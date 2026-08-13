@@ -660,6 +660,87 @@ def test_enabled_pending_or_failed_schema_readback_is_loud_and_exposes_no_factor
     assert dependency_calls == []
 
 
+def test_enabled_schema_readback_failure_recovers_once_on_scheduler_lifecycle() -> None:
+    dependency_calls: list[str] = []
+    readback_outcomes: list[str | Exception] = [
+        ConnectionError("startup readback unavailable"),
+        "applied_and_verified",
+    ]
+
+    def schema_gate_reader() -> str:
+        outcome = readback_outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    activation = build_miniqmt_quote_ingress_activation_from_env(
+        environ=_enabled_env(),
+        schema_gate_reader=schema_gate_reader,
+        subscriber_factory=lambda: dependency_calls.append("subscriber") or _Subscriber(),
+        qmt_client_factory=lambda: dependency_calls.append("qmt") or _QmtClient(),
+    )
+
+    blocked = activation.health()
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["production_ddl_gate"] == "readback_failed"
+    assert blocked["factory_available"] is False
+    assert dependency_calls == []
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=InMemorySimulationRuntimeRepository(),
+        miniqmt_quote_ingress_activation=activation,
+    )
+    assert scheduler._b0_quote_v2_controller_factory is None
+    assert scheduler.orchestrator.b0_quote_v2_controller_factory is None
+
+    assert scheduler._advance_miniqmt_quote_ingress_lifecycle() == ()
+    recovered = activation.health()
+    assert recovered["status"] == "READY"
+    assert recovered["production_ddl_gate"] == "applied_and_verified"
+    assert recovered["reason_code"] is None
+    assert recovered["failure"] is None
+    assert recovered["factory_available"] is True
+    assert dependency_calls == ["subscriber", "qmt"]
+    assert scheduler._b0_quote_v2_controller_factory is activation.controller_factory
+    assert scheduler.orchestrator.b0_quote_v2_controller_factory is activation.controller_factory
+    assert scheduler._miniqmt_quote_context_adapter is activation.quote_context_adapter
+
+    assert scheduler._advance_miniqmt_quote_ingress_lifecycle() == ()
+    assert dependency_calls == ["subscriber", "qmt"]
+    assert readback_outcomes == []
+
+
+def test_enabled_schema_startup_recovery_constructs_one_owner_under_concurrency() -> None:
+    readback_calls = 0
+    dependency_calls: list[str] = []
+    call_lock = RLock()
+
+    def schema_gate_reader() -> str:
+        nonlocal readback_calls
+        with call_lock:
+            readback_calls += 1
+            if readback_calls == 1:
+                raise ConnectionError("startup readback unavailable")
+        return "applied_and_verified"
+
+    activation = build_miniqmt_quote_ingress_activation_from_env(
+        environ=_enabled_env(),
+        schema_gate_reader=schema_gate_reader,
+        subscriber_factory=lambda: dependency_calls.append("subscriber") or _Subscriber(),
+        qmt_client_factory=lambda: dependency_calls.append("qmt") or _QmtClient(),
+    )
+    threads = [Thread(target=activation._recover_enabled_startup_if_needed) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5.0)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert activation.health()["status"] == "READY"
+    assert readback_calls == 2
+    assert dependency_calls == ["subscriber", "qmt"]
+
+
 def test_production_schema_gate_uses_full_postgres_kernel_preflight(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     calls: list[str] = []
 
