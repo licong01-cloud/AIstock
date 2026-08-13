@@ -6243,8 +6243,8 @@ def test_workflow_policy_sources_are_compact_and_semantically_consistent() -> No
     for relative in lane_paths:
         text = (root / relative).read_text(encoding="utf-8")
         assert "TOOL-RTK-001" in text, relative
-        assert "must use RTK" in text, relative
-        assert "never make RTK or telemetry a task/PR/CI gate" in text, relative
+        assert "must use RTK" not in text, relative
+        assert "sole development standard" in text, relative
 
     for relative in (
         ".codex/skills/aistock-task-router/SKILL.md",
