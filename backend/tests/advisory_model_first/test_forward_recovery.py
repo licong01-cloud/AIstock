@@ -196,6 +196,34 @@ def test_settlement_reloads_legal_active_state_change_and_protects_commit_with_c
     assert repository.settlement_kwargs["expected_program_status"] == program.status
 
 
+def test_stale_pending_settlement_returns_authoritative_terminal_without_re_evaluation() -> None:
+    program = _program()
+    persisted = {**_persisted(program), "settlement_status": "SETTLED"}
+    repository = _RecoveryRepository(persisted)
+
+    class _MustNotEvaluate(_RecoveryPrograms):
+        def get_program(self, _program_id: str):
+            raise AssertionError("terminal settlement must not reload Program or evaluate transition")
+
+    service = AdvisoryForwardService(
+        repository=repository,
+        program_service=_MustNotEvaluate(program, _episode()),
+        model_service=SimpleNamespace(),
+        calendar=SimpleNamespace(),
+    )
+
+    result = service._settle({**persisted, "settlement_status": "NOT_DUE"})
+
+    assert result == {
+        "program_id": program.program_id,
+        "forward_run_id": "advfwd-test",
+        "status": "SETTLED",
+        "target_trade_date": "2026-08-17",
+        "idempotent_replay": True,
+    }
+    assert repository.settlement_kwargs is None
+
+
 def test_publish_rejects_reused_target_row_with_mixed_decision_identity() -> None:
     program = _program()
     persisted = _persisted(program)

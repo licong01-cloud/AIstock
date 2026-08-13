@@ -230,6 +230,7 @@ Challenger 在 baseline publication commit 后运行。它失败不能回滚已�
 
 市场数据和纯 transition 结果生成后，`commit_settlement()` 在单个事务中：
 
+0. service 在计算入口及读取 active episode 后各读回一次权威 forward 状态；已终态直接返回既有 `SETTLED/NOT_ENTERED`，避免跨进程 stale pending 以结算后 episode 重算同一 target。
 1. 锁定 forward run 和 Program。
 2. 验证 forward run 已发布且未结算。
 3. 重新计算当前 active episode state hash；与 evaluation 输入不一致时返回 conflict，调用方重新加载再评估。
@@ -556,6 +557,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 - Source Round 9：修复 BUG-1063 同一 Program 较早 settlement 阻塞后仍执行更晚日期、可能倒序改变 episode 状态的问题；runner 现在按 Program 传播本轮阻塞并返回明确 skip，其他 Program 不受影响。
 - Source Round 10：修复 BUG-1065 并发首次保存同一 forward observation 时共享父锁无法阻止 child unique-key 竞争的问题；父行改为排它短锁，相同重放按既有payload幂等合同收敛。
 - Source Round 11：修复 BUG-1066 publication 异常路径只看到 persisted `PUBLISHED` 就恢复、可能吞掉并发不同payload冲突的问题；仅 canonical hash完全相同的 uncertain commit 可恢复，其他异常保持可见。
+- Source Round 12：修复 BUG-1067 跨进程 stale pending 在另一进程已完成结算后，使用结算后episode重算同一target并产生假冲突的问题；service在计算前后读回权威终态，已闭合事实直接幂等返回。
 
 ## 20. Implementation Plan / 本阶段唯一实施顺序
 

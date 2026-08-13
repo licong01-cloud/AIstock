@@ -589,6 +589,9 @@ class AdvisoryForwardService:
 
     def _settle(self, persisted: Mapping[str, Any]) -> dict[str, Any]:
         program_id = str(persisted["program_id"])
+        terminal = self._terminal_settlement(str(persisted["forward_run_id"]))
+        if terminal is not None:
+            return terminal
         current_program = self.program_service.get_program(program_id)
         publication_payload = dict(persisted.get("run_payload_json") or {})
         program = _frozen_program(current_program, publication_payload.get("program_snapshot"))
@@ -599,6 +602,9 @@ class AdvisoryForwardService:
         ]
         active_episodes = self.program_service.active_episode_objects(program_id)
         active_hash = _active_episode_state_hash(active_episodes)
+        terminal = self._terminal_settlement(str(persisted["forward_run_id"]))
+        if terminal is not None:
+            return terminal
         symbols = sorted({candidate.symbol for candidate in candidates} | {episode.symbol for episode in active_episodes})
         marks = self.program_service.load_forward_market_marks(
             symbols=symbols,
@@ -681,6 +687,20 @@ class AdvisoryForwardService:
             "forward_run_id": committed["forward_run_id"],
             "status": committed["settlement_status"],
             "target_trade_date": persisted["target_trade_date"].isoformat(),
+        }
+
+    def _terminal_settlement(self, forward_run_id: str) -> dict[str, Any] | None:
+        detail = self.repository.get(forward_run_id)
+        forward = dict(detail["forward_run"])
+        status = str(forward.get("settlement_status") or "")
+        if status not in {"SETTLED", "NOT_ENTERED"}:
+            return None
+        return {
+            "program_id": str(forward["program_id"]),
+            "forward_run_id": str(forward["forward_run_id"]),
+            "status": status,
+            "target_trade_date": forward["target_trade_date"].isoformat(),
+            "idempotent_replay": True,
         }
 
     def _visible_failure(self, payload: Mapping[str, Any], *, stage: str, exc: Exception) -> dict[str, Any]:
