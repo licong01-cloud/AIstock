@@ -11468,6 +11468,50 @@ def _classify_pr_checks(checks: list[dict[str, Any]]) -> dict[str, list[str]]:
     }
 
 
+def _required_pr_check_summary(result: dict[str, Any]) -> dict[str, list[str]]:
+    """Classify only checks GitHub says are required by branch protection."""
+    raw = str(result.get("stdout") or "").strip()
+    if not raw:
+        if result.get("ok"):
+            checks: list[dict[str, Any]] = []
+        else:
+            raise WorkflowError(
+                str(result.get("stderr") or "required PR check query failed without a result").strip()
+            )
+    else:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise WorkflowError(f"required PR check query returned invalid JSON: {exc}") from exc
+        if not isinstance(parsed, list):
+            raise WorkflowError("required PR check query returned a non-list payload")
+        checks = [item for item in parsed if isinstance(item, dict)]
+
+    failed: list[str] = []
+    pending: list[str] = []
+    non_blocking: list[str] = []
+    passed: list[str] = []
+    for item in checks:
+        name = _check_name(item)
+        bucket = str(item.get("bucket") or "").lower()
+        if bucket == "pass":
+            passed.append(name)
+        elif bucket == "skipping":
+            passed.append(name)
+            non_blocking.append(name)
+        elif bucket == "pending":
+            pending.append(name)
+        else:
+            # fail, cancel, and unknown buckets must all fail closed.
+            failed.append(name)
+    return {
+        "failed": failed,
+        "pending": pending,
+        "non_blocking": non_blocking,
+        "passed": passed,
+    }
+
+
 def _execute_workflow_command(
     bug_id: str,
     args: list[str],
@@ -12475,11 +12519,16 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
         timeout=60,
     )
     payload = json.loads(str(view.get("stdout") or "{}"))
-    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
-    failed = check_summary["failed"]
-    pending = check_summary["pending"]
     if payload.get("state") == "MERGED":
         return {"already_merged": True, "view": payload}
+    required_result = _run_command(
+        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    check_summary = _required_pr_check_summary(required_result)
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _run_command(["gh", "pr", "merge", pr_url, "--squash"], cwd=REPO_ROOT, timeout=180)
@@ -12512,11 +12561,20 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         event="command:gh_pr_view_before_merge",
     )
     payload = json.loads(str(view.get("stdout") or "{}"))
-    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
-    failed = check_summary["failed"]
-    pending = check_summary["pending"]
     if payload.get("state") == "MERGED":
         return {"already_merged": True, "view": payload}
+    required_result = _execute_workflow_command(
+        bug_id,
+        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
+        state="ci_green",
+        cwd=REPO_ROOT,
+        timeout=60,
+        event="command:gh_pr_required_checks_before_merge",
+        allow_failure=True,
+    )
+    check_summary = _required_pr_check_summary(required_result)
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _execute_workflow_command(

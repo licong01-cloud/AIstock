@@ -6964,9 +6964,19 @@ def test_merge_uses_cleanup_owned_branch_deletion(
                     {
                         "state": "OPEN",
                         "statusCheckRollup": [
-                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                            {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                            {"name": "advisory", "status": "COMPLETED", "conclusion": "FAILURE"},
                         ],
                     }
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
                 ),
                 "stderr": "",
             }
@@ -7008,9 +7018,19 @@ def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
                     {
                         "state": "OPEN",
                         "statusCheckRollup": [
-                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                            {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                            {"name": "advisory", "status": "IN_PROGRESS", "conclusion": ""},
                         ],
                     }
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
                 ),
                 "stderr": "",
             }
@@ -7035,6 +7055,69 @@ def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
     assert payload["verified"]["merged"] is True
     merge_commands = [args for args in commands if args[:3] == ["gh", "pr", "merge"]]
     assert merge_commands == [["gh", "pr", "merge", "https://github.example/pull/199", "--squash"]]
+
+
+def test_generic_merge_helper_blocks_failed_required_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "statusCheckRollup": []}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "FAILURE", "bucket": "fail", "workflow": "AIstock CI"}]
+                ),
+                "stderr": "required checks failed",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="CI verdict"):
+        workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert not any(args[:3] == ["gh", "pr", "merge"] for args in commands)
+
+
+def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        assert args[:3] == ["gh", "pr", "view"]
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps({"state": "MERGED", "statusCheckRollup": []}),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["already_merged"] is True
+    assert commands == [
+        [
+            "gh",
+            "pr",
+            "view",
+            "https://github.example/pull/199",
+            "--json",
+            "state,mergeStateStatus,statusCheckRollup,url",
+        ]
+    ]
 
 
 def test_close_sync_pr_commit_only_stages_bug_registry_files(

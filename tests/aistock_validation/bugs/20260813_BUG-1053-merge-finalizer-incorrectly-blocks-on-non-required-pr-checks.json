@@ -1,6 +1,8 @@
 {
   "actual": "The repository branch protection requires only the aggregate CI verdict, but the merge workflow classifies every statusCheckRollup entry as blocking. Pending or failed advisory checks such as CodeQL, Semgrep, PR Quality, Issue Auto Link, and evidence publishers can therefore block merge contrary to the sole development standard. Make merge readiness consume repository-required checks only, preserve fail-closed behavior for required checks, and add focused regression tests.",
   "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
     "tests/aistock_validation/bugs/20260813_BUG-1053-merge-finalizer-incorrectly-blocks-on-non-required-pr-checks.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
