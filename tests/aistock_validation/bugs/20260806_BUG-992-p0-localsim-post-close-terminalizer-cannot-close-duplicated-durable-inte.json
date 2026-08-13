@@ -155,7 +155,7 @@
       "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> passed: 239 tests with committed independent aistock_dev readback",
       "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py <BUG-992 authority/orphan/readback matrix> -q -> passed: 51 tests; independent cleanup readback asserted disposable package/release/binding/evidence/plan/run counts all 0",
       "python -m nox -s simulation_core_l2 -> passed: fresh Python process loaded HEAD code tree; 480 tests, 1 explicit DEV PostgreSQL skip",
-      "post-restart continuation focused matrix -> 41 passed; final fresh-process module plan pending final HEAD"
+      "python -m nox -s simulation_core_l2 -> passed: final HEAD fresh process loaded persistent source; 594 passed, 1 explicit gated skip"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
