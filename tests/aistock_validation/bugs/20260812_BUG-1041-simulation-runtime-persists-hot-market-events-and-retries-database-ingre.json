@@ -176,7 +176,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?limit=100",
     "fresh_process_evidence": [
-      "fresh Python process imported the V4 full-five catalog authority from tracked source; exact plugin_count=5, all plugin_version=4.0.0, catalog_sha256=7c3dbedc542fa05871727c33b74c38f27feb1696bfeea0bbaab20de828de0a69; no installed/latest/previous fallback -> passed"
+      "fresh Python process imported the V4 full-five catalog authority from tracked source; exact plugin_count=5, all plugin_version=4.0.0, catalog_sha256=7c3dbedc542fa05871727c33b74c38f27feb1696bfeea0bbaab20de828de0a69; no installed/latest/previous fallback -> passed",
+      "fresh tracked-source process on final HEAD imported the five V4 hot targets and ran the direct process-local ingress/runtime matrix -> 104 passed; no installed/latest/previous fallback"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
