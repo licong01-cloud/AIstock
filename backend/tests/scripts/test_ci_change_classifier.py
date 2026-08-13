@@ -487,6 +487,19 @@ def test_validation_mcp_issue_files_use_focused_workflow_lane(tmp_path: Path) ->
     ]
 
 
+def test_workflow_fast_contract_test_has_direct_self_mapping(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/tests/scripts/test_aistock_issue_workflow_fast.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["unmapped_code_files"] == []
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ]
+
+
 def test_validation_ui_target_contract_uses_catalog_gate_only(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["backend/tests/test_validation_ui_target_catalog.py"],
