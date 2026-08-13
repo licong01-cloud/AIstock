@@ -124,6 +124,12 @@ WORKTREE_TRANSIENT_CACHE_DIRS = {
 }
 WORKTREE_TRANSIENT_PREFIXES = ("tmp/", "var/research_assistant/")
 WORKTREE_TRANSIENT_EXACT_FILES = {".coverage", "debug.log"}
+WORKTREE_QE_LIVE_LOG_ROOT = "rdagent_assets/qe_live_logs"
+WORKTREE_QE_LIVE_LOG_SCHEMA = "qe_live_log_record_v1"
+WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES = 16 * 1024 * 1024
+WORKTREE_QE_LIVE_LOG_PATHS = frozenset(
+    f"{WORKTREE_QE_LIVE_LOG_ROOT}/qe-live-{index}.jsonl" for index in range(5)
+)
 RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
@@ -10827,6 +10833,49 @@ def _worktree_transient_root(
     return None, "unknown_ignored_artifact"
 
 
+def _validated_qe_live_log_transient_paths(
+    ignored_paths: Iterable[str],
+    *,
+    worktree_path: Path,
+) -> tuple[set[str], str]:
+    prefix = WORKTREE_QE_LIVE_LOG_ROOT + "/"
+    observed = {
+        _normalize_worktree_artifact_path(item)
+        for item in ignored_paths
+        if _normalize_worktree_artifact_path(item).startswith(prefix)
+    }
+    if not observed:
+        return set(), "qe_live_log_ring_not_present"
+    if observed != WORKTREE_QE_LIVE_LOG_PATHS:
+        return set(), "qe_live_log_ring_inventory_mismatch"
+
+    root = worktree_path / WORKTREE_QE_LIVE_LOG_ROOT
+    if (
+        not root.is_dir()
+        or _is_reparse_or_symlink(root.parent)
+        or _is_reparse_or_symlink(root)
+    ):
+        return set(), "qe_live_log_ring_unsafe_directory"
+
+    for relative_path in sorted(WORKTREE_QE_LIVE_LOG_PATHS):
+        candidate = worktree_path / relative_path
+        try:
+            if _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                return set(), "qe_live_log_ring_unsafe_file"
+            if candidate.stat().st_size > WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES:
+                return set(), "qe_live_log_ring_file_too_large"
+            with candidate.open("r", encoding="utf-8", errors="strict") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    if not isinstance(record, dict) or record.get("schema_version") != WORKTREE_QE_LIVE_LOG_SCHEMA:
+                        return set(), "qe_live_log_ring_schema_mismatch"
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return set(), "qe_live_log_ring_invalid_jsonl"
+    return set(WORKTREE_QE_LIVE_LOG_PATHS), "bounded_non_authoritative_qe_live_log_ring"
+
+
 def _minimal_relative_roots(roots: Iterable[str]) -> list[str]:
     ordered = sorted({_normalize_worktree_artifact_path(item) for item in roots if item}, key=lambda item: (item.count("/"), item))
     minimal: list[str] = []
@@ -11022,6 +11071,11 @@ def _worktree_ignored_artifact_profile(
         profile["error"] = result.get("stderr") or result.get("stdout") or "ignored artifact scan failed"
         return profile
     ignored = sorted({_normalize_worktree_artifact_path(item) for item in str(result.get("stdout") or "").split("\0") if item})
+    qe_live_log_paths, qe_live_log_reason = _validated_qe_live_log_transient_paths(
+        ignored,
+        worktree_path=worktree_path,
+    )
+    qe_live_log_prefix = WORKTREE_QE_LIVE_LOG_ROOT + "/"
     roots: list[str] = []
     canonical_lines: list[str] = []
     for rel in ignored:
@@ -11031,7 +11085,11 @@ def _worktree_ignored_artifact_profile(
             if len(profile["protected_samples"]) < 20:
                 profile["protected_samples"].append(rel)
         else:
-            root, reason = _worktree_transient_root(rel, worktree_path=worktree_path, canonical_root=canonical_root)
+            if rel.startswith(qe_live_log_prefix):
+                root = WORKTREE_QE_LIVE_LOG_ROOT if rel in qe_live_log_paths else None
+                reason = qe_live_log_reason
+            else:
+                root, reason = _worktree_transient_root(rel, worktree_path=worktree_path, canonical_root=canonical_root)
             if root:
                 category = "transient"
                 roots.append(root)
