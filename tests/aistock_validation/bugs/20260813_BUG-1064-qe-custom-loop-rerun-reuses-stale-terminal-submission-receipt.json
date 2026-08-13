@@ -142,7 +142,9 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python subprocess imported tracked AutoEvolutionScheduler, resolved a unique rerun reservation identity plus canonical Loop claim identity, printed fresh-process-ok, and exited 0 without database or process control.",
-      "Source commit 16973538f42def87ba99434eeb61bf698eaf2f04 contains the persistent scheduler fix and direct tests; no user backend or experiment process was controlled by the BUG workflow."
+      "Source commit 16973538f42def87ba99434eeb61bf698eaf2f04 contains the persistent scheduler fix and direct tests; no user backend or experiment process was controlled by the BUG workflow.",
+      "final HEAD e3353d6f fresh subprocess loaded rerun attempt reservation plus canonical loop claim identity and exited fresh-process-ok; process_control=false",
+      "HEAD e3353d6f fresh subprocess imported persistent scheduler fix and exited fresh-process-ok; process_control=false"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -167,6 +169,15 @@
     "fingerprint": "ab87a57ab741e446baa271c4",
     "source_event_id": "FE-20260813-ab87a57ab741"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py -q -> 12 passed",
+    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_backtest_executor.py backend/tests/test_qe_evolution_scheduler.py -q -> 58 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership files=14 mapped=14",
+    "python -m nox -s qe_read_backend -> 34 passed",
+    "python -m ruff check and python -m py_compile on changed Python files -> passed",
+    "git diff --check -> passed",
+    "fresh-process rerun reservation identity and canonical claim identity import smoke -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -207,15 +218,6 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
-  "validation_evidence": [
-    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py -q -> 12 passed",
-    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_backtest_executor.py backend/tests/test_qe_evolution_scheduler.py -q -> 58 passed",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership files=14 mapped=14",
-    "python -m nox -s qe_read_backend -> 34 passed",
-    "python -m ruff check and python -m py_compile on changed Python files -> passed",
-    "git diff --check -> passed",
-    "fresh-process rerun reservation identity and canonical claim identity import smoke -> passed"
-  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
