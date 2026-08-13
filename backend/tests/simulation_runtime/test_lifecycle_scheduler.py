@@ -2999,6 +2999,9 @@ def test_scheduler_preplan_unknown_fresh_process_closes_absent_runtime_from_dura
     )
     fresh_activation = _RealB0TestActivation()
     scheduler._miniqmt_quote_ingress_activation = fresh_activation
+    scheduler._b0_quote_v2_controller_factory = fresh_activation.controller_factory
+    scheduler.orchestrator.b0_quote_v2_controller_factory = fresh_activation.controller_factory
+    scheduler._miniqmt_quote_context_adapter = fresh_activation.quote_context_adapter
 
     recovered = scheduler.run_once(
         trade_date=TRADE_DATE,

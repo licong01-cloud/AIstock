@@ -39,11 +39,16 @@ def fit_fresh_sector_hmm(
     train_dates: Sequence[pd.Timestamp],
     continuation_cutoff: str,
     min_trading_days: int = 120,
+    precomputed_observations: pd.DataFrame | None = None,
 ) -> FreshHMMResult:
-    observations = build_sector_observations(
-        static_all=static_all,
-        market_daily=market_daily,
-        benchmark_daily=benchmark_daily,
+    observations = (
+        precomputed_observations.sort_index()
+        if precomputed_observations is not None
+        else build_sector_observations(
+            static_all=static_all,
+            market_daily=market_daily,
+            benchmark_daily=benchmark_daily,
+        )
     )
     calendar = pd.DatetimeIndex(pd.to_datetime(list(trading_calendar))).normalize().sort_values().unique()
     train = pd.DatetimeIndex(pd.to_datetime(list(train_dates))).normalize().sort_values().unique()
