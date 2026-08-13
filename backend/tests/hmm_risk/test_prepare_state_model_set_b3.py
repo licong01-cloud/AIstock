@@ -72,10 +72,18 @@ def _transition_dwell_child(
     for index in range(1048):
         seed = subject.RESTART_SCHEDULE[index // 131]
         sector_code = f"S{index % 131:03d}"
-        entry_body = {"seed": seed, "sector_code": sector_code, "model_entry_valid": True}
-        entries.append({**entry_body, "entry_receipt_sha256": subject.canonical_sha256(entry_body)})
         model_body = {"seed": seed, "sector_code": sector_code}
-        models.append({**model_body, "model_payload_sha256": subject.canonical_sha256(model_body)})
+        model = {**model_body, "model_payload_sha256": subject.canonical_sha256(model_body)}
+        models.append(model)
+        entry_body = {
+            "seed": seed,
+            "sector_code": sector_code,
+            "fit_status": "accepted",
+            "model_entry_status": "accepted",
+            "model_entry_valid": True,
+            "model_payload_sha256": model["model_payload_sha256"],
+        }
+        entries.append({**entry_body, "entry_receipt_sha256": subject.canonical_sha256(entry_body)})
     repeat_body = {
         "schema_version": "hmm_risk_b3_mixed_dimension_level_repeat_v1",
         "contract_version": subject.B3_TRANSITION_DWELL_CONTRACT,
@@ -403,6 +411,8 @@ def test_transition_dwell_child_validator_accepts_complete_grid_with_typed_faile
     failed_entry_body = {
         "seed": subject.RESTART_SCHEDULE[0],
         "sector_code": "S000",
+        "fit_status": "failed",
+        "model_entry_status": "failed",
         "model_entry_valid": False,
         "failure_stage": "covariance",
         "failure_reason_codes": ["hmm_risk_model_covariance_acceptance_failed"],
@@ -427,6 +437,233 @@ def test_transition_dwell_child_validator_accepts_complete_grid_with_typed_faile
     child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
 
     subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+
+def test_transition_dwell_child_validator_accepts_fitted_d4_rejection_and_counts_only_accepted() -> None:
+    child = _transition_dwell_child("fresh_process_1", candidate_seeds=(42,))
+    rejected = child["level_repeat"]["entries"][0]
+    rejected_body = {
+        **{key: value for key, value in rejected.items() if key != "entry_receipt_sha256"},
+        "model_entry_status": "failed",
+        "model_entry_valid": False,
+    }
+    child["level_repeat"]["entries"][0] = {
+        **rejected_body,
+        "entry_receipt_sha256": subject.canonical_sha256(rejected_body),
+    }
+    child["per_seed"][0].update(
+        {
+            "d3_d4_accepted_sector_count": 130,
+            "d3_d4_accepted_131_of_131": False,
+            "diagnostic_candidate_complete": False,
+        }
+    )
+    child["level_repeat"]["entry_payload_sha256"] = subject.canonical_sha256(child["level_repeat"]["entries"])
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    evidence = subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+    assert evidence["receipt_valid"] is True
+    assert evidence["fitted_model_count"] == 1048
+    assert evidence["d3_d4_accepted_entry_count"] == 1047
+    assert evidence["terminal_entry_count_verified"] == 1048
+
+
+def test_transition_dwell_single_pass_counts_only_d3_d4_accepted_models(monkeypatch) -> None:
+    child = _transition_dwell_child("fresh_process_1", candidate_seeds=(42,))
+    rejected = child["level_repeat"]["entries"][0]
+    rejected_body = {
+        **{key: value for key, value in rejected.items() if key != "entry_receipt_sha256"},
+        "model_entry_status": "failed",
+        "model_entry_valid": False,
+    }
+    child["level_repeat"]["entries"][0] = {
+        **rejected_body,
+        "entry_receipt_sha256": subject.canonical_sha256(rejected_body),
+    }
+    model_by_key = {
+        (model["seed"], model["sector_code"]): SimpleNamespace(model_payload_sha256=model["model_payload_sha256"])
+        for model in child["level_repeat"]["models"]
+    }
+    series = {
+        f"S{index:03d}": SimpleNamespace(
+            train_dates=tuple(date(2022, 1, 1) + timedelta(days=offset) for offset in range(400))
+        )
+        for index in range(131)
+    }
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_train_authority",
+        lambda *args, **kwargs: {
+            "producer_commit": "c" * 40,
+            "source_producer_commit": "9" * 40,
+            "treatment_producer_commit": "c" * 40,
+            "families": [
+                {
+                    "family": subject.B3_P6_FAMILY,
+                    "feature_names": list(ALL_CORE_FEATURES),
+                    "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+                }
+            ],
+            "inputs": {"trading_dates": tuple(date(2022, 1, 1) + timedelta(days=offset) for offset in range(400))},
+            "dataset_manifest_hash": "1" * 64,
+            "mapping_manifest_hash": "2" * 64,
+            "calendar_manifest_hash": "3" * 64,
+            "l2_stock_fact_manifest_hash": "4" * 64,
+            "feature_domain_policy": {
+                "receipt_sha256": "5" * 64,
+                "provider_absence_partition_receipt": {},
+                "provider_absence_partition_receipt_sha256": "6" * 64,
+            },
+        },
+    )
+    monkeypatch.setattr(subject, "_direct_l2_train_series_for_family", lambda *args, **kwargs: series)
+    monkeypatch.setattr(
+        subject,
+        "run_level_repeat",
+        lambda *args, **kwargs: (child["level_repeat"], model_by_key),
+    )
+    monkeypatch.setattr(
+        subject,
+        "project_b3_train_stability_source",
+        lambda item, models: ([0] * 400, {"comparison_sha256": "7" * 64}),
+    )
+    monkeypatch.setattr(
+        subject,
+        "evaluate_b3_train_stability_window",
+        lambda *args, **kwargs: {"status": "train_window_structurally_observed"},
+    )
+
+    result = subject.prepare_b3_transition_dwell_single_pass(
+        _request(),
+        db_prefix="TDX_DB_",
+        process_identity="fresh_process_1",
+        source_producer_commit="9" * 40,
+        treatment_producer_commit="c" * 40,
+    )
+
+    assert result["profile_count"] == 1048
+    assert result["per_seed"][0]["d3_d4_accepted_sector_count"] == 130
+    assert result["per_seed"][0]["d3_d4_accepted_131_of_131"] is False
+    assert result["per_seed"][0]["diagnostic_candidate_complete"] is False
+
+
+def test_transition_dwell_parent_preserves_compact_child_validation_evidence(monkeypatch, tmp_path) -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["profiles"][0]["model_payload_sha256"] = "f" * 64
+    profile_body = {key: value for key, value in child["profiles"][0].items() if key != "profile_sha256"}
+    child["profiles"][0]["profile_sha256"] = subject.canonical_sha256(profile_body)
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+    payload = subject.canonical_json_bytes(child)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=payload, stderr=b""),
+    )
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    authority = {
+        "producer_commit": "c" * 40,
+        "source_producer_commit": "9" * 40,
+        "treatment_producer_commit": "c" * 40,
+        "feature_domain_policy": {"receipt_sha256": "p" * 64},
+        "inputs": {},
+    }
+    closure = {
+        "feature_names": tuple(ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "canonical_sector_codes": tuple(f"S{index:03d}" for index in range(131)),
+        "canonical_sector_set_sha256": subject.canonical_sha256([f"S{index:03d}" for index in range(131)]),
+        "authority_keys": {},
+    }
+    child["level_repeat"].update(
+        {
+            "canonical_sector_codes": list(closure["canonical_sector_codes"]),
+            "canonical_sector_set_sha256": closure["canonical_sector_set_sha256"],
+            "schedule": list(subject.RESTART_SCHEDULE),
+        }
+    )
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+    payload = subject.canonical_json_bytes(child)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=payload, stderr=b""),
+    )
+    monkeypatch.setattr(subject, "_load_transition_dwell_train_authority", lambda *args, **kwargs: authority)
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_control_authority",
+        lambda *args, **kwargs: {"control_authority_sha256": "a" * 64},
+    )
+
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["status"] == "insufficient_evidence"
+    assert report["terminal_entry_count"] == 1048
+    assert report["fit_budget_completion_unknown"] is False
+    assert report["child_validation_evidence"]["entry_grid_complete"] is True
+    assert report["child_validation_evidence"]["receipt_valid"] is False
+    assert "profile_model_link_mismatch" in report["child_validation_evidence"]["mismatch_reason_codes"]
+
+
+def test_transition_dwell_child_entry_hash_drift_does_not_claim_completed_fit_budget() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["level_repeat"]["entries"][0]["entry_receipt_sha256"] = "f" * 64
+    child["level_repeat"]["entry_payload_sha256"] = subject.canonical_sha256(child["level_repeat"]["entries"])
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(subject.TransitionDwellChildReceiptError) as caught:
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+    assert caught.value.evidence["entry_grid_complete"] is True
+    assert caught.value.evidence["terminal_entry_count_verified"] == 0
+    assert "entry_receipt_hash_mismatch" in caught.value.evidence["mismatch_reason_codes"]
+
+
+def test_transition_dwell_child_malformed_repeat_returns_typed_validation_evidence() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["level_repeat"] = []
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(subject.TransitionDwellChildReceiptError) as caught:
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+    evidence = caught.value.evidence
+    assert evidence["receipt_valid"] is False
+    assert evidence["terminal_entry_count_verified"] == 0
+    assert "level_repeat_shape_invalid" in evidence["mismatch_reason_codes"]
+    assert "entry_grid_incomplete" in evidence["mismatch_reason_codes"]
+    assert "top_level_contract_mismatch" in evidence["mismatch_reason_codes"]
+
+
+def test_transition_dwell_child_malformed_entry_collection_returns_typed_validation_evidence() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["level_repeat"]["entries"] = {"not": "an array"}
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(subject.TransitionDwellChildReceiptError) as caught:
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+    evidence = caught.value.evidence
+    assert evidence["receipt_valid"] is False
+    assert evidence["terminal_entry_count_verified"] == 0
+    assert "entries_shape_invalid" in evidence["mismatch_reason_codes"]
+    assert "entry_grid_incomplete" in evidence["mismatch_reason_codes"]
 
 
 @pytest.mark.parametrize("drift", ["duplicate_entry", "orphan_profile", "false_complete_seed"])

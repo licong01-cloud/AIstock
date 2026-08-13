@@ -8875,6 +8875,131 @@ def _selected_client_lane_keys(selected_lane: str | None) -> set[str]:
     return {"router", normalized}
 
 
+def _client_lanes_for_changed_files(changed_files: Iterable[str]) -> list[str]:
+    normalized = {
+        str(path).replace("\\", "/").removeprefix("./").strip("/")
+        for path in changed_files
+        if str(path).strip()
+    }
+    lanes: set[str] = set()
+    for key, skill_name in CLIENT_CODEX_SKILLS:
+        prefix = f".codex/skills/{skill_name}/"
+        if any(path == prefix.rstrip("/") or path.startswith(prefix) for path in normalized):
+            lanes.add(key)
+    for key, command_name in CLIENT_CLAUDE_COMMANDS:
+        path = f".claude/commands/{command_name}"
+        if path in normalized:
+            lanes.add(key)
+    return sorted(lanes)
+
+
+def _merge_commit_changed_files(merge_commit: str, *, root: Path) -> dict[str, Any]:
+    parent_result = _run_command(
+        ["git", "rev-list", "--parents", "-n", "1", merge_commit],
+        cwd=root,
+        timeout=30,
+    )
+    if not parent_result.get("ok"):
+        return {"ok": False, "files": [], "error": parent_result.get("stderr") or "merge commit unavailable"}
+    parts = str(parent_result.get("stdout") or "").split()
+    if len(parts) < 2:
+        return {"ok": False, "files": [], "error": f"merge commit has no parent: {merge_commit}"}
+    diff_result = _run_command(
+        ["git", "diff", "--name-only", parts[1], merge_commit],
+        cwd=root,
+        timeout=30,
+    )
+    return {
+        "ok": bool(diff_result.get("ok")),
+        "base": parts[1],
+        "merge_commit": merge_commit,
+        "files": sorted(set(str(diff_result.get("stdout") or "").splitlines())),
+        "error": None if diff_result.get("ok") else diff_result.get("stderr") or "merge diff unavailable",
+    }
+
+
+def _publish_changed_clients_after_merge(
+    *,
+    merge_commit: str,
+    sync_root: bool,
+    apply: bool,
+) -> dict[str, Any]:
+    root = _canonical_root()
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_merge_aftercare_client_publish_v1",
+        "merge_commit": merge_commit,
+        "canonical_root": str(root),
+        "sync_root": sync_root,
+        "dry_run": not apply,
+        "changed_files": [],
+        "selected_lanes": [],
+        "installs": [],
+        "verifications": [],
+        "blocking": [],
+    }
+    if not sync_root:
+        payload.update({"workflow_gate": "deferred", "reason": "canonical_root_sync_not_requested"})
+        return payload
+    if not apply:
+        payload.update({"workflow_gate": "ready_for_apply", "reason": "inspect_after_source_merge"})
+        return payload
+
+    fetch = _cleanup_preflight_fetch_origin(root, apply=True)
+    payload["fetch"] = fetch
+    if fetch.get("status") != "fetched":
+        result = fetch.get("result") if isinstance(fetch.get("result"), dict) else {}
+        payload["blocking"].append(result.get("stderr") or result.get("stdout") or "failed to fetch origin")
+    root_git = _git_snapshot(root)
+    payload["root_before"] = root_git
+    if root_git.get("branch") != "main":
+        payload["blocking"].append(f"canonical root is not on main: {root_git.get('branch')}")
+    if root_git.get("dirty") and root_git.get("head") != root_git.get("origin_main"):
+        payload["blocking"].append("canonical root is dirty and behind origin/main")
+    if payload["blocking"]:
+        payload["workflow_gate"] = "blocked"
+        return payload
+    if root_git.get("head") != root_git.get("origin_main"):
+        sync_result = _run_command(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)
+        payload["root_sync"] = sync_result
+        if not sync_result.get("ok"):
+            payload["blocking"].append(sync_result.get("stderr") or "canonical root fast-forward failed")
+            payload["workflow_gate"] = "blocked"
+            return payload
+
+    changed = _merge_commit_changed_files(merge_commit, root=root)
+    payload["merge_diff"] = changed
+    payload["changed_files"] = changed.get("files") or []
+    if not changed.get("ok"):
+        payload["blocking"].append(str(changed.get("error") or "merge changed-file inspection failed"))
+        payload["workflow_gate"] = "blocked"
+        return payload
+    lanes = _client_lanes_for_changed_files(payload["changed_files"])
+    payload["selected_lanes"] = lanes
+    if not lanes:
+        payload.update({"workflow_gate": "not_required", "reason": "merge_did_not_change_workflow_clients"})
+        return payload
+
+    for lane in lanes:
+        install = build_client_install_plan(apply=True, selected_lane=lane)
+        payload["installs"].append({"lane": lane, **install})
+        if install.get("workflow_gate") != "installed":
+            payload["blocking"].extend(install.get("blocking") or [f"client install failed for lane {lane}"])
+            continue
+        with _ClientInstallLock():
+            manifest = _client_manifest()
+        verification = _client_lane_verification(
+            manifest,
+            selected_lane=lane,
+            verify_codex=True,
+            verify_claude=True,
+        )
+        payload["verifications"].append({"lane": lane, **verification})
+        payload["blocking"].extend(verification.get("blocking") or [])
+    payload["workflow_gate"] = "blocked" if payload["blocking"] else "installed_and_verified"
+    payload["restart_recommended"] = False
+    return payload
+
+
 def _client_source_authority() -> dict[str, Any]:
     canonical_root = _canonical_root()
     canonical_git = _git_snapshot(canonical_root)
@@ -12278,6 +12403,18 @@ def _cleanup_merge_verification(
 
     head_oid = _pr_head_oid_from_pr_check(pr_check)
     merge_commit = _merge_commit_from_pr_check(pr_check)
+    if head_oid and merge_commit and _git_commit_is_ancestor(head_oid, merge_commit, root=root):
+        payload.update(
+            {
+                "method": "merged_pr_head_is_ancestor_of_merge_commit",
+                "verified": True,
+                "squash_merge_verified": False,
+                "tree_equivalent_to_origin_main": False,
+                "tree_equivalence_ref": head_oid,
+                "tree_equivalence_target": merge_commit,
+            }
+        )
+        return payload
     if head_oid and merge_commit:
         merge_commit_equivalence = _git_squash_head_equivalent_to_ref(
             head_oid,
@@ -13570,6 +13707,17 @@ def build_merge_finalizer_plan(
 
     source_pr_check = source_pr_check or _verify_pr_merged(source_pr_url)
     merge_commit = _merge_commit_from_pr_check(source_pr_check)
+    client_publish = _publish_changed_clients_after_merge(
+        merge_commit=merge_commit,
+        sync_root=sync_root,
+        apply=True,
+    )
+    payload["client_publish"] = client_publish
+    if client_publish.get("workflow_gate") == "blocked":
+        payload["workflow_gate"] = "blocked"
+        payload["blocking"] = flow._unique_strings(client_publish.get("blocking") or [])
+        payload["next_actions"] = ["restore_canonical_client_authority_then_resume_merge_finalizer"]
+        return payload
     if batch_mode:
         incomplete_bug_ids: list[str] = []
         complete_markers: list[dict[str, Any]] = []
