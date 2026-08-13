@@ -28,7 +28,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1024",
-  "closed_at": null,
+  "closed_at": "2026-08-13T17:38:33.598080Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -383,8 +383,8 @@
   },
   "first_seen_at": "2026-08-11T13:38:50.592746Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3a6e32903dc5aa759615c9f3efdffee8bb66e851",
+  "fixed_at": "2026-08-11T18:13:36Z",
   "github_issue_number": 3287,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3287",
   "last_seen_at": "2026-08-11T13:38:50.592746Z",
@@ -392,6 +392,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3291",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -415,8 +416,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1024\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1024",
+      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
+      "contract_digest": "b2999965a989ae427b0e6c82513c5634f985356d362ede7eeda8e28906f03d53",
+      "expected_identity": "3a6e32903dc5aa759615c9f3efdffee8bb66e851",
+      "generated_at": "2026-08-13T17:38:03.212033Z",
+      "mode": "read_only",
+      "observed_identity": "5151eebb7661204457b7f5be79de1424df2d4844",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "809e7172a48cb70765f929133e23d96d48714a71f23a1ca39acd56e5a44e05a4",
+      "receipt_sha256": "3187b1b5600855f6413005fb4ae233c2a8227568dcd733293d7a34f17b005a72",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "8bda79179205649ed5355f671fa4941558e18a8f7973ba94d8cdd98f1699d9e5",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -426,7 +444,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -435,6 +453,9 @@
     "fingerprint": "ee5ca30debf596a28a14c986",
     "source_event_id": "FE-20260811-ee5ca30debf5"
   },
+  "validation_evidence": [
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1024 --target backend-main --expected-identity 3a6e32903dc5aa759615c9f3efdffee8bb66e851 -> passed (workflow_gate=verified, ancestor identity, health/identity/business smoke complete)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
