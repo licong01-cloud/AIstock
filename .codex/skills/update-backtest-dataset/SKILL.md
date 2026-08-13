@@ -17,12 +17,14 @@ description: Operate the durable, candidate-only AIstock monthly QE backtest dat
 | 复核旧的不可变 candidate | 先 catalog，再走 `reattest-existing`；只写独立 attestation |
 | 查看复用、增量或失效原因 | 读取 decision/component actions、fingerprints 和 receipt |
 | 修代码、做 fixture 验证 | 使用 feature/BUG lane；不得把测试变成真实导出 |
+| 首次 PIT v2 迁移 | 只使用仓库白名单 `initial-migration` plan；先 sample、验收后再由独立授权运行 full |
 | 激活生产、同步 node1、启动/注册 Worker 或 scheduler | 这是独立授权，不由本 Skill 推导 |
 
 普通 operator 入口：
 
 ```powershell
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v1 reattest-existing --latest
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 events --run-id <run_id> --limit 50
@@ -31,6 +33,9 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 r
 
 `qe_hmm_full_v2` 是 future canonical candidate profile；`qe_hmm_full_v1` 只保留既有 release 的复现与只读重验。
 源码交付不等于 runtime activation，未完成 v2 全量验证和独立激活授权前不得把 production 默认值切到 v2。
+`initial-migration` 不是普通月更参数化捷径：plan id、canonical plan digest、固定 `2026-07-31` cutoff、
+sample instruments/event windows 和 candidate-only safety 必须同时由 control service、Worker resolution reader 与
+build receipt 复验。`sample` binding 不得进入 QE/训练；源码或 fixture 验证不得执行该真实提交命令。
 
 `monthly` 成功响应返回随机 `idempotency_key`；只在重试同一次调用时显式复用。未显式给 key 的下一次人工
 调用必须形成新 submission/fresh probe，resolution 再按 source identity 复用既有 run/release。

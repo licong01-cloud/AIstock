@@ -285,6 +285,8 @@ W1任务：
 W2任务：
 
 - 让v2 profile和release manifest消费W1 binding；rolling/frozen cutoff digest必须一致。
+- 首次迁移使用独立、严格的durable request schema；control service与Worker resolution reader共同复验仓库白名单
+  plan id、canonical plan digest、固定`2026-07-31` cutoff和sample/full scope，禁止CLI单方面注入或伪装普通monthly。
 - 证明component planner不会把PIT变化错误降级为只更新`all.txt`。
 - 证明日线/分钟/因子materializer持续使用流式分块、COW、单股/日期缺口补齐。
 - 月更Skill/Runbook只暴露一次candidate提交、status、receipt和re-attest，不暴露activation。
@@ -655,8 +657,8 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-023 | §6 P9、§11；W9 activation/rollback | artifact: `tests/aistock_validation/pit_v2/activation_identity_receipt.json` | design_ready_for_review | none |
 | F-024 | §9、§15；W0及每个实现窗口 | artifact: `tests/aistock_validation/pit_v2/design_compliance_receipt.json` | design_ready_for_review | none |
 | F-025 | §6 P4；incremental/materializer/validator planned scope | `backend/tests/dataset_release/test_candidate_validator.py`；planned `backend/tests/dataset_release/test_selective_clean_full_parity.py` | design_ready_for_review | none |
-| F-026 | §6 P4；component manifest v2/canonical lineage v3 planned scope | planned `backend/tests/dataset_release/test_long_horizon_manifest_lineage_capacity.py` | design_ready_for_review | none |
-| F-027 | §6 P5/P6；initial migration plan/CLI planned scope | planned `backend/tests/scripts/test_pit_v2_initial_migration_plan.py`；artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
+| F-026 | §6 P4；component manifest v2/canonical lineage v3 planned scope | `backend/tests/dataset_release/test_component_artifact_manifest.py`；`backend/tests/dataset_release/test_canonical_lineage.py` | design_ready_for_review | none |
+| F-027 | §6 P2/P5/P6；initial migration plan、control service、resolution reader和CLI planned scope | `backend/tests/dataset_release/test_control_service.py`；`backend/tests/dataset_release/test_resolution_processor.py`；`backend/tests/scripts/test_update_backtest_dataset_monthly.py`；artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
 
 设计通过只表示可以请求用户确认进入实施；不得把`designed`状态表述为源码、真实数据或生产完成。
 

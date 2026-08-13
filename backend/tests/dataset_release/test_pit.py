@@ -6,9 +6,12 @@ import pandas as pd
 import pytest
 
 from backend.services.dataset_release.pit import (
+    DATASET_CANDIDATE_MANIFEST_SCHEMA,
+    DatasetPitBinding,
     PitSpanInvalid,
     PitSnapshotError,
     PitStateNotReady,
+    build_dataset_pit_binding,
     filter_frame_to_pit_spans,
     frozen_pit_snapshot_from_mapping,
     freeze_pit_snapshot,
@@ -82,6 +85,53 @@ def test_canonical_frozen_snapshot_must_equal_rolling_digest_at_cutoff() -> None
             release_id="release-20260731",
             rolling_cutoff_spans_sha256="c" * 64,
         )
+
+
+def test_release_manifest_carries_one_strict_canonical_rolling_frozen_binding() -> None:
+    snapshot = freeze_pit_snapshot(
+        _rows(),
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        scope_start=date(2026, 7, 1),
+        cutoff=date(2026, 7, 31),
+        state_identity="canonical-state",
+        source_fingerprint_sha256=SHA_A,
+        parameter_hash=SHA_B,
+        state_start=date(2018, 8, 1),
+        state_end=date(2026, 7, 31),
+    )
+    binding = build_dataset_pit_binding(
+        snapshot,
+        release_id="release-20260731",
+        rolling_cutoff_spans_sha256=snapshot.spans_sha256,
+    )
+    manifest = {
+        "schema_version": DATASET_CANDIDATE_MANIFEST_SCHEMA,
+        "release_id": binding.release_id,
+        "cutoff": binding.cutoff.isoformat(),
+        "scope": "full",
+        "pit_binding": binding.as_dict(),
+    }
+
+    loaded = DatasetPitBinding.from_release_manifest(manifest)
+
+    assert loaded == binding
+    assert loaded.rolling_cutoff_spans_sha256 == loaded.frozen_snapshot_digest
+    assert loaded.consumer_binding(consumer="qe_training").release_id == "release-20260731"
+
+    tampered = {**manifest, "pit_binding": {**binding.as_dict(), "frozen_snapshot_digest": "c" * 64}}
+    with pytest.raises(PitSnapshotError, match="rolling/frozen"):
+        DatasetPitBinding.from_release_manifest(tampered)
+
+    sample = build_dataset_pit_binding(
+        snapshot,
+        release_id="sample-20260731",
+        rolling_cutoff_spans_sha256=snapshot.spans_sha256,
+        scope="sample",
+    )
+    assert sample.consumer_binding(consumer="candidate_validation").release_id == "sample-20260731"
+    with pytest.raises(PitSnapshotError, match="cannot drive QE/training"):
+        sample.consumer_binding(consumer="qe_training")
 
 
 def test_frozen_pit_is_order_independent_scope_clipped_and_canonical() -> None:
