@@ -1,7 +1,7 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-13T15:45:24.4942346Z",
-  "source_head": "bb93f2fdcbb6e6f6baef85a1e667873fd9eeb8a2",
+  "observed_at": "2026-08-13T16:18:19.3892455Z",
+  "source_head": "49973d6ea51f3a469fc5ded2b247ed2488256597",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
   "current_revision": {
@@ -21,7 +21,7 @@
     "branch": "feature/qe-pit-v2-w3a-consumer-20260813",
     "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3a-consumer-20260813",
     "base_head": "bb93f2fdcbb6e6f6baef85a1e667873fd9eeb8a2",
-    "status": "implementation_verified_pending_pr",
+    "status": "review_6c_pass_ready_for_merge",
     "actual_write_files": [
       "backend/services/canonical_pit_dataset_consumer.py",
       "backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py",
@@ -121,7 +121,7 @@
     "W3": {
       "depends_on": ["W2_merged"],
       "owner": "W3 contract and integration lead with short-lived per-slice writer",
-      "status": "w3a_implementation_verified_pending_pr",
+      "status": "w3a_review_6c_pass_ready_for_merge",
       "coordination_model": "short_lived_exact_file_lease_v1",
       "sub_sequence": ["W3-A", "W3-B", "W3-C", "W3-D"],
       "lease_contract": {

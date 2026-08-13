@@ -17,7 +17,8 @@ from backend.services.canonical_pit_dataset_consumer import (
     FormalDatasetUsage,
     require_formal_dataset_pit_identity,
 )
-from backend.services.dataset_release.cas_store import canonical_json_bytes
+from backend.services.dataset_release.cas_store import CASStore, canonical_json_bytes
+from backend.services.dataset_release.control_store import ControlStore
 from backend.services.dataset_release.pit import (
     DATASET_CANDIDATE_MANIFEST_SCHEMA,
     DATASET_PIT_BINDING_SCHEMA,
@@ -85,6 +86,20 @@ def test_full_v2_manifest_returns_one_formal_identity_without_database_access(mo
     }
 
 
+def test_real_control_cas_reference_digest_is_accepted(tmp_path) -> None:
+    manifest = _manifest()
+    store = ControlStore.initialize(tmp_path / "control")
+    reference = CASStore(store.root).put_json(manifest)
+
+    identity = require_formal_dataset_pit_identity(
+        manifest,
+        usage_mode=FormalDatasetUsage.TRAINING,
+        expected_manifest_digest=reference.sha256,
+    )
+
+    assert identity.manifest_digest == reference.sha256
+
+
 def test_sample_manifest_cannot_drive_formal_consumers() -> None:
     manifest = _manifest(scope="sample")
 
@@ -124,6 +139,30 @@ def test_manifest_digest_drift_is_rejected_before_binding_use() -> None:
             usage_mode=FormalDatasetUsage.TRAINING,
             expected_manifest_digest=expected_digest,
         )
+
+
+def test_verified_bytes_are_detached_from_nested_caller_mutation(monkeypatch) -> None:
+    import backend.services.canonical_pit_dataset_consumer as consumer_module
+
+    manifest = _manifest()
+    expected_digest = _digest(manifest)
+    encode = canonical_json_bytes
+
+    def _encode_then_mutate(value) -> bytes:
+        encoded = encode(value)
+        manifest["pit_binding"]["frozen_snapshot_digest"] = "d" * 64
+        return encoded
+
+    monkeypatch.setattr(consumer_module, "canonical_json_bytes", _encode_then_mutate)
+
+    identity = require_formal_dataset_pit_identity(
+        manifest,
+        usage_mode=FormalDatasetUsage.TRAINING,
+        expected_manifest_digest=expected_digest,
+    )
+
+    assert identity.frozen_snapshot_digest == SHA_A
+    assert manifest["pit_binding"]["frozen_snapshot_digest"] == "d" * 64
 
 
 def test_canonical_pit_binding_tamper_is_rejected() -> None:

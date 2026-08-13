@@ -801,3 +801,6 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-5A | W3-A实现首轮 | Python `str+Enum`转换误拒合法usage；顶层新增测试未映射到CI定向域 | 枚举实例直接返回；测试迁入`backend/tests/dataset_release/`并同步设计/scope，不修改共享CI规则 | resolved |
 | Review-5B | W3-A异常与边界复审 | 宽泛`ValueError`包装可能掩盖非契约错误；非Mapping输入缺直接证据 | 只包装`CanonicalPitContractError/PitSnapshotError`；补充typed-failure测试 | resolved |
 | Review-5C | W3-A最终合入就绪复审 | 复核W1/W2 API复用、CAS digest、sample/v1/tamper拒绝、DB隔离和精确scope | direct/adjacent 26 passed；data-sync 161 passed；Qlib 15 passed；catalog 7 passed；F2 30/30；guardrail 0 finding；Ruff PASS | pass_pending_pr |
+| Review-6A | W3-A嵌套身份完整性复审 | 外层浅拷贝允许嵌套manifest在digest计算后、W2解析前被调用方修改 | 只序列化一次并校验CAS digest；W1/W2从已验证字节反序列化的独立快照读取；增加TOCTOU回归测试 | resolved |
+| Review-6B | W3-A真实CAS兼容复审 | 原digest测试与实现共用辅助函数，不能独立证明Control CAS引用兼容 | 使用真实`ControlStore`和`CASStore.put_json()`生成引用并通过正式adapter验证 | resolved |
+| Review-6C | W3-A最终HEAD合入复审 | 合并最新main后逐项复核实现、测试、scope、PR设计链接和DESIGN-COMPLIANCE-001四项 | direct/adjacent 28 passed；data-sync 161 passed；Qlib 15 passed；catalog 7 passed；F2 30/30；guardrail 0 finding；ownership 4/4；无P0/P1/P2 | pass_ready_for_merge |

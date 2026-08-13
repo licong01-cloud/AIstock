@@ -8,6 +8,7 @@ concern and is deliberately not accepted here.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
@@ -76,20 +77,21 @@ def require_formal_dataset_pit_identity(
     usage = _require_usage_mode(usage_mode)
     if not isinstance(release_manifest, Mapping):
         raise CanonicalPitDatasetConsumerError("release_manifest must be a mapping")
-    manifest = dict(release_manifest)
-    if manifest.get("schema_version") != DATASET_CANDIDATE_MANIFEST_SCHEMA:
-        raise CanonicalPitDatasetConsumerError(
-            "formal dataset consumers require a v2 candidate release manifest; legacy/v1 manifests are forbidden"
-        )
 
     try:
         expected_digest = ensure_sha256(expected_manifest_digest, field="expected_manifest_digest")
-        actual_digest = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+        encoded_manifest = canonical_json_bytes(dict(release_manifest))
+        actual_digest = hashlib.sha256(encoded_manifest).hexdigest()
+        manifest = json.loads(encoded_manifest)
     except (CanonicalizationError, TypeError, ValueError) as exc:
         raise CanonicalPitDatasetConsumerError(f"release manifest identity is invalid: {exc}") from exc
     if actual_digest != expected_digest:
         raise CanonicalPitDatasetConsumerError(
             f"release manifest digest differs from immutable reference: expected={expected_digest} actual={actual_digest}"
+        )
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != DATASET_CANDIDATE_MANIFEST_SCHEMA:
+        raise CanonicalPitDatasetConsumerError(
+            "formal dataset consumers require a v2 candidate release manifest; legacy/v1 manifests are forbidden"
         )
 
     try:
