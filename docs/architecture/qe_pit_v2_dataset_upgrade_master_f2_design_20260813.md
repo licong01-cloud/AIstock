@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：W0～W2源码已合入；W3短周期分片方案经Review-4A/4B/4C审核通过并满足设计合入标准，等待用户确认；W3消费者实现、真实数据构建和生产激活均未授权
+- 状态：W0～W2源码已合入；W3短周期分片方案经Review-4A/4B/4C审核通过；W3-A已获授权进入独立实施，其源码/合入状态以Acceptance Matrix和window scope receipt为准；W3-B/C、真实数据构建和生产激活均未授权
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
@@ -332,7 +332,7 @@ W2任务：
   W3-A发明通用v1默认值或把legacy identity投影成canonical binding。
 - 返回统一identity projection：`authority_id/rule_version/rule_parameters_digest/release_id/cutoff/
   frozen_snapshot_digest/manifest_digest`。任何字段缺失、digest冲突、scope错误或v1普通运行均typed fail。
-- 直接测试固定为`backend/tests/test_canonical_pit_dataset_consumer.py`，覆盖full PASS、sample拒绝、所有v1拒绝、
+- 直接测试固定为`backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py`，覆盖full PASS、sample拒绝、所有v1拒绝、
   manifest篡改和禁止在线DB fallback；显式reproduction PASS由W3-B/C的domain reader测试负责。
 
 退出：PR-3A独立合入；公共API与W2 manifest兼容，QE/HMM尚未改变运行默认值。
@@ -716,7 +716,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-001 | §4 D-001；`canonical_equity_pit.py`与W1/W6 planned scope | `backend/tests/test_canonical_equity_pit.py`；planned `backend/tests/test_canonical_pit_consumer_inventory.py` | design_ready_for_review | none |
 | F-002 | §4 D-001/D-002；`dataset_release/pit.py`与W1/W2 planned scope | `backend/tests/dataset_release/test_pit.py` | design_ready_for_review | none |
 | F-003 | §4 D-002；planned registry migration与resolver | planned `backend/tests/test_canonical_equity_pit_authority_registry.py` | design_ready_for_review | none |
-| F-004 | §4 D-002、§6 P3-A/W3-A；中立frozen binding adapter | planned `backend/tests/test_canonical_pit_dataset_consumer.py` | design_ready_for_review | none |
+| F-004 | §4 D-002、§6 P3-A/W3-A；中立frozen binding adapter | `backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py` | implementation_verified | none |
 | F-005 | §6 P0/P3/P4；W0/W3/W4/W5/W6 inventory scope | planned `backend/tests/test_canonical_pit_consumer_inventory.py` | design_ready_for_review | none |
 | F-006 | §5/§5.2；各切片task card、短租约和allowed write scope | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json` | design_ready_for_review | none |
 | F-007 | §5.1、§6；W3串行切片、W0/W6/W7 source freeze contract | artifact: `tests/aistock_validation/pit_v2/source_freeze_receipt.json` | design_ready_for_review | none |
@@ -740,9 +740,9 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-025 | §6 P4；incremental/materializer/validator planned scope | `backend/tests/dataset_release/test_candidate_validator.py`；planned `backend/tests/dataset_release/test_selective_clean_full_parity.py` | design_ready_for_review | none |
 | F-026 | §6 P4；component manifest v2/canonical lineage v3 planned scope | `backend/tests/dataset_release/test_component_artifact_manifest.py`；`backend/tests/dataset_release/test_canonical_lineage.py` | design_ready_for_review | none |
 | F-027 | §6 P2/P5/P6；initial migration plan、control service、resolution reader和CLI planned scope | `backend/tests/dataset_release/test_control_service.py`；`backend/tests/dataset_release/test_resolution_processor.py`；`backend/tests/scripts/test_update_backtest_dataset_monthly.py`；artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
-| F-028 | §5/§6 P3-A W3-A；neutral formal adapter与W1/W2 API边界 | planned `backend/tests/test_canonical_pit_dataset_consumer.py` | design_ready_for_review | none |
+| F-028 | §5/§6 P3-A W3-A；neutral formal adapter与W1/W2 API边界 | `backend/services/canonical_pit_dataset_consumer.py`；`backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py` | implementation_verified | none |
 | F-029 | §5.2；短租约、BUG抢占、dirty handoff和实验identity边界 | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json` | design_ready_for_review | none |
-| F-030 | §6 P3-A W3-D；最终main统一身份和隔离矩阵 | planned `backend/tests/test_qe_hmm_canonical_pit_integration.py`；command: `python -m pytest backend/tests/test_canonical_pit_dataset_consumer.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py backend/tests/hmm_data_source/test_isolation_constraints.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q` | design_ready_for_review | none |
+| F-030 | §6 P3-A W3-D；最终main统一身份和隔离矩阵 | planned `backend/tests/test_qe_hmm_canonical_pit_integration.py`；command: `python -m pytest backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py backend/tests/hmm_data_source/test_isolation_constraints.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q` | design_ready_for_review | none |
 
 设计通过只表示可以请求用户确认进入实施；不得把`designed`状态表述为源码、真实数据或生产完成。
 
@@ -798,3 +798,11 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-4A | W3并发与验收首轮 | F-030证据不可验证；W3-A strict v2与v1 reproduction职责冲突；W6仍依赖旧`W3_merged`；dirty handoff语义不严 | 增加跨域测试/精确命令；W3-A只处理正式v2、domain reader处理reproduction；改为W3-D gate；目标文件必须clean/committed | resolved |
 | Review-4B | W3范围与状态复审 | 当前设计修订自身scope未登记；W3-D证据未明确绑定最终main；DEV DDL状态在本轮未重验 | 收据登记本分支两文件精确scope；增加最终main命令/结构化receipt/CI绑定；DEV状态改为本轮未重验 | resolved |
 | Review-4C | 最终合入就绪复审 | 复核分片职责、文件租约/BUG抢占、实验固定身份、enablement/activation边界、最终main证据和两文件变更范围 | F2 30/30且0 warning；guardrail 0 finding；ownership 2/2；catalog integrity 7 passed；无新P0/P1 | pass_pending_user_confirmation |
+| Review-5A | W3-A实现首轮 | Python `str+Enum`转换误拒合法usage；顶层新增测试未映射到CI定向域 | 枚举实例直接返回；测试迁入`backend/tests/dataset_release/`并同步设计/scope，不修改共享CI规则 | resolved |
+| Review-5B | W3-A异常与边界复审 | 宽泛`ValueError`包装可能掩盖非契约错误；非Mapping输入缺直接证据 | 只包装`CanonicalPitContractError/PitSnapshotError`；补充typed-failure测试 | resolved |
+| Review-5C | W3-A最终合入就绪复审 | 复核W1/W2 API复用、CAS digest、sample/v1/tamper拒绝、DB隔离和精确scope | direct/adjacent 26 passed；data-sync 161 passed；Qlib 15 passed；catalog 7 passed；F2 30/30；guardrail 0 finding；Ruff PASS | pass_pending_pr |
+| Review-6A | W3-A嵌套身份完整性复审 | 外层浅拷贝允许嵌套manifest在digest计算后、W2解析前被调用方修改 | 只序列化一次并校验CAS digest；W1/W2从已验证字节反序列化的独立快照读取；增加TOCTOU回归测试 | resolved |
+| Review-6B | W3-A真实CAS兼容复审 | 原digest测试与实现共用辅助函数，不能独立证明Control CAS引用兼容 | 使用真实`ControlStore`和`CASStore.put_json()`生成引用并通过正式adapter验证 | resolved |
+| Review-6C | W3-A最终HEAD合入复审 | 合并最新main后逐项复核实现、测试、scope、PR设计链接和DESIGN-COMPLIANCE-001四项 | direct/adjacent 28 passed；data-sync 161 passed；Qlib 15 passed；catalog 7 passed；F2 30/30；guardrail 0 finding；ownership 4/4；无P0/P1/P2 | pass_ready_for_merge |
+| Review-6D | PR机器可审计性复审 | 人类可读的`Exact write scope`/验收编号未匹配PR Quality固定元数据语法 | PR正文使用`Design Acceptance Matrix`和`Allowed write scope`，并列出四个精确文件及三项production gate | resolved_pending_ci_readback |
+| Review-6E | 最新main漂移复审 | CI期间main前进至`458199cd`，新增Advisory P0-D源码/测试/设计和ownership登记 | 文件交集为零；无冲突合并；按最终main重跑28+161+15+7、F2、guardrail和ownership | pass_ready_for_merge |
