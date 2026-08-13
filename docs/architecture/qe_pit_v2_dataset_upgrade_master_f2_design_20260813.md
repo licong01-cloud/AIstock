@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：三轮独立审核通过、设计满足合入条件，等待用户确认；实现、真实数据构建和生产激活均未授权
+- 状态：W0～W2源码已合入；W3短周期分片方案经Review-4A/4B/4C审核通过并满足设计合入标准，等待用户确认；W3消费者实现、真实数据构建和生产激活均未授权
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
@@ -62,13 +62,15 @@ QE frozen snapshot、在线rolling view、StrategyPackage和模拟盘将可能�
 - `configs/datasets/qe_backtest_monthly_v2.yaml` 已冻结 v2 月更语义与资源上限。
 - `backend/services/dataset_release/retention.py` 已规定已发布或被实验/训练/生产/审计引用的数据集必须完整保留，
   自动删除永远不允许。
+- W1公共authority/registry源码已由`4e1f667e`合入；W2 candidate-only release、严格PIT binding和首次迁移计划已由
+  `589678f3`合入。W3必须消费其公开API，不回改W1/W2核心来规避消费者迁移。
 
 ### 3.2 当前未关闭缺口
 
-1. `stock_universe_pit_service.py`、Selection runtime profile、QE dataset contract、StrategyPackage/Advisory 等仍存在
-   v1 默认值或 SQL 硬编码。
-2. 当前只有目标常量和候选profile，没有一个能被所有在线消费者共同读取、并可用CAS原子切换的 production
-   authority registry。
+1. Selection runtime profile、QE dataset contract、StrategyPackage/Advisory 等消费者仍存在v1默认值、旧dataset常量
+   或SQL硬编码。
+2. W3原设计一次性保留十个QE/HMM业务文件，不适合与持续实验和紧急BUG修复并存；缺少可抢占、可重放的短期文件
+   租约和小PR顺序。
 3. QE/HMM frozen dataset identity与在线rolling authority尚未形成机器可校验的candidate validation bundle与
    activation envelope。
 4. 旧 StrategyPackage/模型是否只需重新认证还是必须重训，尚未按“截面依赖/时序独立”完成分类。
@@ -224,7 +226,10 @@ write scope完全不重叠且共同依赖已合入main时。
 | W0 Program/Design | 主设计、Acceptance Index、跨窗口依赖、最终汇总 | 本设计及其feature记录 | 批次计划、scope矩阵、审核结论 | 不实现业务代码、不运行数据构建 |
 | W1 PIT Core/Registry | authority resolver、registry migration、v1迁移态、v2 builder/state契约 | `canonical_equity_pit.py`、`stock_universe_pit_service.py`、PIT builder、精确migration及直接测试 | 单一registry和fail-closed公共API | 不修改QE/Selection/StrategyPackage消费者 |
 | W2 Dataset Release | v2 profile、PIT snapshot、planner/materializer/validator、资源和月更Skill/Runbook | `dataset_release/**`、月更scripts/config、Skill/Runbook及直接测试 | 有界增量candidate能力 | 不改变消费者运行默认值、不运行真实全量 |
-| W3 QE/HMM/Training | frozen release binding、正式实验/训练/因子缓存/HMM输入和HMM-risk PIT消费者迁移 | `quantevolver/**`、`hmm_data_source/**`、`hmm_evolution/**`、`hmm_risk/stock_fact_repository.py`、相关scripts/tests精确scope | 离线训练不查在线DB；HMM-risk在线查询绑定rolling generation | 不修改Selection/StrategyPackage消费者 |
+| W3-A Shared Dataset Consumer Contract | 中立的正式frozen manifest consumer adapter和legacy排除契约 | 新建`backend/services/canonical_pit_dataset_consumer.py`及直接测试 | 单一v2正式解析入口，复用W2 `DatasetPitBinding` | 不解析v1 reproduction、不回改W1/W2、不写QE/HMM业务文件 |
+| W3-B QE Integration | QE正式实验、因子缓存和长期趋势读取接入frozen binding | 仅QE精确入口文件和直接测试，按短期租约登记 | QE正式任务绑定release identity且不查在线PIT DB | 不修改HMM、Selection、StrategyPackage |
+| W3-C HMM Integration | HMM source/evolution与HMM-risk在线/离线边界迁移 | 仅HMM精确入口文件、repair script和直接测试，按短期租约登记 | frozen训练隔离DB；在线stock facts绑定rolling generation | 不修改QE、Selection、StrategyPackage |
+| W3-D QE/HMM Validation | 在A/B/C均合入后的最终main上验证统一身份、reproduction和隔离 | 不修改业务源码；仅运行直接测试、inventory和结构化验证 | W3 source-ready receipt，失败返回责任切片 | 不修数据、不启动实验、不把旧实验当v2证据 |
 | W4 Selection/Paper/Simulation | rolling resolver、选股/持仓退出、持久化runtime profile和模拟盘兼容 | `selection_center/**`、`paper_trading_v2/**`、`simulation_runtime/**`及其精确JSON migration/tests | 在线消费者统一binding、旧profile显式迁移和shadow能力 | 不改变订单可执行性业务语义 |
 | W5 StrategyPackage/Advisory | package manifest/projection双读契约、旧包分类、Advisory查询迁移 | `strategy_package/**`、`advisory_*`精确scope、直接测试 | v2包重新认证/重训决策和v1 reproduction隔离 | 不改写已发布旧manifest或模型资产 |
 | W6 Integration | 汇总最终main、消费者库存扫描、跨模块fixture、candidate bundle/activation envelope builder、共享inference入口 | 集成测试、inventory guard、`backend/inference_engine.py`精确scope和必要胶水；其他公共核心文件需W1交接 | final source-ready commit、无fallback共享推理和结构化receipt | 不运行生产或全量candidate |
@@ -235,14 +240,34 @@ write scope完全不重叠且共同依赖已合入main时。
 ### 5.1 并行与串行规则
 
 - W1和W2先串行合入：W2必须以W1最终公共binding为输入。
-- W3、W4、W5可在W1/W2合入后并行，但必须拥有互斥文件scope；任何共同文件转交W6单写。
-- W6只在W3/W4/W5均合入或明确记录阻断后开始。
+- W3内部固定`W3-A → W3-B → W3-C → W3-D`；每个源码切片从当时最新`origin/main`开始并形成独立小PR，
+  不保留一个跨越全部QE/HMM文件的长期开发分支。
+- W4、W5可与尚未占用同文件的W3切片并行；任意共同文件转交W6单写。W3-B与W3-C虽文件互斥，仍按上述顺序
+  执行，以减少活跃业务窗口交接和最终identity漂移。
+- W6只在W3-D、W4、W5均通过或明确记录阻断后开始。
 - W7绑定W6最终commit、profile digest和toolchain SHA；W7运行期间W1-W6不得变更构建相关源码。
 - W8可以只读观察W7，但正式签收必须绑定W7 terminal receipt和不可变candidate identity。
 - W9的DEV migration和enablement部署准备可在W6 source-ready后进行；inactive data distribution与最终CAS必须在
   W8 PASS、用户对具体migration/candidate/activation授权后执行。
 
-### 5.2 首次升级与常态月更的窗口差异
+### 5.2 W3短期文件租约与BUG抢占
+
+文件租约是并发写入协调，不是新的业务审批或人工发布门禁：
+
+1. 每个W3源码切片只登记本PR实际要写的精确文件；租约从首次写入前的preflight开始，到PR合入或切片明确放弃时
+   释放。目标是数小时内完成一个原子PR，持续时间只做telemetry，不以超时伪造失败或批准。
+2. 切片入口只要求其目标文件完成提交/交接并且没有其他写入者；其他QE/HMM文件、实验和无交集开发无需停止。
+   若目标文件在其他worktree仍dirty，状态为`WAITING_OWNER_HANDOFF`，不得stash、reset、复制覆盖或进入对方worktree修复。
+3. preflight必须比较最新`origin/main`、open PR/已知活动分支的changed files、窗口登记和owner handoff。Git无法证明的
+   未提交状态必须由原窗口结构化声明；不得把“未发现分支diff”解释为“没有dirty改动”。
+4. 同一目标文件出现P0/P1或阻断当前实验的BUG时，BUG修复优先。W3在可测试的原子commit边界停止并释放租约，BUG先
+   合入main；W3随后从新main重建/同步该切片并重跑全部直接证据，旧HEAD receipt失效。不得让BUG窗口和W3并行写同文件。
+5. 运行中的实验继续固定其启动commit、dataset release和PIT identity；W3源码合入不重启、不切换或重放这些实验，
+   旧实验结果不得作为v2消费者验收证据。
+6. 合入前再次计算PR diff与新main/其他open PR交集；存在语义或文本冲突时停在源码层解决并重验，不通过合入顺序、
+   自动冲突选择或运行时默认值掩盖冲突。
+
+### 5.3 首次升级与常态月更的窗口差异
 
 W0～W9是首次v2升级或规则/schema改变时的完整项目编排。v2稳定激活后的普通月份不重复启动所有研发窗口：
 
@@ -295,15 +320,63 @@ W2任务：
 
 ### P3 消费者迁移（W3/W4/W5并行）
 
-#### P3-A QE/HMM/训练（W3）
+#### P3-A QE/HMM/训练（W3-A→W3-B→W3-C→W3-D）
 
-- QE dataset contract从release manifest获得authority/rule/digest/cutoff，不再接受在线rolling key代替frozen snapshot。
-- 新正式实验、因子批算、HMM训练/预测均保存dataset release identity；普通任务拒绝v1。
-- `hmm_risk/stock_fact_repository.py`等在线DB查询必须通过resolver绑定rolling key和generation；离线训练、回测和
-  预测数据读取不得调用该在线repository补齐frozen数据。
-- 历史任务只有显式reproduction可使用旧release。
-- 对模型分类：截面rank/neutralization/label依赖者标记`retrain_required`；纯单股时序且PIT仅做外层过滤者
-  可标记`revalidate_then_republish`，但不得直接沿用生产资格。
+##### W3-A 中立公共契约
+
+- 新建`backend/services/canonical_pit_dataset_consumer.py`，只组合W1的
+  `require_canonical_consumer_binding`与W2的`DatasetPitBinding.from_release_manifest()`；不得复制manifest字段校验、
+  自行接受缺字段默认值或修改`dataset_release/pit.py`来适配消费者。
+- 公开输入为不可变release manifest及显式usage mode：`formal_training/formal_prediction`只接受full canonical binding；
+  sample和所有legacy/v1 manifest始终拒绝。历史reproduction继续由W3-B/C各自现有legacy reader显式处理，不允许
+  W3-A发明通用v1默认值或把legacy identity投影成canonical binding。
+- 返回统一identity projection：`authority_id/rule_version/rule_parameters_digest/release_id/cutoff/
+  frozen_snapshot_digest/manifest_digest`。任何字段缺失、digest冲突、scope错误或v1普通运行均typed fail。
+- 直接测试固定为`backend/tests/test_canonical_pit_dataset_consumer.py`，覆盖full PASS、sample拒绝、所有v1拒绝、
+  manifest篡改和禁止在线DB fallback；显式reproduction PASS由W3-B/C的domain reader测试负责。
+
+退出：PR-3A独立合入；公共API与W2 manifest兼容，QE/HMM尚未改变运行默认值。
+
+##### W3-B QE小切片
+
+- 精确候选文件：`quantevolver/qe_dataset_contract.py`、`experiment_config.py`、`config_composer.py`、
+  `factor_universe_mask_service.py`、`long_trend_data_reader.py`和`scripts/backfill_factor_cache.py`。实施前按实际调用图
+  进一步缩小；未进入最终PR的文件立即释放租约，不因候选清单而长期冻结。
+- QE dataset contract从W3-A adapter获得frozen identity，显式v2正式实验/因子批算/长期趋势读取保存同一release identity；
+  旧环境变量和硬编码dataset常量仅可在显式reproduction reader中解析，不能作为正式任务默认值。
+- frozen factor universe/mask只消费candidate artifact，不调用在线`StockUniversePitService`或生产DB补齐；composer只
+  传递已验证manifest ref/digest，不通过任意path/key覆盖生成另一套身份。
+- 直接测试以`backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`为主，并覆盖config serialization、
+  factor-cache identity、long-trend manifest parity和v1 reproduction隔离。
+
+退出：PR-3B合入；显式v2正式QE任务必须携带full binding。enablement阶段只增加该能力，不改变当前生产admission；
+已开始的v1任务继续固定原commit/release，W9 activation才切换新任务默认admission。
+
+##### W3-C HMM小切片
+
+- 精确候选文件：`hmm_data_source/legacy_qe_artifact_manifests.py`、`hmm_evolution/universe.py`、
+  `hmm_risk/stock_fact_repository.py`和`scripts/hmm_risk/repair_b3_stock_fact_gaps.py`。同样按实际调用图缩小并短租约执行。
+- 显式v2 HMM训练/预测从W3-A adapter读取与QE相同的frozen identity；legacy QE manifest reader仅服务显式reproduction，
+  不得把`shsz_st_pit_active_v1`或旧dataset prefix提升为正式默认值。
+- `stock_fact_repository.py`在线查询通过W1 resolver绑定rolling key和`activation_generation`；离线训练、回测和预测
+  数据读取不得导入/调用该repository来补齐frozen数据。repair脚本只处理显式plan和目标，不改变consumer binding。
+- 直接测试以`backend/tests/hmm_data_source/test_isolation_constraints.py`及HMM evolution/risk直接测试为主；PR-3C同时
+  新增`backend/tests/test_qe_hmm_canonical_pit_integration.py`，证明离线路径零在线DB调用、在线路径generation漂移
+  fail closed、QE/HMM identity完全相同。
+
+退出：PR-3C合入；HMM enablement完成但不代表模型已重训、重新认证或生产runtime已切换。
+
+##### W3-D 最终验证（无业务源码PR）
+
+- 从包含PR-3A/B/C的最新main运行QE/HMM直接测试、consumer inventory和结构化identity comparison；不在旧W3分支
+  上拼接证据，不修改业务源码，不启动正式实验或训练。
+- 必须证明：QE/HMM投影的canonical tuple完全一致；full v2 formal PASS；sample和普通v1拒绝；显式v1 reproduction
+  仍可读；manifest/digest篡改fail closed；离线路径无在线DB fallback；已有运行实验仍固定旧commit/identity。
+- 任一失败返回W3-A/B/C对应责任切片，新修复PR从最新main开始；修复合入后W3-D全部重跑，旧receipt作废。
+- 对模型分类：截面rank/neutralization/label依赖者标记`retrain_required`；纯单股时序且PIT仅做外层过滤者可标记
+  `revalidate_then_republish`，但不得直接沿用生产资格。
+
+退出：最终main上的W3 source-ready证据PASS；不等于模型重训、真实candidate、runtime activation或重启完成。
 
 #### P3-B Selection/Paper/Simulation（W4）
 
@@ -535,7 +608,10 @@ rollback创建新的单调递增generation，并让其引用最后一个已验�
 | PR-0 | W0 | 本主设计 | 三轮设计审核+F2 validator | 允许实现/导出 |
 | PR-1 | W1 | Core/registry/migration source | DEV migration fixture、contract tests | 生产DDL/DML |
 | PR-2 | W2 | Dataset release v2 enablement | resource/materializer/validator matrix | 真实candidate完成 |
-| PR-3 | W3 | QE/HMM/Training | frozen/reproduction tests | 模型已重训 |
+| PR-3A | W3-A | 中立正式frozen consumer adapter | full/sample/v1 rejection/tamper直接测试 | QE/HMM已迁移或legacy reproduction已验证 |
+| PR-3B | W3-B | QE最小入口接入 | QE binding、cache、reader和serialization测试 | HMM已迁移或生产默认已切换 |
+| PR-3C | W3-C | HMM最小入口接入 | HMM isolation、generation和identity测试 | 模型已重训或重新认证 |
+| 无源码PR | W3-D | 最终main上的QE/HMM统一验证 | A/B/C均合入、inventory无unknown、identity/fallback矩阵PASS | runtime、真实训练或candidate已完成 |
 | PR-4 | W4 | Selection/Paper/Simulation | rolling/shadow/orderability tests | 生产已切v2 |
 | PR-5 | W5 | StrategyPackage/Advisory | immutable old package+compatibility tests | 旧包可直接运行v2 |
 | PR-6 | W6 | 集成inventory/跨模块tests/candidate bundle+activation envelope/Skill及全部activation源码配置 | 最终HEAD receipt、无unknown引用 | candidate或activation完成 |
@@ -582,7 +658,9 @@ W7开始后禁止新增activation源码/config PR；任何功能改动使W7/W8 r
 | 为赶速度提高并发 | DB/WSL/主机资源失控 | concurrency=1 + pressure ladder |
 | 旧包manifest原地改写 | 历史不可复现 | 新v2包版本，旧包只读 |
 | 删除6月/7月历史release | 正式实验无法复现 | FULL_IMMUTABLE + 冷存储/去重优先 |
-| 多窗口修改公共契约 | 合并冲突和语义漂移 | 单写scope + 串行公共PR |
+| 多窗口修改公共契约 | 合并冲突和语义漂移 | W3-A中立单写 + A/B/C串行小PR |
+| 长期冻结QE/HMM业务文件 | 阻塞实验BUG、迫使并行覆盖 | 单PR短租约、仅目标文件交接、BUG优先抢占并从新main重放 |
+| 旧实验被误当v2证据 | identity和runtime结论失真 | 实验固定启动commit/release；W3-D只接受最终main新证据 |
 | receipt绑定旧commit | 验证证据失真 | 最终HEAD/candidate/generation强绑定 |
 
 ## 11. Rollout / Rollback
@@ -605,8 +683,8 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-003 | singleton pointer在单一DB事务内以generation CAS原子切换；不宣称跨节点/运行时原子，消费者不得猜latest。 |
 | F-004 | QE/HMM计算面从不可变manifest读取binding，不回退在线DB。 |
 | F-005 | 所有生产v1引用完成分类，unknown为零；历史identity不做全局替换。 |
-| F-006 | 每个实施窗口有独立worktree、单写scope、入口/退出门禁和结构化receipt。 |
-| F-007 | W3/W4/W5只在公共契约合入后并行，W7构建期间源码冻结。 |
+| F-006 | 每个源码切片有独立worktree、短期精确文件租约、入口/退出门禁和结构化receipt；无关实验和开发不被冻结。 |
+| F-007 | W3按A→B→C→D串行，W4/W5仅在文件互斥时并行；W7构建期间源码冻结。 |
 | F-008 | v2 PIT覆盖252交易日、历史D/P、ST/终止as-of和exception ledger。 |
 | F-009 | planner按依赖选择复用/增量/选择性/全重建，不默认全量重新导出。 |
 | F-010 | PIT变化不会被错误降级为仅更新all.txt；完整candidate artifact graph可独立读取。 |
@@ -627,6 +705,9 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-025 | 每类incremental/selective结果与clean full在ordered index、dtype、NaN mask和数值容差上等价，baseline Merkle不变且无候选外路径依赖。 |
 | F-026 | component manifest storage v2、canonical lineage v3、legacy迁移与6000×36容量门禁满足长期月更。 |
 | F-027 | 首次迁移计划固定2026-07-31、样本代码/事件窗口/plan digest，并由同一durable pipeline运行sample和full。 |
+| F-028 | W3-A只复用W1/W2公共API形成中立正式consumer adapter且拒绝全部legacy；QE/HMM不得复制v2解析器或互相反向依赖。 |
+| F-029 | W3短租约允许同文件BUG优先抢占；仅目标文件需提交/交接，旧实验固定原commit且不作为v2验收。 |
+| F-030 | W3-D在A/B/C合入后的最终main验证QE/HMM identity、v1 reproduction、sample/v1拒绝和零在线DB fallback。 |
 
 ## 13. Design Acceptance Matrix / 设计验收矩阵
 
@@ -635,16 +716,16 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-001 | §4 D-001；`canonical_equity_pit.py`与W1/W6 planned scope | `backend/tests/test_canonical_equity_pit.py`；planned `backend/tests/test_canonical_pit_consumer_inventory.py` | design_ready_for_review | none |
 | F-002 | §4 D-001/D-002；`dataset_release/pit.py`与W1/W2 planned scope | `backend/tests/dataset_release/test_pit.py` | design_ready_for_review | none |
 | F-003 | §4 D-002；planned registry migration与resolver | planned `backend/tests/test_canonical_equity_pit_authority_registry.py` | design_ready_for_review | none |
-| F-004 | §4 D-002、§6 P3-A；W3 planned frozen binding | planned `backend/tests/quantevolver/test_canonical_pit_dataset_binding.py` | design_ready_for_review | none |
+| F-004 | §4 D-002、§6 P3-A/W3-A；中立frozen binding adapter | planned `backend/tests/test_canonical_pit_dataset_consumer.py` | design_ready_for_review | none |
 | F-005 | §6 P0/P3/P4；W0/W3/W4/W5/W6 inventory scope | planned `backend/tests/test_canonical_pit_consumer_inventory.py` | design_ready_for_review | none |
-| F-006 | §5；各窗口task card和allowed write scope | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json` | design_ready_for_review | none |
-| F-007 | §5.1、§6；W0/W6/W7 source freeze contract | artifact: `tests/aistock_validation/pit_v2/source_freeze_receipt.json` | design_ready_for_review | none |
+| F-006 | §5/§5.2；各切片task card、短租约和allowed write scope | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json` | design_ready_for_review | none |
+| F-007 | §5.1、§6；W3串行切片、W0/W6/W7 source freeze contract | artifact: `tests/aistock_validation/pit_v2/source_freeze_receipt.json` | design_ready_for_review | none |
 | F-008 | §6 P2/P5/P7；PIT builder与W1/W7/W8 scope | `backend/tests/test_stock_universe_pit_spans.py` | design_ready_for_review | none |
 | F-009 | §4 D-004、§6 P6；dependency planner/materializer | `backend/tests/dataset_release/test_dependency_graph.py` | design_ready_for_review | none |
 | F-010 | §6 P4/P6、§7.1；candidate manifest/validator | `backend/tests/dataset_release/test_candidate_validator.py` | design_ready_for_review | none |
 | F-011 | §6 P5、§7.1；minute source/overlay | `backend/tests/dataset_release/test_minute_overlay.py` | design_ready_for_review | none |
 | F-012 | §7.1；component validators | `backend/tests/dataset_release/test_candidate_validator.py`；`backend/tests/dataset_release/test_index_context.py` | design_ready_for_review | none |
-| F-013 | §6 P3-A/P8；QE/HMM/训练planned scope | planned `backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`；`backend/tests/hmm_data_source/test_isolation_constraints.py` | design_ready_for_review | none |
+| F-013 | §6 P3-A/P8；W3-B/C QE/HMM/训练planned scope | planned `backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`；`backend/tests/hmm_data_source/test_isolation_constraints.py` | design_ready_for_review | none |
 | F-014 | §6 P3-B；Selection/Paper/Simulation planned scope | planned `backend/tests/selection_center/test_canonical_pit_runtime.py`；`backend/tests/paper_trading_v2/test_runtime_profile.py` | design_ready_for_review | none |
 | F-015 | §6 P3-C/P8；StrategyPackage/Advisory planned scope | planned `backend/tests/strategy_package/test_canonical_pit_compatibility.py` | design_ready_for_review | none |
 | F-016 | §6 P5；W6/W7 source identity contract | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
@@ -659,6 +740,9 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-025 | §6 P4；incremental/materializer/validator planned scope | `backend/tests/dataset_release/test_candidate_validator.py`；planned `backend/tests/dataset_release/test_selective_clean_full_parity.py` | design_ready_for_review | none |
 | F-026 | §6 P4；component manifest v2/canonical lineage v3 planned scope | `backend/tests/dataset_release/test_component_artifact_manifest.py`；`backend/tests/dataset_release/test_canonical_lineage.py` | design_ready_for_review | none |
 | F-027 | §6 P2/P5/P6；initial migration plan、control service、resolution reader和CLI planned scope | `backend/tests/dataset_release/test_control_service.py`；`backend/tests/dataset_release/test_resolution_processor.py`；`backend/tests/scripts/test_update_backtest_dataset_monthly.py`；artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
+| F-028 | §5/§6 P3-A W3-A；neutral formal adapter与W1/W2 API边界 | planned `backend/tests/test_canonical_pit_dataset_consumer.py` | design_ready_for_review | none |
+| F-029 | §5.2；短租约、BUG抢占、dirty handoff和实验identity边界 | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json` | design_ready_for_review | none |
+| F-030 | §6 P3-A W3-D；最终main统一身份和隔离矩阵 | planned `backend/tests/test_qe_hmm_canonical_pit_integration.py`；command: `python -m pytest backend/tests/test_canonical_pit_dataset_consumer.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py backend/tests/hmm_data_source/test_isolation_constraints.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q` | design_ready_for_review | none |
 
 设计通过只表示可以请求用户确认进入实施；不得把`designed`状态表述为源码、真实数据或生产完成。
 
@@ -666,10 +750,13 @@ survivorship limitation，不得把v1重新声明为长期权威。
 
 | 动作 | 当前状态 |
 |---|---|
-| 源码实现 | `not_started_pending_user_design_confirmation` |
+| W1 Core/Registry源码 | `merged_4e1f667e` |
+| W2 Dataset Release源码 | `merged_589678f3` |
+| W3消费者源码 | `not_started_pending_user_revised_design_confirmation` |
+| W4～W6消费者/集成源码 | `not_started_or_separately_owned` |
 | 真实小样本 | `not_run_not_authorized` |
 | 真实全量candidate | `not_run_not_authorized` |
-| DEV DDL/DML | `not_run_pending_implementation` |
+| DEV DDL/DML | `not_revalidated_in_this_design_revision` |
 | 生产DDL/DML | `pending_separate_targeted_authorization` |
 | production activation | `not_requested` |
 | node1/计算节点distribution | `not_requested` |
@@ -693,7 +780,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | 禁止简化交付 | P4～P9分别区分fixture、小样本、full candidate、独立审核、包认证和activation；F-010/F-016～F-018 | pass_design_only；任何子集不得声明完整升级 |
 | 禁止静默错误 | D-002独立oracle、P5/P6 typed failure、P7全量闭环与provider冲突、F-008/F-011/F-012 | pass_design_only；无默认旧key/provider/DB fallback |
 | 禁止改变业务逻辑 | D-001唯一authority、252td/退市/ST as-of、TDX-first、12指数/121列、历史release保留 | pass_design_only；业务语义均引用上位设计和冻结契约 |
-| 禁止私增门禁 | §5.2普通月更只需一次candidate-only提交；§14仅保留动作级生产授权 | pass_design_only；首次升级验证不是每月新增人工审批 |
+| 禁止私增门禁 | §5.2声明文件租约仅为并发协调；§5.3普通月更只需一次candidate-only提交；§14仅保留动作级生产授权 | pass_design_only；短租约不是人工审批，首次升级验证不是每月新增门禁 |
 
 以上只证明本设计满足规范；实现窗口仍须在各自最终HEAD重新执行同四项检查并提供直接代码/测试/运行证据。
 
@@ -708,3 +795,6 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-2B | 数据/资源限定复审 | WSL 12/6 GiB reserve遗漏；首次cutoff语义矛盾；outer schema与lineage schema混淆 | 补WSL reserve/readback；首次固定2026-07-31；区分outer v1/v2与lineage legacy/v3 | resolved |
 | Review-3A | 架构最终复审 | 原Review-2A两项逐项复核 | PASS，无新P0/P1 | pass |
 | Review-3B | 数据/资源最终复审 | 原Review-2B三项逐项复核 | PASS，无新P0/P1 | pass |
+| Review-4A | W3并发与验收首轮 | F-030证据不可验证；W3-A strict v2与v1 reproduction职责冲突；W6仍依赖旧`W3_merged`；dirty handoff语义不严 | 增加跨域测试/精确命令；W3-A只处理正式v2、domain reader处理reproduction；改为W3-D gate；目标文件必须clean/committed | resolved |
+| Review-4B | W3范围与状态复审 | 当前设计修订自身scope未登记；W3-D证据未明确绑定最终main；DEV DDL状态在本轮未重验 | 收据登记本分支两文件精确scope；增加最终main命令/结构化receipt/CI绑定；DEV状态改为本轮未重验 | resolved |
+| Review-4C | 最终合入就绪复审 | 复核分片职责、文件租约/BUG抢占、实验固定身份、enablement/activation边界、最终main证据和两文件变更范围 | F2 30/30且0 warning；guardrail 0 finding；ownership 2/2；catalog integrity 7 passed；无新P0/P1 | pass_pending_user_confirmation |
