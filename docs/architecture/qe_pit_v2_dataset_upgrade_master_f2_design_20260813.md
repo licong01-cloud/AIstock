@@ -658,7 +658,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-024 | §9、§15；W0及每个实现窗口 | artifact: `tests/aistock_validation/pit_v2/design_compliance_receipt.json` | design_ready_for_review | none |
 | F-025 | §6 P4；incremental/materializer/validator planned scope | `backend/tests/dataset_release/test_candidate_validator.py`；planned `backend/tests/dataset_release/test_selective_clean_full_parity.py` | design_ready_for_review | none |
 | F-026 | §6 P4；component manifest v2/canonical lineage v3 planned scope | `backend/tests/dataset_release/test_component_artifact_manifest.py`；`backend/tests/dataset_release/test_canonical_lineage.py` | design_ready_for_review | none |
-| F-027 | §6 P2/P5/P6；initial migration plan、control service、resolution reader和CLI planned scope | `backend/tests/dataset_release/test_control_service.py`；`backend/tests/dataset_release/test_resolution_processor.py`；`backend/tests/scripts/test_pit_v2_initial_migration_plan.py`；artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
+| F-027 | §6 P2/P5/P6；initial migration plan、control service、resolution reader和CLI planned scope | `backend/tests/dataset_release/test_control_service.py`；`backend/tests/dataset_release/test_resolution_processor.py`；`backend/tests/scripts/test_update_backtest_dataset_monthly.py`；artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
 
 设计通过只表示可以请求用户确认进入实施；不得把`designed`状态表述为源码、真实数据或生产完成。
 
