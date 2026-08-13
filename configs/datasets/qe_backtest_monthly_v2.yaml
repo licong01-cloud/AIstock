@@ -1,6 +1,8 @@
 schema_version: qe_backtest_monthly_profile_overlay_v1
 profile: qe_hmm_full_v2
 extends: qe_backtest_monthly_v1.yaml
+initial_migration_plans:
+  - pit_v2_initial_20260731_v1
 
 # Candidate-only canonical PIT upgrade. The loader accepts only this exact
 # overlay shape and validates every inherited v1 resource/data contract.

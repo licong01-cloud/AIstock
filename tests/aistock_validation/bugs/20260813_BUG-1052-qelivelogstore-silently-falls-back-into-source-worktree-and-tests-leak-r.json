@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1052",
-  "closed_at": null,
+  "closed_at": "2026-08-13T04:11:58.377002Z",
   "closure_requirements": [
     "QELiveLogStore default resolution accepts only an absolute repo-external QE_LIVE_LOG_DIR or derives qe_live_logs from an absolute repo-external RDAGENT_STATE_ROOT.",
     "Backend startup constructs the process QELiveLogStore before database and scheduler startup; missing, relative, repository-internal, or Git-checkout state roots fail loudly with stable reason codes and never reach an SSE fallback.",
@@ -121,8 +121,8 @@
   },
   "first_seen_at": "2026-08-13T02:41:13.783163Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "18be8fc278a4e4e41b1f6a8c65ac64cc80fc19fd",
+  "fixed_at": "2026-08-13T03:42:18Z",
   "github_issue_number": 3374,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3374",
   "last_seen_at": "2026-08-13T02:41:13.783163Z",
@@ -132,6 +132,7 @@
     "Do not change MA-E16 business logic, submit Loop7, or alter experiment parallelism.",
     "Do not classify or delete legacy rdagent_assets live-log files; BUG-1051 owns the exact cleanup rule."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3378",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -155,8 +156,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1052\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1052",
+      "catalog_sha256": "dd67d5de0aa81a0b0b74045334f46945b915d1e2b59d896e24ee28b87cd942cc",
+      "contract_digest": "ec358f84f2fe5f956a5bd21e20df5c640774c0902e1fb7190c62cae173e7e7db",
+      "expected_identity": "18be8fc278a4e4e41b1f6a8c65ac64cc80fc19fd",
+      "generated_at": "2026-08-13T04:11:13.583083Z",
+      "mode": "read_only",
+      "observed_identity": "b433658be7b2cd23dbe25d585406aa5fd209f145",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4c10a0f69ff294678361ab8ce4837e6846c873180aa36b2a35156c57cd15589a",
+      "receipt_sha256": "d3005b661de01edaa2ef37b74783c5ad3794df5d096a70d9743386b155a6b0b5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "8e60b89b03414400aed0d95133a45eb9add09f37a1b68163a756a2be6483cace",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -166,7 +184,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -175,6 +193,10 @@
     "fingerprint": "51d76e56aba7e0edaa1cb278",
     "source_event_id": "FE-20260813-51d76e56aba7"
   },
+  "validation_evidence": [
+    "PR #3378 merged as 18be8fc278a4e4e41b1f6a8c65ac64cc80fc19fd; CI verdict passed; focused 17, qe_read_backend 34, registry 8, ruff/compile/diff passed; process_control=false",
+    "post-restart-verify BUG-1052 backend-main -> passed; expected 18be8fc2 observed b433658b descendant; health identity business smoke passed; process_control=false"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

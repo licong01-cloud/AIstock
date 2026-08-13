@@ -22,6 +22,8 @@ A successful candidate release is visible as one atomic catalog projection conta
 - validation/signoff and resource/performance receipts;
 - `metadata/index_context_manifest.json` identity/readback plus moneyflow raw/derived parity evidence;
 - terminal run outcome and submission/run events.
+- for the first PIT v2 migration: exact `plan_id/plan_digest/fixed_cutoff/scope`, frozen sample/event/index windows and
+  the validation-only versus full PIT binding.
 
 Candidate bytes without a cataloged committed marker and matching terminal transaction are not a published release. A receipt path printed by a child is not enough.
 

@@ -48,6 +48,8 @@ class FakeSnapshotSession:
         self.large_rows = 0
         self.entered = 0
         self.stream_calls: list[str] = []
+        self.stream_params: list[tuple[str, Mapping[str, Any]]] = []
+        self.pit_codes: tuple[str, ...] = ("000001.SZ",)
         self.audit_omit: str | None = None
         self.audit_fail: str | None = None
         self.audit_extra_failed: str | None = None
@@ -172,6 +174,7 @@ class FakeSnapshotSession:
         assert self.entered == 1
         assert fetch_rows > 0
         self.stream_calls.append(query_id)
+        self.stream_params.append((query_id, dict(params)))
         if query_id == "trading_dates":
             yield {"trade_date": date(2026, 7, 1)}
             return
@@ -243,17 +246,21 @@ class FakeSnapshotSession:
                     }
             return
         if query_id == "pit_spans":
-            yield {
-                "ts_code": "000001.SZ",
-                "eligible_start": date(2026, 7, 1),
-                "eligible_end": self.pit_exit,
-                "entry_reason": "listed",
-                "exit_reason": "scope_end",
-                "semantic_payload": json.dumps(
-                    {"revision": self.revision, "pit_exit": self.pit_exit.isoformat()},
-                    sort_keys=True,
-                ),
-            }
+            requested = tuple(params.get("codes") or self.pit_codes)
+            for code in self.pit_codes:
+                if code not in requested:
+                    continue
+                yield {
+                    "ts_code": code,
+                    "eligible_start": date(2026, 7, 1),
+                    "eligible_end": self.pit_exit,
+                    "entry_reason": "listed",
+                    "exit_reason": "scope_end",
+                    "semantic_payload": json.dumps(
+                        {"revision": self.revision, "pit_exit": self.pit_exit.isoformat(), "ts_code": code},
+                        sort_keys=True,
+                    ),
+                }
 
             return
         self.current_data_query_ids.add(query_id)
@@ -603,6 +610,38 @@ def test_source_authority_freezes_exact_streams_and_revision_identity(
     revised = authority.freeze(cutoff=date(2026, 7, 31))
     assert revised.source_content_root != first.source_content_root
     assert revised.source_provenance_root != first.source_provenance_root
+
+
+def test_initial_migration_sample_filters_stock_codes_before_row_materialization(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.pit_codes = (
+        "000001.SZ",
+        "300379.SZ",
+        "600462.SH",
+        "600930.SH",
+        "688981.SH",
+    )
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
+    frozen = authority.freeze(
+        cutoff=date(2026, 7, 31),
+        sample_instruments=fake.pit_codes,
+    )
+
+    assert tuple(sorted(span.ts_code for span in frozen.pit_snapshot.spans)) == fake.pit_codes
+    stock_queries = {
+        query_id
+        for query_id, spec in PRODUCTION_QUERY_SPECS.items()
+        if spec.code_policy in {"pit_stock_codes", "pit_minute_code_batch"}
+    }
+    observed = [(query_id, params) for query_id, params in fake.stream_params if query_id in stock_queries]
+    assert observed
+    assert all(set(params["codes"]).issubset(fake.pit_codes) for _query_id, params in observed)
+    assert all(len(params["codes"]) <= 20 for _query_id, params in observed)
+    assert all("ANY(%(codes)s)" in PRODUCTION_QUERY_SPECS[query_id].sql for query_id in stock_queries)
 
 
 def test_exact_recheck_consumes_all_rows_without_cas_write_temp_or_blob_read(
