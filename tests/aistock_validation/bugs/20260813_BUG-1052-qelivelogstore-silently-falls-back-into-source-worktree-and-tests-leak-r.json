@@ -7,7 +7,8 @@
     "backend/tests/unified_engine/test_qe_log_store.py",
     "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
     "tests/aistock_validation/bugs/20260813_BUG-1052-qelivelogstore-silently-falls-back-into-source-worktree-and-tests-leak-r.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1052",
@@ -37,7 +38,8 @@
       "backend/services/quantevolver/qe_log_store.py",
       "backend/tests/test_simulation_runtime_scheduler_startup.py",
       "backend/tests/unified_engine/test_qe_log_store.py",
-      "backend/tests/unified_engine/test_qe_experiment_log_terminal.py"
+      "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "ownership": {
       "changed_files": [
@@ -45,7 +47,8 @@
         "backend/services/quantevolver/qe_log_store.py",
         "backend/tests/test_simulation_runtime_scheduler_startup.py",
         "backend/tests/unified_engine/test_qe_log_store.py",
-        "backend/tests/unified_engine/test_qe_experiment_log_terminal.py"
+        "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "impacted_modules": [
         "qe.core",
@@ -112,7 +115,8 @@
       "backend/services/quantevolver/qe_log_store.py",
       "backend/tests/test_simulation_runtime_scheduler_startup.py",
       "backend/tests/unified_engine/test_qe_log_store.py",
-      "backend/tests/unified_engine/test_qe_experiment_log_terminal.py"
+      "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-08-13T02:41:13.783163Z",
