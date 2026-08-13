@@ -645,8 +645,25 @@ def test_transition_dwell_child_malformed_repeat_returns_typed_validation_eviden
     evidence = caught.value.evidence
     assert evidence["receipt_valid"] is False
     assert evidence["terminal_entry_count_verified"] == 0
+    assert "level_repeat_shape_invalid" in evidence["mismatch_reason_codes"]
     assert "entry_grid_incomplete" in evidence["mismatch_reason_codes"]
     assert "top_level_contract_mismatch" in evidence["mismatch_reason_codes"]
+
+
+def test_transition_dwell_child_malformed_entry_collection_returns_typed_validation_evidence() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["level_repeat"]["entries"] = {"not": "an array"}
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(subject.TransitionDwellChildReceiptError) as caught:
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+    evidence = caught.value.evidence
+    assert evidence["receipt_valid"] is False
+    assert evidence["terminal_entry_count_verified"] == 0
+    assert "entries_shape_invalid" in evidence["mismatch_reason_codes"]
+    assert "entry_grid_incomplete" in evidence["mismatch_reason_codes"]
 
 
 @pytest.mark.parametrize("drift", ["duplicate_entry", "orphan_profile", "false_complete_seed"])

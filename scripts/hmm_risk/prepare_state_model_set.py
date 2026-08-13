@@ -2750,10 +2750,14 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
     body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
     repeat = value.get("level_repeat")
     repeat_receipt = repeat if isinstance(repeat, Mapping) else {}
-    entries = list(repeat_receipt.get("entries") or ())
-    models = list(repeat_receipt.get("models") or ())
-    profiles = list(value.get("profiles") or ())
-    per_seed = list(value.get("per_seed") or ())
+    raw_entries = repeat_receipt.get("entries")
+    raw_models = repeat_receipt.get("models")
+    raw_profiles = value.get("profiles")
+    raw_per_seed = value.get("per_seed")
+    entries = list(raw_entries) if isinstance(raw_entries, list) else []
+    models = list(raw_models) if isinstance(raw_models, list) else []
+    profiles = list(raw_profiles) if isinstance(raw_profiles, list) else []
+    per_seed = list(raw_per_seed) if isinstance(raw_per_seed, list) else []
     entry_keys: list[tuple[int, str]] = []
     accepted_entry_keys: set[tuple[int, str]] = set()
     fitted_entry_keys: set[tuple[int, str]] = set()
@@ -2763,8 +2767,21 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
     profile_keys: set[tuple[int, str]] = set()
     stable_keys: set[tuple[int, str]] = set()
     mismatches: set[str] = set()
+    if not isinstance(repeat, Mapping):
+        mismatches.add("level_repeat_shape_invalid")
+    for field_name, raw_value in (
+        ("entries", raw_entries),
+        ("models", raw_models),
+        ("profiles", raw_profiles),
+        ("per_seed", raw_per_seed),
+    ):
+        if not isinstance(raw_value, list):
+            mismatches.add(f"{field_name}_shape_invalid")
     try:
         for entry in entries:
+            if not isinstance(entry, Mapping):
+                mismatches.add("entry_shape_invalid")
+                continue
             entry_body = {key: item for key, item in entry.items() if key != "entry_receipt_sha256"}
             entry_key = (int(entry["seed"]), str(entry["sector_code"]))
             if entry.get("entry_receipt_sha256") != canonical_sha256(entry_body):
@@ -2797,6 +2814,9 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
             else:
                 mismatches.add("entry_lifecycle_invalid")
         for model in models:
+            if not isinstance(model, Mapping):
+                mismatches.add("model_shape_invalid")
+                continue
             model_body = {key: item for key, item in model.items() if key != "model_payload_sha256"}
             model_key = (int(model["seed"]), str(model["sector_code"]))
             model_hash = str(model.get("model_payload_sha256") or "")
@@ -2805,6 +2825,9 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
             model_keys.add(model_key)
             model_hash_by_key[model_key] = model_hash
         for profile in profiles:
+            if not isinstance(profile, Mapping):
+                mismatches.add("profile_shape_invalid")
+                continue
             profile_body = {key: item for key, item in profile.items() if key != "profile_sha256"}
             profile_key = (int(profile["seed"]), str(profile["sector_code"]))
             if (
