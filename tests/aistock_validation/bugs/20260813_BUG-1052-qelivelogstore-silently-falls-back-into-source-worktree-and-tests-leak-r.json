@@ -1,7 +1,9 @@
 {
   "actual": "The default silently resolves to the current checkout rdagent_assets/qe_live_logs and test_active_log_stream_falls_back_to_node_tail_not_local_fs leaves five ignored files in the source worktree.",
   "allowed_write_scope": [
+    "backend/main.py",
     "backend/services/quantevolver/qe_log_store.py",
+    "backend/tests/test_simulation_runtime_scheduler_startup.py",
     "backend/tests/unified_engine/test_qe_log_store.py",
     "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
     "tests/aistock_validation/bugs/20260813_BUG-1052-qelivelogstore-silently-falls-back-into-source-worktree-and-tests-leak-r.json",
@@ -11,9 +13,10 @@
   "bug_id": "BUG-1052",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "QELiveLogStore default resolution accepts only an absolute repo-external QE_LIVE_LOG_DIR or derives qe_live_logs from an absolute repo-external RDAGENT_STATE_ROOT.",
+    "Backend startup constructs the process QELiveLogStore before database and scheduler startup; missing, relative, repository-internal, or Git-checkout state roots fail loudly with stable reason codes and never reach an SSE fallback.",
+    "The active experiment log-stream test injects a QELiveLogStore rooted under tmp_path and leaves no ring files in the source worktree.",
+    "Run required verification plans and keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-13T02:41:13.783163Z",
   "description": "The default silently resolves to the current checkout rdagent_assets/qe_live_logs and test_active_log_stream_falls_back_to_node_tail_not_local_fs leaves five ignored files in the source worktree.",
@@ -30,13 +33,17 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "backend/main.py",
       "backend/services/quantevolver/qe_log_store.py",
+      "backend/tests/test_simulation_runtime_scheduler_startup.py",
       "backend/tests/unified_engine/test_qe_log_store.py",
       "backend/tests/unified_engine/test_qe_experiment_log_terminal.py"
     ],
     "ownership": {
       "changed_files": [
+        "backend/main.py",
         "backend/services/quantevolver/qe_log_store.py",
+        "backend/tests/test_simulation_runtime_scheduler_startup.py",
         "backend/tests/unified_engine/test_qe_log_store.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py"
       ],
@@ -101,7 +108,9 @@
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/main.py",
       "backend/services/quantevolver/qe_log_store.py",
+      "backend/tests/test_simulation_runtime_scheduler_startup.py",
       "backend/tests/unified_engine/test_qe_log_store.py",
       "backend/tests/unified_engine/test_qe_experiment_log_terminal.py"
     ]
@@ -115,7 +124,9 @@
   "last_seen_at": "2026-08-13T02:41:13.783163Z",
   "module": "quantevolver",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not change MA-E16 business logic, submit Loop7, or alter experiment parallelism.",
+    "Do not classify or delete legacy rdagent_assets live-log files; BUG-1051 owns the exact cleanup rule."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -128,7 +139,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "database_readback_ref": "not_required",
+    "expected_identity_ref": "merged_commit",
     "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
