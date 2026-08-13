@@ -294,3 +294,127 @@ def test_cleanup_discovers_registered_worktree_when_argument_is_omitted(
     assert payload["workflow_gate"] == "ready_for_cleanup"
     assert payload["worktree"] == str(task_worktree)
     assert payload["worktree_registered"] is True
+
+
+def test_cleanup_retry_accepts_merged_pr_head_ancestry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = "a" * 40
+    merge_commit = "b" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"headRefOid": head, "mergeCommit": {"oid": merge_commit}},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_commit_is_ancestor",
+        lambda ancestor, descendant, root: ancestor == head and descendant == merge_commit,
+    )
+
+    result = workflow._cleanup_merge_verification(
+        "bug/BUG-199-already-partially-cleaned",
+        "https://github.example/pull/199",
+        False,
+        cwd=tmp_path,
+    )
+
+    assert result["verified"] is True
+    assert result["method"] == "merged_pr_head_is_ancestor_of_merge_commit"
+    assert result["tree_equivalence_ref"] == head
+
+
+def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_preflight_fetch_origin",
+        lambda root, apply: {"status": "fetched", "result": _result()},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"branch": "main", "dirty": False, "head": "old", "origin_main": "new"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, **kwargs: events.append("root_sync") or _result(),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_merge_commit_changed_files",
+        lambda merge_commit, root: {
+            "ok": True,
+            "files": [
+                ".codex/skills/aistock-merge-aftercare/SKILL.md",
+                ".claude/commands/aistock-task-router.md",
+                "docs/standards/README.md",
+            ],
+        },
+    )
+
+    def fake_install(*, apply: bool, selected_lane: str, **kwargs: Any) -> dict[str, Any]:
+        events.append(f"install:{selected_lane}")
+        return {"workflow_gate": "installed", "blocking": []}
+
+    monkeypatch.setattr(workflow, "build_client_install_plan", fake_install)
+    monkeypatch.setattr(workflow, "_ClientInstallLock", lambda: workflow.contextlib.nullcontext())
+    monkeypatch.setattr(workflow, "_client_manifest", lambda: {})
+    monkeypatch.setattr(
+        workflow,
+        "_client_lane_verification",
+        lambda manifest, selected_lane, verify_codex, verify_claude: {"ready": True, "blocking": []},
+    )
+
+    result = workflow._publish_changed_clients_after_merge(
+        merge_commit="c" * 40,
+        sync_root=True,
+        apply=True,
+    )
+
+    assert result["workflow_gate"] == "installed_and_verified"
+    assert result["selected_lanes"] == ["merge_aftercare", "router"]
+    assert events == ["root_sync", "install:merge_aftercare", "install:router"]
+
+
+def test_merge_finalizer_stops_before_close_sync_when_client_publish_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_publish_changed_clients_after_merge",
+        lambda **kwargs: {"workflow_gate": "blocked", "blocking": ["client publish failed"]},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_close_sync_plan",
+        lambda **kwargs: pytest.fail("close-sync started before client publish"),
+    )
+
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id="BUG-199",
+        source_pr_url="https://github.example/pull/199",
+        source_branch=None,
+        source_worktree=None,
+        validation_evidence=["pytest -> passed"],
+        sync_root=True,
+        apply=True,
+        source_pr_check={
+            "checked": True,
+            "merged": True,
+            "pr": {"mergeCommit": {"oid": "d" * 40}},
+        },
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["blocking"] == ["client publish failed"]
