@@ -4,7 +4,7 @@
 > Feature tier：F2
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.0
 > 直接父产物：P0-C bundle `81e2c9bac5ce1f8e2fdc5a6174bc948dfbe984cf5028726c89ea72eb59fc69bd`
-> 当前阶段：`SOURCE_AND_REAL_WSL_EXPERIMENT_COMPLETE_PENDING_PR_NOT_ACTIVATED`
+> 当前阶段：`SOURCE_AND_REAL_WSL_EXPERIMENT_REATTESTED_PENDING_MERGE_NOT_ACTIVATED`
 > 适用范围：学术研究与模拟荐股观察，不构成实时投资建议，不连接实盘交易或下单执行
 
 ## 1. Background / 当前真实基线
@@ -21,7 +21,7 @@ P0-C 已基于目标多 Alpha 父包真实文件数据产出：
 
 P0-D 的唯一目标是训练首个真实 take/skip/confidence meta-label challenger，并以同一 policy portfolio 口径评价。它不再优化5日 NDCG，也不建设额外基础设施。
 
-截至 2026-08-13，最终训练源码提交 `3033ff3385715e6b971d822589528751ab66baad` 已完成真实 WSL 训练。权威 frozen request v2 为 `advmetareq_79e5762652462ae5855b3be7`，标准 root experimental bundle 为 `86bdda151dd0a0b631cc400a074ec9481042482bace0df4d5e45eb243c376317`。bundle 未激活、未写 descriptor、未进入生产前向发布。
+截至 2026-08-14，P0-C 合入后的最终训练源码提交 `62d216bdf3a0a1ed3227bc8dab8b9bd1d7f7e1c3` 已完成真实 WSL 重训。权威 frozen request v2 为 `advmetareq_0451bd4cb1f8cc7add8b9956`，标准 root experimental bundle 为 `e555903ec928fd39ea09180133401a6490a4e6d5440e3ef63642909e1329e03a`。bundle 未激活、未写 descriptor、未进入生产前向发布。
 
 ## 2. Scope / 交付范围
 
@@ -364,14 +364,15 @@ scripts/wsl/advisory_meta_label_train.py
 - Source Round 8：repository identity 原只校验 `HEAD`，tracked dirty source 仍可在相同 commit 名义下参与训练。frozen request v2 同时绑定 WSL source root 与 Windows worktree root；正式训练在 WSL 通过 `git.exe -C <explicit Windows root>` 校验 commit 与 tracked clean，避免 CRLF/filemode 伪差异，也不猜测路径。dirty 时返回 `ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH`，不静默训练。
 - Source Round 6：exact retry 原先在全部 Qlib/HMM/LightGBM 计算之后才识别现有 bundle；改为验证环境、P0-C manifest 和 request identity 后，在任何重计算前全文件 readback exact bundle。最终 retry 4.578 秒返回 `EXISTING_BUNDLE`。
 - Source Round 7：bundle loader 增加目录名必须等于 content-addressed `bundle_id`；scorer 对预测形状、有限性及 `[0,1]` 范围 fail closed，防止损坏模型输出静默进入排名。
+- Final-source Re-attestation：P0-C 合入后将最新 `origin/main` 合入 P0-D，保留动态 `component_roles` 与 meta-label `incomplete_candidate_policy` 两个独立合同；以 merge commit `62d216bd` 完整重训并 exact retry。新 bundle 与旧 `3033ff` bundle 的 12/12 功能 identity 文件 hash 完全一致，说明源码同步未改变模型经济输出；request/source identity 按最终提交旋转。
 
 ## 19.1 Real WSL Result / 真实实验结果
 
 | item | result |
 |---|---|
-| repository commit | `3033ff3385715e6b971d822589528751ab66baad` |
-| request | `advmetareq_79e5762652462ae5855b3be7` / `79e5762652462ae5855b3be707ef2c2a368acac78a589edcda8668b21021e16f` |
-| bundle | `86bdda151dd0a0b631cc400a074ec9481042482bace0df4d5e45eb243c376317` |
+| repository commit | `62d216bdf3a0a1ed3227bc8dab8b9bd1d7f7e1c3` |
+| request | `advmetareq_0451bd4cb1f8cc7add8b9956` / `0451bd4cb1f8cc7add8b9956de85344d3e99272c52a05e0e2476dcd16c1f5dcf` |
+| bundle | `e555903ec928fd39ea09180133401a6490a4e6d5440e3ef63642909e1329e03a` |
 | input | 7,720 labels；7,651 modelable feature rows；386/386 decision dates；28 READY CPCV paths |
 | trial matrix | 2 families × 3 seeds × 28 paths = 168 rows；6 trials × 8 blocks = 48 block rows |
 | winner | `FAMILY_CORE_HMM` / seed `20260817` / 5 boost rounds |
@@ -380,9 +381,9 @@ scripts/wsl/advisory_meta_label_train.py
 | winner lift | versus Selection `+3.6556249586 bps`；28-path win rate `0.6428571429` |
 | candidate classification | ROC AUC `0.5142260421`；Brier `0.2506001180` |
 | PBO | `0.40`，8 blocks / 70 partitions / 6 trials |
-| resource | 标准 root 317.812 秒；peak RSS 2,862,182,400 bytes，低于 8GB |
-| exact retry | 4.067 秒；同一 bundle；`EXISTING_BUNDLE`；`activated=false` |
-| independent recompute | 两个不同 output root 各自从零训练，均产出 bundle `86bdda151...`；12/12 identity file hashes 相同 |
+| resource | 标准 root 332.182 秒；peak RSS 2,912,239,616 bytes，低于 8GB |
+| exact retry | 3.529 秒；同一 bundle；`EXISTING_BUNDLE`；`activated=false` |
+| final-source re-attestation | 新 `e555903e...` 与旧 `86bdda15...` bundle 的 12/12 功能 identity file hashes 相同；request/source identity 按最终 commit 旋转 |
 | loader/scorer | WSL LightGBM reload 成功；smoke take `0.5535642729`、skip `0.4464357271`、confidence `0.1071285459`，全部有限 |
 
 结论必须同时保留两面：policy-aligned meta-label 在冻结 CPCV 口径下相对 Selection Top5 有正增量，方向值得进入前向 challenger；但 AUC 接近随机且 PBO 为 0.40，选择偏差风险仍高，因此只能保持 `EXPERIMENTAL_MODEL / UNCALIBRATED / NOT_ACTIVATED`。该结论不是审批或收益门禁，也不得被改写为已验证 champion。
@@ -402,11 +403,11 @@ scripts/wsl/advisory_meta_label_train.py
 
 | action | 状态 | 独立授权 |
 |---|---|---|
-| P0-D源码/PR合入 | source complete；PR pending creation；merge pending user confirmation | 必须 |
+| P0-D源码/PR合入 | source complete；PR #3368 open；merge已授权，等待最终CI | 已授权 |
 | DEV/生产DDL/DML | none | 不适用 |
 | backend restart | none | 不适用 |
 | descriptor写入/模型激活 | out of scope | 后续单独授权 |
-| 正式WSL训练 | complete；bundle `86bdda15...`；未激活 | 只写repo-external model artifacts |
+| 正式WSL训练 | final-source re-attested；bundle `e555903e...`；未激活 | 只写repo-external model artifacts |
 
 ## 22. Completion Definition
 
