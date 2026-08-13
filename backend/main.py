@@ -97,6 +97,7 @@ from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 from .schedulers.strategy_scheduler import scheduler as strategy_scheduler
 from .infra.qmt_client import get_qmt_client_singleton
+from .services.quantevolver.qe_log_store import get_qe_live_log_store
 
 
 def _report_bootstrap_failure(event: str, exc: BaseException) -> None:
@@ -292,6 +293,12 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:
         _report_nonfatal_lifecycle_failure("APPLICATION_LOGGER_SETUP_FAILED", exc)
 
+    # QE live logs are runtime state, never source-tree artifacts. Construct
+    # the process store before any backend service starts so a missing or
+    # unsafe state root fails startup instead of being swallowed by a lazy SSE
+    # fallback later.
+    get_qe_live_log_store()
+
     init_db_pool(minconn=5, maxconn=40)
     _configure_external_research_provider()
 
@@ -340,6 +347,16 @@ async def _lifespan(app: FastAPI):
     if enable_pt_v2 in {"1", "true", "yes", "y", "on"}:
         from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
         paper_trading_v2_scheduler.start()
+
+    enable_advisory_forward = (os.getenv("AISTOCK_ADVISORY_FORWARD_SCHEDULER_ENABLED") or "").strip().lower()
+    logging.getLogger("uvicorn.error").info(
+        "Advisory forward scheduler autostart=%s interval=%s",
+        enable_advisory_forward in {"1", "true", "yes", "y", "on"},
+        os.getenv("AISTOCK_ADVISORY_FORWARD_POLL_SECONDS") or "300",
+    )
+    if enable_advisory_forward in {"1", "true", "yes", "y", "on"}:
+        from .services.advisory_forward.scheduler import advisory_forward_scheduler
+        advisory_forward_scheduler.start()
 
     # Unified LocalSim/MiniQMT simulation lifecycle scheduler is opt-in. It
     # follows the committed simulation-runtime path and never starts by default.
@@ -475,6 +492,11 @@ async def _lifespan(app: FastAPI):
             paper_trading_v2_scheduler.shutdown(wait=False)
         except Exception as exc:
             _report_nonfatal_lifecycle_failure("PAPER_V2_SCHEDULER_SHUTDOWN_FAILED", exc)
+        try:
+            from .services.advisory_forward.scheduler import advisory_forward_scheduler
+            advisory_forward_scheduler.shutdown(wait=False)
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("ADVISORY_FORWARD_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             from .services.simulation_runtime import simulation_lifecycle_background_scheduler
             simulation_lifecycle_background_scheduler.shutdown(wait=False)

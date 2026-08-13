@@ -51,6 +51,7 @@ try:
         ExistingBugReservationError,
         GlobalBugIdLock,
         bootstrap_fingerprint_index,
+        compact_terminal_reservations,
         find_matching_reservation,
         read_allocator_state,
         read_reservations,
@@ -64,6 +65,7 @@ except ModuleNotFoundError:  # Direct execution: python scripts/aistock_mcp_serv
         ExistingBugReservationError,
         GlobalBugIdLock,
         bootstrap_fingerprint_index,
+        compact_terminal_reservations,
         find_matching_reservation,
         read_allocator_state,
         read_reservations,
@@ -797,7 +799,17 @@ def _allocate_next_bug_id(
         registry_max = max(_scan_global_bug_ids(include_github=False) or {0}) if state_bootstrap_required else 0
         bootstrap_max = max(_read_bug_id_allocator_last(), state_max, registry_max)
         if fingerprint_bootstrap_required:
-            bootstrap_fingerprint_index(_bug_id_reservation_root(), _fingerprint_bootstrap_records())
+            bootstrap_records = _fingerprint_bootstrap_records()
+            bootstrap_fingerprint_index(_bug_id_reservation_root(), bootstrap_records)
+            durable_bug_ids = {
+                str(item.get("bug_id") or "").upper()
+                for item in bootstrap_records
+                if item.get("registry_path") and item.get("bug_id")
+            }
+            compact_terminal_reservations(
+                _bug_id_reservation_root(),
+                durable_bug_ids,
+            )
             try:
                 write_allocator_state(
                     _bug_id_state_path(),

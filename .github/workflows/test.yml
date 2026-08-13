@@ -476,21 +476,13 @@ jobs:
     # Keep this job green/no-op when targeted tests pass or are intentionally
     # skipped. PR failures retain compact evidence without creating a second
     # Issue alongside the default-branch failure workflow.
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - name: No targeted CI failure evidence required
-        if: ${{ needs.backend-tests.result != 'failure' && needs.workflow-validation-tests.result != 'failure' && needs.prompt-evaluation.result != 'failure' }}
-        run: |
-          echo "backend-tests result: ${{ needs.backend-tests.result }}"
-          echo "workflow-validation-tests result: ${{ needs.workflow-validation-tests.result }}"
-          echo "prompt-evaluation result: ${{ needs.prompt-evaluation.result }}"
-          echo "No CI failure evidence required."
-
       - uses: actions/checkout@v4
         if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
 

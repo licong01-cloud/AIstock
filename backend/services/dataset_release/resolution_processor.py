@@ -45,7 +45,7 @@ from .mixed_planner import (
     load_artifact_ready_planning_authority,
     pit_span_digest_by_code,
 )
-from .profile import DatasetProfile
+from .profile import DatasetProfile, load_initial_migration_plan
 from .resolution import (
     BUILD_INPUTS_SCHEMA_VERSION,
     SourceProbeReceipt,
@@ -70,6 +70,7 @@ from .worker import (
 
 
 MONTHLY_REQUEST_SCHEMA = "dataset_release_monthly_request_v1"
+INITIAL_MIGRATION_REQUEST_SCHEMA = "dataset_release_initial_migration_request_v1"
 REATTEST_REQUEST_SCHEMA = "dataset_release_reattest_request_v1"
 SUBMISSION_REQUEST_SCHEMA = "dataset_release_submission_request_v1"
 CANDIDATE_EVIDENCE_SCHEMA = "dataset_release_candidate_evidence_v1"
@@ -103,6 +104,32 @@ _MONTHLY_FIELDS = frozenset(
         "candidate_only",
         "logical_request_key",
         "semantic_profile_digest",
+        "resolution",
+        "activation",
+        "node1",
+        "db_repair",
+        "restart",
+        "cleanup",
+    }
+)
+_INITIAL_MIGRATION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "profile",
+        "operation",
+        "cutoff_policy",
+        "resolved_cutoff",
+        "scope",
+        "candidate_only",
+        "logical_request_key",
+        "semantic_profile_digest",
+        "plan_id",
+        "plan_digest",
+        "source_identity_policy",
+        "sample_instruments",
+        "event_windows",
+        "index_windows",
+        "plan_safety",
         "resolution",
         "activation",
         "node1",
@@ -188,6 +215,16 @@ class VersionedResolutionRequest:
     def is_reattest(self) -> bool:
         return self.schema_version == REATTEST_REQUEST_SCHEMA
 
+    @property
+    def is_initial_migration(self) -> bool:
+        return self.schema_version == INITIAL_MIGRATION_REQUEST_SCHEMA
+
+    @property
+    def sample_instruments(self) -> tuple[str, ...]:
+        if not self.is_initial_migration or self.scope is not Scope.SAMPLE:
+            return ()
+        return tuple(str(value) for value in self.payload["sample_instruments"])
+
 
 @dataclass(frozen=True, slots=True)
 class CatalogCandidate:
@@ -272,6 +309,7 @@ class ResolutionSourceStage(Protocol):
         baseline_partitions: Sequence[Mapping[str, Any]],
         predicted_new_bytes: int,
         pressure_rung: int,
+        sample_instruments: Sequence[str],
     ) -> FrozenSourceAuthoritySnapshot: ...
 
 
@@ -290,6 +328,7 @@ class InProcessFixtureSourceStage:
         baseline_partitions: Sequence[Mapping[str, Any]],
         predicted_new_bytes: int,
         pressure_rung: int,
+        sample_instruments: Sequence[str],
     ) -> FrozenSourceAuthoritySnapshot:
         del baseline_reuse_ref, predicted_new_bytes
         return self.authority.freeze(
@@ -297,6 +336,7 @@ class InProcessFixtureSourceStage:
             checkpoint=context.checkpoint,
             baseline_partitions=baseline_partitions,
             pressure_rung=pressure_rung,
+            sample_instruments=sample_instruments,
         )
 
 
@@ -330,6 +370,7 @@ class SupervisedResolutionSourceStage:
         baseline_partitions: Sequence[Mapping[str, Any]],
         predicted_new_bytes: int,
         pressure_rung: int,
+        sample_instruments: Sequence[str],
     ) -> FrozenSourceAuthoritySnapshot:
         if baseline_partitions and baseline_reuse_ref is None:
             raise ResolutionCandidateEvidenceInvalid(
@@ -367,6 +408,8 @@ class SupervisedResolutionSourceStage:
             "--stage-timeout-seconds",
             str(self.profile.stage_timeouts_seconds["source_freeze"]),
         ]
+        for instrument in sample_instruments:
+            command.extend(("--sample-instrument", instrument))
         if baseline_reuse_ref is not None:
             command.extend(("--baseline-reuse-ref", baseline_reuse_ref.sha256))
         receipt = context.run_supervised(
@@ -600,6 +643,7 @@ class MonthlyResolutionProcessor:
             baseline_partitions=baseline_partitions,
             predicted_new_bytes=predicted_new_bytes,
             pressure_rung=context.pressure_rung,
+            sample_instruments=request.sample_instruments,
         )
         context.checkpoint()
         probe = self._record_probe(context, request, frozen, candidate)
@@ -679,8 +723,12 @@ class MonthlyResolutionProcessor:
         if not isinstance(inner, Mapping):
             raise ResolutionRequestInvalid("submission request payload is not a mapping")
         schema = str(inner.get("schema_version", ""))
-        expected_fields = _MONTHLY_FIELDS if schema == MONTHLY_REQUEST_SCHEMA else _REATTEST_FIELDS
-        if schema not in {MONTHLY_REQUEST_SCHEMA, REATTEST_REQUEST_SCHEMA} or set(inner) != expected_fields:
+        expected_fields = {
+            MONTHLY_REQUEST_SCHEMA: _MONTHLY_FIELDS,
+            INITIAL_MIGRATION_REQUEST_SCHEMA: _INITIAL_MIGRATION_FIELDS,
+            REATTEST_REQUEST_SCHEMA: _REATTEST_FIELDS,
+        }.get(schema)
+        if expected_fields is None or set(inner) != expected_fields:
             raise ResolutionRequestInvalid(
                 "submission request payload schema/fields are invalid",
                 context={"schema_version": schema},
@@ -717,6 +765,8 @@ class MonthlyResolutionProcessor:
             scope = Scope(str(inner.get("scope")))
         except ValueError as exc:
             raise ResolutionRequestInvalid("request cutoff/scope is invalid") from exc
+        if schema == INITIAL_MIGRATION_REQUEST_SCHEMA:
+            self._validate_initial_migration_request(inner, cutoff=cutoff, scope=scope)
         return VersionedResolutionRequest(
             schema_version=schema,
             profile=self.profile.profile,
@@ -726,6 +776,70 @@ class MonthlyResolutionProcessor:
             semantic_profile_digest=self.profile.semantic_profile_digest,
             payload=dict(inner),
         )
+
+    def _validate_initial_migration_request(
+        self,
+        value: Mapping[str, Any],
+        *,
+        cutoff: date,
+        scope: Scope,
+    ) -> None:
+        if (
+            value.get("operation") != "initial-migration"
+            or value.get("cutoff_policy") != "fixed-allowlisted-plan"
+            or value.get("resolution") != "worker_required"
+        ):
+            raise ResolutionRequestInvalid("initial migration operation/cutoff policy differs")
+        plan_id = str(value.get("plan_id") or "")
+        if plan_id not in self.profile.initial_migration_plan_ids:
+            raise ResolutionRequestInvalid("initial migration plan is not profile-allowlisted")
+        try:
+            plan = load_initial_migration_plan(self.profile.path.parent / "migrations" / f"{plan_id}.yaml")
+            plan_digest = ensure_sha256(str(value.get("plan_digest") or ""), field="plan_digest")
+        except (DatasetReleaseError, OSError, ValueError) as exc:
+            raise ResolutionRequestInvalid("initial migration plan cannot be verified") from exc
+        expected = {
+            "profile": plan.profile,
+            "resolved_cutoff": plan.cutoff.isoformat(),
+            "plan_id": plan.plan_id,
+            "plan_digest": plan.plan_digest,
+            "source_identity_policy": plan.source_identity_policy,
+            "sample_instruments": list(plan.sample_instruments),
+            "event_windows": [dict(item) for item in plan.event_windows],
+            "index_windows": [dict(item) for item in plan.index_windows],
+            "plan_safety": dict(plan.raw["safety"]),
+        }
+        expected_logical_request_key = digest_named_fields(
+            "dataset_release_initial_migration_logical_request_v1",
+            {
+                "profile": plan.profile,
+                "scope": scope.value,
+                "cutoff": plan.cutoff,
+                "semantic_profile_digest": self.profile.semantic_profile_digest,
+                "plan_id": plan.plan_id,
+                "plan_digest": plan.plan_digest,
+            },
+        )
+        mismatches = {
+            field: {"expected": expected_value, "actual": value.get(field)}
+            for field, expected_value in expected.items()
+            if value.get(field) != expected_value
+        }
+        if (
+            mismatches
+            or plan_digest != plan.plan_digest
+            or cutoff != plan.cutoff
+            or not plan.allows_scope(scope.value)
+            or value.get("logical_request_key") != expected_logical_request_key
+        ):
+            raise ResolutionRequestInvalid(
+                "initial migration request differs from the checked-in plan",
+                context={
+                    "mismatches": mismatches,
+                    "scope": scope.value,
+                    "logical_request_key_matches": value.get("logical_request_key") == expected_logical_request_key,
+                },
+            )
 
     def _bounded_catalog(
         self,
@@ -1495,7 +1609,7 @@ class MonthlyResolutionProcessor:
             effective_root,
             frozen.pit_snapshot_digest,
         ).key
-        return {
+        build_inputs = {
             "schema_version": BUILD_INPUTS_SCHEMA_VERSION,
             "profile": request.profile,
             "scope": request.scope.value,
@@ -1602,6 +1716,18 @@ class MonthlyResolutionProcessor:
                 "candidate_writes": 0,
             },
         }
+        if request.is_initial_migration:
+            build_inputs["initial_migration_plan"] = {
+                "plan_id": request.payload["plan_id"],
+                "plan_digest": request.payload["plan_digest"],
+                "fixed_cutoff": request.cutoff.isoformat(),
+                "scope": request.scope.value,
+                "sample_instruments": list(request.payload["sample_instruments"]),
+                "event_windows": list(request.payload["event_windows"]),
+                "index_windows": list(request.payload["index_windows"]),
+                "source_identity_policy": request.payload["source_identity_policy"],
+            }
+        return build_inputs
 
     def _latest_attestation_row(
         self,

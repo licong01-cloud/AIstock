@@ -38,6 +38,7 @@ from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_SCOPE,
     CANONICAL_PIT_UNIVERSE_KEY,
+    canonical_rule_parameters_digest,
 )
 
 
@@ -245,6 +246,12 @@ def _ensure_tables(conn: Any) -> None:
         )
         cur.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_stock_universe_pit_spans_rule_version
+                ON market.stock_universe_pit_spans (universe_key, rule_version);
+            """
+        )
+        cur.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_stock_universe_pit_events_ts_code
                 ON market.stock_universe_pit_events (universe_key, ts_code, action_date);
             """
@@ -439,7 +446,13 @@ def audit_st_snapshot_continuity(
         (
             event
             for event in events
-            if event.event_kind in {"st_negative", "st_restore", "delisted", "paused_listing"}
+            if event.event_kind in {
+                "st_negative",
+                "st_restore",
+                "delisted",
+                "paused_listing",
+                "delisting_confirmed",
+            }
         ),
         key=lambda event: (event.action_date, event.ts_code, event.event_kind),
     )
@@ -453,7 +466,9 @@ def audit_st_snapshot_continuity(
         gap_events = [
             (
                 event.ts_code,
-                "terminal_exit" if event.event_kind in {"delisted", "paused_listing"} else event.event_kind,
+                "terminal_exit"
+                if event.event_kind in {"delisted", "paused_listing", "delisting_confirmed"}
+                else event.event_kind,
             )
             for event in relevant_events
             if previous_day < event.action_date <= next_day
@@ -492,6 +507,13 @@ def _ipo_eligible_date(
     if filter_unit == "trading_sessions":
         return calendar.after_sessions(list_date, filter_value)
     raise RuntimeError(f"unsupported IPO filter unit: {filter_unit}")
+
+
+def _canonical_calendar_start(
+    stocks: Iterable[StockRow], *, start_date: dt.date, minimum_lookback_days: int
+) -> dt.date:
+    earliest_list_date = min((stock.list_date for stock in stocks if stock.list_date), default=start_date)
+    return min(start_date - dt.timedelta(days=minimum_lookback_days), earliest_list_date)
 
 
 def _load_stock_basic(conn: Any, *, active_only: bool = False, active_as_of: dt.date | None = None) -> list[StockRow]:
@@ -665,7 +687,12 @@ def _load_initial_st_events(
         ]
 
 
-def _stock_basic_terminal_events(stocks: Iterable[StockRow], calendar: TradingCalendar) -> list[EventRow]:
+def _stock_basic_terminal_events(
+    stocks: Iterable[StockRow],
+    calendar: TradingCalendar,
+    *,
+    allow_paused_list_date_fallback: bool = True,
+) -> list[EventRow]:
     events: list[EventRow] = []
     for stock in stocks:
         status = (stock.list_status or "").upper()
@@ -684,7 +711,10 @@ def _stock_basic_terminal_events(stocks: Iterable[StockRow], calendar: TradingCa
                     )
                 )
         elif status == "P":
-            effective = stock.delist_date or stock.list_date
+            # stock_basic has no dedicated historical pause date. Legacy mode
+            # retains its old fallback, but canonical PIT must never reinterpret
+            # the IPO listing date as the pause date.
+            effective = stock.delist_date or (stock.list_date if allow_paused_list_date_fallback else None)
             if effective:
                 action_date = calendar.on_or_after(effective)
                 if action_date:
@@ -709,12 +739,14 @@ def _load_confirmed_delisting_events(conn: Any, calendar: TradingCalendar, end_d
         cur.execute(
             f"""
             SELECT ts_code, source_event_date::date, available_at, effective_trade_date::date,
+                   COALESCE((available_at AT TIME ZONE 'Asia/Shanghai')::date, source_event_date::date)
+                       AS known_date,
                    source_type, source_pk, reason, evidence
              FROM market.event_signal
              WHERE event_type = 'stock_delisting_confirmed'
                AND time_mode = 'backtest'
                AND signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')
-               AND effective_trade_date::date <= %s
+               AND COALESCE((available_at AT TIME ZONE 'Asia/Shanghai')::date, source_event_date::date) <= %s
                {a_share_ts_code_filter("ts_code")}
              ORDER BY ts_code, effective_trade_date, available_at, signal_id
             """,
@@ -724,9 +756,25 @@ def _load_confirmed_delisting_events(conn: Any, calendar: TradingCalendar, end_d
         for row in cur.fetchall():
             effective = row.get("effective_trade_date")
             available_at = row.get("available_at")
-            known_date = available_at.date() if isinstance(available_at, dt.datetime) else row.get("source_event_date")
-            action_base = max(value for value in (effective, known_date) if value is not None)
-            action_date = calendar.on_or_after(action_base)
+            known_date = row.get("known_date")
+            if known_date is None:
+                raise CanonicalPitEvidenceError(
+                    "confirmed delisting event has no observable knowledge date",
+                    context={"ts_code": str(row["ts_code"]), "source_pk": row.get("source_pk")},
+                )
+            if effective is None or effective < known_date:
+                raise CanonicalPitEvidenceError(
+                    "confirmed delisting effective_trade_date violates point-in-time ordering",
+                    context={
+                        "ts_code": str(row["ts_code"]),
+                        "known_date": known_date.isoformat(),
+                        "effective_trade_date": effective.isoformat() if effective else None,
+                    },
+                )
+            # event_signal.effective_trade_date is the shared, leakage-safe
+            # authority. It already accounts for exact publish time and the
+            # pre-open cutoff; recomputing it here would drift from that rule.
+            action_date = calendar.on_or_after(effective)
             if action_date is None:
                 continue
             output.append(
@@ -747,22 +795,68 @@ def _load_confirmed_delisting_events(conn: Any, calendar: TradingCalendar, end_d
                     },
                 )
             )
-        return output
+    return output
+
+
+def audit_canonical_stock_lifecycle(stocks: Iterable[StockRow]) -> dict[str, Any]:
+    """Fail closed when stock_basic cannot support a historical PIT lifecycle."""
+
+    rows = list(stocks)
+    missing_list_date = sorted(stock.ts_code for stock in rows if stock.list_date is None)
+    unsupported_status = sorted(
+        stock.ts_code for stock in rows if str(stock.list_status or "").upper() not in {"L", "D", "P"}
+    )
+    delisted_missing_date = sorted(
+        stock.ts_code
+        for stock in rows
+        if str(stock.list_status or "").upper() == "D" and stock.delist_date is None
+    )
+    unresolved = sorted(set(missing_list_date + unsupported_status + delisted_missing_date))
+    ledger = {
+        "schema_version": "canonical_pit_exception_ledger_v1",
+        "stock_count": len(rows),
+        "missing_list_date_count": len(missing_list_date),
+        "missing_list_date_codes": missing_list_date,
+        "unsupported_list_status_count": len(unsupported_status),
+        "unsupported_list_status_codes": unsupported_status,
+        "delisted_missing_date_count": len(delisted_missing_date),
+        "delisted_missing_date_codes": delisted_missing_date,
+        "unresolved_exception_count": len(unresolved),
+        "unresolved_exception_codes": unresolved,
+        "status": "ready" if not unresolved else "blocked",
+    }
+    if unresolved:
+        raise CanonicalPitEvidenceError(
+            f"canonical stock lifecycle evidence is incomplete: unresolved_count={len(unresolved)}",
+            context=ledger,
+        )
+    return ledger
 
 
 def audit_canonical_terminal_evidence(
     stocks: Iterable[StockRow],
     *,
     announcement_events: Iterable[EventRow],
+    end_date: dt.date | None = None,
 ) -> dict[str, Any]:
     """Require announcement/event evidence for every historical D/P security."""
 
     terminal_codes = {
         event.ts_code
         for event in announcement_events
-        if event.terminal and event.source != "market.stock_basic"
+        if event.terminal
+        and event.source != "market.stock_basic"
+        and (end_date is None or event.action_date <= end_date)
     }
-    required = sorted(stock.ts_code for stock in stocks if str(stock.list_status or "").upper() in {"D", "P"})
+    required = sorted(
+        stock.ts_code
+        for stock in stocks
+        if str(stock.list_status or "").upper() == "P"
+        or (
+            str(stock.list_status or "").upper() == "D"
+            and (end_date is None or (stock.delist_date is not None and stock.delist_date <= end_date))
+        )
+    )
     missing = sorted(set(required).difference(terminal_codes))
     receipt = {
         "required_terminal_security_count": len(required),
@@ -826,7 +920,13 @@ def _audit_canonical_st_snapshots(
         (
             event
             for event in events
-            if event.event_kind in {"st_negative", "st_restore", "delisted", "paused_listing"}
+            if event.event_kind in {
+                "st_negative",
+                "st_restore",
+                "delisted",
+                "paused_listing",
+                "delisting_confirmed",
+            }
         ),
         key=lambda event: (event.action_date, event.ts_code, event.event_kind),
     )
@@ -850,7 +950,9 @@ def _audit_canonical_st_snapshots(
         gap_events = [
             (
                 event.ts_code,
-                "terminal_exit" if event.event_kind in {"delisted", "paused_listing"} else event.event_kind,
+                "terminal_exit"
+                if event.event_kind in {"delisted", "paused_listing", "delisting_confirmed"}
+                else event.event_kind,
             )
             for event in relevant_events
             if previous_day < event.action_date <= next_day
@@ -1287,14 +1389,24 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
 
     with psycopg2.connect(**_db_config()) as conn:
         _ensure_tables(conn)
+        scope_counts = _load_stock_basic_scope_counts(conn, active_as_of=end_date)
+        stocks = _load_stock_basic(conn, active_only=st_only_active, active_as_of=end_date)
+        exception_ledger = audit_canonical_stock_lifecycle(stocks) if canonical_scope else None
+        calendar_start = start_date - dt.timedelta(days=max(args.ipo_filter_days + 31, 400))
+        if canonical_scope:
+            # A 252-session IPO threshold must be counted from the actual
+            # listing session, not from an arbitrary backtest lookback window.
+            calendar_start = _canonical_calendar_start(
+                stocks,
+                start_date=start_date,
+                minimum_lookback_days=max(args.ipo_filter_days + 31, 400),
+            )
         calendar_days = _load_trading_days(
             conn,
-            start_date - dt.timedelta(days=max(args.ipo_filter_days + 31, 400)),
+            calendar_start,
             end_date + dt.timedelta(days=31),
         )
         calendar = TradingCalendar(calendar_days)
-        scope_counts = _load_stock_basic_scope_counts(conn, active_as_of=end_date)
-        stocks = _load_stock_basic(conn, active_only=st_only_active, active_as_of=end_date)
         initial_st_events = _load_initial_st_events(
             conn,
             calendar,
@@ -1303,12 +1415,21 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             active_as_of=end_date,
         )
         st_events = _load_st_events(conn, calendar, end_date, terminal_as_negative=st_only_active)
-        terminal_events = [] if st_only_active else _stock_basic_terminal_events(stocks, calendar)
+        terminal_events = (
+            []
+            if st_only_active
+            else _stock_basic_terminal_events(
+                stocks,
+                calendar,
+                allow_paused_list_date_fallback=not canonical_scope,
+            )
+        )
         confirmed_delisting_events = _load_confirmed_delisting_events(conn, calendar, end_date) if canonical_scope else []
         terminal_evidence = (
             audit_canonical_terminal_evidence(
                 stocks,
                 announcement_events=st_events + confirmed_delisting_events,
+                end_date=end_date,
             )
             if canonical_scope
             else None
@@ -1323,7 +1444,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 calendar=calendar,
                 start_date=start_date,
                 end_date=end_date,
-                events=st_events + terminal_events,
+                events=st_events + terminal_events + confirmed_delisting_events,
             )
             if canonical_scope
             else None
@@ -1368,6 +1489,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "write_mode": write_mode,
             "incremental_from": incremental_from.isoformat() if incremental_from else None,
             "st_pit": True,
+            "rule_parameters_digest": canonical_rule_parameters_digest() if canonical_scope else None,
+            "exception_ledger_status": exception_ledger["status"] if exception_ledger else None,
+            "exception_ledger": exception_ledger,
             "st_snapshot_continuity": st_snapshot_continuity,
             "terminal_evidence": terminal_evidence,
             "delist_pit": not st_only_active,

@@ -30,6 +30,7 @@ try:
         BugIdLockError,
         GlobalBugIdLock,
         bootstrap_fingerprint_index,
+        compact_terminal_reservation,
         compact_terminal_reservations as compact_terminal_reservations,
         find_matching_reservation,
         read_allocator_state,
@@ -44,6 +45,7 @@ except ModuleNotFoundError:  # Direct execution: python scripts/aistock_issue_wo
         BugIdLockError,
         GlobalBugIdLock,
         bootstrap_fingerprint_index,
+        compact_terminal_reservation,
         compact_terminal_reservations as compact_terminal_reservations,
         find_matching_reservation,
         read_allocator_state,
@@ -124,6 +126,21 @@ WORKTREE_TRANSIENT_CACHE_DIRS = {
 }
 WORKTREE_TRANSIENT_PREFIXES = ("tmp/", "var/research_assistant/")
 WORKTREE_TRANSIENT_EXACT_FILES = {".coverage", "debug.log"}
+WORKTREE_QE_LIVE_LOG_ROOT = "rdagent_assets/qe_live_logs"
+WORKTREE_QE_LIVE_LOG_SCHEMA = "qe_live_log_record_v1"
+WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES = 16 * 1024 * 1024
+WORKTREE_QE_LIVE_LOG_PATHS = frozenset(
+    f"{WORKTREE_QE_LIVE_LOG_ROOT}/qe-live-{index}.jsonl" for index in range(5)
+)
+WORKTREE_BACKEND_LOG_ROOT = "backend/logs"
+WORKTREE_BACKEND_LOG_LIMITS = {
+    "backend/logs/aistock.log": 10 * 1024 * 1024,
+    "backend/logs/errors.log": 5 * 1024 * 1024,
+}
+WORKTREE_BACKEND_LOG_LINE_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} "
+    r"(?:DEBUG|INFO|WARNING|ERROR|CRITICAL) \[[^\]\r\n]+\] .+$"
+)
 RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
@@ -1423,6 +1440,8 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "selected_lane_keys",
                 "blocking",
                 "warnings",
+                "checkout_advisories",
+                "remediation",
                 "restart_recommended",
             )
         )
@@ -1505,7 +1524,8 @@ def _format_summary_lines(payload: dict[str, Any], compact: dict[str, Any]) -> l
             (
                 f"{prefix} client-sync workflow_gate={gate} lane={compact.get('selected_lane') or 'all'} "
                 f"blocking={len(compact.get('blocking') or [])} warnings={len(compact.get('warnings') or [])} "
-                f"restart_recommended={str(bool(compact.get('restart_recommended'))).lower()}"
+                f"restart_recommended={str(bool(compact.get('restart_recommended'))).lower()} "
+                f"action={(compact.get('remediation') or {}).get('action') or 'unknown'}"
             )
         ]
     if schema == "aistock_issue_workflow_client_install_v2":
@@ -2488,6 +2508,26 @@ def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) ->
         }
     except Exception as exc:
         return {"ok": False, "returncode": None, "stdout": "", "stderr": str(exc)}
+
+
+def _run_read_command_with_retry(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 30,
+    attempts: int = 3,
+) -> dict[str, Any]:
+    """Retry a bounded idempotent remote/read command with short backoff."""
+
+    total = max(1, int(attempts))
+    last: dict[str, Any] = {"ok": False, "returncode": None, "stdout": "", "stderr": "not run"}
+    for index in range(total):
+        last = _run_command(args, cwd=cwd, timeout=timeout)
+        if last.get("ok"):
+            return {**last, "attempts": index + 1}
+        if index + 1 < total:
+            time.sleep(0.5 * (index + 1))
+    return {**last, "attempts": total}
 
 
 def _subprocess_env(args: list[str]) -> dict[str, str] | None:
@@ -3747,9 +3787,21 @@ def _reserve_bug_id(
             "exact_candidate" if include_github else "not_requested"
         )
         if allocator_bootstrap_required:
+            bootstrap_records = _fingerprint_bootstrap_records(root)
             report["fingerprint_index_bootstrap_count"] = bootstrap_fingerprint_index(
                 _bug_id_reservation_root(),
-                _fingerprint_bootstrap_records(root),
+                bootstrap_records,
+            )
+            durable_bug_ids = {
+                str(item.get("bug_id") or "").upper()
+                for item in bootstrap_records
+                if item.get("registry_path") and item.get("bug_id")
+            }
+            report["terminal_reservation_compaction_count"] = len(
+                compact_terminal_reservations(
+                    _bug_id_reservation_root(),
+                    durable_bug_ids,
+                )
             )
             try:
                 write_allocator_state(
@@ -5271,8 +5323,14 @@ def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) ->
     if not bug_id:
         raise WorkflowError("Either --bug-id or --issue-json is required")
     normalized = bug_id.strip().upper()
+    target_number = _bug_id_number(normalized)
     matches: list[tuple[dict[str, Any], Path]] = []
+    candidates: list[Path] = []
     for path in _bug_files():
+        filename_number = _bug_id_number_from_filename(path.name)
+        if filename_number == target_number or filename_number is None:
+            candidates.append(path)
+    for path in candidates:
         record = _load_json(path)
         if str(record.get("bug_id") or "").upper() == normalized:
             matches.append((record, path))
@@ -5961,7 +6019,14 @@ def build_submit_bug_plan(
         "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
         "github_issue_labels": github_labels,
         "registry_pr_only": registry_pr_only,
-        "stale_pr_check": _stale_pr_check_for_bug(canonical_bug_id) if effective_apply else {"status": "not_applicable_before_apply"},
+        "stale_pr_check": (
+            _stale_pr_check_for_bug(canonical_bug_id)
+            if effective_apply and bug_id
+            else {
+                "status": "skipped_fresh_allocation" if effective_apply else "not_applicable_before_apply",
+                "reason": "a newly allocated BUG id cannot have a stale PR",
+            }
+        ),
         "bug_id_allocation": {
             "allocator_root": str(allocation_root),
             "global_max_number": allocation_report.get("max_number"),
@@ -7069,7 +7134,10 @@ def build_workflow_smoke_plan(
     finish: dict[str, Any] | None = None
     postmortem_preview: dict[str, Any] | None = None
     try:
-        doctor_payload = build_doctor_report(skip_external=True)
+        doctor_payload = {
+            "workflow_gate": "skipped",
+            "reason": "workflow-smoke validates the lightweight state-machine contract; run doctor explicitly for diagnostics",
+        }
         fast_path = build_fast_path_plan(
             bug_id=bug_id,
             issue_json=issue_json,
@@ -7078,6 +7146,20 @@ def build_workflow_smoke_plan(
             allow_missing_linkage=True,
             allow_closed=True,
         )
+        shared_code_intelligence = {
+            "schema_version": "aistock_code_intelligence_summary_v1",
+            "provider": "workflow_smoke_contract",
+            "status": "skipped_external_in_smoke",
+            "context_ref": "not_required_workflow_smoke",
+            "manifest_ref": "not_required_workflow_smoke",
+            "affected_tests_ref": "not_required_workflow_smoke",
+            "affected_tests_count": 0,
+            "affected_quality": "not_required_workflow_smoke",
+            "affected_tests": {"suggested_tests": []},
+            "fallback_used": False,
+            "understand_anything": {"status": "not_required_workflow_smoke", "graph_exists": True},
+            "understand_anything_summary_ref": "not_required_workflow_smoke",
+        }
         start = build_start_plan(
             bug_id=bug_id,
             issue_json=issue_json,
@@ -7087,6 +7169,7 @@ def build_workflow_smoke_plan(
             task_slug="workflow-smoke",
             allow_missing_linkage=True,
             allow_closed=True,
+            code_intelligence_summary_override=shared_code_intelligence,
         )
         finish = build_finish_plan(
             bug_id=bug_id,
@@ -7097,6 +7180,7 @@ def build_workflow_smoke_plan(
             validation_evidence=[],
             plan_only=True,
             allow_missing_evidence=False,
+            code_intelligence_summary_override=shared_code_intelligence,
         )
         postmortem_preview = {
             "schema_version": "aistock_issue_workflow_smoke_postmortem_preview_v1",
@@ -7475,6 +7559,7 @@ def build_start_plan(
     allow_missing_linkage: bool,
     allow_closed: bool,
     active_decision: dict[str, Any] | None = None,
+    code_intelligence_summary_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not issue_json and active_decision and active_decision.get("registry_issue_json"):
         issue_json = str(active_decision["registry_issue_json"])
@@ -7508,7 +7593,7 @@ def build_start_plan(
     context_pack["required_verification"] = budgeted_validation["required_plans"]
     context_pack["recommended_verification"] = budgeted_validation["recommended_plans"]
     context_pack["deferred_nightly_plans"] = budgeted_validation.get("deferred_nightly_plans") or []
-    code_intelligence_summary = _build_code_intelligence_summary(
+    code_intelligence_summary = code_intelligence_summary_override or _build_code_intelligence_summary(
         item_id=canonical_bug_id,
         record=record,
         changed_files=changed_files,
@@ -7689,6 +7774,7 @@ def build_finish_plan(
     plan_only: bool,
     allow_missing_evidence: bool,
     fresh_process_evidence: list[str] | None = None,
+    code_intelligence_summary_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
@@ -7698,7 +7784,7 @@ def build_finish_plan(
         validation=flow.select_validation(changed, module=record.get("module")),
     )
     pr_quality = flow.build_pr_quality(base=base, head=head, issue_record=record, changed_files=changed)
-    code_intelligence_summary = _build_code_intelligence_summary(
+    code_intelligence_summary = code_intelligence_summary_override or _build_code_intelligence_summary(
         item_id=canonical_bug_id,
         record=record,
         changed_files=changed,
@@ -8789,6 +8875,235 @@ def _selected_client_lane_keys(selected_lane: str | None) -> set[str]:
     return {"router", normalized}
 
 
+def _client_lanes_for_changed_files(changed_files: Iterable[str]) -> list[str]:
+    normalized = {
+        str(path).replace("\\", "/").removeprefix("./").strip("/")
+        for path in changed_files
+        if str(path).strip()
+    }
+    lanes: set[str] = set()
+    for key, skill_name in CLIENT_CODEX_SKILLS:
+        prefix = f".codex/skills/{skill_name}/"
+        if any(path == prefix.rstrip("/") or path.startswith(prefix) for path in normalized):
+            lanes.add(key)
+    for key, command_name in CLIENT_CLAUDE_COMMANDS:
+        path = f".claude/commands/{command_name}"
+        if path in normalized:
+            lanes.add(key)
+    return sorted(lanes)
+
+
+def _stale_client_lanes(manifest: dict[str, Any]) -> list[str]:
+    stale_statuses = {"stale", "stale_global", "missing_global"}
+    lanes: set[str] = set()
+    for entries_key in ("codex_entries", "claude_entries"):
+        entries = manifest.get(entries_key) if isinstance(manifest.get(entries_key), dict) else {}
+        for lane, entry in entries.items():
+            if str((entry or {}).get("status") or "") in stale_statuses:
+                lanes.add(str(lane))
+    return sorted(lanes)
+
+
+def _merge_commit_changed_files(merge_commit: str, *, root: Path) -> dict[str, Any]:
+    parent_result = _run_command(
+        ["git", "rev-list", "--parents", "-n", "1", merge_commit],
+        cwd=root,
+        timeout=30,
+    )
+    if not parent_result.get("ok"):
+        return {"ok": False, "files": [], "error": parent_result.get("stderr") or "merge commit unavailable"}
+    parts = str(parent_result.get("stdout") or "").split()
+    if len(parts) < 2:
+        return {"ok": False, "files": [], "error": f"merge commit has no parent: {merge_commit}"}
+    diff_result = _run_command(
+        ["git", "diff", "--name-only", parts[1], merge_commit],
+        cwd=root,
+        timeout=30,
+    )
+    return {
+        "ok": bool(diff_result.get("ok")),
+        "base": parts[1],
+        "merge_commit": merge_commit,
+        "files": sorted(set(str(diff_result.get("stdout") or "").splitlines())),
+        "error": None if diff_result.get("ok") else diff_result.get("stderr") or "merge diff unavailable",
+    }
+
+
+def _publish_changed_clients_after_merge(
+    *,
+    merge_commit: str,
+    sync_root: bool,
+    apply: bool,
+) -> dict[str, Any]:
+    root = _canonical_root()
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_merge_aftercare_client_publish_v1",
+        "merge_commit": merge_commit,
+        "canonical_root": str(root),
+        "sync_root": sync_root,
+        "dry_run": not apply,
+        "changed_files": [],
+        "selected_lanes": [],
+        "installs": [],
+        "verifications": [],
+        "blocking": [],
+    }
+    if not sync_root:
+        payload.update({"workflow_gate": "deferred", "reason": "canonical_root_sync_not_requested"})
+        return payload
+    if not apply:
+        payload.update({"workflow_gate": "ready_for_apply", "reason": "inspect_after_source_merge"})
+        return payload
+
+    fetch = _cleanup_preflight_fetch_origin(root, apply=True)
+    payload["fetch"] = fetch
+    if fetch.get("status") != "fetched":
+        result = fetch.get("result") if isinstance(fetch.get("result"), dict) else {}
+        payload["blocking"].append(result.get("stderr") or result.get("stdout") or "failed to fetch origin")
+    root_git = _git_snapshot(root)
+    payload["root_before"] = root_git
+    if root_git.get("branch") != "main":
+        payload["blocking"].append(f"canonical root is not on main: {root_git.get('branch')}")
+    if root_git.get("dirty") and root_git.get("head") != root_git.get("origin_main"):
+        payload["blocking"].append("canonical root is dirty and behind origin/main")
+    if payload["blocking"]:
+        payload["workflow_gate"] = "blocked"
+        return payload
+    if root_git.get("head") != root_git.get("origin_main"):
+        sync_result = _run_command(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)
+        payload["root_sync"] = sync_result
+        if not sync_result.get("ok"):
+            payload["blocking"].append(sync_result.get("stderr") or "canonical root fast-forward failed")
+            payload["workflow_gate"] = "blocked"
+            return payload
+
+    changed = _merge_commit_changed_files(merge_commit, root=root)
+    payload["merge_diff"] = changed
+    payload["changed_files"] = changed.get("files") or []
+    if not changed.get("ok"):
+        payload["blocking"].append(str(changed.get("error") or "merge changed-file inspection failed"))
+        payload["workflow_gate"] = "blocked"
+        return payload
+    changed_lanes = _client_lanes_for_changed_files(payload["changed_files"])
+    payload["changed_lanes"] = changed_lanes
+    if not changed_lanes:
+        payload.update({"workflow_gate": "not_required", "reason": "merge_did_not_change_workflow_clients"})
+        return payload
+    with _ClientInstallLock():
+        preinstall_manifest = _client_manifest()
+    stale_lanes = _stale_client_lanes(preinstall_manifest)
+    lanes = sorted(set(changed_lanes) | set(stale_lanes))
+    payload["stale_lanes_before"] = stale_lanes
+    payload["selected_lanes"] = lanes
+
+    for lane in lanes:
+        install = build_client_install_plan(apply=True, selected_lane=lane)
+        payload["installs"].append({"lane": lane, **install})
+        if install.get("workflow_gate") != "installed":
+            payload["blocking"].extend(install.get("blocking") or [f"client install failed for lane {lane}"])
+            continue
+        with _ClientInstallLock():
+            manifest = _client_manifest()
+        verification = _client_lane_verification(
+            manifest,
+            selected_lane=lane,
+            verify_codex=True,
+            verify_claude=True,
+        )
+        payload["verifications"].append({"lane": lane, **verification})
+        payload["blocking"].extend(verification.get("blocking") or [])
+    payload["workflow_gate"] = "blocked" if payload["blocking"] else "installed_and_verified"
+    payload["restart_recommended"] = False
+    return payload
+
+
+def _client_source_authority() -> dict[str, Any]:
+    canonical_root = _canonical_root()
+    canonical_git = _git_snapshot(canonical_root)
+    head_result = _run_command(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=canonical_root, timeout=15)
+    head = str(head_result.get("stdout") or "").strip().lower()
+    origin_main = _origin_main_commit(root=canonical_root)
+    authority_status = _run_command(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--",
+            ".codex/skills",
+            ".claude/commands",
+            "scripts/aistock_issue_workflow.py",
+        ],
+        cwd=canonical_root,
+        timeout=15,
+    )
+    authority_paths_dirty = bool(str(authority_status.get("stdout") or "").strip())
+    if (
+        canonical_git.get("ok")
+        and canonical_git.get("branch") == "main"
+        and authority_status.get("ok")
+        and not authority_paths_dirty
+        and head
+        and origin_main
+        and head == origin_main
+    ):
+        return {
+            "ready": True,
+            "source": "canonical_main",
+            "root": str(canonical_root),
+            "commit": head,
+            "origin_main_commit": origin_main,
+            "authority_paths_clean": True,
+            "blocking_reason": None,
+            "blocking_reasons": [],
+        }
+
+    reasons: list[str] = []
+    if not canonical_git.get("ok"):
+        reasons.append("canonical root is not a readable Git checkout")
+    if canonical_git.get("branch") != "main":
+        reasons.append(f"canonical root branch is {canonical_git.get('branch') or 'unknown'}, expected main")
+    if not authority_status.get("ok"):
+        reasons.append("canonical client-authority path status is unavailable")
+    elif authority_paths_dirty:
+        reasons.append("canonical client-authority paths are dirty")
+    if not origin_main:
+        reasons.append("origin/main identity is unavailable")
+    if head and origin_main and head != origin_main:
+        reasons.append("canonical main is not aligned with origin/main")
+    return {
+        "ready": False,
+        "source": "canonical_main",
+        "root": str(canonical_root),
+        "commit": head or None,
+        "origin_main_commit": origin_main,
+        "authority_paths_clean": bool(authority_status.get("ok")) and not authority_paths_dirty,
+        "blocking_reason": reasons[0] if reasons else "canonical client authority is unavailable",
+        "blocking_reasons": reasons,
+    }
+
+
+def _client_checkout_root() -> Path:
+    result = _run_command(["git", "rev-parse", "--show-toplevel"], cwd=Path.cwd(), timeout=15)
+    value = str(result.get("stdout") or "").strip()
+    return Path(value) if result.get("ok") and value else REPO_ROOT
+
+
+def _client_checkout_relation(authority: dict[str, Any]) -> str:
+    checkout_root = _client_checkout_root()
+    authority_commit = str(authority.get("commit") or "").strip()
+    head_result = _run_command(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=checkout_root, timeout=15)
+    checkout_commit = str(head_result.get("stdout") or "").strip().lower()
+    if not authority_commit or not checkout_commit:
+        return "authority_checkout" if _same_path(Path(authority["root"]), checkout_root) else "unknown"
+    if checkout_commit == authority_commit:
+        return "matches_authority"
+    if _git_commit_is_ancestor(checkout_commit, authority_commit, root=checkout_root):
+        return "behind_authority"
+    if _git_commit_is_ancestor(authority_commit, checkout_commit, root=checkout_root):
+        return "ahead_of_authority"
+    return "divergent_from_authority"
+
+
 class _ClientInstallLock:
     def __init__(self, *, timeout: float = 30.0) -> None:
         self.timeout = timeout
@@ -8854,28 +9169,40 @@ def _staged_replace_file(source: Path, target: Path) -> None:
 def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = None) -> dict[str, Any]:
     codex_home = codex_home or _codex_home()
     claude_home = claude_home or _claude_home()
+    checkout_root = _client_checkout_root()
     cli = REPO_ROOT / "scripts" / "aistock_issue_workflow.py"
-    repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=15)
+    checkout_cli = checkout_root / "scripts" / "aistock_issue_workflow.py"
+    repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=checkout_root, timeout=15)
     cli_sha = _sha256_file(cli)
+    authority = _client_source_authority()
+    authority_root = Path(authority["root"])
+    authority_cli = authority_root / "scripts" / "aistock_issue_workflow.py"
+    checkout_relation = _client_checkout_relation(authority)
 
-    def _tree_status(repo_sha: str | None, global_sha: str | None) -> str:
-        if repo_sha and global_sha:
-            return "current" if repo_sha == global_sha else "stale"
-        if repo_sha and not global_sha:
+    def _tree_status(authority_sha: str | None, global_sha: str | None) -> str:
+        if not authority.get("ready"):
+            return "authority_unavailable"
+        if authority_sha and global_sha:
+            return "current" if authority_sha == global_sha else "stale"
+        if authority_sha and not global_sha:
             return "missing_global"
-        return "missing_repo_skill"
+        return "missing_authority"
 
-    def _file_status(repo_sha: str | None, global_sha: str | None) -> str:
-        if repo_sha and global_sha:
-            return "current" if repo_sha == global_sha else "stale_global"
-        if repo_sha and not global_sha:
+    def _file_status(authority_sha: str | None, global_sha: str | None) -> str:
+        if not authority.get("ready"):
+            return "authority_unavailable"
+        if authority_sha and global_sha:
+            return "current" if authority_sha == global_sha else "stale_global"
+        if authority_sha and not global_sha:
             return "missing_global"
-        return "missing_repo"
+        return "missing_authority"
 
-    def _combined_status(statuses: Iterable[str], *, missing_repo_status: str, stale_status: str) -> str:
+    def _combined_status(statuses: Iterable[str], *, stale_status: str) -> str:
         values = list(statuses)
-        if any(value == missing_repo_status for value in values):
-            return missing_repo_status
+        if any(value == "authority_unavailable" for value in values):
+            return "authority_unavailable"
+        if any(value == "missing_authority" for value in values):
+            return "missing_authority"
         if any(value.startswith("stale") for value in values):
             return stale_status
         if any(value == "missing_global" for value in values):
@@ -8884,81 +9211,112 @@ def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = 
 
     codex_entries: dict[str, dict[str, Any]] = {}
     for key, skill_name in CLIENT_CODEX_SKILLS:
-        repo_path = REPO_ROOT / ".codex" / "skills" / skill_name
+        repo_path = checkout_root / ".codex" / "skills" / skill_name
+        authority_path = authority_root / ".codex" / "skills" / skill_name
         global_path = codex_home / "skills" / skill_name
         repo_sha = _sha256_tree(repo_path)
+        authority_sha = _sha256_tree(authority_path) if authority.get("ready") else None
         global_sha = _sha256_tree(global_path)
         codex_entries[key] = {
             "name": skill_name,
             "repo_path": str(repo_path),
+            "authority_path": str(authority_path),
             "global_path": str(global_path),
             "repo_sha256": repo_sha,
+            "authority_sha256": authority_sha,
             "global_sha256": global_sha,
-            "status": _tree_status(repo_sha, global_sha),
+            "checkout_status": "matches_authority" if repo_sha == authority_sha else "differs_from_authority",
+            "status": _tree_status(authority_sha, global_sha),
         }
 
     claude_entries: dict[str, dict[str, Any]] = {}
     for key, command_name in CLIENT_CLAUDE_COMMANDS:
-        repo_path = REPO_ROOT / ".claude" / "commands" / command_name
+        repo_path = checkout_root / ".claude" / "commands" / command_name
+        authority_path = authority_root / ".claude" / "commands" / command_name
         global_path = claude_home / "commands" / command_name
         repo_sha = _sha256_file(repo_path)
+        authority_sha = _sha256_file(authority_path) if authority.get("ready") else None
         global_sha = _sha256_file(global_path)
         claude_entries[key] = {
             "name": command_name,
             "repo_path": str(repo_path),
+            "authority_path": str(authority_path),
             "global_path": str(global_path),
             "repo_sha256": repo_sha,
+            "authority_sha256": authority_sha,
             "global_sha256": global_sha,
-            "status": _file_status(repo_sha, global_sha),
+            "checkout_status": "matches_authority" if repo_sha == authority_sha else "differs_from_authority",
+            "status": _file_status(authority_sha, global_sha),
         }
 
     codex_status = _combined_status(
         (entry["status"] for entry in codex_entries.values()),
-        missing_repo_status="missing_repo_skill",
         stale_status="stale",
     )
     claude_status = _combined_status(
         (entry["status"] for entry in claude_entries.values()),
-        missing_repo_status="missing_repo",
         stale_status="stale_global",
     )
 
-    paths: dict[str, str] = {"workflow_cli": str(cli)}
+    paths: dict[str, str] = {"workflow_cli": str(cli), "checkout_workflow_cli": str(checkout_cli)}
     for key, entry in codex_entries.items():
         paths[f"repo_codex_{key}_skill"] = entry["repo_path"]
+        paths[f"authority_codex_{key}_skill"] = entry["authority_path"]
         paths[f"global_codex_{key}_skill"] = entry["global_path"]
     for key, entry in claude_entries.items():
         paths[f"claude_{key}_command"] = entry["repo_path"]
+        paths[f"authority_claude_{key}_command"] = entry["authority_path"]
         paths[f"global_claude_{key}_command"] = entry["global_path"]
 
     payload: dict[str, Any] = {
         "schema_version": "aistock_issue_workflow_client_manifest_v2",
         "repo_commit": repo_head.get("stdout") if repo_head.get("ok") else None,
+        "checkout_root": str(checkout_root),
+        "checkout_commit_relation": checkout_relation,
+        "source_authority": authority,
+        "codex_home": str(codex_home),
+        "claude_home": str(claude_home),
         "workflow_cli_sha256": cli_sha,
+        "authority_workflow_cli_sha256": _sha256_file(authority_cli) if authority.get("ready") else None,
         "codex_skill_status": codex_status,
         "claude_command_status": claude_status,
         "codex_entries": codex_entries,
         "claude_entries": claude_entries,
         "paths": paths,
-        "restart_recommended": codex_status != "current" or claude_status != "current",
-        "install_client_next_command": f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} install-client --apply",
+        "restart_recommended": False,
+        "install_client_next_command": subprocess.list2cmdline(
+            [
+                "python",
+                str(authority_cli),
+                "install-client",
+                "--apply",
+                "--codex-home",
+                str(codex_home),
+                "--claude-home",
+                str(claude_home),
+            ]
+        ),
     }
 
     # Backward-compatible flat fields used by compact output and older tests.
     if "issue" in codex_entries:
-        payload["codex_skill_sha256"] = codex_entries["issue"]["repo_sha256"]
+        payload["codex_skill_sha256"] = codex_entries["issue"]["authority_sha256"]
+        payload["checkout_codex_skill_sha256"] = codex_entries["issue"]["repo_sha256"]
         payload["global_codex_skill_sha256"] = codex_entries["issue"]["global_sha256"]
         payload["codex_issue_skill_status"] = codex_entries["issue"]["status"]
     if "feature" in codex_entries:
-        payload["codex_feature_skill_sha256"] = codex_entries["feature"]["repo_sha256"]
+        payload["codex_feature_skill_sha256"] = codex_entries["feature"]["authority_sha256"]
+        payload["checkout_codex_feature_skill_sha256"] = codex_entries["feature"]["repo_sha256"]
         payload["global_codex_feature_skill_sha256"] = codex_entries["feature"]["global_sha256"]
         payload["codex_feature_skill_status"] = codex_entries["feature"]["status"]
     if "issue" in claude_entries:
-        payload["claude_command_sha256"] = claude_entries["issue"]["repo_sha256"]
+        payload["claude_command_sha256"] = claude_entries["issue"]["authority_sha256"]
+        payload["checkout_claude_command_sha256"] = claude_entries["issue"]["repo_sha256"]
         payload["global_claude_command_sha256"] = claude_entries["issue"]["global_sha256"]
         payload["claude_issue_command_status"] = claude_entries["issue"]["status"]
     if "feature" in claude_entries:
-        payload["claude_feature_command_sha256"] = claude_entries["feature"]["repo_sha256"]
+        payload["claude_feature_command_sha256"] = claude_entries["feature"]["authority_sha256"]
+        payload["checkout_claude_feature_command_sha256"] = claude_entries["feature"]["repo_sha256"]
         payload["global_claude_feature_command_sha256"] = claude_entries["feature"]["global_sha256"]
         payload["claude_feature_command_status"] = claude_entries["feature"]["status"]
     for key in ("router", "docs_handoff", "merge_aftercare", "readonly_triage", "validation_delegation"):
@@ -8979,6 +9337,7 @@ def _client_lane_verification(
     selected_keys = _selected_client_lane_keys(selected_lane)
     blocking: list[str] = []
     warnings: list[str] = []
+    checkout_advisories: list[str] = []
     checked: list[dict[str, str]] = []
     for client, enabled, entries_key in (
         ("codex", verify_codex, "codex_entries"),
@@ -8989,8 +9348,22 @@ def _client_lane_verification(
         entries = manifest.get(entries_key) or {}
         for key, entry in entries.items():
             status = str((entry or {}).get("status") or "missing")
+            checkout_status = str((entry or {}).get("checkout_status") or "unknown")
             relevant = key in selected_keys
-            checked.append({"client": client, "lane": key, "status": status, "relevance": "selected" if relevant else "unrelated"})
+            checked.append(
+                {
+                    "client": client,
+                    "lane": key,
+                    "status": status,
+                    "checkout_status": checkout_status,
+                    "relevance": "selected" if relevant else "unrelated",
+                }
+            )
+            if relevant and checkout_status == "differs_from_authority":
+                checkout_advisories.append(
+                    f"{client} lane {key} checkout differs from merged client authority; "
+                    "do not install from this task worktree"
+                )
             if status == "current":
                 continue
             message = f"{client} lane {key} is {status}"
@@ -8998,12 +9371,47 @@ def _client_lane_verification(
                 blocking.append(message)
             else:
                 warnings.append(f"unrelated {message}")
+    authority = manifest.get("source_authority") if isinstance(manifest.get("source_authority"), dict) else {}
+    authority_cli = Path(str(authority.get("root") or _canonical_root())) / "scripts" / "aistock_issue_workflow.py"
+    install_args = ["python", str(authority_cli), "install-client", "--apply"]
+    verify_args = ["python", str(authority_cli), "verify-clients", "--workflow-only"]
+    if selected_lane:
+        install_args.extend(["--selected-lane", selected_lane])
+        verify_args.extend(["--selected-lane", selected_lane])
+    if verify_codex:
+        install_args.extend(["--codex-home", str(manifest.get("codex_home") or _codex_home())])
+        verify_args.extend(["--codex-home", str(manifest.get("codex_home") or _codex_home())])
+    else:
+        install_args.append("--skip-codex")
+        verify_args.append("--skip-codex")
+    if verify_claude:
+        install_args.extend(["--claude-home", str(manifest.get("claude_home") or _claude_home())])
+        verify_args.extend(["--claude-home", str(manifest.get("claude_home") or _claude_home())])
+    else:
+        install_args.append("--skip-claude")
+        verify_args.append("--skip-claude")
+    if blocking:
+        authority_blocked = any("authority_unavailable" in item or "missing_authority" in item for item in blocking)
+        action = "sync_canonical_main_then_single_owner_install" if authority_blocked else "request_single_owner_sync"
+    else:
+        action = "continue_without_install"
+    remediation = {
+        "action": action,
+        "single_owner_required": bool(blocking),
+        "must_not_install_from_task_worktree": True,
+        "owner_command": subprocess.list2cmdline(install_args) if blocking else None,
+        "window_verify_command": subprocess.list2cmdline(verify_args),
+        "authority_root": str(authority.get("root") or _canonical_root()),
+        "authority_commit": authority.get("commit"),
+    }
     return {
         "selected_lane": selected_lane,
         "selected_lane_keys": sorted(selected_keys),
         "checked": checked,
         "blocking": blocking,
         "warnings": warnings,
+        "checkout_advisories": checkout_advisories,
+        "remediation": remediation,
         "ready": not blocking,
     }
 
@@ -9100,15 +9508,15 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         warnings.append("MCP/Codex config mentions AIstock_worktrees; verify it is not a stale server target")
 
     client_manifest = _client_manifest()
-    if client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
+    if client_manifest["codex_skill_status"] in {"authority_unavailable", "missing_authority"}:
+        blocking.append("merged Codex workflow authority is unavailable or incomplete")
+    elif client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
         warnings.append(
             "global Codex workflow skill set is missing or stale; verify the router and selected lane for this window "
             "before any target-scoped install"
         )
-    elif client_manifest["codex_skill_status"] == "missing_repo_skill":
-        blocking.append("repo Codex workflow skill set is missing")
-    if client_manifest["claude_command_status"] == "missing_repo":
-        warnings.append("repo Claude Code workflow command set is missing; Claude can still call the repo CLI directly")
+    if client_manifest["claude_command_status"] in {"authority_unavailable", "missing_authority"}:
+        blocking.append("merged Claude Code workflow authority is unavailable or incomplete")
     elif client_manifest["claude_command_status"] in {"missing_global", "stale_global"}:
         warnings.append(
             "global Claude Code workflow command set is missing or stale; verify the router and selected lane for this "
@@ -9166,17 +9574,24 @@ def build_client_install_plan(
     target_home = Path(codex_home) if codex_home else _codex_home()
     target_claude_home = Path(claude_home) if claude_home else _claude_home()
     selected_keys = _selected_client_lane_keys(selected_lane)
+    source_authority = _client_source_authority()
+    authority_root = Path(source_authority["root"])
     source_codex_skills = [
-        (key, name, REPO_ROOT / ".codex" / "skills" / name, target_home / "skills" / name)
+        (key, name, authority_root / ".codex" / "skills" / name, target_home / "skills" / name)
         for key, name in CLIENT_CODEX_SKILLS
         if key in selected_keys
     ] if install_codex else []
     source_claude_commands = [
-        (key, name, REPO_ROOT / ".claude" / "commands" / name, target_claude_home / "commands" / name)
+        (key, name, authority_root / ".claude" / "commands" / name, target_claude_home / "commands" / name)
         for key, name in CLIENT_CLAUDE_COMMANDS
         if key in selected_keys
     ] if install_claude else []
     blocking: list[str] = []
+    if not source_authority.get("ready"):
+        blocking.append(
+            "merged client authority is unavailable: "
+            f"{source_authority.get('blocking_reason') or 'sync canonical main with origin/main'}"
+        )
     for _key, name, source, _target in source_codex_skills:
         if not source.exists():
             blocking.append(f"missing repo Codex skill {name}: {source}")
@@ -9229,6 +9644,9 @@ def build_client_install_plan(
         "install_claude": install_claude,
         "selected_lane": selected_lane,
         "selected_lane_keys": sorted(selected_keys),
+        "source_authority": source_authority,
+        "single_owner_required": any(bool(item.get("sync_required")) for item in actions),
+        "task_worktree_is_install_source": False,
         "client_manifest_before": _client_manifest(target_home, target_claude_home),
     }
     if apply:
@@ -9237,6 +9655,15 @@ def build_client_install_plan(
         installed: list[dict[str, str]] = []
         skipped_current: list[dict[str, str]] = []
         with _ClientInstallLock():
+            locked_authority = _client_source_authority()
+            if (
+                not locked_authority.get("ready")
+                or not _same_path(Path(locked_authority["root"]), authority_root)
+                or locked_authority.get("commit") != source_authority.get("commit")
+            ):
+                raise WorkflowError(
+                    "merged client authority changed before install; rerun from synchronized canonical main"
+                )
             for key, _name, source, target in source_codex_skills:
                 if _sha256_tree(source) == _sha256_tree(target):
                     skipped_current.append({"client": "codex", "lane": key, "target": str(target)})
@@ -9389,7 +9816,10 @@ def build_postmortem_plan(
             return prior
     active = _active_workflows_for_bug(canonical_bug_id)
     duplicate_active_count = max(0, len(active) - 1)
-    stale_pr_check = _stale_pr_check_for_bug(canonical_bug_id)
+    stale_pr_check = state.get("stale_pr_check") or {
+        "status": "skipped_postmortem_remote_read",
+        "reason": "postmortem reuses durable workflow state and does not repeat GitHub PR inventory queries",
+    }
     context_metrics = state.get("context_metrics") or {}
     if not context_metrics:
         context_metrics = _fallback_context_metrics(canonical_bug_id, root)
@@ -10625,6 +11055,86 @@ def _worktree_transient_root(
     return None, "unknown_ignored_artifact"
 
 
+def _validated_qe_live_log_transient_paths(
+    ignored_paths: Iterable[str],
+    *,
+    worktree_path: Path,
+) -> tuple[set[str], str]:
+    prefix = WORKTREE_QE_LIVE_LOG_ROOT + "/"
+    observed = {
+        _normalize_worktree_artifact_path(item)
+        for item in ignored_paths
+        if _normalize_worktree_artifact_path(item).startswith(prefix)
+    }
+    if not observed:
+        return set(), "qe_live_log_ring_not_present"
+    if observed != WORKTREE_QE_LIVE_LOG_PATHS:
+        return set(), "qe_live_log_ring_inventory_mismatch"
+
+    root = worktree_path / WORKTREE_QE_LIVE_LOG_ROOT
+    if (
+        not root.is_dir()
+        or _is_reparse_or_symlink(root.parent)
+        or _is_reparse_or_symlink(root)
+    ):
+        return set(), "qe_live_log_ring_unsafe_directory"
+
+    for relative_path in sorted(WORKTREE_QE_LIVE_LOG_PATHS):
+        candidate = worktree_path / relative_path
+        try:
+            if _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                return set(), "qe_live_log_ring_unsafe_file"
+            if candidate.stat().st_size > WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES:
+                return set(), "qe_live_log_ring_file_too_large"
+            with candidate.open("r", encoding="utf-8", errors="strict") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    if not isinstance(record, dict) or record.get("schema_version") != WORKTREE_QE_LIVE_LOG_SCHEMA:
+                        return set(), "qe_live_log_ring_schema_mismatch"
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return set(), "qe_live_log_ring_invalid_jsonl"
+    return set(WORKTREE_QE_LIVE_LOG_PATHS), "bounded_non_authoritative_qe_live_log_ring"
+
+
+def _validated_backend_lifespan_log_transient_paths(
+    ignored_paths: Iterable[str],
+    *,
+    worktree_path: Path,
+) -> tuple[set[str], str]:
+    prefix = WORKTREE_BACKEND_LOG_ROOT + "/"
+    observed = {
+        _normalize_worktree_artifact_path(item)
+        for item in ignored_paths
+        if _normalize_worktree_artifact_path(item).startswith(prefix)
+    }
+    if not observed:
+        return set(), "backend_lifespan_logs_not_present"
+    allowed = set(WORKTREE_BACKEND_LOG_LIMITS)
+    if not observed.issubset(allowed):
+        return set(), "backend_lifespan_log_inventory_mismatch"
+
+    root = worktree_path / WORKTREE_BACKEND_LOG_ROOT
+    if not root.is_dir() or _is_reparse_or_symlink(root.parent) or _is_reparse_or_symlink(root):
+        return set(), "backend_lifespan_log_unsafe_directory"
+    for relative_path in sorted(observed):
+        candidate = worktree_path / relative_path
+        try:
+            if _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                return set(), "backend_lifespan_log_unsafe_file"
+            if candidate.stat().st_size > WORKTREE_BACKEND_LOG_LIMITS[relative_path]:
+                return set(), "backend_lifespan_log_file_too_large"
+            with candidate.open("r", encoding="utf-8", errors="strict") as handle:
+                for line in handle:
+                    text = line.rstrip("\r\n")
+                    if not text or not WORKTREE_BACKEND_LOG_LINE_RE.fullmatch(text):
+                        return set(), "backend_lifespan_log_format_mismatch"
+        except (OSError, UnicodeError):
+            return set(), "backend_lifespan_log_unreadable"
+    return observed, "bounded_test_created_backend_lifespan_log"
+
+
 def _minimal_relative_roots(roots: Iterable[str]) -> list[str]:
     ordered = sorted({_normalize_worktree_artifact_path(item) for item in roots if item}, key=lambda item: (item.count("/"), item))
     minimal: list[str] = []
@@ -10727,12 +11237,17 @@ def _worktree_active_process_profile(worktree_path: Path) -> dict[str, Any]:
             return profile
         env = os.environ.copy()
         env["AISTOCK_CLEANUP_TARGET"] = resolved
-        env["AISTOCK_CLEANUP_EXCLUDE_PIDS"] = ",".join(str(item) for item in {os.getpid(), os.getppid()})
+        env["AISTOCK_CLEANUP_CALLER_PID"] = str(os.getpid())
         script = (
             "$target=$env:AISTOCK_CLEANUP_TARGET;"
             "$forward=$target.Replace('\\','/');"
-            "$exclude=@($env:AISTOCK_CLEANUP_EXCLUDE_PIDS.Split(',')|ForEach-Object{[int]$_});"
-            "$hits=@(Get-CimInstance Win32_Process|Where-Object{$exclude -notcontains [int]$_.ProcessId}|"
+            "$all=@(Get-CimInstance Win32_Process);"
+            "$exclude=New-Object 'System.Collections.Generic.HashSet[int]';"
+            "$null=$exclude.Add([int]$PID);$cursor=[int]$env:AISTOCK_CLEANUP_CALLER_PID;"
+            "while($cursor -gt 0 -and $exclude.Add($cursor)){"
+            "$row=$all|Where-Object{[int]$_.ProcessId -eq $cursor}|Select-Object -First 1;"
+            "if($null -eq $row){break};$cursor=[int]$row.ParentProcessId};"
+            "$hits=@($all|Where-Object{-not $exclude.Contains([int]$_.ProcessId)}|"
             "Where-Object{([string]$_.CommandLine).IndexOf($target,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or "
             "([string]$_.CommandLine).IndexOf($forward,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or "
             "([string]$_.ExecutablePath).IndexOf($target,[StringComparison]::OrdinalIgnoreCase)-ge 0}|"
@@ -10820,6 +11335,16 @@ def _worktree_ignored_artifact_profile(
         profile["error"] = result.get("stderr") or result.get("stdout") or "ignored artifact scan failed"
         return profile
     ignored = sorted({_normalize_worktree_artifact_path(item) for item in str(result.get("stdout") or "").split("\0") if item})
+    qe_live_log_paths, qe_live_log_reason = _validated_qe_live_log_transient_paths(
+        ignored,
+        worktree_path=worktree_path,
+    )
+    qe_live_log_prefix = WORKTREE_QE_LIVE_LOG_ROOT + "/"
+    backend_log_paths, backend_log_reason = _validated_backend_lifespan_log_transient_paths(
+        ignored,
+        worktree_path=worktree_path,
+    )
+    backend_log_prefix = WORKTREE_BACKEND_LOG_ROOT + "/"
     roots: list[str] = []
     canonical_lines: list[str] = []
     for rel in ignored:
@@ -10829,7 +11354,14 @@ def _worktree_ignored_artifact_profile(
             if len(profile["protected_samples"]) < 20:
                 profile["protected_samples"].append(rel)
         else:
-            root, reason = _worktree_transient_root(rel, worktree_path=worktree_path, canonical_root=canonical_root)
+            if rel.startswith(qe_live_log_prefix):
+                root = WORKTREE_QE_LIVE_LOG_ROOT if rel in qe_live_log_paths else None
+                reason = qe_live_log_reason
+            elif rel.startswith(backend_log_prefix):
+                root = rel if rel in backend_log_paths else None
+                reason = backend_log_reason
+            else:
+                root, reason = _worktree_transient_root(rel, worktree_path=worktree_path, canonical_root=canonical_root)
             if root:
                 category = "transient"
                 roots.append(root)
@@ -10954,12 +11486,13 @@ def _cleanup_post_removal_verification(
     local_refs = set(
         _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
     )
-    try:
-        remote_output = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=True)
-        remote_check_ok = True
-    except Exception:
-        remote_output = ""
-        remote_check_ok = False
+    remote_result = _run_read_command_with_retry(
+        ["git", "ls-remote", "--heads", "origin", branch],
+        cwd=root,
+        timeout=60,
+    )
+    remote_output = str(remote_result.get("stdout") or "") if remote_result.get("ok") else ""
+    remote_check_ok = bool(remote_result.get("ok"))
     local_absent = branch not in local_refs
     remote_absent = remote_check_ok and not remote_output.strip()
     path_absent = worktree_path is None or not worktree_path.exists()
@@ -10972,6 +11505,7 @@ def _cleanup_post_removal_verification(
         "local_branch_absent": local_absent,
         "remote_branch_absent": remote_absent,
         "remote_check_ok": remote_check_ok,
+        "remote_check_attempts": remote_result.get("attempts"),
         "all_clear": all_clear,
     }
 
@@ -10994,22 +11528,6 @@ def _delete_remote_branch_with_lease(
     expected_sha = _remote_branch_sha(expected_remote_ref, branch)
     if not expected_sha:
         raise WorkflowError(f"remote branch preflight identity is invalid: {branch}")
-    live_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=True)
-    if not live_ref.strip():
-        return {
-            "ok": True,
-            "returncode": 0,
-            "stdout": "remote branch already absent",
-            "stderr": "",
-            "expected_sha": expected_sha,
-            "already_absent": True,
-        }
-    live_sha = _remote_branch_sha(live_ref, branch)
-    if live_sha != expected_sha:
-        raise WorkflowError(
-            f"remote branch changed after cleanup preflight: {branch} "
-            f"expected={expected_sha} observed={live_sha or 'invalid'}"
-        )
     result = _execute_checked(
         [
             "git",
@@ -11199,6 +11717,50 @@ def _classify_pr_checks(checks: list[dict[str, Any]]) -> dict[str, list[str]]:
             if conclusion in {"NEUTRAL", "SKIPPED"}:
                 non_blocking.append(name)
         elif conclusion:
+            failed.append(name)
+    return {
+        "failed": failed,
+        "pending": pending,
+        "non_blocking": non_blocking,
+        "passed": passed,
+    }
+
+
+def _required_pr_check_summary(result: dict[str, Any]) -> dict[str, list[str]]:
+    """Classify only checks GitHub says are required by branch protection."""
+    raw = str(result.get("stdout") or "").strip()
+    if not raw:
+        if result.get("ok"):
+            checks: list[dict[str, Any]] = []
+        else:
+            raise WorkflowError(
+                str(result.get("stderr") or "required PR check query failed without a result").strip()
+            )
+    else:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise WorkflowError(f"required PR check query returned invalid JSON: {exc}") from exc
+        if not isinstance(parsed, list):
+            raise WorkflowError("required PR check query returned a non-list payload")
+        checks = [item for item in parsed if isinstance(item, dict)]
+
+    failed: list[str] = []
+    pending: list[str] = []
+    non_blocking: list[str] = []
+    passed: list[str] = []
+    for item in checks:
+        name = _check_name(item)
+        bucket = str(item.get("bucket") or "").lower()
+        if bucket == "pass":
+            passed.append(name)
+        elif bucket == "skipping":
+            passed.append(name)
+            non_blocking.append(name)
+        elif bucket == "pending":
+            pending.append(name)
+        else:
+            # fail, cancel, and unknown buckets must all fail closed.
             failed.append(name)
     return {
         "failed": failed,
@@ -11575,7 +12137,7 @@ def _maybe_create_pr(
 def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[str, Any]:
     if skip_github_check:
         return {"checked": False, "merged": True, "reason": "skip_github_check"}
-    result = _run_command(
+    result = _run_read_command_with_retry(
         ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,mergeCommit,url,headRefName,headRefOid"],
         cwd=REPO_ROOT,
         timeout=30,
@@ -11603,7 +12165,7 @@ def _merged_pr_validation_receipt_profile(pr_url: str) -> dict[str, Any]:
         "durable_receipt_present": False,
         "status": "check_failed",
     }
-    result = _run_command(
+    result = _run_read_command_with_retry(
         ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,url,headRefOid,body"],
         cwd=REPO_ROOT,
         timeout=30,
@@ -11858,6 +12420,18 @@ def _cleanup_merge_verification(
 
     head_oid = _pr_head_oid_from_pr_check(pr_check)
     merge_commit = _merge_commit_from_pr_check(pr_check)
+    if head_oid and merge_commit and _git_commit_is_ancestor(head_oid, merge_commit, root=root):
+        payload.update(
+            {
+                "method": "merged_pr_head_is_ancestor_of_merge_commit",
+                "verified": True,
+                "squash_merge_verified": False,
+                "tree_equivalent_to_origin_main": False,
+                "tree_equivalence_ref": head_oid,
+                "tree_equivalence_target": merge_commit,
+            }
+        )
+        return payload
     if head_oid and merge_commit:
         merge_commit_equivalence = _git_squash_head_equivalent_to_ref(
             head_oid,
@@ -11913,7 +12487,11 @@ def _cleanup_merge_verification(
 def _cleanup_preflight_fetch_origin(root: Path, *, apply: bool) -> dict[str, Any]:
     if not apply:
         return {"status": "skipped", "reason": "dry_run"}
-    result = _run_command(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)
+    result = _run_read_command_with_retry(
+        ["git", "fetch", "origin", "--prune"],
+        cwd=root,
+        timeout=120,
+    )
     return {
         "status": "fetched" if result.get("ok") else "failed",
         "command": "git fetch origin --prune",
@@ -12215,11 +12793,16 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
         timeout=60,
     )
     payload = json.loads(str(view.get("stdout") or "{}"))
-    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
-    failed = check_summary["failed"]
-    pending = check_summary["pending"]
     if payload.get("state") == "MERGED":
         return {"already_merged": True, "view": payload}
+    required_result = _run_command(
+        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    check_summary = _required_pr_check_summary(required_result)
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _run_command(["gh", "pr", "merge", pr_url, "--squash"], cwd=REPO_ROOT, timeout=180)
@@ -12252,11 +12835,20 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         event="command:gh_pr_view_before_merge",
     )
     payload = json.loads(str(view.get("stdout") or "{}"))
-    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
-    failed = check_summary["failed"]
-    pending = check_summary["pending"]
     if payload.get("state") == "MERGED":
         return {"already_merged": True, "view": payload}
+    required_result = _execute_workflow_command(
+        bug_id,
+        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
+        state="ci_green",
+        cwd=REPO_ROOT,
+        timeout=60,
+        event="command:gh_pr_required_checks_before_merge",
+        allow_failure=True,
+    )
+    check_summary = _required_pr_check_summary(required_result)
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _execute_workflow_command(
@@ -13132,6 +13724,17 @@ def build_merge_finalizer_plan(
 
     source_pr_check = source_pr_check or _verify_pr_merged(source_pr_url)
     merge_commit = _merge_commit_from_pr_check(source_pr_check)
+    client_publish = _publish_changed_clients_after_merge(
+        merge_commit=merge_commit,
+        sync_root=sync_root,
+        apply=True,
+    )
+    payload["client_publish"] = client_publish
+    if client_publish.get("workflow_gate") == "blocked":
+        payload["workflow_gate"] = "blocked"
+        payload["blocking"] = flow._unique_strings(client_publish.get("blocking") or [])
+        payload["next_actions"] = ["restore_canonical_client_authority_then_resume_merge_finalizer"]
+        return payload
     if batch_mode:
         incomplete_bug_ids: list[str] = []
         complete_markers: list[dict[str, Any]] = []
@@ -13242,16 +13845,27 @@ def build_merge_finalizer_plan(
                 production_gates=production_gates or _production_gates_payload(),
                 create_registry_worktree=True,
             )
-            close_sync_commit = _maybe_commit_and_pr_close_sync(
-                bug_id=canonical_bug_id,
-                close_sync=close_sync,
-                validation_evidence=evidence,
-            )
-            close_sync_pr_merge = _merge_close_sync_pr_if_ready(
-                bug_id=canonical_bug_id,
-                close_sync_commit=close_sync_commit,
-                auto_merge=merge_close_sync_pr,
-            )
+            if close_sync.get("workflow_gate") == "fixed_source_pending_user_restart":
+                close_sync_commit = {
+                    "workflow_gate": "deferred_runtime_verification",
+                    "reason": "persist pending state in workflow/GitHub evidence and create only the final verified close-sync PR",
+                }
+                close_sync_pr_merge = {
+                    "workflow_gate": "deferred_runtime_verification",
+                    "auto_merge": False,
+                    "reason": "runtime verification receipt is not available yet",
+                }
+            else:
+                close_sync_commit = _maybe_commit_and_pr_close_sync(
+                    bug_id=canonical_bug_id,
+                    close_sync=close_sync,
+                    validation_evidence=evidence,
+                )
+                close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+                    bug_id=canonical_bug_id,
+                    close_sync_commit=close_sync_commit,
+                    auto_merge=merge_close_sync_pr,
+                )
 
     cleanup_plan = None
     if cleanup and source_branch:
@@ -14109,7 +14723,23 @@ def build_cleanup_after_merge_plan(
     local_branches = set(
         _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
     )
-    remote_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=False)
+    if apply:
+        remote_ref_result = _run_read_command_with_retry(
+            ["git", "ls-remote", "--heads", "origin", branch],
+            cwd=root,
+            timeout=60,
+        )
+        remote_ref = str(remote_ref_result.get("stdout") or "") if remote_ref_result.get("ok") else ""
+    else:
+        remote_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=False)
+        remote_ref_result = {
+            "ok": True,
+            "returncode": 0,
+            "stdout": remote_ref,
+            "stderr": "",
+            "attempts": 1,
+            "mode": "single_dry_run_read",
+        }
     merged_refs = set(_git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], cwd=root, check=False).splitlines())
     merged = branch in merged_refs
     merge_verification = _cleanup_merge_verification(branch, pr_url, merged, cwd=root)
@@ -14117,7 +14747,7 @@ def build_cleanup_after_merge_plan(
     pr_check = merge_verification["pr_check"]
     tree_equivalent = bool(merge_verification["tree_equivalent_to_origin_main"])
     merge_verified = bool(merge_verification["verified"])
-    worktree_path = Path(worktree) if worktree else None
+    worktree_path = Path(worktree) if worktree else _registered_worktree_for_branch(branch, cwd=root)
     worktree_clean = True
     worktree_registered = False
     worktree_exists = bool(worktree_path and worktree_path.exists())
@@ -14191,6 +14821,9 @@ def build_cleanup_after_merge_plan(
         result = pre_cleanup_fetch.get("result") if isinstance(pre_cleanup_fetch.get("result"), dict) else {}
         detail = result.get("stderr") or result.get("stdout") or "unknown error"
         blocking.append(f"failed to refresh origin/main before cleanup: {detail}")
+    if not remote_ref_result.get("ok"):
+        detail = remote_ref_result.get("stderr") or remote_ref_result.get("stdout") or "unknown error"
+        blocking.append(f"failed to inspect remote branch before cleanup: {detail}")
     if branch == current_branch and apply:
         blocking.append("refusing to cleanup the currently checked-out branch")
     if not merge_verified:
@@ -14311,6 +14944,7 @@ def build_cleanup_after_merge_plan(
         "evidence_bug_id": evidence_bug_id,
         "worktree_is_current_cwd": worktree_is_current_cwd,
         "pre_cleanup_fetch": pre_cleanup_fetch,
+        "remote_ref_check": remote_ref_result,
         "root_git": root_git,
         "root_dirty_files": root_dirty_files,
         "origin_equivalent_dirty_files": origin_equivalent_dirty_files,
@@ -14456,6 +15090,21 @@ def build_cleanup_after_merge_plan(
             payload["registry_intake_cleanup"] = registry_cleanup
             if registry_cleanup.get("warnings"):
                 payload["warnings"].extend(registry_cleanup.get("warnings") or [])
+            try:
+                with _GlobalBugIdAllocatorLock(timeout=30.0):
+                    removed_reservation = compact_terminal_reservation(
+                        _bug_id_reservation_root(),
+                        bug_id,
+                        min_age_seconds=0,
+                    )
+                payload["reservation_cleanup"] = {
+                    "status": "removed" if removed_reservation else "already_absent_or_non_terminal",
+                    "path": removed_reservation,
+                    "inventory_scanned": False,
+                }
+            except (BugIdLockError, WorkflowError) as exc:
+                payload["reservation_cleanup"] = {"status": "deferred", "error": str(exc)}
+                payload["warnings"].append(f"terminal BUG reservation cleanup deferred: {exc}")
         payload["applied"] = applied
         payload["workflow_gate"] = "cleanup_done"
         payload["dry_run"] = False
@@ -14673,8 +15322,10 @@ def cmd_verify_clients(args: argparse.Namespace) -> int:
             "selected_lane_keys": lane_verification["selected_lane_keys"],
             "blocking": lane_verification["blocking"],
             "warnings": lane_verification["warnings"],
+            "checkout_advisories": lane_verification["checkout_advisories"],
+            "remediation": lane_verification["remediation"],
             "checked": lane_verification["checked"],
-            "restart_recommended": not workflow_clients_current,
+            "restart_recommended": False,
         }
         _emit_args(payload, args)
         return 0 if workflow_clients_current else 2
@@ -14830,12 +15481,17 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
         allow_current_worktree=args.allow_current_worktree,
         post_restart_receipt=args.post_restart_receipt,
     )
-    if args.create_pr:
+    if args.create_pr and payload.get("workflow_gate") != "fixed_source_pending_user_restart":
         payload["close_sync_commit"] = _maybe_commit_and_pr_close_sync(
             bug_id=str(payload.get("bug_id") or args.bug_id or "").upper(),
             close_sync=payload,
             validation_evidence=list(args.validation_evidence or []),
         )
+    elif args.create_pr:
+        payload["close_sync_commit"] = {
+            "workflow_gate": "deferred_runtime_verification",
+            "reason": "skip the intermediate pending close-sync PR; create one final PR after post-restart verification",
+        }
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced", "fixed_source_pending_user_restart"} else 2
 

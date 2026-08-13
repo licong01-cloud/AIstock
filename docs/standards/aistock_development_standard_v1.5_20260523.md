@@ -1,7 +1,7 @@
 # AIstock 项目开发规范 v1.5
 
 > 版本：1.5
-> 更新日期：2026-08-11
+> 更新日期：2026-08-13
 > 状态：唯一人类可读开发规范
 > 权威文件：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 > 机器派生目录：`docs/standards/aistock_development_standard_v1.5_20260523.yaml`
@@ -15,7 +15,7 @@
 - YAML 是本文的机器派生目录，用于扫描和流水线；规则含义以本文为准，稳定 rule ID 供工具引用。
 - 规范路径保持稳定。修订直接更新本文和同版本 YAML，历史由 Git 和 `docs/standards/archive/` 保存。
 - `docs/standards/README.md` 只维护权威入口和场景路由。
-- 规则变更与对应测试在同一 PR 中提交；客户端入口在合入后由 `install-client` 同步。
+- 规则变更与对应测试在同一 PR 中提交；仅当 `.codex/**` 或 `.claude/**` 客户端入口发生变化时，合入后才由单一 owner 执行一次 `install-client` 同步。
 
 ## 2. 统一执行流程
 
@@ -42,7 +42,7 @@
 
 #### 2.3.1 控制效果、阶段与计数
 
-1. 每个稳定控制 ID 在机器目录中只出现一次。`rules` 保存可自动扫描或已有机器入口的控制；`manual_review_controls` 只保存没有对应 machine rule 的人工控制，禁止为同一 ID 建立第二份记录。
+1. 每个稳定控制 ID 在机器目录中只出现一次。`rules` 保存可自动扫描或已有机器入口的控制；`manual_review_controls` 保存纯人工控制或组合人工验收，组合人工验收可以引用已有 machine evidence，但禁止宣称其人工语义已被自动化，也禁止为同一 ID 建立第二份记录。
 2. 每个控制明确记录 `effect` 和 `enforcement_phase`：
    - `block` 只阻断该控制适用的任务类型、文件范围和阶段，不升级为全任务或全仓门禁；
    - `warn` 产生可见警告和修复建议，但不阻断当前阶段；
@@ -55,7 +55,7 @@
 
 1. PR 前运行本任务的最小本地 gate，并执行 BUG `finish --plan-only` 或 feature design validation。
 2. CI 只执行变更模块的必要计划和全仓通用轻量检查；深度回归由 Validation Center/CI/nightly 去重执行。
-3. 合入后同步 BUG/GitHub 状态、根目录 `main`、task worktree/branch 和客户端入口。
+3. 合入后同步 BUG/GitHub 状态、根目录 `main` 和已授权的 task worktree/branch；客户端入口未变化时明确记为 `noop`，只有 `.codex/**` 或 `.claude/**` 变化才进入单一 owner 的客户端同步流程。
 4. 生产 DDL、依赖安装、运行时激活分别报告为 `noop`、`applied_and_verified` 或 `pending`；代码合入与运行时激活是两个独立结果。
 5. 授权按动作和目标独立判断，但不按消息次数拆分。同一条用户指令可以明确打包源码合入、精确命名的 source worktree/local branch/remote branch cleanup，以及已通过 DEV 验证的具体生产目标与 migration；授权包完整时，合入后直接继续这些已授权动作，禁止再次索要同一授权。
 6. 裸 `merge` 授权仍只覆盖源码合入和必要 BUG/metadata 同步，不推导 cleanup、DDL/DML、依赖、激活、进程控制或删除。打包动作逐项执行和报告；某一项前置条件失败只阻断该项，不伪造成功，也不扩大其他授权。
@@ -68,8 +68,9 @@
 3. runtime `post-restart-verify` receipt 在 close-sync 消费前属于受保护证据。close-sync 通过后必须把 expected/observed identity、runtime proof、contract/catalog/probe digest、receipt SHA-256 和 gate 保存为不含响应正文的 durable summary；只有 durable summary 完整时，worktree-local receipt 才可清理。等待用户重启不要求保留 source worktree；后续 receipt 写入 canonical/registry workflow root 并由 close-sync 固化。
 4. 已明确授权的精确 cleanup 在合入/close-sync 后连续执行，无需再次授权：先重新验证 PR/HEAD、干净状态、活动进程引用和路径边界，再生成 ignored artifact manifest；`transient` 可在同一次 cleanup 内删除，`protected` 或 `unknown` 必须 fail closed。裸 merge 仍不推导 cleanup。
 5. cleanup 只能删除 manifest 中已分类且位于目标 worktree 内的精确 transient roots；禁止 `git clean`、通配符删除、越界路径、跟随 symlink/junction 到目标外或在 manifest 漂移后继续。与 canonical root 不同的本地配置、未固化 receipt、未知文件和活动进程引用均阻断删除。
-6. 执行顺序固定为：evidence finalization → ignored/process manifest → transient purge → 普通 `git worktree remove` → local branch delete → remote branch SHA 校验与 delete → 路径/注册/local/remote 四态读回。任一步失败只报告已完成状态并停止后续破坏性动作，禁止伪造 `cleanup_done`。
-7. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
+6. 位于整体 ignored 资产树内的运行产物，只有精确分类器验证固定目录、有限且完整的文件名集合、非权威 schema、文件大小上限、无额外文件、无 tracked file、无 symlink/junction/reparse point，并继续通过活动进程引用与 manifest 漂移门禁后，才可标为 `transient`。任一条件不满足仍归为 `unknown`；禁止为兼容单类运行产物而放宽其父资产树。
+7. 执行顺序固定为：evidence finalization → ignored/process manifest → transient purge → 普通 `git worktree remove` → local branch delete → remote branch SHA 校验与 delete → 路径/注册/local/remote 四态读回。任一步失败只报告已完成状态并停止后续破坏性动作，禁止伪造 `cleanup_done`。
+8. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
 
 ## 3. 风险与工作量分级
 
@@ -298,10 +299,11 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 ### 8.2 客户端同步
 
 - 普通任务直接执行选定 lane 的 `run`、`resume`、`submit-bug` 或对应入口，不把 `doctor` 作为通用前置门禁。仅在客户端/bootstrap 状态未知、workflow/client 代码刚变更、恢复状态 stale/conflict，或用户明确要求诊断时运行一次 `doctor`；失败后按具体检查修复，禁止反复全量 doctor。
-- `.codex/**` 或 `.claude/**` 合入后，由一个明确 owner 对列入本次任务的目标执行完整 `install-client --apply`，随后使用 `verify-clients --workflow-only` 校验全部 workflow lane；禁止多个窗口无差别重复安装。
+- `.codex/**` 或 `.claude/**` 合入后，由一个明确 owner 在 canonical root fast-forward 完成后、close-sync 或 cleanup 开始前，从与 `origin/main` 对齐且客户端权威路径无未提交改动的 canonical `main`，对本次实际变化的 lane 以及同一明确目标 profile 中已检测到的存量 stale lane 一次性执行 `install-client --apply`，随后使用 `verify-clients --workflow-only` 校验 router 与全部目标 lane；`merge-finalizer --sync-root --apply` 自动执行该步骤，全部 hash 无漂移时为 `noop`，不再把存量漂移留给业务窗口逐 lane 阻断，也不要求转交命令或二次授权。canonical root 的无关路径状态不构成客户端门禁，禁止把 task worktree、未合入 commit 或旧 checkout 作为全局客户端安装源，禁止多个窗口无差别重复安装。
 - 官方隔离 Codex 或单一客户端目标必须显式传入 `--codex-home <path>`/`--claude-home <path>` 和对应的 `--skip-*`。客户端 profile 只在本次任务明确列入目标时更新。
-- 在途任务仅在 `doctor` 报告客户端 stale、窗口恢复或当前 lane 需要新入口时，使用 `verify-clients --workflow-only --selected-lane <lane>` 校验 router 与当前 lane。router/当前 lane stale 才阻断；无关 lane stale 只告警并记录待同步，禁止升级为全局任务门禁。
-- `install-client --selected-lane <lane>` 只同步 router 与该 lane，hash 相同时跳过，并通过跨进程锁与 staged replacement 避免并发窗口观察到部分安装。一次目标限定同步失败后停止并报告，禁止循环重装。
+- 在途任务仅在 `doctor` 报告客户端 stale、窗口恢复或当前 lane 需要新入口时，使用 canonical root 内的 CLI 执行 `verify-clients --workflow-only --selected-lane <lane>` 校验 router 与当前 lane，禁止从旧 task worktree 调用旧版 workflow CLI。校验以已合入的 canonical `main` 为入口权威并分别报告 checkout relation 与 profile status：task checkout 落后、领先或包含未合入入口变更只产生 advisory，禁止把已符合合入权威的客户端判为 stale；router/当前 lane 的 profile drift 才阻断，无关 lane drift 只告警并记录待同步。
+- profile drift 阻断时，CLI 必须返回 `request_single_owner_sync`、明确目标 profile 和 canonical-owner command；活动任务窗口禁止自行从 worktree 安装。唯一 owner 完成一次同步后，其他窗口只复验；`continue_without_install` 明确禁止重复安装或重启。
+- `install-client --selected-lane <lane>` 只从已合入的 canonical `main` 同步 router 与该 lane；canonical `main` 未与 `origin/main` 对齐，或 `.codex/skills`、`.claude/commands`、workflow CLI 存在未提交改动时 fail closed，无关路径 dirty 不阻断。hash 相同时跳过，并通过跨进程锁、authority identity 复验与 staged replacement 避免并发窗口观察到部分安装。一次目标限定同步失败后停止并报告，禁止循环重装或从不同版本 worktree 相互覆盖。
 - 同步完成且 `restart_recommended=false` 时，旧窗口重新读取 router 与当前 lane 后继续；只有 CLI 明确建议重启或客户端 UI 仍加载旧入口时才重启客户端。客户端同步不授权任何后端进程控制。
 - 授权以动作和目标为边界，而不是以消息次数为边界。同一条用户指令可明确打包 merge、精确 cleanup targets 和具体 production target/migration；完整授权包在合入后连续执行，无需二次询问，并分别报告结果。裸 PR/branch merge 授权仍只覆盖源码合入和必要 BUG/metadata 同步；禁止据此推导 source cleanup、生产 DDL/DML、依赖安装、runtime/frontend/client 激活、程序控制或任何删除。
 

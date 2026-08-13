@@ -17,11 +17,17 @@ from backend.execution_algos.adaptive_is.contracts import (
     SessionSegment,
     canonical_json_bytes,
 )
-from backend.execution_algos.adaptive_is.reasons import QuoteContractError
+from backend.execution_algos.hot_market_contracts import HotMarketDataEconomicEffectV1
 from backend.execution_algos.vnpy_compat.facade_contracts import VnpyFacadeAuthorityInputV2
 from backend.services.miniqmt_execution_runtime import kernel_delivery, kernel_product_evidence
 from backend.services.miniqmt_execution_runtime.kernel_creation import KernelAlgoCreationCoordinatorV2
 from backend.services.miniqmt_execution_runtime.kernel_ingress import KernelIngressCoordinatorV1
+from backend.services.miniqmt_execution_runtime.hot_market_data import (
+    HotMarketDataEffectRetryableError,
+    HotMarketDataEffectTerminalError,
+    HotMarketDataIngressV1,
+    _PendingHotMarketEffectV1,
+)
 from backend.services.miniqmt_execution_runtime.kernel_product_cutover import KernelProductCutoverCoordinator
 from backend.services.miniqmt_execution_runtime.kernel_delivery import (
     KernelProductDeliveryWorkerV3,
@@ -60,15 +66,20 @@ from backend.services.miniqmt_execution_runtime.kernel_repository_event_delivery
 )
 from backend.services.miniqmt_execution_runtime.plugin_canonical import freeze_json_v1, hash_hex_v1, thaw_json_v1
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
+    AlgoDeliveryPersistenceV1,
+    AlgoEventDeliveryV1,
     BrokerCommandOutboxStatusV1,
     BrokerCommandTypeV2,
     BrokerCommandV2,
     CommandChildMappingStatusV1,
     ExecutionCommandChildMappingV1,
+    ExecutionAlgoPersistenceStatusV2,
+    KernelErrorEvidenceV1,
     AlgoTransitionV1,
     AlgoTransitionReceiptV1,
     EventSourceV2,
     EventTypeV2,
+    DeliveryStatusV1,
     OrderTypeV1,
     RuntimeEventIngressReceiptV1,
     RuntimeEventEnvelopeV2,
@@ -88,14 +99,15 @@ from backend.services.simulation_runtime.miniqmt_kernel_product import (
     build_k6d_gateway_catalog_v1,
     build_simulation_miniqmt_product_runtime_v1,
 )
-from backend.services.simulation_runtime.miniqmt_quote_activation import (
-    MiniQMTKernelProductIngressSuppression,
-    build_miniqmt_quote_ingress_activation_from_env,
-)
+from backend.services.simulation_runtime.miniqmt_quote_activation import build_miniqmt_quote_ingress_activation_from_env
 from backend.services.simulation_runtime.models import SimulationBrokerBackend
 from backend.services.strategy_package.execution_policy import compute_execution_policy_sha256
 from backend.services.trading_core.models import OrderSide
 from backend.tests.miniqmt_execution_runtime.test_kernel_delivery import _worker_facts
+from backend.tests.miniqmt_execution_runtime.test_hot_market_data_boundary import (
+    _hot_initialized,
+    _hot_persistence,
+)
 from backend.tests.miniqmt_execution_runtime.test_kernel_product_cutover import (
     _catalog,
     _full_five_authority,
@@ -732,7 +744,24 @@ def test_cancel_lineage_rejects_ambiguous_or_malformed_authority(metadata) -> No
 def test_product_transition_binding_rebuilds_zero_command_authority_and_rejects_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    event, delivery, algo, state = _worker_facts()
+    event, delivery, _legacy_algo, _legacy_state = _worker_facts()
+    _plugin, context, state = _hot_initialized("TWAP_LITE_MINIQMT")
+    algo = _hot_persistence("TWAP_LITE_MINIQMT", context, state)
+    event = event.model_copy(update={"runtime_id": algo.runtime_id, "symbol": algo.symbol})
+    delivery = delivery.model_copy(
+        update={
+            "runtime_id": algo.runtime_id,
+            "algo_instance_id": algo.algo_instance_id,
+            "plugin_manifest_sha256": algo.plugin_manifest_sha256,
+        }
+    )
+    authority = _full_five_authority()
+    descriptor = next(
+        item
+        for item in authority.catalog_runtime.snapshot.registration_descriptors
+        if item.manifest.algo_code == algo.algo_code
+    )
+    assert algo.plugin_manifest_sha256 == descriptor.manifest.manifest_sha256
     provider = _prepare_evidence_provider(
         monkeypatch,
         preflight=SimpleNamespace(errors=(), freeze_amount=Decimal("0")),
@@ -772,12 +801,6 @@ def test_product_transition_binding_rebuilds_zero_command_authority_and_rejects_
         projection_set=base.execution_projection_set,
         after_state=state,
         applied_transition=transition,
-    )
-    authority = _full_five_authority()
-    descriptor = next(
-        item
-        for item in authority.catalog_runtime.snapshot.registration_descriptors
-        if item.manifest.algo_code == algo.algo_code
     )
     pinned = next(
         item
@@ -1230,7 +1253,50 @@ class _CallbackIngress:
         return "trade_event"
 
 
-def _runtime(repository, dispatcher, *, symbols: tuple[str, ...] = ("600000.SH",)) -> SimulationMiniQMTProductRuntimeV1:
+def _runtime_session_authority(runtime_id: str, trade_date: date = date(2026, 8, 4)):
+    segments = (
+        SessionSegment(time(9, 15), time(9, 25)),
+        SessionSegment(time(9, 30), time(11, 30)),
+        SessionSegment(time(13), time(14, 57)),
+        SessionSegment(time(14, 57), time(15)),
+    )
+    effective_at = datetime.combine(trade_date, time(0), tzinfo=UTC)
+    snapshots = {
+        market: CalendarSnapshot(
+            calendar_id=f"calendar_{market.value}_{trade_date:%Y%m%d}",
+            market=market,
+            trade_date=trade_date,
+            timezone="Asia/Shanghai",
+            session_segments=segments,
+            effective_at_utc=effective_at,
+            source_version="aistock_calendar_v1",
+        )
+        for market in MarketCode
+    }
+    snapshot_set = CalendarSnapshotSet(snapshot_set_id="calendar_set_runtime_k6d", snapshot_by_market=snapshots)
+    snapshot_json = json.loads(canonical_json_bytes(snapshot_set.canonical_payload()).decode("utf-8"))
+    snapshot_json["set_sha256"] = snapshot_set.set_sha256
+    ordered = (MarketCode.SH, MarketCode.SZ, MarketCode.BJ)
+    return type(_authority()).create(
+        runtime_id=runtime_id,
+        exchange_trade_date=trade_date.isoformat(),
+        calendar_snapshot_set_id=snapshot_set.snapshot_set_id,
+        calendar_snapshot_set_json=snapshot_json,
+        calendar_snapshot_set_sha256=snapshot_set.set_sha256,
+        ordered_market_calendar_sha256s=tuple(snapshots[market].calendar_sha256 for market in ordered),
+        ordered_session_segments=tuple(segment.canonical_payload() for segment in segments),
+        source_effective_at_utc=effective_at,
+    )
+
+
+def _runtime(
+    repository,
+    dispatcher,
+    *,
+    symbols: tuple[str, ...] = ("600000.SH",),
+    trade_date: date = date(2026, 8, 4),
+    quote_context_id: str = "context_runtime_k6d",
+) -> SimulationMiniQMTProductRuntimeV1:
     reconciler = _Reconciler() if dispatcher is not None else None
     snapshot_ingress = _SnapshotIngress() if dispatcher is not None else None
     return SimulationMiniQMTProductRuntimeV1(
@@ -1238,15 +1304,21 @@ def _runtime(repository, dispatcher, *, symbols: tuple[str, ...] = ("600000.SH",
         worker_incarnation_id="incarnation_k6d",
         runtime_id="runtime_k6d",
         binding_id="binding_k6d",
-        trade_date=date(2026, 8, 4),
+        trade_date=trade_date,
         symbols=symbols,
         source_capability_sha256="a" * 64,
+        quote_context_id=quote_context_id,
+        exchange_session_authority=_runtime_session_authority("runtime_k6d", trade_date),
         repository=repository,  # type: ignore[arg-type]
         clock=_Clock(),  # type: ignore[arg-type]
         outbox_dispatcher=dispatcher,  # type: ignore[arg-type]
         outbox_reconciler=reconciler,  # type: ignore[arg-type]
         callback_ingress=_CallbackIngress(),  # type: ignore[arg-type]
         snapshot_ingress=snapshot_ingress,  # type: ignore[arg-type]
+        hot_market_data_ingress=HotMarketDataIngressV1(
+            runtime_id="runtime_k6d",
+            effect_committer=lambda _effect: None,
+        ),
     )
 
 
@@ -1295,12 +1367,18 @@ def test_product_runtime_rejects_incomplete_components_hash_and_naive_time() -> 
             trade_date=date(2026, 8, 4),
             symbols=("600000.SH",),
             source_capability_sha256="a" * 64,
+            quote_context_id="context_runtime_k6d",
+            exchange_session_authority=_runtime_session_authority("runtime_k6d"),
             repository=repository,  # type: ignore[arg-type]
             clock=_Clock(),  # type: ignore[arg-type]
             outbox_dispatcher=_Dispatcher(),  # type: ignore[arg-type]
             outbox_reconciler=None,
             callback_ingress=_CallbackIngress(),  # type: ignore[arg-type]
             snapshot_ingress=None,
+            hot_market_data_ingress=HotMarketDataIngressV1(
+                runtime_id="runtime_k6d",
+                effect_committer=lambda _effect: None,
+            ),
         )
 
 
@@ -1909,7 +1987,7 @@ def test_product_composition_root_builds_preview_runtime_without_parallel_route(
     monkeypatch.setattr(product_module, "PostgresMiniQMTKernelRepository", lambda **_values: product_repository)
     monkeypatch.setattr(
         product_module,
-        "build_full_five_catalog_authority_v1",
+        "build_hot_full_five_catalog_authority_v1",
         lambda **_values: SimpleNamespace(
             catalog_runtime=SimpleNamespace(snapshot=object()),
             conformance_authority=object(),
@@ -2002,7 +2080,7 @@ def test_product_composition_restart_uses_durable_session_without_broker_side_ef
     monkeypatch.setattr(product_module, "PostgresMiniQMTKernelRepository", lambda **_values: product_repository)
     monkeypatch.setattr(
         product_module,
-        "build_full_five_catalog_authority_v1",
+        "build_hot_full_five_catalog_authority_v1",
         lambda **_values: SimpleNamespace(
             catalog_runtime=SimpleNamespace(snapshot=object()),
             conformance_authority=object(),
@@ -2156,6 +2234,133 @@ def test_scheduler_tick_ingests_callbacks_before_clock_events_without_quote() ->
     assert order == ["callbacks", "clock"]
 
 
+def test_scheduler_tick_refreshes_hot_targets_after_durable_callback_and_removes_terminal() -> None:
+    _plugin, context, state = _hot_initialized("SNIPER_MINIQMT")
+    active = _hot_persistence("SNIPER_MINIQMT", context, state)
+    successor = active.model_copy(update={"row_version": active.row_version + 1})
+    rows = {active.algo_instance_id: successor}
+
+    class Repository(_RuntimeRepository):
+        @staticmethod
+        def read_algo_instance(algo_instance_id):
+            return rows[algo_instance_id]
+
+    class Snapshot:
+        @staticmethod
+        def sync_v1(**_values):
+            return ()
+
+    class Clock:
+        @staticmethod
+        def wake(**_values):
+            return SimpleNamespace(ordered_session_event_ids=(), ordered_timer_event_ids=(), eod_event_id=None)
+
+    repository = Repository()
+    repository.reads = 1
+    runtime = _runtime(repository, _Dispatcher())
+    object.__setattr__(runtime, "runtime_id", active.runtime_id)
+    object.__setattr__(
+        runtime,
+        "hot_market_data_ingress",
+        HotMarketDataIngressV1(runtime_id=active.runtime_id, effect_committer=lambda _effect: None),
+    )
+    object.__setattr__(runtime, "snapshot_ingress", Snapshot())
+    object.__setattr__(runtime, "clock", Clock())
+    runtime.activate_hot_market_targets_v1((active.algo_instance_id,))
+    runtime.scheduler_tick_v1(observed_at=datetime(2026, 8, 4, 7, 1, tzinfo=UTC), monotonic_ns=10)
+    refreshed = runtime.hot_market_data_ingress._targets_by_symbol[active.symbol][0]
+    assert refreshed.algo.row_version == successor.row_version
+
+    rows[active.algo_instance_id] = successor.model_copy(
+        update={
+            "status": ExecutionAlgoPersistenceStatusV2.COMPLETED,
+            "terminal_delivery_sequence": successor.last_closed_delivery_sequence,
+            "terminal_at_utc": successor.updated_at_utc,
+            "active_child_closure_status": "CLEAN",
+        }
+    )
+    runtime.scheduler_tick_v1(observed_at=datetime(2026, 8, 4, 7, 1, 1, tzinfo=UTC), monotonic_ns=11)
+    assert runtime.hot_market_data_ingress.target_algo_instance_ids_v1() == ()
+
+
+def test_product_scheduler_refresh_preserves_isolation_until_durable_successor() -> None:
+    _plugin, context, state = _hot_initialized("SNIPER_MINIQMT")
+    predecessor = _hot_persistence("SNIPER_MINIQMT", context, state)
+    rows = {predecessor.algo_instance_id: predecessor}
+
+    class Repository(_RuntimeRepository):
+        @staticmethod
+        def read_algo_instance(algo_instance_id):
+            return rows[algo_instance_id]
+
+    runtime = _runtime(Repository(), _Dispatcher())
+    object.__setattr__(runtime, "runtime_id", predecessor.runtime_id)
+    object.__setattr__(
+        runtime,
+        "hot_market_data_ingress",
+        HotMarketDataIngressV1(runtime_id=predecessor.runtime_id, effect_committer=lambda _effect: None),
+    )
+    runtime.activate_hot_market_targets_v1((predecessor.algo_instance_id,))
+    with runtime.hot_market_data_ingress._lock:
+        runtime.hot_market_data_ingress._isolate_target_locked_v1(
+            symbol=predecessor.symbol,
+            algo_instance_id=predecessor.algo_instance_id,
+            expected_algo_row_version=predecessor.row_version,
+        )
+
+    runtime.refresh_hot_market_targets_v1()
+    assert runtime.hot_market_data_ingress.target_algo_instance_ids_v1() == ()
+    assert runtime.hot_market_data_ingress.registered_algo_instance_ids_v1() == (predecessor.algo_instance_id,)
+
+    successor = predecessor.model_copy(update={"row_version": predecessor.row_version + 1})
+    rows[predecessor.algo_instance_id] = successor
+    runtime.refresh_hot_market_targets_v1()
+    restored = runtime.hot_market_data_ingress._targets_by_symbol[predecessor.symbol][0]
+    assert restored.algo.row_version == successor.row_version
+
+
+def test_product_scheduler_refresh_skips_repository_while_effect_is_pending() -> None:
+    _plugin, context, state = _hot_initialized("SNIPER_MINIQMT")
+    predecessor = _hot_persistence("SNIPER_MINIQMT", context, state)
+    reads: list[str] = []
+
+    class Repository(_RuntimeRepository):
+        @staticmethod
+        def read_algo_instance(algo_instance_id):
+            reads.append(algo_instance_id)
+            return predecessor
+
+    runtime = _runtime(Repository(), _Dispatcher())
+    object.__setattr__(runtime, "runtime_id", predecessor.runtime_id)
+    ingress = HotMarketDataIngressV1(runtime_id=predecessor.runtime_id, effect_committer=lambda _effect: None)
+    ingress.replace_targets_v1((runtime._build_hot_market_target_v1(predecessor),))
+    effect = HotMarketDataEconomicEffectV1(
+        runtime_id=predecessor.runtime_id,
+        algo_instance_id=predecessor.algo_instance_id,
+        expected_algo_row_version=predecessor.row_version,
+        effect_identity="mqhoteffect_refresh_pending",
+        economic_payload={
+            "action": "CANCEL_ORDER",
+            "action_time_utc": "2026-08-12T01:30:00Z",
+            "exchange_trade_date": "2026-08-12",
+            "session_epoch": "session_hot_tick",
+            "session_phase": "CONTINUOUS_AM",
+            "reason_code": "refresh_pending",
+        },
+    )
+    ingress._pending_by_algo[predecessor.algo_instance_id] = _PendingHotMarketEffectV1(
+        effect=effect,
+        target=runtime._build_hot_market_target_v1(predecessor),
+        failure_count=1,
+        next_retry_at_utc=datetime(2026, 8, 12, 1, 31, tzinfo=UTC),
+    )
+    object.__setattr__(runtime, "hot_market_data_ingress", ingress)
+
+    runtime.refresh_hot_market_targets_v1()
+    assert reads == []
+    assert ingress.target_algo_instance_ids_v1() == (predecessor.algo_instance_id,)
+
+
 def test_product_runtime_quote_clock_callbacks_and_bounded_ingress_use_durable_seams() -> None:
     context = _context()
     observation = _observation(context)
@@ -2191,13 +2396,18 @@ def test_product_runtime_quote_clock_callbacks_and_bounded_ingress_use_durable_s
 
     repository = Repository()
     repository.reads = 1
-    runtime = _runtime(repository, _Dispatcher(), symbols=(observation.quote.symbol,))
+    runtime = _runtime(
+        repository,
+        _Dispatcher(),
+        symbols=(observation.quote.symbol,),
+        trade_date=observation.quote.clock_trade_date,
+        quote_context_id=context.context_id,
+    )
     object.__setattr__(runtime, "coordinator", Coordinator())
     object.__setattr__(runtime, "clock", Clock())
     runtime.observe_b0_quote_v1(observation, context)
-    assert len(ingested) == 1
-    assert ingested[0].source is EventSourceV2.B0_QUOTE_V2
-    assert thaw_json_v1(ingested[0].source_identity)["market_data_id"] == observation.market_data_id
+    assert ingested == []
+    assert repository.reads == 1
 
     with pytest.raises(TypeError, match="normalized observation"):
         runtime.observe_b0_quote_v1(object(), context)  # type: ignore[arg-type]
@@ -2209,7 +2419,12 @@ def test_product_runtime_quote_clock_callbacks_and_bounded_ingress_use_durable_s
         runtime.observe_b0_quote_v1(invalid_depth, context)
     assert depth_failure.value.reason_code == "MINIQMT_K6_PRODUCT_B0_DEPTH_INVALID"
 
-    unowned = _runtime(repository, _Dispatcher())
+    unowned = _runtime(
+        repository,
+        _Dispatcher(),
+        trade_date=observation.quote.clock_trade_date,
+        quote_context_id=context.context_id,
+    )
     object.__setattr__(unowned, "clock", Clock())
     with pytest.raises(MiniQMTKernelProductCompositionError, match="not owned"):
         unowned.observe_b0_quote_v1(observation, context)
@@ -2231,12 +2446,235 @@ def test_product_runtime_quote_clock_callbacks_and_bounded_ingress_use_durable_s
     assert (order_event, trade_event) == ("order_event", "trade_event")
 
 
-def test_real_product_quote_clock_schema_failure_is_backed_off_before_tick_ingress_repeats() -> None:
+def test_product_hot_effect_commit_requires_exact_applied_delivery_and_classifies_terminal_failure() -> None:
+    _plugin, context, state = _hot_initialized("SNIPER_MINIQMT")
+    algo = _hot_persistence("SNIPER_MINIQMT", context, state)
+    effect = HotMarketDataEconomicEffectV1(
+        runtime_id=algo.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        expected_algo_row_version=algo.row_version,
+        effect_identity="mqhoteffect_product_readback",
+        economic_payload={
+            "action": "SUBMIT_LIMIT",
+            "action_time_utc": "2026-08-12T01:30:00Z",
+            "exchange_trade_date": "2026-08-12",
+            "session_epoch": "session_hot_tick",
+            "session_phase": "CONTINUOUS_AM",
+            "symbol": algo.symbol,
+            "side": "BUY",
+            "price_decimal": "10.01",
+            "quantity": 100,
+            "reason_code": "product_readback",
+        },
+    )
+    payload = {
+        "schema_version": "miniqmt_hot_market_economic_action_v1",
+        "runtime_id": effect.runtime_id,
+        "algo_instance_id": effect.algo_instance_id,
+        "expected_algo_row_version": effect.expected_algo_row_version,
+        "effect_identity": effect.effect_identity,
+        "economic_effect": thaw_json_v1(effect.economic_payload),
+    }
+    event = RuntimeEventEnvelopeV2.create(
+        runtime_id=effect.runtime_id,
+        sequence=7,
+        event_type=EventTypeV2.OPERATOR,
+        event_time_utc="2026-08-12T01:30:00Z",
+        monotonic_ns=None,
+        source=EventSourceV2.SIMULATION_RUNTIME_OPERATOR,
+        symbol=algo.symbol,
+        payload_schema_version="miniqmt_operator_command_v1",
+        payload=payload,
+        source_identity={"operator_command_id": effect.effect_identity},
+        correlation={
+            "algo_instance_id": effect.algo_instance_id,
+            "exchange_trade_date": "2026-08-12",
+            "session_epoch": "session_hot_tick",
+            "session_phase": "CONTINUOUS_AM",
+        },
+    )
+    delivery_id = "mqdelivery_" + hash_hex_v1(
+        "miniqmt_algo_event_delivery_identity_v1",
+        {
+            "event_id": event.event_id,
+            "algo_instance_id": algo.algo_instance_id,
+            "plugin_manifest_sha256": algo.plugin_manifest_sha256,
+        },
+    )
+    receipt = RuntimeEventIngressReceiptV1.create(
+        runtime_id=event.runtime_id,
+        event_id=event.event_id,
+        event_key_sha256=event.event_key_sha256,
+        runtime_sequence=event.sequence,
+        ordered_target_algo_instance_ids=(algo.algo_instance_id,),
+        ordered_delivery_ids=(delivery_id,),
+        transaction_commit_identity="tx_hot_effect_readback",
+    )
+
+    def _delivery(status: DeliveryStatusV1) -> AlgoDeliveryPersistenceV1:
+        carrier = AlgoEventDeliveryV1.create(
+            event=event,
+            algo_instance_id=algo.algo_instance_id,
+            plugin_manifest_sha256=algo.plugin_manifest_sha256,
+            algo_delivery_sequence=algo.last_applied_delivery_sequence + 1,
+            previous_delivery_id=algo.last_applied_delivery_id,
+            status=DeliveryStatusV1.APPLIED,
+            attempt_count=1,
+            lease_owner=None,
+            lease_expires_at=None,
+            transition_id="transition_hot_effect",
+            last_error_json=None,
+            created_at_utc="2026-08-12T01:30:00Z",
+            updated_at_utc="2026-08-12T01:30:00Z",
+        )
+        persisted = AlgoDeliveryPersistenceV1.create(
+            delivery=carrier,
+            lease_epoch=1,
+            lease_fence_token=None,
+            row_version=3,
+            next_attempt_at_utc=None,
+            failure_receipt_id=None,
+            skip_receipt_id=None,
+            closed_at_utc="2026-08-12T01:30:00Z",
+        )
+        if status is DeliveryStatusV1.APPLIED:
+            return persisted
+        error = KernelErrorEvidenceV1.create(
+            stage="DELIVERY_APPLY",
+            stable_reason_code="PLUGIN_FAILED",
+            exception=RuntimeError("terminal"),
+            message="terminal",
+            retryable=False,
+            terminal=True,
+            broker_called=False,
+            primary_context={"stage": "DELIVERY"},
+            secondary_errors=[],
+        )
+        return AlgoDeliveryPersistenceV1.model_validate(
+            {
+                **persisted.model_dump(mode="python"),
+                "status": DeliveryStatusV1.FAILED_TERMINAL,
+                "transition_id": None,
+                "last_error_json": error.model_dump(mode="json"),
+                "failure_receipt_id": "failure_hot_effect",
+            },
+            strict=True,
+        )
+
+    applied = _delivery(DeliveryStatusV1.APPLIED)
+    successor = algo.model_copy(
+        update={
+            "row_version": algo.row_version + 1,
+            "last_applied_delivery_id": delivery_id,
+            "last_applied_delivery_sequence": applied.algo_delivery_sequence,
+        }
+    )
+
+    class Repository(_RuntimeRepository):
+        delivery = applied
+
+        def read_event_transaction(self, _event_id):
+            return {"event": event, "receipt": receipt, "deliveries": (self.delivery,)}
+
+        @staticmethod
+        def read_algo_instance(_algo_instance_id):
+            return successor
+
+    repository = Repository()
+    runtime = _runtime(repository, None, symbols=(algo.symbol,), trade_date=date(2026, 8, 12))
+    object.__setattr__(runtime, "runtime_id", algo.runtime_id)
+    object.__setattr__(runtime, "coordinator", SimpleNamespace(ingest_native_event_v1=lambda **_values: receipt))
+    assert runtime.commit_hot_market_effect_v1(effect) == successor
+
+    repository.delivery = _delivery(DeliveryStatusV1.FAILED_TERMINAL)
+    with pytest.raises(HotMarketDataEffectTerminalError) as terminal:
+        runtime.commit_hot_market_effect_v1(effect)
+    assert terminal.value.context["delivery_id"] == delivery_id
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        KernelRepositoryCommitUnknown("commit acknowledgement lost"),
+        product_module.psycopg2.OperationalError("server closed the connection"),
+        product_module.psycopg2.errors.SerializationFailure("serialization failure"),
+        product_module.PoolError("connection pool exhausted"),
+    ),
+)
+def test_bound_hot_effect_committer_wraps_only_allowlisted_database_transients(failure: Exception) -> None:
+    _plugin, context, state = _hot_initialized("SNIPER_MINIQMT")
+    algo = _hot_persistence("SNIPER_MINIQMT", context, state)
+    effect = HotMarketDataEconomicEffectV1(
+        runtime_id=algo.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        expected_algo_row_version=algo.row_version,
+        effect_identity="mqhoteffect_transient_classification",
+        economic_payload={
+            "action": "CANCEL_ORDER",
+            "action_time_utc": "2026-08-12T01:30:00Z",
+            "exchange_trade_date": "2026-08-12",
+            "session_epoch": "session_hot_tick",
+            "session_phase": "CONTINUOUS_AM",
+            "reason_code": "transient_classification",
+        },
+    )
+
+    class Runtime:
+        @staticmethod
+        def commit_hot_market_effect_v1(_effect):
+            raise failure
+
+    committer = product_module._BoundHotMarketEffectCommitterV1()
+    committer.bind_v1(Runtime())
+    with pytest.raises(HotMarketDataEffectRetryableError) as caught:
+        committer(effect)
+    assert caught.value.reason_code == "MINIQMT_HOT_MARKET_EFFECT_DATABASE_TRANSIENT"
+    assert caught.value.__cause__ is failure
+
+
+@pytest.mark.parametrize("failure", (ValueError("schema drift"), KernelRepositoryConflict("identity conflict")))
+def test_bound_hot_effect_committer_preserves_nonretryable_failures(failure: Exception) -> None:
+    _plugin, context, state = _hot_initialized("SNIPER_MINIQMT")
+    algo = _hot_persistence("SNIPER_MINIQMT", context, state)
+    effect = HotMarketDataEconomicEffectV1(
+        runtime_id=algo.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        expected_algo_row_version=algo.row_version,
+        effect_identity="mqhoteffect_nonretryable_classification",
+        economic_payload={
+            "action": "CANCEL_ORDER",
+            "action_time_utc": "2026-08-12T01:30:00Z",
+            "exchange_trade_date": "2026-08-12",
+            "session_epoch": "session_hot_tick",
+            "session_phase": "CONTINUOUS_AM",
+            "reason_code": "nonretryable_classification",
+        },
+    )
+
+    class Runtime:
+        @staticmethod
+        def commit_hot_market_effect_v1(_effect):
+            raise failure
+
+    committer = product_module._BoundHotMarketEffectCommitterV1()
+    committer.bind_v1(Runtime())
+    with pytest.raises(type(failure)) as caught:
+        committer(effect)
+    assert caught.value is failure
+
+
+def test_real_product_quote_callback_never_reaches_clock_schema_or_retry_backoff() -> None:
     context = _context()
     observation = _observation(context)
     repository = _RuntimeRepository()
     repository.reads = 1
-    runtime = _runtime(repository, _Dispatcher(), symbols=(observation.quote.symbol,))
+    runtime = _runtime(
+        repository,
+        _Dispatcher(),
+        symbols=(observation.quote.symbol,),
+        trade_date=observation.quote.clock_trade_date,
+        quote_context_id=context.context_id,
+    )
 
     class _Diag:
         constraint_name = "ck_miniqmt_event_source"
@@ -2312,21 +2750,11 @@ def test_real_product_quote_clock_schema_failure_is_backed_off_before_tick_ingre
     activation.register_kernel_product_runtime(runtime=runtime, symbols=runtime.symbols)
     assert callable(supervisor.sink)
 
-    with pytest.raises(QuoteContractError):
-        supervisor.sink(observation, context)
-    suppression = supervisor.sink(observation, context)
+    supervisor.sink(observation, context)
+    supervisor.sink(observation, context)
 
-    assert clock.attempts == 1
-    assert isinstance(suppression, MiniQMTKernelProductIngressSuppression)
-    assert suppression.disposition == "RETRY_BACKOFF_SUPPRESSED"
-    assert suppression.consumer_id == f"k6d-kernel-v2:{runtime.runtime_id}"
-    assert suppression.runtime_id == runtime.runtime_id
-    assert suppression.symbol == observation.frame.symbol
-    assert suppression.ingress_generation == observation.frame.ingress_generation
-    assert suppression.ingress_sequence == observation.frame.ingress_sequence
-    assert suppression.market_data_id == observation.market_data_id
-    assert suppression.pending_identity_sha256 is not None
-    assert activation.health()["kernel_product_runtimes"][0]["ingress_retry"]["suppressed_callback_count"] == 1
+    assert clock.attempts == 0
+    assert activation.health()["kernel_product_runtimes"][0]["ingress_retry"]["suppressed_callback_count"] == 0
 
 
 def test_product_runtime_outbox_and_reconcile_are_bounded_and_fail_loud() -> None:

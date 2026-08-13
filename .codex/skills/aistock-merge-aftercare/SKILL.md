@@ -17,7 +17,7 @@ Use the RD-Agent section when source merge, immutable release, deployment, resta
 2. Check PR state and CI with `gh pr view <PR> --json statusCheckRollup,mergeable,state`.
 3. Do not use long `gh pr checks --watch` waits when a compact rollup is enough.
 4. Stop if required checks fail, mergeability is blocked, or source worktree is dirty.
-5. Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK; direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure, with one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a task/PR/CI gate.
+5. Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine it.
 
 ## Merge
 
@@ -33,7 +33,7 @@ Use the RD-Agent section when source merge, immutable release, deployment, resta
 - Backend restart remains user-owned even when merge/finalizer/aftercare was authorized. Emit the catalog target and operator runbook reference; do not execute process control without explicit authorization for that target.
 - A runtime BUG remains `fixed_source_pending_user_restart` with an open GitHub Issue and `runtime_identity_match=pending` until `post-restart-verify` produces a complete digest-bound identity/business-smoke receipt. Runtime BUGs use only single-issue close-sync and are never routed through close-sync-batch.
 - Run close-sync/finalizer for BUG PRs.
-- Run `python scripts/aistock_issue_workflow.py install-client --apply` when `.codex/**`, `.claude/**`, or workflow client files changed.
+- Immediately after the canonical root fast-forward, and before close-sync or cleanup, the single merge-aftercare owner runs change-scoped `install-client --apply` plus `verify-clients --workflow-only` for lanes changed under `.codex/**` or `.claude/**` and any already-stale lanes detected in the same explicitly targeted profile. `merge-finalizer --sync-root --apply` performs this automatically; a fully current profile is a no-op and no second authorization or client restart is required.
 - When the authorization bundle names the production target and committed migration and the DEV receipt passed, confirm the immutable merge commit first, then run target preflight, apply, and readback without another prompt. Bare merge authorization never authorizes DDL; otherwise report `production_ddl_gate=noop` or `pending`.
 - When the authorization bundle names exact cleanup targets, run cleanup after merge/close-sync and report source worktree, source local/remote branch, close-sync worktree/branch, `git fetch --prune`, and root `main...origin/main`. Without cleanup authorization, report those items as pending rather than deleting them.
 - Squash merge cleanup is allowed when GitHub PR state is `MERGED`, there is no open PR for the branch, and the task worktree is clean; do not require the source HEAD to be an ancestor of `main`.

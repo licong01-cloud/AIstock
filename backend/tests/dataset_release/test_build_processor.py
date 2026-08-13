@@ -14,9 +14,11 @@ from backend.services.dataset_release.build_processor import (
     BuildStageLayout,
     BuildStageFailed,
     BuildResourceEvidenceInvalid,
+    BuildProcessorError,
     ProductionBuildProcessor,
     _portable_child_receipt,
     _qlib_dump_operations,
+    _validate_initial_migration_build_inputs,
     _validate_supervised_resource_receipt,
 )
 from backend.services.dataset_release.artifact_ready_source import (
@@ -60,6 +62,7 @@ from backend.services.dataset_release.control_store import (
 from backend.services.dataset_release.daily_minute_materializer import QlibDumpToolchain
 from backend.services.dataset_release.lease import LeaseManager
 from backend.services.dataset_release.publisher import artifact_tree_digest
+from backend.services.dataset_release.profile import load_dataset_profile, load_initial_migration_plan
 from backend.services.dataset_release.resolution import (
     BUILD_INPUTS_SCHEMA_VERSION,
     RESOLUTION_PLAN_SCHEMA_VERSION,
@@ -1379,3 +1382,41 @@ def test_build_rejects_stage_without_matching_authoritative_resource_gate(tmp_pa
             pressure_rung=0,
             timeout_seconds=profile.stage_timeouts_seconds["full_build"],
         )
+
+
+def test_build_revalidates_initial_migration_plan_before_candidate_write() -> None:
+    root = Path(__file__).resolve().parents[3]
+    profile = load_dataset_profile(root / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml")
+    plan = load_initial_migration_plan(root / "configs" / "datasets" / "migrations" / "pit_v2_initial_20260731_v1.yaml")
+    value = {
+        "scope": "sample",
+        "cutoff": plan.cutoff.isoformat(),
+        "initial_migration_plan": {
+            "plan_id": plan.plan_id,
+            "plan_digest": plan.plan_digest,
+            "fixed_cutoff": plan.cutoff.isoformat(),
+            "scope": "sample",
+            "sample_instruments": list(plan.sample_instruments),
+            "event_windows": [dict(item) for item in plan.event_windows],
+            "index_windows": [dict(item) for item in plan.index_windows],
+            "source_identity_policy": plan.source_identity_policy,
+        },
+    }
+
+    _validate_initial_migration_build_inputs(profile, value)
+
+    value["initial_migration_plan"] = {
+        **value["initial_migration_plan"],
+        "plan_digest": "c" * 64,
+    }
+    with pytest.raises(BuildProcessorError, match="checked-in plan"):
+        _validate_initial_migration_build_inputs(profile, value)
+
+    value["scope"] = "arbitrary"
+    value["initial_migration_plan"] = {
+        **value["initial_migration_plan"],
+        "plan_digest": plan.plan_digest,
+        "scope": "arbitrary",
+    }
+    with pytest.raises(BuildProcessorError, match="checked-in plan"):
+        _validate_initial_migration_build_inputs(profile, value)

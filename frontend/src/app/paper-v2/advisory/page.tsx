@@ -6,6 +6,8 @@ import {
   advisoryApi,
   type AdvisoryBindingPayload,
   type AdvisoryEpisode,
+  type AdvisoryForwardRun,
+  type AdvisoryForwardRunDetail,
   type AdvisoryListVersionDetail,
   type AdvisoryLeaderboardRow,
   type AdvisoryModelShadowResponse,
@@ -161,6 +163,12 @@ function fmtPrice(value: number | null | undefined): string {
 
 function fmtPriceBand(value: { low: number; high: number } | null | undefined): string {
   return value ? `${fmtPrice(value.low)} - ${fmtPrice(value.high)}` : "-";
+}
+
+function forwardPrediction(detail: AdvisoryForwardRunDetail | null): AdvisoryModelShadowResponse | null {
+  const payload = detail?.model_observation?.prediction_payload_json;
+  if (!payload || payload.status !== "EXPERIMENTAL_SHADOW" || !Array.isArray(payload.candidates)) return null;
+  return payload as unknown as AdvisoryModelShadowResponse;
 }
 
 function short(value: unknown, len = 10): string {
@@ -673,6 +681,9 @@ function AdvisoryPageContent() {
   const [modelShadow, setModelShadow] = useState<AdvisoryModelShadowResponse | null>(null);
   const [modelShadowLoading, setModelShadowLoading] = useState(false);
   const [modelShadowError, setModelShadowError] = useState<string | null>(null);
+  const [forwardRuns, setForwardRuns] = useState<AdvisoryForwardRun[]>([]);
+  const [latestForwardDetail, setLatestForwardDetail] = useState<AdvisoryForwardRunDetail | null>(null);
+  const [forwardError, setForwardError] = useState<string | null>(null);
   const [outcomeHorizonDays, setOutcomeHorizonDays] = useState<OutcomeHorizon>(5);
   const [selectedListVersionId, setSelectedListVersionId] = useState("");
   const [listVersionLoadingId, setListVersionLoadingId] = useState("");
@@ -707,6 +718,10 @@ function AdvisoryPageContent() {
   const selectedProgram = useMemo(
     () => programs.find((item) => item.program_id === selectedProgramId) || programs[0],
     [programs, selectedProgramId],
+  );
+  const latestForwardPrediction = useMemo(
+    () => forwardPrediction(latestForwardDetail),
+    [latestForwardDetail],
   );
 
   const activeColumns = useMemo<ActivePoolColumn[]>(() => [
@@ -823,6 +838,22 @@ function AdvisoryPageContent() {
     setReviewTotalCount(reviewPageData.total_count);
     setBindings(bindingRows);
     setListVersions(versionRows);
+    setForwardRuns([]);
+    setLatestForwardDetail(null);
+    setForwardError(null);
+    void advisoryApi.forwardRuns(programId, 20)
+      .then((forwardRows) => {
+        if (!stillCurrent()) return;
+        setForwardRuns(forwardRows);
+        if (!forwardRows[0]) return;
+        return advisoryApi.forwardRunDetail(forwardRows[0].forward_run_id);
+      })
+      .then((detail) => {
+        if (detail && stillCurrent()) setLatestForwardDetail(detail);
+      })
+      .catch((exc) => {
+        if (stillCurrent()) setForwardError(exc instanceof Error ? exc.message : String(exc));
+      });
     setLoadedDetailsProgramId(programId);
     if (versionRows[0]) {
       const latestVersion = versionRows[0];
@@ -1806,6 +1837,72 @@ function AdvisoryPageContent() {
               当前策略绑定：{activeBinding.package_mode} / {packageSummary(activeBinding.package_ids)} / {short(activeBinding.binding_version_id, 18)}
             </div>
           ) : null}
+        </div>
+        <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-forward-publication">
+          <div className="pv2-card-head">
+            <div>
+              <div className="pv2-kicker">每日前向</div>
+              <h3>基线发布与模型观察</h3>
+            </div>
+            <div className="pv2-row-actions">
+              <span className={`pv2-badge ${forwardRuns[0]?.publication_status === "PUBLISHED" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                {forwardRuns[0]?.publication_status || "NO_FORWARD_RUN"}
+              </span>
+              <span className="pv2-badge pv2-badge-neutral">{forwardRuns[0]?.settlement_status || "NOT_DUE"}</span>
+              <span className={`pv2-badge ${latestForwardDetail?.model_observation?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                {latestForwardDetail?.model_observation?.status || "MODEL_UNAVAILABLE"}
+              </span>
+            </div>
+          </div>
+          {forwardError ? <div className="pv2-error" data-testid="advisory-forward-error">{forwardError}</div> : null}
+          {forwardRuns[0] ? (
+            <div data-testid="advisory-forward-latest">
+              <strong>目标日 {forwardRuns[0].target_trade_date}</strong>
+              <span className="pv2-muted"> 数据截止 {forwardRuns[0].decision_as_of_trade_date}；阶段 {forwardRuns[0].last_stage}；发布 {short(forwardRuns[0].published_at, 16)}；结算 {short(forwardRuns[0].settled_at, 16)}</span>
+              {forwardRuns[0].last_reason_code ? <div className="pv2-muted" style={{ marginTop: 6 }}>原因：{forwardRuns[0].last_reason_code}</div> : null}
+              {latestForwardDetail?.model_observation ? (
+                <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-forward-model-identity">
+                  模型 {short(latestForwardDetail.model_observation.bundle_id, 14)}；Top5 {latestForwardDetail.model_observation.shortlist_count}/{latestForwardDetail.model_observation.candidate_count}；成熟日 {latestForwardDetail.model_observation.maturity_trade_date || "尚无"}
+                  {latestForwardDetail.model_observation.reason_code ? `；${latestForwardDetail.model_observation.reason_code}` : ""}
+                </div>
+              ) : null}
+              {latestForwardPrediction ? (
+                <>
+                <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-forward-child-status">
+                  收益/周期 {latestForwardPrediction.outcome?.status || "OUTCOME_UNAVAILABLE"}；价格区间 {latestForwardPrediction.price_range?.status || "PRICE_RANGE_UNAVAILABLE"}
+                </div>
+                <div className="pv2-table-wrap" style={{ marginTop: 10 }} data-testid="advisory-forward-prediction-table">
+                  <table className="pv2-table">
+                    <thead><tr><th>模型排名</th><th>股票</th><th>建议周期</th><th>5日收益区间</th><th>买入区间</th><th>止盈区间</th><th>止损区间</th></tr></thead>
+                    <tbody>
+                      {latestForwardPrediction.candidates
+                        .filter((candidate) => candidate.is_top5)
+                        .sort((left, right) => left.advisory_model_rank - right.advisory_model_rank)
+                        .map((candidate) => {
+                          const outcomeCandidate = latestForwardPrediction.outcome?.candidates.find((row) => row.symbol === candidate.symbol);
+                          const horizon = outcomeCandidate ? outcomeHorizon(outcomeCandidate, 5) : null;
+                          const price = latestForwardPrediction.price_range?.candidates.find((row) => row.symbol === candidate.symbol);
+                          return (
+                            <tr key={candidate.symbol} data-testid="advisory-forward-prediction-row">
+                              <td>{candidate.advisory_model_rank}</td>
+                              <td><strong>{candidate.symbol}</strong></td>
+                              <td>{outcomeCandidate ? `${outcomeCandidate.holding_period.range_low_days}-${outcomeCandidate.holding_period.range_high_days}日` : "-"}</td>
+                              <td>{horizon ? `${fmtPct(horizon.excess_return_calibrated_q10 ?? horizon.excess_return_q10)} - ${fmtPct(horizon.excess_return_calibrated_q90 ?? horizon.excess_return_q90)}` : "-"}</td>
+                              <td>{fmtPriceBand(price?.calibrated_entry_price ?? price?.entry_price)}</td>
+                              <td>{fmtPriceBand(price?.take_profit_price)}</td>
+                              <td>{fmtPriceBand(price?.stop_loss_price)}</td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <div className="pv2-muted" data-testid="advisory-forward-empty">尚未产生自然前向发布日期；自动前向只从启用后当前交易日开始，不回填历史缺口。</div>
+          )}
         </div>
         {reviewResult ? (
           <div className="pv2-readable-panel" style={{ marginTop: 12 }}>

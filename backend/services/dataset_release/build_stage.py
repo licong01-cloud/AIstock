@@ -111,7 +111,12 @@ from .index_context_candidate_manifest import (
     validate_index_context_candidate_manifest,
 )
 from .minute_overlay import canonical_session_times
-from .pit import FrozenPitSnapshot, frozen_pit_snapshot_from_mapping
+from .pit import (
+    DATASET_CANDIDATE_MANIFEST_SCHEMA,
+    FrozenPitSnapshot,
+    build_dataset_pit_binding,
+    frozen_pit_snapshot_from_mapping,
+)
 from .profile import DatasetProfile
 from .stock_schema import QLIB_STOCK_FIELDS
 
@@ -1021,15 +1026,14 @@ def _validate(
     )
     component_manifest = _cas_json(invocation.cas, component_ref)
     validation_ref = invocation.cas.put_json(report.payload)
-    manifest_ref = invocation.cas.put_json(
-        {
-            "schema_version": "dataset_release_candidate_manifest_v1",
-            "artifact_root": artifact_root,
-            "manifest_root": component_manifest["manifest_root"],
-            "component_artifact_manifest_ref": component_ref.as_dict(),
-            "artifact_ready_content_root": invocation.build_inputs["artifact_ready_content_root"],
-        }
+    candidate_manifest = _build_candidate_manifest(
+        invocation=invocation,
+        pit=pit,
+        artifact_root=artifact_root,
+        component_manifest=component_manifest,
+        component_ref=component_ref,
     )
+    manifest_ref = invocation.cas.put_json(candidate_manifest)
     return {
         "validation_status": "PASS",
         "required_validation_failures": 0,
@@ -1045,6 +1049,49 @@ def _validate(
         "artifact_snapshot": artifact_snapshot.receipt(),
         "runtime_real_data_evidence": "not_run_not_authorized",
     }
+
+
+def _build_candidate_manifest(
+    *,
+    invocation: BuildStageInvocation,
+    pit: FrozenPitSnapshot,
+    artifact_root: str,
+    component_manifest: Mapping[str, Any],
+    component_ref: CASRef,
+) -> dict[str, Any]:
+    candidate_manifest: dict[str, Any] = {
+        "schema_version": DATASET_CANDIDATE_MANIFEST_SCHEMA,
+        "profile": invocation.profile.profile,
+        "scope": str(invocation.build_inputs["scope"]),
+        "cutoff": pit.cutoff.isoformat(),
+        "release_id": invocation.release_id,
+        "release_digest": invocation.release_digest,
+        "semantic_profile_digest": invocation.profile.semantic_profile_digest,
+        "source_content_root": invocation.build_inputs["source_snapshot"]["raw_source_content_root"],
+        "pit_snapshot_digest": pit.spans_sha256,
+        "artifact_root": artifact_root,
+        "manifest_root": component_manifest["manifest_root"],
+        "component_artifact_manifest_ref": component_ref.as_dict(),
+        "artifact_ready_content_root": invocation.build_inputs["artifact_ready_content_root"],
+        "safety": {
+            "database_writes": 0,
+            "production_writes": 0,
+            "production_deletes": 0,
+            "production_pointer_changes": 0,
+            "service_process_controls": 0,
+        },
+    }
+    if invocation.profile.pit_authority_status == "ACTIVE_CANONICAL":
+        pit_binding = build_dataset_pit_binding(
+            pit,
+            release_id=invocation.release_id,
+            rolling_cutoff_spans_sha256=str(invocation.build_inputs["source_snapshot"]["pit_snapshot_digest"]),
+            scope=str(invocation.build_inputs["scope"]),
+        )
+        candidate_manifest["pit_binding"] = pit_binding.as_dict()
+    if "initial_migration_plan" in invocation.build_inputs:
+        candidate_manifest["initial_migration_plan"] = dict(invocation.build_inputs["initial_migration_plan"])
+    return candidate_manifest
 
 
 def _build_source(

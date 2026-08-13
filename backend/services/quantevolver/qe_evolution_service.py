@@ -123,6 +123,7 @@ QE_LOOP_RETRY_MODES = {
     QE_LOOP_RETRY_MODE_RESULTS_ONLY,
 }
 _QE_RETRY_SUBMISSION_KEY = "_qe_retry_submission"
+_QE_RERUN_SUBMISSION_KEY = "_qe_rerun_submission"
 _QE_LOOP_RETRY_MODE_ALIASES = {
     "backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
     "only_backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
@@ -237,6 +238,41 @@ class AutoEvolutionScheduler:
             return None
         metadata = config.get(_QE_RETRY_SUBMISSION_KEY)
         return dict(metadata) if isinstance(metadata, dict) else None
+
+    @staticmethod
+    def _custom_evo_submission_identity(
+        loop_config: Any,
+        *,
+        canonical_loop_id: str,
+    ) -> tuple[str, str | None]:
+        """Resolve reservation and canonical-claim identities for a custom Loop.
+
+        Normal first submissions retain the historical canonical identity. A
+        destructive rerun must use a new reservation identity so a terminal
+        worker receipt from the previous generation cannot be adopted as the
+        new execution. The canonical loop row remains the source claim.
+        """
+
+        if not isinstance(loop_config, dict):
+            return canonical_loop_id, None
+        metadata = loop_config.get(_QE_RERUN_SUBMISSION_KEY)
+        if metadata is None:
+            return canonical_loop_id, None
+        if not isinstance(metadata, dict):
+            raise ValueError("QE_CUSTOM_EVO_RERUN_IDENTITY_INVALID: metadata must be an object")
+        attempt_id = str(metadata.get("rerun_attempt_id") or "").strip()
+        source_execution_id = str(metadata.get("source_execution_id") or "").strip()
+        expected_source_execution_id = f"{canonical_loop_id}:rerun:{attempt_id}"
+        if (
+            metadata.get("schema_version") != "qe_custom_evo_rerun_submission_v1"
+            or len(attempt_id) != 32
+            or any(char not in "0123456789abcdef" for char in attempt_id)
+            or source_execution_id != expected_source_execution_id
+        ):
+            raise ValueError(
+                "QE_CUSTOM_EVO_RERUN_IDENTITY_INVALID: rerun attempt identity is incomplete or inconsistent"
+            )
+        return source_execution_id, canonical_loop_id
 
     def _track_retry_resume_task(self, loop_db_id: str, task: asyncio.Task) -> None:
         self._ensure_retry_resume_state()
@@ -6606,6 +6642,15 @@ class AutoEvolutionScheduler:
                     next_loops: List[Dict[str, Any]] = []
                     replacement = dict(loop_config)
                     replacement["loop_index"] = loop_index
+                    rerun_attempt_id = uuid.uuid4().hex
+                    rerun_source_execution_id = (
+                        f"{task_id}_Loop{loop_index}:rerun:{rerun_attempt_id}"
+                    )
+                    replacement[_QE_RERUN_SUBMISSION_KEY] = {
+                        "schema_version": "qe_custom_evo_rerun_submission_v1",
+                        "rerun_attempt_id": rerun_attempt_id,
+                        "source_execution_id": rerun_source_execution_id,
+                    }
                     for cfg in strategy_config["loops"]:
                         if int(cfg.get("loop_index") or 0) == loop_index:
                             next_loops.append(replacement)
@@ -6658,6 +6703,8 @@ class AutoEvolutionScheduler:
                 "loop_index": loop_index,
                 "loop_id": f"{task_id}_Loop{loop_index}",
                 "node_parallelism": full_node_parallelism,
+                "rerun_attempt_id": rerun_attempt_id,
+                "source_execution_id": rerun_source_execution_id,
                 "cleanup": cleanup_result,
                 "message": f"Custom evolution Loop {loop_index} rerun queued.",
             }
@@ -7002,6 +7049,12 @@ class AutoEvolutionScheduler:
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
         effective_node_id = loop_config.get("node_id") or task.get("node_id") or resolve_default_qe_node_id()
+        submission_source_execution_id, submission_source_claim_id = (
+            self._custom_evo_submission_identity(
+                loop_config,
+                canonical_loop_id=evolution_loop_db_id,
+            )
+        )
 
         if self._get_task_status(task_id) != "running":
             logger.info(f"Custom evolution task {task_id} is not running; skip submitting Loop {loop_index}")
@@ -7126,6 +7179,9 @@ class AutoEvolutionScheduler:
                 "gpu_training_policy": gpu_training_policy,
                 "resource_session_id": resource_session.session_id if resource_session else None,
             }
+            rerun_submission = loop_config.get(_QE_RERUN_SUBMISSION_KEY)
+            if isinstance(rerun_submission, dict):
+                config_record[_QE_RERUN_SUBMISSION_KEY] = dict(rerun_submission)
             loop_model_params = merge_qe_minute_runtime_contract(
                 cfg.build_custom_params(),
                 config=config_record,
@@ -7212,7 +7268,8 @@ class AutoEvolutionScheduler:
                 resource_session_token=resource_session.token if resource_session else None,
                 phase_pipeline_enabled=phase_pipeline_enabled,
                 submission_source_kind="qe_evolution_loop",
-                submission_source_execution_id=evolution_loop_db_id,
+                submission_source_execution_id=submission_source_execution_id,
+                submission_source_claim_id=submission_source_claim_id,
             )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
@@ -7254,7 +7311,8 @@ class AutoEvolutionScheduler:
                     resource_session_token=resource_session.token if resource_session else None,
                     phase_pipeline_enabled=False,
                     submission_source_kind="qe_evolution_loop",
-                    submission_source_execution_id=evolution_loop_db_id,
+                    submission_source_execution_id=submission_source_execution_id,
+                    submission_source_claim_id=submission_source_claim_id,
                 )
                 mode = BacktestMode.BACKTEST_ONLY
                 logger.info(
