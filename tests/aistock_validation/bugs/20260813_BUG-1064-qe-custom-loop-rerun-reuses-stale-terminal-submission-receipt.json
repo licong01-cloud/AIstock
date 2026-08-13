@@ -123,8 +123,8 @@
   },
   "first_seen_at": "2026-08-13T04:55:32.115568Z",
   "fix_branch": "bug/BUG-1064-qe-custom-loop-rerun-reuses-stale-terminal-submi-20260813",
-  "fix_commit": "16973538f42def87ba99434eeb61bf698eaf2f04",
-  "fixed_at": null,
+  "fix_commit": "30b346935733b45a99f46d5c1b68cb516317034a",
+  "fixed_at": "2026-08-13T07:36:03Z",
   "github_issue_number": 3393,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3393",
   "last_seen_at": "2026-08-13T04:55:32.115568Z",
@@ -157,7 +157,8 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -168,7 +169,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -184,7 +185,10 @@
     "python -m nox -s qe_read_backend -> 34 passed",
     "python -m ruff check and python -m py_compile on changed Python files -> passed",
     "git diff --check -> passed",
-    "fresh-process rerun reservation identity and canonical claim identity import smoke -> passed"
+    "fresh-process rerun reservation identity and canonical claim identity import smoke -> passed",
+    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py -q -> 12 passed; source HEAD 5fd0ad4b",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership 14/14; source HEAD 5fd0ad4b",
+    "python -m nox -s qe_read_backend -> 34 passed; source HEAD 5fd0ad4b"
   ],
   "verification_budget": {
     "budget": "standard",
