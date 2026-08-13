@@ -17,6 +17,7 @@ import statistics
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,8 @@ def _load_parent(path: Path) -> dict[str, Any]:
 
 
 def _entry_rejections(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if entry.get("artifact_write_performed") is not False:
+        raise B3EvidenceAggregationError("child entry artifact-write boundary is invalid")
     if entry.get("fit_status") != "accepted":
         reasons = list(entry.get("failure_reason_codes") or ())
         return [
@@ -98,9 +101,9 @@ def _entry_rejections(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
         ]
     rejected: list[dict[str, Any]] = []
     likelihood = entry.get("likelihood")
-    if isinstance(likelihood, Mapping) and not (
-        likelihood.get("convergence_valid") is True and likelihood.get("likelihood_valid") is True
-    ):
+    if not isinstance(likelihood, Mapping):
+        raise B3EvidenceAggregationError("child entry likelihood evidence is missing")
+    if not (likelihood.get("convergence_valid") is True and likelihood.get("likelihood_valid") is True):
         rejected.append(
             {
                 "stage": "likelihood",
@@ -110,7 +113,9 @@ def _entry_rejections(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
     covariance = entry.get("covariance")
-    if isinstance(covariance, Mapping) and covariance.get("covariance_valid") is not True:
+    if not isinstance(covariance, Mapping):
+        raise B3EvidenceAggregationError("child entry covariance evidence is missing")
+    if covariance.get("covariance_valid") is not True:
         rejected.append(
             {
                 "stage": "covariance",
@@ -120,7 +125,9 @@ def _entry_rejections(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
     occupancy = entry.get("train_occupancy")
-    if isinstance(occupancy, Mapping) and occupancy.get("train_occupancy_valid") is not True:
+    if not isinstance(occupancy, Mapping):
+        raise B3EvidenceAggregationError("child entry train-occupancy evidence is missing")
+    if occupancy.get("train_occupancy_valid") is not True:
         rejected.append(
             {
                 "stage": "train_occupancy",
@@ -144,11 +151,21 @@ def _entry_rejections(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _window_summary(value: Mapping[str, Any]) -> dict[str, Any]:
-    reasons = tuple(sorted(str(item) for item in value.get("reason_codes") or ()))
+    status = value.get("status")
+    if status not in {"train_window_structurally_observed", "train_window_structurally_unobserved"}:
+        raise B3EvidenceAggregationError("child profile window status is invalid")
+    raw_reasons = value.get("reason_codes")
+    if not isinstance(raw_reasons, list) or any(not isinstance(item, str) or not item for item in raw_reasons):
+        raise B3EvidenceAggregationError("child profile window reason codes are invalid")
+    reasons = tuple(sorted(raw_reasons))
+    if (status == "train_window_structurally_observed" and reasons) or (
+        status == "train_window_structurally_unobserved" and not reasons
+    ):
+        raise B3EvidenceAggregationError("child profile window status/reason closure is invalid")
     return {
-        "status": str(value.get("status") or ""),
+        "status": status,
         "reason_codes": list(reasons),
-        "structurally_observed": value.get("status") == "train_window_structurally_observed",
+        "structurally_observed": status == "train_window_structurally_observed",
     }
 
 
@@ -182,8 +199,16 @@ def _compact_entry_source(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_profile_source(value: dict[str, Any]) -> dict[str, Any]:
-    early = _window_summary(value.get("early") if isinstance(value.get("early"), Mapping) else {})
-    late = _window_summary(value.get("late") if isinstance(value.get("late"), Mapping) else {})
+    early_value = value.get("early")
+    late_value = value.get("late")
+    if not isinstance(early_value, Mapping) or not isinstance(late_value, Mapping):
+        raise B3EvidenceAggregationError("child profile window evidence is missing")
+    early = _window_summary(early_value)
+    late = _window_summary(late_value)
+    declared_both = value.get("both_windows_structurally_observed")
+    derived_both = early["structurally_observed"] and late["structurally_observed"]
+    if not isinstance(declared_both, bool) or declared_both is not derived_both:
+        raise B3EvidenceAggregationError("child profile window closure is inconsistent")
     return {
         "seed": value.get("seed"),
         "sector_code": value.get("sector_code"),
@@ -205,12 +230,24 @@ def _coverage_proxy(
     invalid_receipts: Sequence[Mapping[str, Any]],
     sector_codes: Sequence[str],
 ) -> dict[str, Any]:
+    sector_set = set(sector_codes)
     size_values: dict[str, list[float]] = defaultdict(list)
     liquidity_values: dict[str, list[float]] = defaultdict(list)
+    domain_dates: dict[str, set[str]] = defaultdict(set)
+    domain_keys: set[tuple[str, str]] = set()
     for receipt in receipts:
         code = str(receipt.get("sector_code") or "")
-        if code not in sector_codes:
+        trade_date = str(receipt.get("trade_date") or "")
+        if code not in sector_set:
             raise B3EvidenceAggregationError("L2 domain receipt contains a non-canonical sector")
+        try:
+            parsed_date = date.fromisoformat(trade_date)
+        except ValueError as exc:
+            raise B3EvidenceAggregationError("L2 domain receipt trade date is invalid") from exc
+        if parsed_date.isoformat() != trade_date or (code, trade_date) in domain_keys:
+            raise B3EvidenceAggregationError("L2 domain receipt key is duplicated or non-canonical")
+        domain_keys.add((code, trade_date))
+        domain_dates[code].add(trade_date)
         size = receipt.get("price_expected_weight")
         liquidity = receipt.get("moneyflow_contributor_amount")
         if isinstance(size, (int, float)) and math.isfinite(float(size)) and float(size) > 0:
@@ -223,21 +260,36 @@ def _coverage_proxy(
     invalid_reasons: Counter[str] = Counter()
     for receipt in invalid_receipts:
         code = str(receipt.get("sector_code") or "")
+        trade_date = str(receipt.get("trade_date") or "")
         reason = str(receipt.get("price_domain_reason_code") or "")
-        if code not in sector_codes or not reason:
+        if code not in sector_set or not reason:
             raise B3EvidenceAggregationError("invalid L2 domain receipt is incomplete")
+        try:
+            parsed_date = date.fromisoformat(trade_date)
+        except ValueError as exc:
+            raise B3EvidenceAggregationError("invalid L2 domain receipt trade date is invalid") from exc
+        if parsed_date.isoformat() != trade_date or (code, trade_date) in domain_keys:
+            raise B3EvidenceAggregationError("invalid L2 domain receipt key is duplicated or non-canonical")
+        domain_keys.add((code, trade_date))
+        domain_dates[code].add(trade_date)
         invalid_counts[code] += 1
         invalid_reasons[reason] += 1
-    total_counts = {code: len(size_values[code]) + invalid_counts[code] for code in sector_codes}
-    if len(set(total_counts.values())) != 1 or next(iter(total_counts.values()), 0) <= 0:
+    if set(domain_dates) != sector_set:
+        raise B3EvidenceAggregationError("L2 domain receipt date coverage is incomplete")
+    canonical_dates = domain_dates[sector_codes[0]]
+    if not canonical_dates or any(domain_dates[code] != canonical_dates for code in sector_codes):
         raise B3EvidenceAggregationError("L2 domain receipt date denominator differs by sector")
+    ordered_dates = sorted(canonical_dates)
     size_median = {code: statistics.median(values) for code, values in size_values.items()}
     liquidity_median = {code: statistics.median(values) for code, values in liquidity_values.items()}
     return {
         "proxy_contract": "frozen_train_l2_daily_median_v1",
         "size_proxy": "median_price_expected_weight",
         "liquidity_proxy": "median_moneyflow_contributor_amount",
-        "domain_date_count_per_sector": next(iter(total_counts.values())),
+        "domain_date_count_per_sector": len(ordered_dates),
+        "domain_trade_date_start": ordered_dates[0],
+        "domain_trade_date_end": ordered_dates[-1],
+        "domain_trade_date_sha256": canonical_sha256(ordered_dates),
         "valid_domain_receipt_count": len(receipts),
         "invalid_domain_receipt_count": len(invalid_receipts),
         "invalid_domain_reason_counts": dict(sorted(invalid_reasons.items())),
@@ -257,6 +309,7 @@ _FINITE_NUMBER_PATTERN = rb"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?
 _SECTOR_PATTERN = re.compile(rb'"sector_code":"([^"]+)"')
 _SIZE_PATTERN = re.compile(rb'"price_expected_weight":(' + _FINITE_NUMBER_PATTERN + rb")")
 _LIQUIDITY_PATTERN = re.compile(rb'"moneyflow_contributor_amount":(' + _FINITE_NUMBER_PATTERN + rb")")
+_TRADE_DATE_PATTERN = re.compile(rb'"trade_date":"([0-9]{4}-[0-9]{2}-[0-9]{2})"')
 
 
 def _canonical_file_sha256(path: Path) -> str:
@@ -305,7 +358,10 @@ def _iter_prefixed_objects(
     while position < array_end:
         next_position = source.find(delimiter, position)
         object_end = array_end if next_position < 0 or next_position >= array_end else next_position
-        yield memoryview(source)[position:object_end]
+        # mmap slicing copies only the current compact object.  Do not expose a
+        # memoryview across transform failures: an exported view would make the
+        # mmap close raise BufferError and mask the typed source-contract error.
+        yield source[position:object_end]
         if object_end == array_end:
             return
         position = next_position + 1
@@ -353,11 +409,13 @@ def _compact_domain_objects(
         sector = _SECTOR_PATTERN.search(raw)
         size = _SIZE_PATTERN.search(raw)
         liquidity = _LIQUIDITY_PATTERN.search(raw)
-        if not sector or not size or not liquidity:
+        trade_date = _TRADE_DATE_PATTERN.search(raw)
+        if not sector or not size or not liquidity or not trade_date:
             raise B3EvidenceAggregationError("L2 domain receipt is missing a coverage proxy field")
         values.append(
             {
                 "sector_code": sector.group(1).decode("utf-8"),
+                "trade_date": trade_date.group(1).decode("ascii"),
                 "price_expected_weight": float(size.group(1)),
                 "moneyflow_contributor_amount": float(liquidity.group(1)),
             }
@@ -386,12 +444,21 @@ def _compact_invalid_domain_objects(
         if not isinstance(parsed, dict) or canonical_json_bytes(parsed) != raw_bytes:
             raise B3EvidenceAggregationError("invalid L2 domain receipt is not canonical")
         sector = parsed.get("sector_code")
+        trade_date = parsed.get("trade_date")
         reason = parsed.get("price_domain_reason_code")
-        if not isinstance(sector, str) or not sector or not isinstance(reason, str) or not reason:
+        if (
+            not isinstance(sector, str)
+            or not sector
+            or not isinstance(trade_date, str)
+            or not trade_date
+            or not isinstance(reason, str)
+            or not reason
+        ):
             raise B3EvidenceAggregationError("invalid L2 domain receipt is missing its typed reason")
         values.append(
             {
                 "sector_code": sector,
+                "trade_date": trade_date,
                 "price_domain_reason_code": reason,
             }
         )
@@ -696,7 +763,16 @@ def write_aggregation_report(path: Path, report: Mapping[str, Any]) -> None:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_name, target)
+        try:
+            os.link(temp_name, target)
+        except FileExistsError:
+            if target.read_bytes() != payload:
+                raise B3EvidenceAggregationError(f"aggregation report collision: {target}") from None
+        finally:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
     except Exception:
         try:
             os.unlink(temp_name)

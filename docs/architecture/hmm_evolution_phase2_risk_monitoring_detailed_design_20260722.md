@@ -2669,18 +2669,18 @@ model/READY 写入。
 5. child 不携带 L2→L1 parent/industry authority，因此 P2-2 对 L1/industry bias 必须写
    `insufficient_evidence/hmm_risk_p2_2_child_artifact_l1_mapping_unavailable`，不得按代码前缀猜测、访问数据库补写或隐藏该缺口。P2-3
    exact coverage contract 必须另行绑定 canonical hierarchy mapping 后才能形成 FULL_READY/COVERAGE_AVAILABLE 代表性结论；
-6. 两 fresh process 的 compact records 必须 canonical 相同；输出使用 collision-safe append-only write。任何 hash、denominator、array closure、
+6. 两 fresh process 的 compact records 必须 canonical 相同；coverage 必须按 `(sector_code,trade_date)` 唯一键闭合，并证明 131 个 sector 共享同一冻结日期集合，输出保存日期起止与 canonical date-set hash；输出使用并发首次写入也不得覆盖既有结果的 collision-safe append-only write。任何 hash、denominator、array closure、
    finite proxy 或 process identity 不一致均 fail closed，不产生 `diagnostic_complete`；
 7. 输出必须显式保留 `refit/selection/family_selection/D5/D6/model/READY/database/runtime=false` 和
    `formal_product_thresholds_applied=false`。聚合完成只允许进入 P2-3 精确设计，不增加 F-011/F-013 完成计数。
 
 2026-08-14 首次正式执行结果：parent=`transition_dwell_b_postbug1068_20260813_29417ceb/transition_dwell_b.json`，两 child
 canonical/payload closure一致；聚合输出 schema=`hmm_risk_phase2_p2_2_evidence_aggregation_v1`、receipt SHA-256=
-`9a4b292a2a6d041e919285585edd26bb016dd71bd883fed7d2ab5f095db3b2bd`、`1048/1048` seed×sector records。主导类别为
+`8aed2bc4c22037120fe6757e75fed8dc7407d8dcd12b4275f6a08e0c29194698`、`1048/1048` seed×sector records。主导类别为
 `accepted=879`、`transition_run_dwell=149`、`occupancy_coverage=17`、`train_occupancy=3`；10个sector至少一个seed跨early/late
 持续失败，其中`801155.SI`为8/8、`801038.SI`为7/8、`801141.SI`为6/8。9个D3/D4 accepted sector只形成
 `K3_STRUCTURE_COLLAPSE_SUGGESTS_K2_HYPOTHESIS`，未执行K=2 fit或K选择。size/liquidity quintile诊断未显示失败只集中在最低
-quintile。冻结domain分母为每sector 601日，`78362`个valid与`369`个typed invalid receipts闭合`131×601=78731`；仅
+quintile。冻结domain分母为每sector相同的601日集合（`2022-01-04..2024-06-28`，date-set SHA-256=`b48fb5e911295d1c16920178b6ea48285c5890455aeaa31ad03ef7e11841f715`），`78362`个valid与`369`个typed invalid receipts按唯一`(sector_code,trade_date)`闭合`131×601=78731`；仅
 `801114.SI`与`801952.SI`同时出现在10个persistent sector和32个存在invalid date的sector中，不能把主导结构失败归因于domain缺口。
 L1 parent/industry mapping仍为typed insufficient。所有refit/selection/family selection/D5/D6/model/READY/DB/runtime
 flags均为false。该证据把P2-3的唯一spike建议收敛为`market_regime + sector_relative_strength`部署结构，并优先评估jump estimator；

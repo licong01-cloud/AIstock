@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,7 @@ def _child(process_identity: str, *, invalid_sector: str | None = None) -> dict:
                 "direct_sector_level": "L2",
                 "price_domain_reason_code": "hmm_risk_c010_price_domain_coverage_insufficient",
                 "sector_code": invalid_sector,
+                "trade_date": "2024-01-03",
             }
         ]
         if invalid_sector
@@ -204,6 +206,9 @@ def test_aggregate_transition_dwell_evidence_is_zero_refit_compact_and_fail_clos
     }
     assert report["coverage_bias"]["canonical_l2_denominator"] == 131
     assert report["coverage_bias"]["domain_date_count_per_sector"] == 1
+    assert report["coverage_bias"]["domain_trade_date_start"] == "2024-01-02"
+    assert report["coverage_bias"]["domain_trade_date_end"] == "2024-01-02"
+    assert report["coverage_bias"]["domain_trade_date_sha256"] == canonical_sha256(["2024-01-02"])
     assert report["coverage_bias"]["valid_domain_receipt_count"] == 131
     assert report["coverage_bias"]["invalid_domain_receipt_count"] == 0
     assert report["coverage_bias"]["l1_parent_and_industry_mapping_status"] == "insufficient_evidence"
@@ -265,6 +270,42 @@ def test_aggregate_transition_dwell_evidence_rejects_incomplete_grid(tmp_path: P
         aggregate_transition_dwell_evidence(parent_path)
 
 
+def test_aggregate_transition_dwell_evidence_rejects_duplicate_domain_key_hidden_by_count(tmp_path: Path) -> None:
+    parent_path = _parent(tmp_path, invalid_sector="801001.SI")
+    parent = __import__("json").loads(parent_path.read_text(encoding="utf-8"))
+    child_path = Path(parent["fresh_process_receipts"][0]["receipt_path"])
+    child = __import__("json").loads(child_path.read_text(encoding="utf-8"))
+    child["feature_domain_policy_manifest"]["aggregate_receipt"]["l2_invalid_price_domain"][0]["trade_date"] = (
+        "2024-01-02"
+    )
+    _write_canonical(child_path, child)
+    parent["fresh_process_receipts"][0]["receipt_sha256"] = canonical_sha256(child)
+    body = {key: value for key, value in parent.items() if key != "report_sha256"}
+    parent["report_sha256"] = canonical_sha256(body)
+    _write_canonical(parent_path, parent)
+
+    with pytest.raises(B3EvidenceAggregationError, match="key is duplicated"):
+        aggregate_transition_dwell_evidence(parent_path)
+
+
+def test_aggregate_transition_dwell_evidence_rejects_missing_accepted_stage_evidence(tmp_path: Path) -> None:
+    parent_path = _parent(tmp_path)
+    parent = __import__("json").loads(parent_path.read_text(encoding="utf-8"))
+    child_path = Path(parent["fresh_process_receipts"][0]["receipt_path"])
+    child = __import__("json").loads(child_path.read_text(encoding="utf-8"))
+    child["level_repeat"]["entries"][0].pop("covariance")
+    child["level_repeat"]["entry_payload_sha256"] = canonical_sha256(child["level_repeat"]["entries"])
+    _write_canonical(child_path, child)
+    parent["fresh_process_receipts"][0]["receipt_sha256"] = canonical_sha256(child)
+    parent["fresh_process_receipts"][0]["entry_payload_sha256"] = child["level_repeat"]["entry_payload_sha256"]
+    body = {key: value for key, value in parent.items() if key != "report_sha256"}
+    parent["report_sha256"] = canonical_sha256(body)
+    _write_canonical(parent_path, parent)
+
+    with pytest.raises(B3EvidenceAggregationError, match="covariance evidence is missing"):
+        aggregate_transition_dwell_evidence(parent_path)
+
+
 def test_write_aggregation_report_is_idempotent_and_rejects_collision(tmp_path: Path) -> None:
     report = aggregate_transition_dwell_evidence(_parent(tmp_path))
     output = tmp_path / "result.json"
@@ -275,6 +316,25 @@ def test_write_aggregation_report_is_idempotent_and_rejects_collision(tmp_path: 
     drift["status"] = "different"
     with pytest.raises(B3EvidenceAggregationError, match="collision"):
         write_aggregation_report(output, drift)
+
+
+def test_write_aggregation_report_never_overwrites_a_concurrent_first_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = aggregate_transition_dwell_evidence(_parent(tmp_path))
+    output = tmp_path / "race.json"
+    competing = copy.deepcopy(report)
+    competing["status"] = "competing-writer"
+    competing_payload = canonical_json_bytes(competing) + b"\n"
+
+    def _competing_link(_source: str, destination: Path) -> None:
+        Path(destination).write_bytes(competing_payload)
+        raise FileExistsError
+
+    monkeypatch.setattr(os, "link", _competing_link)
+    with pytest.raises(B3EvidenceAggregationError, match="collision"):
+        write_aggregation_report(output, report)
+    assert output.read_bytes() == competing_payload
 
 
 def test_aggregation_failure_is_typed_durable_and_never_claims_side_effects(tmp_path: Path) -> None:
