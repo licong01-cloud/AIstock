@@ -2733,6 +2733,13 @@ L2-global transformed raw median，不读取 relative residual。市场 median �
 至少要求 L1 `28/31`、L2 `118/131`；不足时该 level/date 为 typed unavailable，不从剩余少量 sector 偷换
 denominator。所有 threshold/mean/std、train rows、level、feature order 与 hash 必须进入 preprocess receipt。
 
+preprocess数值合同固定如下：输入先按`trade_date,sector_code` canonical排序并转为little-endian float64；一行只有在五项feature与
+source eligibility全部有效、有限时才是valid row，任一feature缺失/非有限使整行typed unavailable，禁止逐feature补值。
+每项winsor阈值使用valid train值升序后的NumPy `quantile(method="linear")`；clip后mean使用`math.fsum(x)/N`，population
+variance使用`math.fsum((x-mean)^2)/N`、std为其平方根（ddof=0）。daily cross-section median使用升序中位数，偶数项取中间两值
+算术平均。上述算法、dtype、row count、unavailable identities、quantile method与实现版本都进入receipt；禁止依赖库默认
+quantile/std行为。
+
 market semantic score 固定为标准化 centroid 的
 `daily_return - volatility_Nd`；较高 state=`risk_on`、较低 state=`risk_off`。sector semantic 只按 centroid 的
 `excess_return_Nd` 严格升序映射 `fading < neutral < trending`。相邻 score 差 `<=1e-8`、non-finite 或 center 缺失均
@@ -2757,6 +2764,12 @@ gap 前后不得计算 transition；gap 后 arrival costs 全部重置为 0。�
 200 次；`J_new > J_prev + 1e-10*max(1,abs(J_prev))` 为 numeric failure；下降量不超过同一 envelope 且 path 未变化才为
 converged。所有 objective、iteration、center、path/count/run/jump 和 failure reason 进入 compact receipt。
 
+KMeans初始化完整参数固定为`n_clusters=K, init="k-means++", n_init=1, random_state=restart_seed, max_iter=300,
+tol=1e-4, algorithm="lloyd", copy_x=True`，输入保持上述canonical row order。DP在每个独立segment首日将K个arrival cost全部置0；
+fold validation与未来P2-4 holdout首日也必须从全0 cost开始，不携带train terminal path/cost。每一步cost完全相同时按较小predecessor
+state index、再按较小current state index确定性取值；该index只用于数值tie-break，不产生semantic。达到200次仍未满足converged
+条件时以`hmm_risk_jump_max_iterations_reached`失败，禁止把last iterate当成功。
+
 该 objective、交替参数/path优化和 `O(T*K²)` DP 来源于 Bemporad、Breschi、Piga、Boyd 的
 *Fitting jump models*（Automatica 96, 2018, DOI `10.1016/j.automatica.2018.06.022`）；本文固定上述单一
 Gaussian-centroid 实例，不引入论文框架的任意模型扩展。
@@ -2773,6 +2786,9 @@ restart 选择，也禁止 per-sector restart。
 - fold-1：`2023-09-04..2024-03-14`（126日）；
 - fold-2：`2024-03-15..2024-09-18`（126日）；
 - fold-3：`2024-09-19..2025-03-31`（126日）。
+
+精确train/validation配对为：fold-1 train=`2022-01-04..2023-09-01`；fold-2 train=`2022-01-04..2024-03-14`
+（531日）；fold-3 train=`2022-01-04..2024-09-18`（657日）。任何自然日推算、少日、重复日或跨fold行均fail closed。
 
 每个 fold 只用此前日期拟合 preprocess/centers/restart，validation 使用固定参数和递归 arrival cost 做 causal inference，
 不得 smoothing。λ 只按 D4 的三个 fold 产品指标选择；selection 后在完整 783 日开发区间重拟合一次，仍完整运行八个 restart并
@@ -2808,7 +2824,9 @@ P2-3 不读取或执行 untouched holdout。holdout 或任一 holdout-derived ha
 future window 不含 t 日；未来值只用于离线评估，不进入 t 日 observation/state。state signal 编码固定为
 `trending=+1, neutral=0, fading=-1`，并以 average-rank 处理 tie。
 
-1. 日度横截面 Rank IC：逐日对 state signal 与 sector future excess return 计算 Spearman；主指标为 L2 10D。
+1. 日度横截面 Rank IC：逐日对 state signal 与 sector future excess return 计算 Spearman；主指标为 L2 10D。两侧均按
+   canonical sector code对齐后使用average-rank，再对rank计算Pearson correlation；任一侧样本少于5、方差非有限/非正、
+   identity集合不相等或结果非有限时该日metric unavailable，禁止返回0。
 2. spread：逐日 `mean(future_excess | trending)-mean(future_excess | fading)`；任一侧少于 5 个 sector 当日记为
    metric unavailable，不缩小阈值或改用 top/bottom 代替。
 3. market λ selection label：`market_risk_event[t]=1` 当且仅当
@@ -2868,7 +2886,9 @@ COVERAGE_AVAILABLE 的 metrics 使用同一已冻结模型和同一 canonical de
 
 ##### D6. 单一 spike 实施、成本与停止条件
 
-实现只允许新增 `backend/services/hmm_risk/market_relative_jump_spike.py`、直接测试与一个薄 CLI；复用现有 observation reader，
+实现只允许新增 `backend/services/hmm_risk/market_relative_jump_spike.py`、
+`backend/tests/hmm_risk/test_market_relative_jump_spike.py`与薄CLI
+`scripts/hmm_risk/run_market_relative_jump_spike.py`；复用现有 observation reader，
 不得新建通用 estimator/evidence/training platform、数据库表、scheduler 或历史输入副本。算法只使用仓库现有
 NumPy/SciPy/scikit-learn，不新增依赖。单进程 spike 计划为三个 component × 六个 λ × 八个 restart × 三个 fold，加三个
 final component × 八 restart，共 `456` 个 pooled jump fits；它不是456×sector。spike 只写 compact model-candidate/metric/failure
@@ -2881,6 +2901,27 @@ receipt，不写生产 model set、READY、DB或runtime。
 `hmm_risk_jump_candidate_readback_mismatch`。P2-4另记录`hmm_risk_jump_product_metric_unavailable`、
 `hmm_risk_jump_coverage_contract_failed`和`hmm_risk_jump_representativeness_failed`。这些是确定性错误分类，不是新增人工审批；
 unknown exception必须保存exception type/stage后fail closed，不得压成`incomplete`或伪造成功。
+
+P2-3唯一durable输出schema固定为`hmm_risk_market_relative_jump_spike_report_v1`。顶层至少包含：contract/model/algorithm
+version、producer commit与数值环境、dataset/mapping/calendar/benchmark/formula/hierarchy hashes、development与forbidden-holdout
+date-set hashes、planned/completed fit counts、三个component receipt/hash、candidate status、failure stage/reason、canonical hash以及
+`holdout_accessed=false,selection_performed=<actual>,selection_scope=development_only,
+product_acceptance_performed=false,model_write=false,ready_write=false,database_write=false,runtime_action=false`。
+失败发生在selection前时`selection_performed=false`，只有三个component均完成批准的development restart/λ selection才为true；
+不得预填true或与P2-4 acceptance混用。另以`candidate_receipt_write=<actual>`区分允许的compact receipt写入与禁止的production
+model write。`holdout_accessed`只统计holdout feature/return/outcome/metric读取；预注册的窗口端点与calendar-only date-set identity可以
+写入manifest，但不得据此访问该窗口的业务数据。
+
+每个component receipt至少包含：component/level/K/feature order、valid row count/identity hash、typed unavailable item清单、preprocess完整参数与hash、每fold
+train/validation/outcome-eligible hashes、全部λ×restart objective/status/failure摘要、selected λ与restart receipt、final centers、
+semantic mapping、train path/count/run/jump摘要、final arrival-cost policy和parameter hash。大数组只保存shape/dtype/canonical content hash
+与不可替代的final参数，不复制完整历史输入或每条path。success与failure都必须collision-safe首次写入、canonical回读并验证hash；
+同路径既有不同内容必须`hmm_risk_jump_candidate_collision`，禁止覆盖。
+
+CLI必须显式接收绝对、repo-external的`--output`，不得提供`latest`、默认目录或覆盖开关。正常/业务失败写指定report；在指定report
+无法安全落盘、发生collision或final readback失败时，只允许首次写入同目录不同identity的`<stem>.failure.json`，且仍不得覆盖既有
+内容。JSON与hash统一复用`state_model_set.canonical_json_bytes/canonical_sha256`（UTF-8、sorted keys、compact separators、
+`allow_nan=false`）；array hash使用显式dtype/shape framing和little-endian C-order bytes，禁止`default=str`或float舍入。
 
 任一 source/hash/causal split/numeric/semantic闭合失败即 typed fail closed，状态为 `NOT_AVAILABLE_FOR_PROMOTION`；不得自动
 启动第二范式、换阈值、扩大 grid、安装依赖或承诺 coverage fallback。只有三个 component 都完成三fold选择、完整783日final refit、
@@ -2902,6 +2943,19 @@ P2-4 的双fresh-process reproducibility、首次 holdout evaluation、D4/D5 pro
 
 用户已整体批准`C-011-P2-3-A/D1～D6`，后续只实施这一条spike；不得拆成能绕过失败的子集实现。批准只使精确设计生效，
 不把尚未发生的源码、456 fits、selection或P2-4 holdout验收写成完成。
+
+实现PR的直接fix-point仅为`backend/tests/hmm_risk/test_market_relative_jump_spike.py`及薄CLI测试，必须覆盖：
+
+- valid-row全五项finite闭合、linear quantile、`math.fsum` mean/std、偶数median、禁止逐sector scaler与NA补值；
+- KMeans完整参数/seed identity、small-array DP对brute-force oracle、gap/segment reset、cost tie-break、empty state、objective increase与
+  max-iteration failure；
+- 三个anchored folds的精确日期/行数、fold-3 outcome不越过development、P2-3 holdout access fail-fast且网络/DB reader未被调用；
+- restart只读train objective、三个component分别选择λ、任一fold metric unavailable即candidate ineligible、无`6^3`联合搜索；
+- market/sector semantic排序与tie、Rank IC/spread/Newey-West/risk公式的手算正反例、L1/L2独立risk gate；
+- FULL_READY/COVERAGE_AVAILABLE/NOT_AVAILABLE边界、development冻结hierarchy/quintile、metric与coverage双分母；
+- CLI显式repo-external output、无默认/latest/overwrite、report/failure sibling首次写入；success/failure schema、canonical
+  hash/readback/collision、异常typed reason与所有zero-side-effect flags；
+- 计划fit严格`456`，不乘sector、不启动第二范式、不调用旧HMM READY writer、repository、scheduler或runtime。
 
 ### 4.4 InputManifest
 
@@ -4487,22 +4541,23 @@ domain partition已不再是上游blocker。C-008-B3-REMEDIATION-DIAG-02 已按�
 审核对象为§4.3.4.2、Decision Index六项、Acceptance Matrix与父蓝图v2.25 Gate 2。第一轮发现并修复pooled preprocess
 authority不清、三个component共用λ selection、market/sector risk label混用、Newey-West与代表性分组公式不完整、matrix缺少可执行
 证据五项缺口；第二轮发现并修复P2-3提前读取P2-4 untouched holdout、fold-3 future label越界、风险聚合层级与metric coverage
-分母不明确；第三轮逐项结果如下：
+分母不明确；第三轮补齐用户批准状态。PR创建后的第四轮独立复审又修复preprocess数值算法/NA row资格、KMeans完整参数、
+DP/validation arrival-cost初始化与tie-break、max-iteration失败、compact report schema和直接测试矩阵；最终逐项结果如下：
 
-1. **父蓝图/阶段一致性：PASS_PROPOSAL**。P2-2主导失败只选择一个jump spike；P2-3只使用development folds、完成456 fits与
+1. **父蓝图/阶段一致性：PASS_EXACT_DESIGN**。P2-2主导失败只选择一个jump spike；P2-3只使用development folds、完成456 fits与
    唯一候选冻结，不读取holdout。P2-4才首次执行双fresh-process、holdout与D4/D5产品验收，失败不得返回P2-3重选。
-2. **无简化/子集伪完成：PASS_PROPOSAL**。market、L1、L2三个component必须全部完成；canonical L1=31、L2=131分母不删除。
+2. **无简化/子集伪完成：PASS_EXACT_DESIGN**。market、L1、L2三个component必须全部完成；canonical L1=31、L2=131分母不删除。
    `COVERAGE_AVAILABLE`须通过同一产品指标与代表性合同，不是FULL_READY、spike成功或time-box的别名。
-3. **无静默错误/fail-open：PASS_PROPOSAL**。input/fold/preprocess/objective/state/semantic/selection/collision/readback均有稳定
+3. **无静默错误/fail-open：PASS_EXACT_DESIGN**。input/fold/preprocess/objective/state/semantic/selection/collision/readback均有稳定
    typed reason；non-finite、空state、metric denominator不足、mapping/quintile证据缺失均fail closed，不补neutral或默认值。
 4. **无业务逻辑迁移：PASS_USER_APPROVED_SCOPE_CHANGE**。PIT/t-1/canonical denominator/advisory-only保持；新jump输出使用独立
    `market_relative_jump_v1` identity，禁止复用direct-HMM parser/READY。用户已明确批准autocycle五项、market K2与relative K3，
    legacy历史角色不被删除。
 5. **无未经确认门禁/审批：PASS_USER_APPROVED_EXACT_CONTRACT**。用户已明确批准λ、seed、fold、risk label、
    Rank IC/spread/risk/coverage阈值；它们是确定性离线模型合同，不增加runtime人工审批。merge、依赖、DDL/DML和进程控制保持独立授权。
-6. **因果与选择隔离：PASS_PROPOSAL**。preprocess/center/restart仅train拟合；development future labels不得越过fold end；semantic
+6. **因果与选择隔离：PASS_EXACT_DESIGN**。preprocess/center/restart仅train拟合；development future labels不得越过fold end；semantic
    mapping只由train centroid冻结；holdout identity在candidate冻结前不可读，P2-4失败后不得换λ/seed/feature/K/family。
-7. **产品目标与反过度工程：PASS_PROPOSAL**。主指标直接是横截面Rank IC、trending-fading spread与风险precision/recall；只新增
+7. **产品目标与反过度工程：PASS_EXACT_DESIGN**。主指标直接是横截面Rank IC、trending-fading spread与风险precision/recall；只新增
    一个模型模块、直接测试和薄CLI，零新增依赖/表/scheduler/通用平台/完整历史副本。456是pooled fits，不乘sector。
 8. **验证：PASS**。`python scripts/aistock_feature_workflow.py validate --design
    docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2`返回
