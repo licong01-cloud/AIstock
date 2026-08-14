@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import uuid
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 import psycopg2
@@ -227,16 +228,46 @@ def _fetch_daily_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]
     return rows
 
 
+def _finite_numeric_or_none(value: Any) -> Any:
+    """Normalize provider numeric values before PostgreSQL adaptation.
+
+    PostgreSQL ``numeric`` accepts NaN and infinity as special values, so the
+    database driver cannot be relied on to reject them.  Tushare numeric
+    columns use missing/non-finite values to represent unavailable data; store
+    those as SQL NULL and keep only finite numeric values.
+    """
+
+    if value is None:
+        return None
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if not number.is_finite():
+        return None
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
 def _upsert_daily_basic(conn, rows: List[Dict[str, Any]]) -> int:
     if not rows:
         return 0
     sql = (
-        "INSERT INTO market.daily_basic (trade_date, ts_code, close, turnover_rate, turnover_rate_f, volume_ratio, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share, free_share, total_mv, circ_mv) "
+        "INSERT INTO market.daily_basic AS target (trade_date, ts_code, close, turnover_rate, turnover_rate_f, volume_ratio, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share, free_share, total_mv, circ_mv) "
         "VALUES %s ON CONFLICT (trade_date, ts_code) DO UPDATE SET "
-        "close=EXCLUDED.close, turnover_rate=EXCLUDED.turnover_rate, turnover_rate_f=EXCLUDED.turnover_rate_f, "
-        "volume_ratio=EXCLUDED.volume_ratio, pe=EXCLUDED.pe, pe_ttm=EXCLUDED.pe_ttm, pb=EXCLUDED.pb, ps=EXCLUDED.ps, ps_ttm=EXCLUDED.ps_ttm, "
-        "dv_ratio=EXCLUDED.dv_ratio, dv_ttm=EXCLUDED.dv_ttm, total_share=EXCLUDED.total_share, float_share=EXCLUDED.float_share, "
-        "free_share=EXCLUDED.free_share, total_mv=EXCLUDED.total_mv, circ_mv=EXCLUDED.circ_mv"
+        "close=COALESCE(EXCLUDED.close, target.close), "
+        "turnover_rate=COALESCE(EXCLUDED.turnover_rate, target.turnover_rate), "
+        "turnover_rate_f=COALESCE(EXCLUDED.turnover_rate_f, target.turnover_rate_f), "
+        "volume_ratio=COALESCE(EXCLUDED.volume_ratio, target.volume_ratio), "
+        "pe=COALESCE(EXCLUDED.pe, target.pe), pe_ttm=COALESCE(EXCLUDED.pe_ttm, target.pe_ttm), "
+        "pb=COALESCE(EXCLUDED.pb, target.pb), ps=COALESCE(EXCLUDED.ps, target.ps), "
+        "ps_ttm=COALESCE(EXCLUDED.ps_ttm, target.ps_ttm), "
+        "dv_ratio=COALESCE(EXCLUDED.dv_ratio, target.dv_ratio), dv_ttm=COALESCE(EXCLUDED.dv_ttm, target.dv_ttm), "
+        "total_share=COALESCE(EXCLUDED.total_share, target.total_share), "
+        "float_share=COALESCE(EXCLUDED.float_share, target.float_share), "
+        "free_share=COALESCE(EXCLUDED.free_share, target.free_share), "
+        "total_mv=COALESCE(EXCLUDED.total_mv, target.total_mv), circ_mv=COALESCE(EXCLUDED.circ_mv, target.circ_mv)"
     )
     values = []
     for r in rows:
@@ -248,22 +279,24 @@ def _upsert_daily_basic(conn, rows: List[Dict[str, Any]]) -> int:
             (
                 trade_date,
                 ts_code,
-                r.get("close"),
-                r.get("turnover_rate"),
-                r.get("turnover_rate_f"),
-                r.get("volume_ratio"),
-                r.get("pe"),
-                r.get("pe_ttm"),
-                r.get("pb"),
-                r.get("ps"),
-                r.get("ps_ttm"),
-                r.get("dv_ratio"),
-                r.get("dv_ttm"),
-                r.get("total_share"),
-                r.get("float_share"),
-                r.get("free_share"),
-                r.get("total_mv"),
-                r.get("circ_mv"),
+                *(_finite_numeric_or_none(r.get(column)) for column in (
+                    "close",
+                    "turnover_rate",
+                    "turnover_rate_f",
+                    "volume_ratio",
+                    "pe",
+                    "pe_ttm",
+                    "pb",
+                    "ps",
+                    "ps_ttm",
+                    "dv_ratio",
+                    "dv_ttm",
+                    "total_share",
+                    "float_share",
+                    "free_share",
+                    "total_mv",
+                    "circ_mv",
+                )),
             )
         )
     if not values:

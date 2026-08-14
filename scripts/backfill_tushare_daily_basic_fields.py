@@ -96,11 +96,37 @@ def parse_fields(value: str | Sequence[str]) -> tuple[str, ...]:
 
 
 def _python_value(value: Any) -> Any:
-    if value is None or pd.isna(value):
+    if not _is_finite_numeric_value(value):
         return None
     if hasattr(value, "item"):
         return value.item()
     return value
+
+
+def _is_finite_numeric_value(value: Any) -> bool:
+    """Return whether a daily_basic numeric cell is usable by inference.
+
+    PostgreSQL ``numeric`` accepts special NaN/Infinity values.  They are not
+    SQL NULL, but pandas converts them to non-finite values and strict
+    inference must reject them.  Treat both database and provider non-finite
+    values as missing throughout preview, apply, and readback verification.
+    """
+
+    if value is None:
+        return False
+    try:
+        if bool(pd.isna(value)):
+            return False
+    except (TypeError, ValueError):
+        return False
+    try:
+        return Decimal(str(value)).is_finite()
+    except (InvalidOperation, ValueError):
+        return False
+
+
+def _finite_mask(series: pd.Series) -> pd.Series:
+    return series.map(_is_finite_numeric_value)
 
 
 def fetch_tushare_snapshot(trade_date: dt.date, *, pro: Any | None = None) -> pd.DataFrame:
@@ -140,7 +166,7 @@ def validate_snapshot(
     _require(not frame["ts_code"].duplicated().any(), "provider snapshot contains duplicate ts_code")
     _require(len(frame) >= min_rows, f"provider row_count={len(frame)} below min_rows={min_rows}")
 
-    non_null = {field: int(frame[field].notna().sum()) for field in fill_fields}
+    non_null = {field: int(_finite_mask(frame[field]).sum()) for field in fill_fields}
     for field, count in non_null.items():
         ratio = count / len(frame)
         _require(
@@ -184,7 +210,7 @@ def preview_database(conn: Any, trade_date: dt.date, fields: Sequence[str]) -> D
         code = str(row[0])
         existing_codes.add(code)
         for index, field in enumerate(fields, start=1):
-            if row[index] is None:
+            if not _is_finite_numeric_value(row[index]):
                 missing[field] += 1
             else:
                 non_null[field] += 1
@@ -203,15 +229,26 @@ def build_upsert_sql(fill_fields: Sequence[str]) -> str:
     fields = parse_fields(fill_fields)
     columns = ", ".join(ALL_COLUMNS)
     assignments = ", ".join(
-        f"{field} = COALESCE(target.{field}, EXCLUDED.{field})" for field in fields
+        f"{field} = CASE WHEN {_invalid_sql_value(f'target.{field}')} "
+        f"THEN EXCLUDED.{field} ELSE target.{field} END"
+        for field in fields
     )
     predicate = " OR ".join(
-        f"(target.{field} IS NULL AND EXCLUDED.{field} IS NOT NULL)" for field in fields
+        f"({_invalid_sql_value(f'target.{field}')} AND "
+        f"NOT {_invalid_sql_value(f'EXCLUDED.{field}')})"
+        for field in fields
     )
     return (
         f"INSERT INTO market.daily_basic AS target ({columns}) VALUES %s "
         "ON CONFLICT (trade_date, ts_code) DO UPDATE SET "
         f"{assignments} WHERE {predicate}"
+    )
+
+
+def _invalid_sql_value(expression: str) -> str:
+    return (
+        f"({expression} IS NULL OR "
+        f"{expression}::text IN ('NaN', 'Infinity', '-Infinity'))"
     )
 
 
@@ -225,7 +262,7 @@ def snapshot_rows(frame: pd.DataFrame, trade_date: dt.date) -> list[tuple[Any, .
 
 
 def _source_non_null_codes(frame: pd.DataFrame, field: str) -> set[str]:
-    return set(frame.loc[frame[field].notna(), "ts_code"].astype(str))
+    return set(frame.loc[_finite_mask(frame[field]), "ts_code"].astype(str))
 
 
 def verify_after(
@@ -247,7 +284,7 @@ def verify_after(
         )
         source_values = {
             str(row["ts_code"]): row[field]
-            for row in frame.loc[frame[field].notna(), ["ts_code", field]].to_dict(orient="records")
+            for row in frame.loc[_finite_mask(frame[field]), ["ts_code", field]].to_dict(orient="records")
         }
         filled_codes = expected_codes - before.non_null_codes_by_field[field]
         mismatched = [
