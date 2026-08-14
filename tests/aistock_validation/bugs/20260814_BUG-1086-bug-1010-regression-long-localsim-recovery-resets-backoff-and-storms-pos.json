@@ -121,7 +121,9 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh Python process loaded committed source 1b0628b0c01338543412ff88baf0dc60db9d8e69 and passed test_scheduler_historical_recovery_backoff_uses_stable_identity_and_failure_completion; no production backend restart or database write"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
