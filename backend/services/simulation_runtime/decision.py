@@ -22,6 +22,10 @@ from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
     source_build_manifest,
 )
 from backend.services.selection_center.models import SignalSnapshot, TargetPosition
+from backend.services.strategy_package.execution_policy import (
+    local_sim_twap_only_policy_snapshot,
+    validate_frozen_execution_policy_snapshot,
+)
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.runtime import TargetPositionEngine
 from backend.services.trading_core.errors import (
@@ -67,6 +71,39 @@ def _immutable_execution_policy_json(execution_policy: dict[str, Any]) -> dict[s
 
     policy_json = execution_policy.get("policy_json")
     return dict(policy_json) if isinstance(policy_json, dict) else dict(execution_policy)
+
+
+def _execution_plan_policy_identity(
+    *,
+    execution_policy: dict[str, Any],
+    runtime_release: StrategyRuntimeRelease,
+    binding: SimulationReleaseBinding,
+) -> tuple[str, str]:
+    """Resolve the policy identity persisted by an execution plan.
+
+    LocalSIM may receive a scheduler-owned runtime-mode snapshot whose identity
+    intentionally differs from the strategy release's research policy.  Only
+    a complete, hash-valid frozen snapshot can override the plan identity.
+    Legacy raw test/fixture payloads and all MiniQMT plans retain the release
+    identity.
+    """
+
+    if binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM or "policy_json" not in execution_policy:
+        return runtime_release.execution_policy_version_id, runtime_release.execution_policy_sha256
+    snapshot = validate_frozen_execution_policy_snapshot(
+        execution_policy,
+        context={
+            "stage": "LOCAL_SIM_EXECUTION_PLAN_POLICY_IDENTITY",
+            "release_id": runtime_release.release_id,
+            "binding_id": binding.binding_id,
+        },
+    )
+    policy_id = next(
+        str(snapshot[field])
+        for field in ("policy_version_id", "validated_execution_policy_id", "policy_id")
+        if field in snapshot
+    )
+    return policy_id, str(snapshot["policy_sha256"])
 
 
 @dataclass(frozen=True)
@@ -476,8 +513,15 @@ class ExecutionPlanCompiler:
     ) -> ExecutionPlan:
         self._validate_identity(runtime_release=runtime_release, binding=binding, selection_evidence=selection_evidence)
         execution_policy = dict(execution_policy_payload or runtime_release.release_config_json.get("execution_policy") or {})
-        tail_policy = dict(tail_policy_payload or runtime_release.release_config_json.get("tail_policy") or {})
         self._reject_paper_only_policy(execution_policy)
+        if binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
+            execution_policy = local_sim_twap_only_policy_snapshot()
+        tail_policy = dict(tail_policy_payload or runtime_release.release_config_json.get("tail_policy") or {})
+        execution_policy_version_id, execution_policy_sha256 = _execution_plan_policy_identity(
+            execution_policy=execution_policy,
+            runtime_release=runtime_release,
+            binding=binding,
+        )
         decision_by_id = {decision.decision_id: decision for decision in trading_rule_decisions}
         missing = [
             intent.metadata.get("trading_rule_decision_id")
@@ -603,8 +647,8 @@ class ExecutionPlanCompiler:
             "selection_evidence_hash": selection_evidence.artifact_hash,
             "target_trade_date": selection_evidence.target_trade_date.isoformat(),
             "execution_policy": {
-                "version_id": runtime_release.execution_policy_version_id,
-                "sha256": runtime_release.execution_policy_sha256,
+                "version_id": execution_policy_version_id,
+                "sha256": execution_policy_sha256,
                 "payload": execution_policy,
             },
             "tail_policy": {
@@ -671,8 +715,8 @@ class ExecutionPlanCompiler:
             selection_evidence_id=selection_evidence.evidence_id,
             selection_evidence_hash=selection_evidence.artifact_hash,
             target_trade_date=selection_evidence.target_trade_date,
-            execution_policy_version_id=runtime_release.execution_policy_version_id,
-            execution_policy_sha256=runtime_release.execution_policy_sha256,
+            execution_policy_version_id=execution_policy_version_id,
+            execution_policy_sha256=execution_policy_sha256,
             tail_policy_version_id=runtime_release.tail_policy_version_id,
             tail_policy_sha256=runtime_release.tail_policy_sha256,
             intents=plan_intents,
@@ -704,8 +748,11 @@ class ExecutionPlanCompiler:
 
     @staticmethod
     def _reject_paper_only_policy(policy: dict[str, Any]) -> None:
-        algo_code = str(policy.get("algo_code") or policy.get("policy_version_id") or "").strip().lower()
-        if bool(policy.get("paper_only")) or algo_code in {"paper_only", "selection_order_builder", "manual"}:
+        policy_json = _immutable_execution_policy_json(policy)
+        algo_code = str(
+            policy_json.get("algo_code") or policy_json.get("policy_version_id") or ""
+        ).strip().lower()
+        if bool(policy_json.get("paper_only")) or algo_code in {"paper_only", "selection_order_builder", "manual"}:
             raise RuntimeConfigInvalidError(
                 "ExecutionPlanCompiler only accepts validated execution policies, not paper-only or manual algorithms",
                 context={"execution_policy": policy},

@@ -508,26 +508,21 @@ def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplic
     assert first_state.remaining_quantity > 0
     assert first_state.last_processed_bar_time == first_as_of
 
-    wrong_policy_backend, _, _ = _build_backend(
-        initial_cash=10_000_000,
-        initial_available_cash=float(first.query_account().cash),
-        initial_positions=first.query_positions(),
-        data_source=MinuteDataSource.TDX_REALTIME,
-        provider=provider,
-        execution_policy={
-            "validated_execution_policy_id": "exec_policy_close_price_drift",
-            "policy_sha256": "sha_close_price_drift",
-            "policy_json": {"algo_code": "CLOSE_PRICE", "algo_config": {}},
-        },
-    )
-    wrong_policy_backend.configure_execution_runtime(
-        run_id="run_stream_restart",
-        binding_id="binding_stream_restart",
-    )
-    wrong_policy_backend.bind_execution_plan(plan=plan, as_of_time=cursor + timedelta(minutes=3))
-    with pytest.raises(BrokerSubmitError) as policy_exc:
-        wrong_policy_backend.restore_execution_state(order=first_order, state=first_state)
-    assert policy_exc.value.context["reason_code"] == "LOCALSIM_RESTORE_EXECUTION_POLICY_CONFLICT"
+    with pytest.raises(RuntimeConfigInvalidError) as policy_exc:
+        _build_backend(
+            initial_cash=10_000_000,
+            initial_available_cash=float(first.query_account().cash),
+            initial_positions=first.query_positions(),
+            data_source=MinuteDataSource.TDX_REALTIME,
+            provider=provider,
+            execution_policy={
+                "validated_execution_policy_id": "exec_policy_close_price_drift",
+                "policy_sha256": "sha_close_price_drift",
+                "policy_json": {"algo_code": "CLOSE_PRICE", "algo_config": {}},
+            },
+        )
+    assert policy_exc.value.context["reason_code"] == "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED"
+    assert policy_exc.value.context["fallback_used"] is False
 
     wrong_order_backend, _, _ = _build_backend(
         initial_cash=10_000_000,
@@ -1341,20 +1336,22 @@ def test_localsim_single_order_keeps_affordable_fill_and_records_capital_residua
     assert order.metadata["local_sim_capital_dependency"]["waiting_quantity"] == 100
 
 
-def test_localsim_vwap_rejects_missing_authoritative_volume_profile_without_fallback() -> None:
-    backend, _, _ = _build_backend(
-        execution_policy={
-            "validated_execution_policy_id": "exec_policy_vwap_no_profile",
-            "policy_sha256": "sha_vwap_no_profile",
-            "policy_json": {"algo_code": "VWAP", "algo_config": {}},
-        }
-    )
-    with pytest.raises(BrokerRejectedError) as exc_info:
-        backend.submit_order_intent(_buy_intent(backend, quantity=600))
-    assert exc_info.value.context["cause_code"] == "EXECUTION_ALGO_ERROR"
-    assert exc_info.value.context["cause_context"]["reason_code"] == "VWAP_VOLUME_PROFILE_INVALID"
-    assert "authoritative volume_profile" in exc_info.value.context["cause_context"]["cause"]
-    assert backend.export_execution_snapshot()["fills"] == ()
+@pytest.mark.parametrize("algo_code", ["VWAP", "V25_TWO_STAGE", "V25_1_SMALL_CAP"])
+def test_localsim_rejects_non_twap_policy_before_market_data_access(algo_code: str) -> None:
+    provider = FakeMarketDataProvider()
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        _build_backend(
+            provider=provider,
+            execution_policy={
+                "validated_execution_policy_id": f"exec_policy_{algo_code.lower()}",
+                "policy_sha256": "recomputed_by_fixture",
+                "policy_json": {"algo_code": algo_code, "algo_config": {}},
+            },
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED"
+    assert exc_info.value.context["algo_code"] == algo_code
+    assert exc_info.value.context["fallback_used"] is False
+    assert provider.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -1493,9 +1490,11 @@ def test_submit_order_intent_allows_star_whole_position_odd_lot_sell() -> None:
     assert [fill.quantity for fill in snapshot["fills"]] == [1547]
 
 
-def test_localsim_policy_authority_uses_explicit_validated_execution_policy_snapshot() -> None:
+def test_localsim_policy_authority_uses_explicit_twap_snapshot_without_day_features() -> None:
     manifest = make_paper_enabled_manifest().model_copy(update={"minute_execution_policy": None})
-    provider = FakeMarketDataProvider()
+    provider = FakeMarketDataProvider(
+        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=6)}
+    )
     backend = LocalSimBackend(
         portfolio_id="paper_local_validated_policy",
         initial_cash=100_000,
@@ -1504,10 +1503,10 @@ def test_localsim_policy_authority_uses_explicit_validated_execution_policy_snap
         market_data_provider=provider,
         execution_policy=_test_execution_policy_snapshot(
             {
-                "algo_code": "CLOSE_PRICE",
+                "algo_code": "TWAP",
                 "algo_config": {"allow_partial_fill": True},
             },
-            policy_id="exec_policy_close",
+            policy_id="exec_policy_twap_only",
         ),
     )
 

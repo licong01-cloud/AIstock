@@ -28,6 +28,10 @@ from backend.services.simulation_runtime import (
     TradingRuleService,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.strategy_package.execution_policy import (
+    compute_execution_policy_sha256,
+    normalize_execution_policy_json,
+)
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderSide, PositionLot
 
@@ -453,6 +457,67 @@ def test_execution_plan_compiler_links_release_binding_evidence_and_rule_decisio
     assert runtime_repo.get_execution_plan(persisted.plan_id).plan_hash == plan.plan_hash
 
 
+def test_localsim_execution_plan_persists_effective_twap_snapshot_identity() -> None:
+    release, binding, _ = _release_binding_repo(backend=SimulationBrokerBackend.LOCAL_SIM)
+    evidence = _evidence(release)
+    targets = TargetPositionService().build_target_positions(
+        selection_evidence=evidence,
+        signal_snapshot=_snapshot(),
+        runtime_release=release,
+        binding=binding,
+        current_positions=_current_positions("portfolio_shared"),
+    )
+    rebalance = RebalanceIntentService().build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions=_current_positions("portfolio_shared"),
+        target_positions=targets,
+    )
+    policy_json = normalize_execution_policy_json(
+        {"algo_code": "V25_1_SMALL_CAP", "algo_config": {}}
+    )
+    policy_snapshot = {
+        "policy_version_id": "requested_v25_policy",
+        "policy_sha256": compute_execution_policy_sha256(policy_json),
+        "policy_json": policy_json,
+    }
+
+    plan = ExecutionPlanCompiler().compile_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=evidence,
+        order_intents=rebalance.order_intents,
+        trading_rule_decisions=rebalance.trading_rule_decisions,
+        portfolio_id="portfolio_shared",
+        execution_policy_payload=policy_snapshot,
+    )
+
+    assert plan.execution_policy_version_id == "localsim_twap_only_v1"
+    effective_snapshot = plan.plan_payload_json["execution_policy"]["payload"]
+    assert effective_snapshot["policy_json"]["algo_code"] == "TWAP"
+    assert effective_snapshot["policy_json"]["fallback_algo_code"] is None
+    assert plan.execution_policy_sha256 == effective_snapshot["policy_sha256"]
+    assert plan.plan_payload_json["execution_policy"] == {
+        "version_id": "localsim_twap_only_v1",
+        "sha256": effective_snapshot["policy_sha256"],
+        "payload": effective_snapshot,
+    }
+
+    corrupt_snapshot = {**policy_snapshot, "policy_sha256": "0" * 64}
+    independent_plan = ExecutionPlanCompiler().compile_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=evidence,
+        order_intents=rebalance.order_intents,
+        trading_rule_decisions=rebalance.trading_rule_decisions,
+        portfolio_id="portfolio_shared",
+        execution_policy_payload=corrupt_snapshot,
+    )
+    assert independent_plan.plan_payload_json["execution_policy"]["payload"]["policy_json"]["algo_code"] == "TWAP"
+
+
 def test_b0_execution_plan_reads_quote_policy_from_immutable_policy_json_snapshot() -> None:
     policy_json = {
         "algo_code": "SNIPER_MINIQMT",
@@ -595,6 +660,21 @@ def test_execution_plan_compiler_rejects_paper_only_policy() -> None:
             trading_rule_decisions=rebalance.trading_rule_decisions,
             portfolio_id="portfolio_shared",
             execution_policy_payload={"paper_only": True, "algo_code": "paper_only"},
+        )
+
+    with pytest.raises(RuntimeConfigInvalidError):
+        ExecutionPlanCompiler().compile_plan(
+            runtime_release=release,
+            binding=binding,
+            selection_evidence=evidence,
+            order_intents=rebalance.order_intents,
+            trading_rule_decisions=rebalance.trading_rule_decisions,
+            portfolio_id="portfolio_shared",
+            execution_policy_payload={
+                "policy_version_id": "manual_policy",
+                "policy_sha256": "manual_policy_sha",
+                "policy_json": {"algo_code": "manual"},
+            },
         )
 
 
