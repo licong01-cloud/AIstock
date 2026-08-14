@@ -1,47 +1,51 @@
 {
-  "actual": "The Markdown authority date differs from the machine YAML, top-level client install wording conflicts with the scoped client-sync section, overlapping fallback/process rules can emit duplicate findings, manual composite review taxonomy overstates automation, and RTK policy text is copied across lane entries despite the single-authority rule. Align Markdown and YAML semantics, narrow overlapping machine rules without weakening blocking coverage, make composite human review explicit, and replace copied RTK prose in repository-owned client lanes with concise TOOL-RTK-001 references. Do not modify AGENTS.md.",
+  "actual": "Both branches use call conda activate AIstock & uvicorn, so activation failure is ignored and bare uvicorn may resolve to the base environment.",
   "allowed_write_scope": [
-    "docs/standards/aistock_development_standard_v1.5_20260523.md",
-    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
-    "scripts/aistock_guardrail_scan.py",
-    "backend/tests/scripts/test_aistock_guardrail_scan.py",
-    ".codex/skills/aistock-task-router/SKILL.md",
-    ".codex/skills/fix-aistock-issue/SKILL.md",
-    ".codex/skills/aistock-merge-aftercare/SKILL.md",
-    ".codex/skills/aistock-readonly-triage/SKILL.md",
-    ".codex/skills/aistock-docs-handoff/SKILL.md",
-    ".codex/skills/aistock-validation-delegation/SKILL.md",
-    ".codex/skills/verify-aistock-feature/SKILL.md",
-    ".claude/commands/aistock-task-router.md",
-    ".claude/commands/fix-aistock-issue.md",
-    ".claude/commands/aistock-merge-aftercare.md",
-    ".claude/commands/aistock-readonly-triage.md",
-    ".claude/commands/aistock-docs-handoff.md",
-    ".claude/commands/aistock-validation-delegation.md",
-    ".claude/commands/aistock-feature-workflow.md",
-    "tests/aistock_validation/bugs/20260813_BUG-1059-development-standard-controls-contain-inconsistent-taxonomy-dates-and-du.json",
+    "start_all_ai_stock.bat",
+    "backend/tests/test_aistock_guardrail_scan.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260810_BUG-1005-start-all-ai-stock-bat-silently-launches-backend-from-base-conda-environ.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1059",
-  "closed_at": "2026-08-13T19:45:19Z",
+  "bug_id": "BUG-1005",
+  "closed_at": "2026-08-14T02:15:19.773703Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-13T04:17:40.907107Z",
-  "description": "The Markdown authority date differs from the machine YAML, top-level client install wording conflicts with the scoped client-sync section, overlapping fallback/process rules can emit duplicate findings, manual composite review taxonomy overstates automation, and RTK policy text is copied across lane entries despite the single-authority rule. Align Markdown and YAML semantics, narrow overlapping machine rules without weakening blocking coverage, make composite human review explicit, and replace copied RTK prose in repository-owned client lanes with concise TOOL-RTK-001 references. Do not modify AGENTS.md.",
+  "created_at": "2026-08-10T03:26:06.374399Z",
+  "description": "Both branches use call conda activate AIstock & uvicorn, so activation failure is ignored and bare uvicorn may resolve to the base environment.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260813-7314b87cc785",
-      "timestamp": "2026-08-13T04:17:40.907094Z"
+      "note": "Promoted from IC-20260810-049d85ca0870",
+      "timestamp": "2026-08-10T03:26:06.374387Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "Codex",
+      "note": "Add the canonical launcher, its static contract test, runtime-target classification, and file-ownership mapping. No service process control, dependency change, or database action is in scope.",
+      "timestamp": "2026-08-10T03:31:00Z"
+    },
+    {
+      "action": "record_fresh_process_load_evidence",
+      "actor": "Codex",
+      "note": "A standalone cmd process called the absolute conda.bat, activated AIstock, then used the absolute AIstock interpreter to import LightGBM 4.6.0 and uvicorn 0.40.0. It did not import backend.main, bind a port, or control any service.",
+      "timestamp": "2026-08-10T03:34:00Z"
+    },
+    {
+      "action": "align_static_test_with_ci_catalog",
+      "actor": "Codex",
+      "note": "Move the launcher contract assertions into the existing guardrail test target instead of expanding the generic CI classifier for one startup script.",
+      "timestamp": "2026-08-10T03:47:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Both Windows Terminal and fallback backend branches invoke uvicorn through the verified AIstock Conda interpreter; an invalid working directory or missing interpreter prevents launch visibly.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -56,64 +60,82 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
-  "first_seen_at": "2026-08-13T04:17:40.907107Z",
+  "first_seen_at": "2026-08-10T03:26:06.374399Z",
   "fix_branch": null,
-  "fix_commit": "269f9c3824b80ee89475846436cf7353d688a057",
-  "fixed_at": "2026-08-13T19:47:05.688329Z",
-  "github_issue_number": 3388,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3388",
-  "last_seen_at": "2026-08-13T04:17:40.907107Z",
-  "module": "validation",
+  "fix_commit": "e25753dc88c329ba076713e68d110eab7af6a6f3",
+  "fixed_at": "2026-08-13T19:56:24Z",
+  "github_issue_number": 3238,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3238",
+  "last_seen_at": "2026-08-10T03:26:06.374399Z",
+  "module": "platform.config",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3454",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3241",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Read-only inspection of start_all_ai_stock.bat and live process executable paths; do not execute the startup script.",
   "required_verification": [
     "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "client",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "fresh_process_evidence": [
+      "cmd /d /c call C:/Users/lc999/miniconda3/condabin/conda.bat activate AIstock && C:/Users/lc999/miniconda3/envs/AIstock/python.exe -c import sys,lightgbm,uvicorn -> executable=C:/Users/lc999/miniconda3/envs/AIstock/python.exe; lightgbm=4.6.0; uvicorn=0.40.0"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1005/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1005",
+      "catalog_sha256": "9212831ad8a6d18ed8e13020c10493ea90f42d6f11cbf74022157d442d25645f",
+      "contract_digest": "5cfd2b67c4af101086a421fbfe1372a8e44111cc326c4b4e42efb1d2864690c5",
+      "expected_identity": "e25753dc88c329ba076713e68d110eab7af6a6f3",
+      "generated_at": "2026-08-14T02:12:10.458630Z",
+      "mode": "read_only",
+      "observed_identity": "e25753dc88c329ba076713e68d110eab7af6a6f3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e19a295a7dacc6341149391e39d50d0664cd4fd5144a3496984732dc67231573",
+      "receipt_sha256": "d9e9d1f475176751ca8742430ed75b7f0990ee636d60f87d332f93a0ed11769b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "584ced6c612fa2e134568ac5a3f1f4227cfd2462c6a5eca6314b8ffc653ef23d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "verified",
   "suspected_modules": [
-    "validation"
+    "platform.config"
   ],
-  "title": "Development standard controls contain inconsistent taxonomy dates and duplicated RTK policy text",
+  "title": "start_all_ai_stock.bat silently launches backend from base Conda environment",
   "trigger_condition": {
-    "fingerprint": "7314b87cc7853a23fb338b30",
-    "source_event_id": "FE-20260813-7314b87cc785"
+    "fingerprint": "049d85ca08704097da08ae02",
+    "source_event_id": "FE-20260810-049d85ca0870"
   },
   "validation_evidence": [
-    "python -m nox -s l0 -> passed (blocking=0; source-head=cea8bc2d; merge=7e3b1308)",
-    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; 14/14 mapped; source-head=cea8bc2d)",
-    "python -m nox -s guardrail_changed_files -> passed (blocking=0; source-head=cea8bc2d)",
-    "validation-receipt: id=bug1058-1059-regression-20260814 commit=57252c2061e416d090feb2caf4c86466e22e33d6 kind=pytest plan=workflow_fast status=passed command=pytest-workflow-guardrail result=338-passed-2-skipped"
+    "post-restart runtime identity e25753dc; health and launcher business smoke passed"
   ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center"
-      ],
-      "plans": [
-        "validation_center_backend"
-      ],
-      "required": true,
+      "modules": [],
+      "plans": [],
+      "required": false,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -150,7 +172,7 @@
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
-    "batch_candidate": true,
+    "batch_candidate": false,
     "cleanup_fast_candidate": false,
     "compact_success_output": true,
     "docs_only_merge_with_related_code": true,
@@ -158,22 +180,15 @@
     "recommendations": [
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
-      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
-      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center"
-        ],
-        "plans": [
-          "validation_center_backend"
-        ],
-        "required": true,
+        "modules": [],
+        "plans": [],
+        "required": false,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
