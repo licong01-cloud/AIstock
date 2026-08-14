@@ -12523,6 +12523,48 @@ def _cleanup_merge_verification(
             }
         )
         return payload
+
+    pr = pr_check.get("pr") if isinstance(pr_check, dict) else None
+    pr_head_name = str((pr or {}).get("headRefName") or "") if isinstance(pr, dict) else ""
+    local_head = _git(
+        ["rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}"],
+        cwd=root,
+        check=False,
+    ).strip().lower()
+    normalized_head = str(head_oid or "").strip().lower()
+    normalized_merge_commit = str(merge_commit or "").strip().lower()
+    merge_commit_in_origin_main = bool(
+        _FULL_GIT_COMMIT_RE.fullmatch(normalized_merge_commit)
+        and _git_commit_is_ancestor(normalized_merge_commit, "origin/main", root=root)
+    )
+    exact_pr_head_identity = bool(
+        pr_head_name == branch
+        and _FULL_GIT_COMMIT_RE.fullmatch(normalized_head)
+        and local_head == normalized_head
+        and merge_commit_in_origin_main
+    )
+    payload["pr_head_identity"] = {
+        "verified": exact_pr_head_identity,
+        "pr_head_name": pr_head_name or None,
+        "expected_branch": branch,
+        "pr_head_oid": normalized_head or None,
+        "local_branch_oid": local_head or None,
+        "merge_commit": normalized_merge_commit or None,
+        "merge_commit_in_origin_main": merge_commit_in_origin_main,
+    }
+    if exact_pr_head_identity:
+        payload.update(
+            {
+                "method": "merged_pr_exact_head_identity_in_origin_main",
+                "verified": True,
+                "squash_merge_verified": True,
+                "tree_equivalent_to_origin_main": False,
+                "tree_equivalence_ref": normalized_head,
+                "tree_equivalence_target": normalized_merge_commit,
+            }
+        )
+        return payload
+
     if head_oid and merge_commit:
         merge_commit_equivalence = _git_squash_head_equivalent_to_ref(
             head_oid,

@@ -11243,6 +11243,75 @@ def test_cleanup_after_merge_uses_pr_merge_commit_when_origin_drifted(
     assert payload["merge_verification"]["merge_commit_path_equivalence"]["verified"] is True
 
 
+@pytest.mark.parametrize(("merge_in_origin", "expected_verified"), [(True, True), (False, False)])
+def test_cleanup_merge_verification_uses_exact_pr_head_identity_when_allocator_path_differs(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    merge_in_origin: bool,
+    expected_verified: bool,
+) -> None:
+    branch = "bug/BUG-199-allocator-preservation"
+    head_oid = "a" * 40
+    merge_commit = "b" * 40
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": pr_url,
+                "headRefName": branch,
+                "headRefOid": head_oid,
+                "mergeCommit": {"oid": merge_commit},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, cwd=None, check=True: head_oid if args[:2] == ["rev-parse", "--verify"] else "",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_commit_is_ancestor",
+        lambda ancestor, descendant, root: merge_in_origin
+        if (ancestor, descendant) == (merge_commit, "origin/main")
+        else False,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_ref",
+        lambda *args, **kwargs: {
+            "verified": False,
+            "reason": "changed_paths_differ",
+            "changed_files": ["tests/aistock_validation/bugs/.bug_id_allocator.json"],
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_origin",
+        lambda *args, **kwargs: {"verified": False, "reason": "changed_paths_differ"},
+    )
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: False)
+
+    payload = workflow._cleanup_merge_verification(
+        branch,
+        "https://github.example/pull/199",
+        False,
+        cwd=isolated_workflow_root,
+    )
+
+    assert payload["verified"] is expected_verified
+    assert payload["pr_head_identity"]["merge_commit_in_origin_main"] is merge_in_origin
+    if expected_verified:
+        assert payload["method"] == "merged_pr_exact_head_identity_in_origin_main"
+        assert payload["squash_merge_verified"] is True
+    else:
+        assert payload["method"] is None
+
+
 def test_cleanup_after_merge_blocks_when_squash_pr_head_tree_differs(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
