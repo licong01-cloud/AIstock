@@ -1,8 +1,19 @@
 {
   "actual": "LocalSIM currently admits V25_TWO_STAGE/V25_1_SMALL_CAP and loads V25 day_features through trading_calendar, dataset_date_refresh_audit, kline_daily_raw, daily_basic, moneyflow_ts, index_daily and sector_data. The current V25 causal audit invalidates this execution path and the DB feature reads create unnecessary load. Expected: LocalSIM explicitly compiles and persists TWAP as its only effective execution policy, rejects V25 before any V25-specific market-data loading, and never silently falls back at execution time; QE and MiniQMT behavior remain unchanged.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260814_BUG-1096-p0-localsim-v25-remains-active-and-loads-unrelated-db-day-feature-tables.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/simulation_runtime/decision.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/strategy_package/execution_policy.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "backend/tests/strategy_package/test_multi_alpha_paper_admission.py",
+    "tests/aistock_validation/bugs/20260814_BUG-1096-p0-localsim-v25-remains-active-and-loads-unrelated-db-day-feature-tables.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1096",
@@ -26,7 +37,21 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/paper_trading_v2/broker/localsim.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/simulation_runtime/decision.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/strategy_package/execution_policy.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_localsim_backend.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+      "backend/tests/strategy_package/test_multi_alpha_paper_admission.py",
+      "tests/aistock_validation/bugs/20260814_BUG-1096-p0-localsim-v25-remains-active-and-loads-unrelated-db-day-feature-tables.json"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +61,21 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/paper_trading_v2/broker/localsim.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/simulation_runtime/decision.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/strategy_package/execution_policy.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_localsim_backend.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+      "backend/tests/strategy_package/test_multi_alpha_paper_admission.py",
+      "tests/aistock_validation/bugs/20260814_BUG-1096-p0-localsim-v25-remains-active-and-loads-unrelated-db-day-feature-tables.json"
+    ]
   },
   "first_seen_at": "2026-08-14T05:49:08.609982Z",
   "fix_branch": null,
@@ -54,19 +93,31 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0",
-    "paper_v2_backend"
+    "validation_module_registry_l0",
+    "paper_v2_backend",
+    "simulation_core_l2",
+    "qe_read_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "python fresh-process LocalSIM policy import probe passed: V25 request compiled to explicit TWAP with fallback_used=false"
+    ],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
