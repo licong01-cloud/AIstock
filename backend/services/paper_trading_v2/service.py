@@ -903,6 +903,7 @@ class PaperTradingV2PortfolioService:
 
     def list_execution_policies(self, portfolio_id: str) -> list[dict[str, Any]]:
         portfolio = self.repository.get_portfolio(portfolio_id)
+        local_sim_twap_only = str(portfolio.broker_backend) == "local_sim"
         default_policy_id = str(portfolio.execution_policy.get("validated_execution_policy_id") or "")
         rows: list[dict[str, Any]] = []
         seen_policy_ids: set[str] = set()
@@ -910,10 +911,15 @@ class PaperTradingV2PortfolioService:
             payload = self._paper_execution_policy_payload(policy)
             payload["is_portfolio_default"] = policy.policy_id == default_policy_id
             payload["matches_portfolio_manifest"] = policy.manifest_sha256 == portfolio.manifest_sha256
-            payload["runtime_selectable"] = policy.manifest_sha256 == portfolio.manifest_sha256
-            payload["runtime_diagnostics"] = [
-                "execution policy is runtime configuration; platform checks happen when the run starts"
-            ]
+            algo_code = str(policy.algo_code or policy.policy_json.get("algo_code") or "").strip().upper()
+            payload["runtime_selectable"] = policy.manifest_sha256 == portfolio.manifest_sha256 and (
+                not local_sim_twap_only or algo_code == "TWAP"
+            )
+            payload["runtime_diagnostics"] = (
+                ["LocalSIM is in explicit TWAP-only runtime mode; this policy cannot be activated"]
+                if local_sim_twap_only and algo_code != "TWAP"
+                else ["execution policy is runtime configuration; platform checks happen when the run starts"]
+            )
             rows.append(payload)
             seen_policy_ids.add(policy.policy_id)
         for policy in self._vnpy_style_template_policies_for_portfolio(portfolio):
@@ -925,12 +931,16 @@ class PaperTradingV2PortfolioService:
                 {
                     "is_portfolio_default": policy.policy_id == default_policy_id,
                     "matches_portfolio_manifest": policy.manifest_sha256 == portfolio.manifest_sha256,
-                    "runtime_selectable": True,
+                    "runtime_selectable": not local_sim_twap_only,
                     "activation_policy_source": "vnpy_style_asset_template",
                     "source_attribution": spec.metadata()["source_attribution"],
                     "asset_version": spec.version,
                     "runtime_diagnostics": [
-                        "vn.py-style MiniQMT asset template; broker quote/order/trade state is authoritative",
+                        *(
+                            ["LocalSIM is in explicit TWAP-only runtime mode; MiniQMT assets cannot be activated"]
+                            if local_sim_twap_only
+                            else ["vn.py-style MiniQMT asset template; broker quote/order/trade state is authoritative"]
+                        ),
                         "no TWAP/default fallback is allowed when the selected asset cannot run",
                     ],
                 }
@@ -970,6 +980,20 @@ class PaperTradingV2PortfolioService:
                 },
             )
         policy = self._resolve_activation_execution_policy(portfolio=portfolio, policy_id=policy_id)
+        algo_code = str(policy.algo_code or policy.policy_json.get("algo_code") or "").strip().upper()
+        if str(portfolio.broker_backend) == "local_sim" and algo_code != "TWAP":
+            raise RuntimeConfigInvalidError(
+                "LocalSIM execution policy activation only accepts TWAP",
+                context={
+                    "reason_code": "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED",
+                    "portfolio_id": portfolio_id,
+                    "trade_date": trade_date.isoformat(),
+                    "requested_policy_id": policy_id,
+                    "requested_algo_code": algo_code or None,
+                    "required_algo_code": "TWAP",
+                    "fallback_used": False,
+                },
+            )
         existing_activation = self.repository.get_active_execution_policy_activation(portfolio_id, trade_date)
         if existing_activation is not None:
             if not replace_existing:

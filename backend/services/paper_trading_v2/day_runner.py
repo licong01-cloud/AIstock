@@ -22,6 +22,7 @@ from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
     validate_runtime_profile_matches_backtest_contract,
 )
+from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_context
 from backend.services.strategy_package.runtime import (
     RebalanceEngine,
     StrategyPackageRuntime,
@@ -2423,7 +2424,7 @@ class PaperTradingDayRunner:
                 "paper portfolio requires a backtest-validated execution policy snapshot",
                 context={"portfolio_id": portfolio.portfolio_id},
             )
-        return {
+        context = {
             "validated_execution_policy_id": str(policy_id),
             "policy_sha256": str(policy_sha256),
             "policy_name": policy.get("policy_name"),
@@ -2435,6 +2436,9 @@ class PaperTradingDayRunner:
             "validation_status": policy.get("validation_status"),
             "policy_json": policy_json,
         }
+        if str(getattr(portfolio, "broker_backend", "local_sim")) == "local_sim":
+            return local_sim_twap_only_policy_context(context)
+        return context
 
     def _execution_policy_context_for_date(self, portfolio: Any, trade_date: date) -> dict[str, Any]:
         activation = None
@@ -2442,7 +2446,7 @@ class PaperTradingDayRunner:
             activation = self.repository.get_active_execution_policy_activation(portfolio.portfolio_id, trade_date)
         if activation is None:
             return self._execution_policy_context(portfolio)
-        return {
+        context = {
             "validated_execution_policy_id": activation.policy_id,
             "policy_sha256": activation.policy_sha256,
             "policy_name": activation.policy_name,
@@ -2457,6 +2461,9 @@ class PaperTradingDayRunner:
             "validation_status": "BACKTEST_VALIDATED",
             "policy_json": activation.policy_json,
         }
+        if str(getattr(portfolio, "broker_backend", "local_sim")) == "local_sim":
+            return local_sim_twap_only_policy_context(context)
+        return context
 
     @staticmethod
     def _fee_model_from_policy(policy: dict[str, Any]) -> FeeModel:

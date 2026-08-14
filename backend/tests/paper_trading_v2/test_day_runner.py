@@ -898,7 +898,10 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
 
     assert result.run.status.value == "SUCCEEDED"
     assert portfolio.execution_policy["validated_execution_policy_id"]
-    assert result.run.runtime_config["validated_execution_policy"]["policy_sha256"] == portfolio.execution_policy["policy_sha256"]
+    execution_context = result.run.runtime_config["validated_execution_policy"]
+    assert execution_context["validated_execution_policy_id"] == "localsim_twap_only_v1"
+    assert execution_context["runtime_policy_selection"]["requested_policy_sha256"] == portfolio.execution_policy["policy_sha256"]
+    assert execution_context["runtime_policy_selection"]["fallback_used"] is False
     assert sum(fill.quantity for fill in result.fills) == 9500
     assert result.run.runtime_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["strategy_family"] == "score_weighted_topk_v2"
     assert len(paper_repo.orders[result.run.run_id]) == 1
@@ -1349,7 +1352,7 @@ def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_
     )
 
 
-def test_day_runner_excludes_symbol_with_missing_v25_turnover_rate_f_and_continues() -> None:
+def test_day_runner_v25_portfolio_uses_twap_without_requesting_day_features() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest(algo_code="V25_1_SMALL_CAP", topk=2, n_drop=0)
@@ -1387,19 +1390,16 @@ def test_day_runner_excludes_symbol_with_missing_v25_turnover_rate_f_and_continu
     )
 
     assert result.run.status == RunStatus.SUCCEEDED
-    assert [order.symbol for order in result.orders] == ["000002.SZ"]
-    assert [fill.symbol for fill in result.fills] == ["000002.SZ"]
-    assert any(call["symbol"] == "000001.SZ" and call["require_day_features"] for call in provider.calls)
-    assert any(call["symbol"] == "000002.SZ" and call["require_day_features"] for call in provider.calls)
-    assert not any(order.symbol == "000001.SZ" for order in paper_repo.orders[result.run.run_id])
-
+    assert [order.symbol for order in result.orders] == ["000001.SZ", "000002.SZ"]
+    assert [fill.symbol for fill in result.fills] == ["000001.SZ", "000002.SZ"]
+    assert provider.calls
+    assert all(call["require_day_features"] is False for call in provider.calls)
+    context = result.run.runtime_config["validated_execution_policy"]
+    assert context["algo_code"] == "TWAP"
+    assert context["runtime_policy_selection"]["requested_algo_code"] == "V25_1_SMALL_CAP"
+    assert context["runtime_policy_selection"]["fallback_used"] is False
     events = paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
-    exclusion = next(item for item in events if item["event_type"] == "DAY_FEATURE_SYMBOL_EXCLUDED")
-    assert exclusion["context"]["symbol"] == "000001.SZ"
-    assert exclusion["context"]["reason_code"] == "V25_DAY_FEATURE_TURNOVER_RATE_F_MISSING"
-    assert exclusion["context"]["fail_closed_policy"] == "exclude_symbol_for_trade_date"
-    assert exclusion["context"]["source_error"]["error_code"] == "DATA_UNAVAILABLE"
-    assert exclusion["context"]["source_error"]["context"]["forbidden_fallback"] == "turnover_rate"
+    assert not any(item["event_type"] == "DAY_FEATURE_SYMBOL_EXCLUDED" for item in events)
 
 
 def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -> None:
@@ -1654,7 +1654,7 @@ def test_paper_trading_day_runner_rejects_duplicate_portfolio_trade_date() -> No
         )
 
 
-def test_paper_execution_policy_activation_accepts_versioned_policy_that_differs_from_manifest() -> None:
+def test_localsim_lists_versioned_non_twap_policy_as_unselectable_and_rejects_activation() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
@@ -1684,20 +1684,54 @@ def test_paper_execution_policy_activation_accepts_versioned_policy_that_differs
     listed = portfolio_service.list_execution_policies(portfolio.portfolio_id)
     listed_policy = next(item for item in listed if item["validated_execution_policy_id"] == policy.policy_id)
     assert listed_policy["matches_portfolio_manifest"] is True
-    assert listed_policy["runtime_selectable"] is True
+    assert listed_policy["runtime_selectable"] is False
+    assert "TWAP-only" in listed_policy["runtime_diagnostics"][0]
     assert "can_enter_paper" not in listed_policy
     assert "paper_check_error" not in listed_policy
 
-    activation = portfolio_service.activate_execution_policy(
-        portfolio_id=portfolio.portfolio_id,
-        trade_date=date(2024, 1, 2),
-        policy_id=policy.policy_id,
-        activated_by="unit_test",
-        reason="validate activation path",
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        portfolio_service.activate_execution_policy(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+            policy_id=policy.policy_id,
+            activated_by="unit_test",
+            reason="validate LocalSIM TWAP-only guard",
+        )
+
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED"
+    assert exc_info.value.context["requested_algo_code"] == "CLOSE_PRICE"
+
+
+def test_localsim_rejects_new_v25_execution_policy_activation() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest(algo_code="V25_1_SMALL_CAP")
+    save_manifest_with_default_execution_policy(package_repo, manifest)
+    service = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    )
+    portfolio = service.create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="paper v25 activation rejected",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
     )
 
-    assert activation.policy_id == policy.policy_id
-    assert activation.policy_json["algo_code"] == "CLOSE_PRICE"
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        service.activate_execution_policy(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+            policy_id=portfolio.execution_policy["validated_execution_policy_id"],
+            activated_by="unit_test",
+            reason="V25 must remain disabled for LocalSIM",
+        )
+
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED"
+    assert exc_info.value.context["requested_algo_code"] == "V25_1_SMALL_CAP"
+    assert exc_info.value.context["fallback_used"] is False
+    assert paper_repo.list_execution_policy_activations(portfolio.portfolio_id) == []
 
 
 def test_paper_execution_policy_activation_matching_qe_contract_is_used_for_trade_date_run() -> None:
@@ -1728,6 +1762,7 @@ def test_paper_execution_policy_activation_matching_qe_contract_is_used_for_trad
     result = PaperTradingDayRunner(
         repository=paper_repo,
         calendar_provider=FakeCalendar(),
+        execution_engine=FakeFullExecutionEngine(),
         market_data_provider=PaperV2MinuteMarketDataProvider(
             limit_price_provider=FakeLimitProvider(),
             suspend_status_provider=FakeSuspendProvider(),
@@ -1743,9 +1778,11 @@ def test_paper_execution_policy_activation_matching_qe_contract_is_used_for_trad
 
     context = result.run.runtime_config["validated_execution_policy"]
     assert context["activation_id"] == activation.activation_id
-    assert context["activation_source"] == "trade_date_activation"
-    assert context["validated_execution_policy_id"] == policy_id
-    assert context["algo_code"] == manifest.minute_execution_policy.algo_code
+    assert context["activation_source"] == "localsim_runtime_mode_policy"
+    assert context["validated_execution_policy_id"] == "localsim_twap_only_v1"
+    assert context["algo_code"] == "TWAP"
+    assert context["runtime_policy_selection"]["requested_policy_id"] == policy_id
+    assert context["runtime_policy_selection"]["fallback_used"] is False
     assert paper_repo.list_execution_policy_activations(portfolio.portfolio_id)[0].activation_id == activation.activation_id
 
 
@@ -1826,7 +1863,10 @@ def test_day_runner_consumes_validated_runtime_variant_candidate() -> None:
     assert stored_config["runtime_variant"]["paper_candidate"] is False
     assert stored_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["topk"] == 1
     assert stored_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["max_single_order_value"] == 10_000.0
-    assert stored_config["validated_execution_policy"]["activation_source"] == "portfolio_default"
+    assert stored_config["validated_execution_policy"]["activation_source"] == "localsim_runtime_mode_policy"
+    assert stored_config["validated_execution_policy"]["runtime_policy_selection"]["requested_policy_id"] == (
+        portfolio.execution_policy["validated_execution_policy_id"]
+    )
     assert len(result.orders) == 1
     assert result.orders[0].quantity == 1000
 

@@ -20,6 +20,7 @@ from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
     validate_runtime_profile_matches_backtest_contract,
 )
+from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_context
 from backend.services.strategy_package.runtime import (
     RebalanceEngine,
     StrategyPackageRuntime,
@@ -571,7 +572,7 @@ class PaperTradingReadinessService:
             activation = self.repository.get_active_execution_policy_activation(portfolio.portfolio_id, trade_date)
         if activation is None:
             return PaperTradingDayRunner._execution_policy_context(portfolio)
-        return {
+        context = {
             "validated_execution_policy_id": activation.policy_id,
             "policy_sha256": activation.policy_sha256,
             "policy_name": activation.policy_name,
@@ -586,3 +587,6 @@ class PaperTradingReadinessService:
             "validation_status": "BACKTEST_VALIDATED",
             "policy_json": activation.policy_json,
         }
+        if str(getattr(portfolio, "broker_backend", "local_sim")) == "local_sim":
+            return local_sim_twap_only_policy_context(context)
+        return context
