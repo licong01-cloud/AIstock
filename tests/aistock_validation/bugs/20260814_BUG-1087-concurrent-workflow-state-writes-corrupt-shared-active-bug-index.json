@@ -1,39 +1,44 @@
 {
-  "actual": "BUG-1023 and BUG-1024 post-restart verification wrote workflow_gate=verified receipts but both commands exited 1 with JSONDecodeError: Extra data at line 681 column 1 while loading active_index.json.",
+  "actual": "_write_json writes the shared index in place without a lock or atomic replace, while _update_active_index catches WorkflowError but not JSONDecodeError; concurrent writes produced Extra data and cleanup exited 1 after deleting the intended worktree and branches.",
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
     "tests/aistock_validation/bugs/20260814_BUG-1091-issue-workflow-active-index-concurrent-writes-produce-invalid-concatenat.json",
+    "tests/aistock_validation/bugs/20260814_BUG-1087-concurrent-workflow-state-writes-corrupt-shared-active-bug-index.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1091",
+  "bug_id": "BUG-1087",
   "closed_at": "2026-08-14T03:41:40Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-14T03:04:39.473717Z",
-  "description": "BUG-1023 and BUG-1024 post-restart verification wrote workflow_gate=verified receipts but both commands exited 1 with JSONDecodeError: Extra data at line 681 column 1 while loading active_index.json.",
+  "created_at": "2026-08-14T02:32:28.897762Z",
+  "description": "_write_json writes the shared index in place without a lock or atomic replace, while _update_active_index catches WorkflowError but not JSONDecodeError; concurrent writes produced Extra data and cleanup exited 1 after deleting the intended worktree and branches.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260814-d1c93bbd7bbc",
-      "timestamp": "2026-08-14T03:04:39.473702Z"
+      "note": "Promoted from IC-20260814-3b6558a268d8",
+      "timestamp": "2026-08-14T02:32:28.897745Z"
     },
     {
-      "action": "duplicate_fix_bound",
+      "action": "implementation_validated",
       "actor": "codex",
-      "note": "Linked to the already implemented and validated BUG-1087 fix in PR #3468. Both BUGs have identical validation module, code scope, production gates, and runtime_impact=none; one shared source fix avoids competing implementations.",
+      "note": "Added process-safe active-index read-modify-write, atomic workflow JSON replacement, deterministic recovery from authoritative state files, and fail-closed handling for invalid state. Latest blueprint and workflow authority remain unchanged.",
+      "timestamp": "2026-08-14T02:42:00Z"
+    },
+    {
+      "action": "compatible_duplicate_linked",
+      "actor": "codex",
+      "note": "BUG-1091 was registered independently after this implementation started and describes the same active-index concatenated-JSON failure with identical code scope and validation. PR #3468 is the single shared fix; no second implementation is created.",
       "timestamp": "2026-08-14T03:09:00Z"
     }
   ],
-  "evidence_uris": [
-    "scripts/aistock_issue_workflow.py"
-  ],
-  "expected": "Shared issue workflow index updates must be process-safe and atomically replace one valid JSON document; a valid per-BUG receipt must not be followed by an unrelated shared-index JSONDecodeError.",
+  "evidence_uris": [],
+  "expected": "Active BUG index updates must be process-safe and atomic; malformed transient index content must fail closed or recover deterministically without losing authoritative BUG records, and completed cleanup must not crash during final state persistence.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -95,13 +100,13 @@
       "backend/tests/scripts/test_aistock_issue_workflow.py"
     ]
   },
-  "first_seen_at": "2026-08-14T03:04:39.473717Z",
+  "first_seen_at": "2026-08-14T02:32:28.897762Z",
   "fix_branch": null,
   "fix_commit": "1b0895c97b80b8103a04cc456dbae5de2843f5d9",
   "fixed_at": "2026-08-14T03:41:40Z",
-  "github_issue_number": 3471,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3471",
-  "last_seen_at": "2026-08-14T03:04:39.473717Z",
+  "github_issue_number": 3462,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3462",
+  "last_seen_at": "2026-08-14T02:32:28.897762Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -110,7 +115,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1023 --target backend-main --expected-identity d8e80b9f831689821b025126610d0c5673c4f893",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k active_index -q",
   "required_verification": [
     "l0",
     "guardrail_changed_files"
@@ -134,17 +139,19 @@
   "suspected_modules": [
     "validation"
   ],
-  "title": "Issue workflow active index concurrent writes produce invalid concatenated JSON",
+  "title": "Concurrent workflow state writes corrupt shared active BUG index",
   "trigger_condition": {
-    "fingerprint": "d1c93bbd7bbce9d710057d32",
-    "source_event_id": "FE-20260814-d1c93bbd7bbc"
+    "fingerprint": "3b6558a268d890e2e410f70e",
+    "source_event_id": "FE-20260814-3b6558a268d8"
   },
   "validation_evidence": [
     "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k active_index -q -> 5 passed",
     "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py backend/tests/test_aistock_guardrail_scan.py -q -> 366 passed, 2 skipped on merged final workflow code",
     "python -m nox -s validation_module_registry_l0 -> passed",
-    "python -m nox -s guardrail_changed_files -> passed, files=3 blocking=0",
-    "shared BUG-1087/BUG-1091 source fix: workflow suite 366 passed, 2 skipped; focused concurrency tests 5 passed; CI green"
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation --output-format summary -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --module validation --output-format summary -> passed",
+    "ruff, py_compile, and git diff --check -> passed",
+    "backend/tests/scripts workflow suite 366 passed, 2 skipped; focused concurrency tests 5 passed; CI green"
   ],
   "verification_budget": {
     "budget": "standard",

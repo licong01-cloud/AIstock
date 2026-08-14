@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -4561,6 +4563,164 @@ def test_submit_bug_apply_with_existing_github_link_writes_registry(
     assert active_entry["branch"] is None
     assert "git add tests/aistock_validation/bugs" in payload["next_command"]
     assert "tmp/issue_workflow" not in payload["next_command"]
+
+
+def test_active_index_recovers_extra_data_from_authoritative_states(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISTOCK_ACTIVE_INDEX_LOCK_ROOT", str(isolated_workflow_root / "locks"))
+    workflow_root = isolated_workflow_root / workflow.WORKFLOW_ROOT
+    _write_json(
+        workflow_root / "BUG-201" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-201",
+            "state": "fix_in_progress",
+            "updated_at": "2026-08-14T01:00:00Z",
+            "worktree": str(isolated_workflow_root / "BUG-201"),
+        },
+    )
+    _write_json(
+        workflow_root / "BUG-202" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-202",
+            "state": "cleanup_done",
+            "updated_at": "2026-08-14T01:01:00Z",
+        },
+    )
+    index_path = workflow._active_index_path(isolated_workflow_root)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text('{"active_bugs": {}}\n{"active_bugs": {}}\n', encoding="utf-8")
+
+    payload = workflow._update_active_index(
+        "BUG-203",
+        {
+            "bug_id": "BUG-203",
+            "state": "validation_running",
+            "updated_at": "2026-08-14T01:02:00Z",
+            "worktree": str(isolated_workflow_root / "BUG-203"),
+        },
+        root=isolated_workflow_root,
+    )
+
+    assert sorted(payload["active_bugs"]) == ["BUG-201", "BUG-203"]
+    assert json.loads(index_path.read_text(encoding="utf-8")) == payload
+
+
+def test_active_index_recovery_fails_closed_on_invalid_authoritative_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISTOCK_ACTIVE_INDEX_LOCK_ROOT", str(isolated_workflow_root / "locks"))
+    workflow_root = isolated_workflow_root / workflow.WORKFLOW_ROOT
+    state_path = workflow_root / "BUG-201" / "state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("not-json", encoding="utf-8")
+    index_path = workflow._active_index_path(isolated_workflow_root)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    corrupted = '{"active_bugs": {}}\n{"active_bugs": {}}\n'
+    index_path.write_text(corrupted, encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="invalid authoritative state"):
+        workflow._update_active_index(
+            "BUG-203",
+            {"bug_id": "BUG-203", "state": "validation_running"},
+            root=isolated_workflow_root,
+        )
+
+    assert index_path.read_text(encoding="utf-8") == corrupted
+
+
+def test_missing_active_index_rebuilds_other_active_states(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISTOCK_ACTIVE_INDEX_LOCK_ROOT", str(isolated_workflow_root / "locks"))
+    workflow_root = isolated_workflow_root / workflow.WORKFLOW_ROOT
+    _write_json(
+        workflow_root / "BUG-201" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-201",
+            "state": "ci_running",
+            "updated_at": "2026-08-14T01:00:00Z",
+        },
+    )
+
+    payload = workflow._update_active_index(
+        "BUG-203",
+        {"bug_id": "BUG-203", "state": "validation_running"},
+        root=isolated_workflow_root,
+    )
+
+    assert sorted(payload["active_bugs"]) == ["BUG-201", "BUG-203"]
+
+
+def test_active_index_concurrent_updates_are_locked_and_atomic(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISTOCK_ACTIVE_INDEX_LOCK_ROOT", str(isolated_workflow_root / "locks"))
+    index_path = workflow._active_index_path(isolated_workflow_root)
+    workflow._write_json(
+        index_path,
+        {
+            "schema_version": "aistock_issue_workflow_active_index_v1",
+            "updated_at": "2026-08-14T01:00:00Z",
+            "active_bugs": {},
+        },
+    )
+    original_load_json = workflow._load_json
+
+    def slow_index_read(path: Path) -> dict[str, Any]:
+        payload = original_load_json(path)
+        if path == index_path:
+            time.sleep(0.01)
+        return payload
+
+    monkeypatch.setattr(workflow, "_load_json", slow_index_read)
+
+    def update(number: int) -> None:
+        bug_id = f"BUG-{number}"
+        workflow._update_active_index(
+            bug_id,
+            {
+                "bug_id": bug_id,
+                "state": "fix_in_progress",
+                "updated_at": f"2026-08-14T01:00:{number - 200:02d}Z",
+                "worktree": str(isolated_workflow_root / bug_id),
+            },
+            root=isolated_workflow_root,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(update, range(201, 213)))
+
+    final_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    assert sorted(final_payload["active_bugs"]) == [f"BUG-{number}" for number in range(201, 213)]
+    assert list(index_path.parent.glob(f".{index_path.name}.*.tmp")) == []
+
+
+def test_atomic_json_replace_failure_preserves_previous_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "state.json"
+    original = '{"version": "previous"}\n'
+    path.write_text(original, encoding="utf-8")
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        raise OSError("replace denied")
+
+    monkeypatch.setattr(workflow.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace denied"):
+        workflow._write_json(path, {"version": "next"})
+
+    assert path.read_text(encoding="utf-8") == original
+    assert list(tmp_path.glob(f".{path.name}.*.tmp")) == []
 
 
 def test_submit_bug_registry_pr_only_stops_after_intake(

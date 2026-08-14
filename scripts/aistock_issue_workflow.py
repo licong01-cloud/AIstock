@@ -275,7 +275,27 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary_path = Path(handle.name)
+    try:
+        with handle:
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _size_and_token_estimate(path: Path) -> dict[str, Any]:
@@ -2620,6 +2640,17 @@ def _active_index_path(root: Path | None = None) -> Path:
     return (root or REPO_ROOT) / WORKFLOW_ROOT / "index" / "active_bugs.json"
 
 
+def _active_index_lock_path(index_path: Path) -> Path:
+    override = os.environ.get("AISTOCK_ACTIVE_INDEX_LOCK_ROOT")
+    lock_root = Path(override) if override else _default_worktree_root() / ".locks"
+    try:
+        identity = os.path.normcase(str(index_path.resolve()))
+    except OSError:
+        identity = os.path.normcase(str(index_path.absolute()))
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+    return lock_root / f"active-bugs-index-{digest}.lock"
+
+
 def _load_state(bug_id: str, root: Path | None = None) -> dict[str, Any] | None:
     path = _state_path(bug_id, root)
     if not path.exists():
@@ -3010,39 +3041,88 @@ def _code_intelligence_hint(root: Path | None = None) -> dict[str, Any]:
     }
 
 
+def _active_index_entry(bug_id: str, state_payload: dict[str, Any], *, root: Path) -> dict[str, Any]:
+    active_worktree = state_payload.get("worktree") or state_payload.get("cwd") or str(root)
+    return {
+        "bug_id": bug_id,
+        "active_state": state_payload.get("state"),
+        "branch": state_payload.get("branch"),
+        "planned_branch": state_payload.get("planned_branch"),
+        "worktree": active_worktree,
+        "planned_worktree": state_payload.get("planned_worktree"),
+        "pr_url": state_payload.get("pr_url"),
+        "last_event_at": state_payload.get("updated_at"),
+        "next_command": _next_command_for_state(bug_id, state_payload),
+    }
+
+
+def _rebuild_active_index_from_states(root: Path) -> dict[str, Any]:
+    workflow_root = root / WORKFLOW_ROOT
+    index: dict[str, Any] = {}
+    invalid_states: list[str] = []
+    for state_path in sorted(workflow_root.glob("BUG-*/state.json")):
+        try:
+            state_payload = _load_json(state_path)
+        except (OSError, json.JSONDecodeError, WorkflowError):
+            invalid_states.append(_repo_rel(state_path))
+            continue
+        bug_id = str(state_payload.get("bug_id") or state_path.parent.name).strip().upper()
+        if not BUG_ID_RE.fullmatch(bug_id):
+            invalid_states.append(_repo_rel(state_path))
+            continue
+        if _state_is_active(state_payload):
+            index[bug_id] = _active_index_entry(bug_id, state_payload, root=root)
+    if invalid_states:
+        raise WorkflowError(
+            "active BUG index recovery found invalid authoritative state file(s): "
+            + ", ".join(invalid_states[:10])
+        )
+    return index
+
+
 def _update_active_index(bug_id: str, state_payload: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     root = root or REPO_ROOT
     path = _active_index_path(root)
-    existing: dict[str, Any] = {}
-    if path.exists():
-        try:
-            existing = _load_json(path)
-        except WorkflowError:
-            existing = {}
-    index = dict(existing.get("active_bugs") or existing)
-    key = bug_id.strip().upper()
-    if not _state_is_active(state_payload):
-        index.pop(key, None)
-    else:
-        active_worktree = state_payload.get("worktree") or state_payload.get("cwd") or str(root)
-        index[key] = {
-            "bug_id": key,
-            "active_state": state_payload.get("state"),
-            "branch": state_payload.get("branch"),
-            "planned_branch": state_payload.get("planned_branch"),
-            "worktree": active_worktree,
-            "planned_worktree": state_payload.get("planned_worktree"),
-            "pr_url": state_payload.get("pr_url"),
-            "last_event_at": state_payload.get("updated_at"),
-            "next_command": _next_command_for_state(key, state_payload),
-        }
-    payload = {
-        "schema_version": "aistock_issue_workflow_active_index_v1",
-        "updated_at": _utc_now(),
-        "active_bugs": index,
-    }
-    _write_json(path, payload)
-    return payload
+    lock = GlobalBugIdLock(
+        _active_index_lock_path(path),
+        timeout=30.0,
+        process_is_alive=_process_id_is_alive,
+    )
+    try:
+        with lock:
+            if not path.exists():
+                existing: dict[str, Any] = {
+                    "schema_version": "aistock_issue_workflow_active_index_v1",
+                    "active_bugs": _rebuild_active_index_from_states(root),
+                }
+            else:
+                try:
+                    existing = _load_json(path)
+                except (OSError, json.JSONDecodeError, WorkflowError):
+                    existing = {
+                        "schema_version": "aistock_issue_workflow_active_index_v1",
+                        "active_bugs": _rebuild_active_index_from_states(root),
+                    }
+            existing_index = existing.get("active_bugs")
+            if existing_index is None:
+                existing_index = existing
+            if not isinstance(existing_index, dict):
+                raise WorkflowError(f"active BUG index has invalid entries: {path}")
+            index = dict(existing_index)
+            key = bug_id.strip().upper()
+            if not _state_is_active(state_payload):
+                index.pop(key, None)
+            else:
+                index[key] = _active_index_entry(key, state_payload, root=root)
+            payload = {
+                "schema_version": "aistock_issue_workflow_active_index_v1",
+                "updated_at": _utc_now(),
+                "active_bugs": index,
+            }
+            _write_json(path, payload)
+            return payload
+    except BugIdLockError as exc:
+        raise WorkflowError(f"active BUG index lock failed: {path}: {exc}") from exc
 
 
 def _write_state(
