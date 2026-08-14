@@ -1685,6 +1685,8 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
     if not path.exists():
         raise WorkflowError(f"runtime target catalog is missing: {_repo_rel(path, root)}")
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise WorkflowError("runtime target catalog must be a mapping")
     if payload.get("schema_version") != "aistock_runtime_target_catalog_v1":
         raise WorkflowError("runtime target catalog schema_version must be aistock_runtime_target_catalog_v1")
     targets = payload.get("targets")
@@ -1703,6 +1705,97 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
             if port in seen_ports:
                 raise WorkflowError(f"runtime target production_port conflict: {port} ({seen_ports[port]}, {target_id})")
             seen_ports[port] = str(target_id)
+    raw_non_runtime_paths = payload.get("non_runtime_source_paths", [])
+    if not isinstance(raw_non_runtime_paths, list):
+        raise WorkflowError("runtime target catalog non_runtime_source_paths must be a list")
+    non_runtime_paths: list[str] = []
+    non_runtime_path_keys: set[str] = set()
+    root_resolved = root.resolve()
+    for raw_path in raw_non_runtime_paths:
+        if not isinstance(raw_path, str):
+            raise WorkflowError("runtime target catalog non_runtime_source_paths entries must be strings")
+        path_value = raw_path.strip()
+        if (
+            not path_value
+            or "\\" in path_value
+            or path_value.startswith(("/", "./"))
+            or re.match(r"^[A-Za-z]:(?:/|$)", path_value)
+            or any(part in {"", ".", ".."} for part in path_value.split("/"))
+        ):
+            raise WorkflowError(
+                f"runtime target catalog non_runtime_source_paths contains an invalid relative path: {raw_path}"
+            )
+        if any(character in path_value for character in "*?["):
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths requires exact paths without wildcards: "
+                f"{path_value}"
+            )
+        if path_value in non_runtime_paths:
+            raise WorkflowError(
+                f"runtime target catalog non_runtime_source_paths contains a duplicate: {path_value}"
+            )
+        overlapping_targets = sorted(
+            str(target_id)
+            for target_id, target in targets.items()
+            if any(
+                _runtime_glob_matches(path_value, str(pattern))
+                for pattern in flow._as_list(target.get("source_globs"))
+            )
+        )
+        if overlapping_targets:
+            raise WorkflowError(
+                "runtime target catalog non-runtime path overlaps runtime targets: "
+                f"{path_value} -> {overlapping_targets}"
+            )
+        if not path_value.startswith("scripts/") or not path_value.endswith(".py"):
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths only accepts Python operator scripts under scripts/: "
+                f"{path_value}"
+            )
+        candidate = root.joinpath(*path_value.split("/"))
+        try:
+            resolved_candidate = candidate.resolve(strict=True)
+            resolved_relative = resolved_candidate.relative_to(root_resolved).as_posix()
+        except (FileNotFoundError, OSError, ValueError):
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths entry must be an existing repository file: "
+                f"{path_value}"
+            ) from None
+        if not candidate.is_file():
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths entry must be a regular file: "
+                f"{path_value}"
+            )
+        if candidate.is_symlink() or resolved_relative.casefold() != path_value.casefold():
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths entry must not use a symbolic-link alias: "
+                f"{path_value}"
+            )
+        cursor = root
+        canonical_parts: list[str] = []
+        for part in path_value.split("/"):
+            matches = [entry for entry in cursor.iterdir() if entry.name.casefold() == part.casefold()]
+            if len(matches) != 1:
+                raise WorkflowError(
+                    "runtime target catalog non_runtime_source_paths entry has ambiguous or missing path casing: "
+                    f"{path_value}"
+                )
+            cursor = matches[0]
+            canonical_parts.append(cursor.name)
+        canonical_path = "/".join(canonical_parts)
+        if canonical_path != path_value:
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths entry must use canonical repository path casing: "
+                f"{path_value} -> {canonical_path}"
+            )
+        normalized_key = os.path.normcase(path_value).casefold()
+        if normalized_key in non_runtime_path_keys:
+            raise WorkflowError(
+                f"runtime target catalog non_runtime_source_paths contains a duplicate: {path_value}"
+            )
+        non_runtime_path_keys.add(normalized_key)
+        non_runtime_paths.append(path_value)
+    payload["non_runtime_source_paths"] = non_runtime_paths
     return payload
 
 
@@ -1727,9 +1820,11 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
     impacts: set[str] = set()
     runtime_files: list[str] = []
     target_ids: set[str] = set()
-    catalog_targets: dict[str, Any] = {}
+    catalog: dict[str, Any] = {}
     with contextlib.suppress(WorkflowError):
-        catalog_targets = (_load_runtime_target_catalog(root).get("targets") or {})
+        catalog = _load_runtime_target_catalog(root)
+    catalog_targets = catalog.get("targets") or {}
+    catalog_non_runtime_files = set(flow._as_list(catalog.get("non_runtime_source_paths")))
     known_non_runtime_prefixes = (
         ".github/",
         "backend/tests/",
@@ -1772,7 +1867,11 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         if path in known_client_files or lower.startswith((".codex/", ".claude/")):
             impacts.add("client")
             continue
-        if path in known_non_runtime_files or lower.startswith(known_non_runtime_prefixes):
+        if (
+            path in known_non_runtime_files
+            or path in catalog_non_runtime_files
+            or lower.startswith(known_non_runtime_prefixes)
+        ):
             impacts.add("none")
             continue
         matched_targets: list[tuple[str, str]] = []

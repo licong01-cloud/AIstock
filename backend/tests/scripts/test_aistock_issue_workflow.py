@@ -79,12 +79,23 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
 
 
 def _write_runtime_catalog(root: Path) -> Path:
+    for script_name in (
+        "scripts/backfill_tushare_daily_basic_fields.py",
+        "scripts/ingest_tushare_daily_basic.py",
+    ):
+        script_path = root / script_name
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text("# one-shot operator fixture\n", encoding="utf-8")
     path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         yaml.safe_dump(
             {
                 "schema_version": "aistock_runtime_target_catalog_v1",
+                "non_runtime_source_paths": [
+                    "scripts/backfill_tushare_daily_basic_fields.py",
+                    "scripts/ingest_tushare_daily_basic.py",
+                ],
                 "targets": {
                     "backend-main": {
                         "runtime_kind": "backend",
@@ -1438,6 +1449,143 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_contract["backend_restart_required"] is False
     assert offline_contract["pre_pr_ready"] is True
     assert offline_contract["blocking"] == []
+
+
+def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_activation(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "scripts/backfill_tushare_daily_basic_fields.py",
+        "scripts/ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+        "tests/aistock_validation/bugs/BUG-1089.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ]
+    record = _bug(
+        bug_id="BUG-1089",
+        module="local_data",
+        allowed_write_scope=changed_files,
+        file_scope_contract=_file_scope_contract(changed_files),
+        required_verification=["validation_module_registry_l0"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+            "post_restart_effective_gate": "not_required",
+            "target_id": None,
+            "target_ids": [],
+        },
+    )
+    issue = _write_json(isolated_workflow_root / "bug-1089.json", record)
+
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert workflow._classify_runtime_impact(
+        ["scripts/unlisted_operator.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "unknown"
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=changed_files,
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s validation_module_registry_l0 -> passed"],
+        plan_only=True,
+        allow_missing_evidence=False,
+        code_intelligence_summary_override=_fake_code_intelligence_summary(),
+    )
+
+    assert payload["closure_ready"] is True
+    assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["runtime_contract"]["runtime_impact"] == "none"
+    assert payload["runtime_contract"]["blocking"] == []
+    assert payload["backend_restart"]["required"] is False
+
+
+def test_runtime_catalog_non_runtime_paths_are_exact_and_do_not_overlap_targets(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["non_runtime_source_paths"] = ["scripts/**/*.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="exact paths without wildcards"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    catalog["non_runtime_source_paths"] = ["backend/services/example.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="overlaps runtime targets"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+
+def test_runtime_catalog_non_runtime_paths_reject_future_alias_and_non_operator_entries(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+
+    invalid_entries = [
+        (["scripts\\backfill_tushare_daily_basic_fields.py"], "invalid relative path"),
+        (["scripts/FUTURE_OPERATOR.py"], "existing repository file"),
+        ([123], "entries must be strings"),
+    ]
+    for entries, expected_message in invalid_entries:
+        catalog["non_runtime_source_paths"] = entries
+        catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+        with pytest.raises(workflow.WorkflowError, match=expected_message):
+            workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    non_operator = isolated_workflow_root / "tools" / "offline.py"
+    non_operator.parent.mkdir(parents=True)
+    non_operator.write_text("# not an operator-script namespace\n", encoding="utf-8")
+    catalog["non_runtime_source_paths"] = ["tools/offline.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="Python operator scripts under scripts"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    catalog_path.write_text("- not-a-mapping\n", encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="must be a mapping"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+    assert workflow._classify_runtime_impact(
+        ["scripts/backfill_tushare_daily_basic_fields.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "unknown"
+
+
+def test_runtime_catalog_non_runtime_paths_reject_case_alias_and_symlink(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["non_runtime_source_paths"] = ["scripts/BACKFILL_TUSHARE_DAILY_BASIC_FIELDS.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="existing repository file|canonical repository path casing"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    alias = isolated_workflow_root / "scripts" / "daily_basic_alias.py"
+    alias.write_text("# symlink alias fixture\n", encoding="utf-8")
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda candidate: candidate == alias or original_is_symlink(candidate),
+    )
+    catalog["non_runtime_source_paths"] = ["scripts/daily_basic_alias.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="symbolic-link alias"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
 
 
 def test_bug_1032_offline_hmm_state_model_set_preserves_real_backend_detection(
