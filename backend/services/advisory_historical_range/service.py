@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Event, Lock, Thread
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -64,6 +65,7 @@ from .runtime_factories import HistoricalRangeOutcomeCommandPlan
 LOGGER = logging.getLogger(__name__)
 
 _BRIDGE_PARENT_LEASE_DURATION = timedelta(minutes=30)
+_OUTCOME_PARENT_LEASE_DURATION = timedelta(minutes=30)
 # Live catalog workers renew this lease; the duration bounds orphan takeover latency.
 _CATALOG_LEASE_DURATION = timedelta(minutes=5)
 
@@ -79,6 +81,69 @@ def _renewed_lease_expiry(operation: Mapping[str, Any], duration: timedelta) -> 
     if current_expiry.tzinfo is None:
         current_expiry = current_expiry.replace(tzinfo=UTC)
     return max(now, current_expiry.astimezone(UTC)) + duration
+
+
+class _OutcomeParentLeaseHeartbeatSupervisor:
+    """Renew an outcome parent claim while its child operation is active."""
+
+    def __init__(
+        self,
+        *,
+        repository: PostgresHistoricalRangeRepository,
+        operation: Mapping[str, Any],
+        lease_duration: timedelta,
+    ) -> None:
+        self._repository = repository
+        self._operation = dict(operation)
+        self._lease_duration = lease_duration
+        self._interval_seconds = min(
+            60.0,
+            max(0.1, lease_duration.total_seconds() / 3),
+        )
+        self._stop_event = Event()
+        self._lock = Lock()
+        self._error: BaseException | None = None
+        self._thread = Thread(
+            target=self._run,
+            name=f"ahr-outcome-parent-heartbeat-{operation['operation_id']}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> dict[str, Any]:
+        self._stop_event.set()
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        with self._lock:
+            return dict(self._operation)
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._interval_seconds):
+            try:
+                with self._lock:
+                    current = dict(self._operation)
+                refreshed = self._repository.transition_operation(
+                    operation_id=str(current["operation_id"]),
+                    expected_row_version=int(current["row_version"]),
+                    target_status=HistoricalRangeOperationStatus.RUNNING,
+                    attempt_no=int(current["attempt_no"]),
+                    worker_id=str(current["worker_id"]),
+                    lease_token=str(current["lease_token"]),
+                    lease_expires_at=datetime.now(UTC) + self._lease_duration,
+                    fencing_token=int(current["fencing_token"]),
+                    stable_keyset_cursor_json=current.get(
+                        "stable_keyset_cursor_json"
+                    ),
+                )
+                with self._lock:
+                    self._operation = dict(refreshed)
+            except BaseException as exc:  # surfaced synchronously by stop()
+                self._error = exc
+                self._stop_event.set()
+                return
 
 
 class BackgroundTaskRegistrar(Protocol):
@@ -603,6 +668,12 @@ class ResponseBoundHistoricalRangeDispatcher:
             plan=plan,
             worker_id=worker_id,
         )
+        parent_heartbeat = _OutcomeParentLeaseHeartbeatSupervisor(
+            repository=runtime.repository,
+            operation=claimed,
+            lease_duration=_OUTCOME_PARENT_LEASE_DURATION,
+        )
+        parent_heartbeat.start()
         outcome_refs: dict[str, HistoricalRangeArtifactRefV1] = {}
         summary_refs: dict[str, HistoricalRangeArtifactRefV1] = {}
         receipts = []
@@ -631,6 +702,8 @@ class ResponseBoundHistoricalRangeDispatcher:
                 operation_id,
                 batch_id,
             )
+        finally:
+            claimed = parent_heartbeat.stop()
         statuses = {receipt.status for receipt in receipts}
         if orchestration_error is not None or "FAILED" in statuses:
             receipt_status = "FAILED"
@@ -811,7 +884,7 @@ class ResponseBoundHistoricalRangeDispatcher:
             attempt_no=int(operation.get("attempt_no") or 0) + 1,
             worker_id=worker_id,
             lease_token=uuid4().hex,
-            lease_expires_at=datetime.now(UTC) + timedelta(minutes=30),
+            lease_expires_at=datetime.now(UTC) + _OUTCOME_PARENT_LEASE_DURATION,
             fencing_token=int(operation.get("fencing_token") or 0) + 1,
             started_at=datetime.now(UTC),
             expired_attempt=expired_attempt,
