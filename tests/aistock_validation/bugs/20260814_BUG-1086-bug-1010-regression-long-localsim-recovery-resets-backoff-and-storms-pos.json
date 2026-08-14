@@ -1,71 +1,55 @@
 {
-  "actual": "Enabled startup catches the schema exception and returns an immutable BLOCKED activation without a schema reader or lazy retry delegate, so later scheduler ticks cannot recover in the same process.",
+  "actual": "35-second production sampling observed at least 1510 backend SQL executions (43.1/s lower bound) and 10492 commits. Consecutive attempts at 10:22:22 and 10:24:36 both reset attempt_count/consecutive_failure_count to 1 with different source/failure fingerprints; each next_retry_at expired before the attempt completed.",
   "allowed_write_scope": [
-    "backend/services/simulation_runtime/miniqmt_quote_activation.py",
     "backend/services/simulation_runtime/scheduler.py",
-    "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+    "backend/services/simulation_runtime/repository.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
-    "tests/aistock_validation/bugs/20260813_BUG-1079-miniqmt-quote-ingress-caches-startup-schema-readback-failure-and-cannot.json",
+    "tests/aistock_validation/bugs/20260814_BUG-1086-bug-1010-regression-long-localsim-recovery-resets-backoff-and-storms-pos.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1079",
-  "closed_at": "2026-08-14T02:34:01.573564Z",
+  "bug_id": "BUG-1086",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-13T17:31:47.868395Z",
-  "description": "Enabled startup catches the schema exception and returns an immutable BLOCKED activation without a schema reader or lazy retry delegate, so later scheduler ticks cannot recover in the same process.",
+  "created_at": "2026-08-14T02:29:52.043860Z",
+  "description": "35-second production sampling observed at least 1510 backend SQL executions (43.1/s lower bound) and 10492 commits. Consecutive attempts at 10:22:22 and 10:24:36 both reset attempt_count/consecutive_failure_count to 1 with different source/failure fingerprints; each next_retry_at expired before the attempt completed.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260813-fc125b97f36d",
-      "timestamp": "2026-08-13T17:31:47.868378Z"
+      "note": "Promoted from IC-20260814-ada76c6ebabc",
+      "timestamp": "2026-08-14T02:29:52.043839Z"
     }
   ],
   "evidence_uris": [
-    "GitHub Issue #3430 and read-only scheduler/quote diagnostics contradiction observed 2026-08-13"
+    "backend/logs/aistock.log",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/repository.py"
   ],
-  "expected": "A transient startup schema readback failure remains fail-closed and retries automatically on the existing scheduler lifecycle cadence; exact readback success constructs the canonical activation exactly once without manual tick, fallback, approval gate, broker replay, or process control.",
+  "expected": "Unchanged economic recovery failures must retain a stable retry identity and schedule the next attempt from completed failure observation; a non-due recovery must perform bounded carrier readback only and must not reload per-symbol market datasets.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/services/simulation_runtime/miniqmt_quote_activation.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+      "backend/services/simulation_runtime/repository.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
     ],
     "ownership": {
       "changed_files": [
-        "backend/services/simulation_runtime/miniqmt_quote_activation.py",
         "backend/services/simulation_runtime/scheduler.py",
-        "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
-        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+        "backend/services/simulation_runtime/repository.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
       ],
       "impacted_modules": [
         "simulation_runtime",
         "paper_v2",
-        "miniqmt_execution_runtime",
-        "docs.architecture",
-        "validation.module_quality"
+        "miniqmt_execution_runtime"
       ],
       "matched_rules": [
-        {
-          "file": "backend/services/simulation_runtime/miniqmt_quote_activation.py",
-          "impact_modules": [
-            "paper_v2",
-            "miniqmt_execution_runtime"
-          ],
-          "primary_module": "simulation_runtime",
-          "risk_level": "critical",
-          "rule_id": "simulation_runtime_core"
-        },
         {
           "file": "backend/services/simulation_runtime/scheduler.py",
           "impact_modules": [
@@ -77,7 +61,7 @@
           "rule_id": "simulation_runtime_core"
         },
         {
-          "file": "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+          "file": "backend/services/simulation_runtime/repository.py",
           "impact_modules": [
             "paper_v2",
             "miniqmt_execution_runtime"
@@ -95,89 +79,50 @@
           "primary_module": "simulation_runtime",
           "risk_level": "critical",
           "rule_id": "simulation_runtime_core"
-        },
-        {
-          "file": "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
-          "impact_modules": [
-            "validation.module_quality"
-          ],
-          "primary_module": "docs.architecture",
-          "risk_level": "low",
-          "rule_id": "docs_architecture"
         }
       ],
       "risk_levels": [
-        "critical",
-        "low"
+        "critical"
       ],
       "suggested_scope": [
-        "backend/services/simulation_runtime/miniqmt_quote_activation.py",
         "backend/services/simulation_runtime/scheduler.py",
-        "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
-        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+        "backend/services/simulation_runtime/repository.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/services/simulation_runtime/miniqmt_quote_activation.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+      "backend/services/simulation_runtime/repository.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
     ]
   },
-  "first_seen_at": "2026-08-13T17:31:47.868395Z",
+  "first_seen_at": "2026-08-14T02:29:52.043860Z",
   "fix_branch": null,
-  "fix_commit": "4e2c3b7ca74dd3b3a7dd9e0d1427afdd6b88f6a1",
-  "fixed_at": "2026-08-13T18:01:56Z",
-  "github_issue_number": 3430,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3430",
-  "last_seen_at": "2026-08-13T17:31:47.868395Z",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3461,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3461",
+  "last_seen_at": "2026-08-14T02:29:52.043860Z",
   "module": "simulation_runtime",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3438",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "applied_and_verified",
+  "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_miniqmt_quote_activation.py -q",
+  "reproduce_command": "Read-only: sample pg_stat_activity for 35 seconds while GET /api/v1/simulation-runtime/scheduler/status reports STALE_LOCALSIM_FAILED_RETRYABLE_ACTIVE_RECOVERY for simrun_03865dd2c7422a57; compare retry_control source_fingerprint, failure_fingerprint, last_failed_at, next_retry_at across two completed ticks.",
   "required_verification": [
     "l0",
     "simulation_core_l2"
   ],
-  "risk_area": "bug",
+  "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
-    "fresh_process_evidence": [
-      "Fresh pytest/nox processes loaded persisted BUG-1079 source: activation 87 passed and Simulation Core L2 598 passed/1 skipped; no backend process control"
-    ],
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "fresh_process_evidence": [],
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "passed",
-    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1079/post-restart-verify.json",
-    "post_restart_receipt_summary": {
-      "bug_id": "BUG-1079",
-      "catalog_sha256": "9212831ad8a6d18ed8e13020c10493ea90f42d6f11cbf74022157d442d25645f",
-      "contract_digest": "4f58697ecda75cbf36ffae77d341ccacb30dc3df0f1b8cfbdbf6c6867271929a",
-      "expected_identity": "4e2c3b7ca74dd3b3a7dd9e0d1427afdd6b88f6a1",
-      "generated_at": "2026-08-14T02:12:11.590557Z",
-      "mode": "read_only",
-      "observed_identity": "e25753dc88c329ba076713e68d110eab7af6a6f3",
-      "post_restart_effective_gate": "passed",
-      "probe_evidence_digest": "2c39757ad00687c16566b215f206b51fefcd5c1633033045324be5866260a78c",
-      "receipt_sha256": "765ac96d33c088428594f264564185cf06567c69c7e06fad393a4addda6e8d6d",
-      "response_content_persisted": false,
-      "runtime_identity_proof_digest": "4cc1d61c5cae042fb1c34e32679a6d91d3e70ed0cf7bb6333bb17f909b25915b",
-      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
-      "target_id": "backend-main"
-    },
-    "runtime_identity_match": true,
+    "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -187,18 +132,15 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "verified",
+  "status": "open",
   "suspected_modules": [
     "simulation_runtime"
   ],
-  "title": "MiniQMT quote ingress caches startup schema readback failure and cannot auto-recover",
+  "title": "BUG-1010 regression: long LocalSim recovery resets backoff and storms PostgreSQL",
   "trigger_condition": {
-    "fingerprint": "fc125b97f36d88e2c63272fd",
-    "source_event_id": "FE-20260813-fc125b97f36d"
+    "fingerprint": "ada76c6ebabc284d147fbb53",
+    "source_event_id": "FE-20260814-ada76c6ebabc"
   },
-  "validation_evidence": [
-    "Post-restart runtime identity e25753dc includes source merge 4e2c3b7c; MiniQMT quote ingress activation reports READY with production_ddl_gate applied_and_verified."
-  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
