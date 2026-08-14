@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1087",
-  "closed_at": null,
+  "closed_at": "2026-08-14T03:41:40Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-08-14T02:32:28.897762Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b0895c97b80b8103a04cc456dbae5de2843f5d9",
+  "fixed_at": "2026-08-14T03:41:40Z",
   "github_issue_number": 3462,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3462",
   "last_seen_at": "2026-08-14T02:32:28.897762Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3468",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -125,6 +126,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -132,7 +135,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -147,7 +150,8 @@
     "python -m nox -s validation_module_registry_l0 -> passed",
     "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation --output-format summary -> passed",
     "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --module validation --output-format summary -> passed",
-    "ruff, py_compile, and git diff --check -> passed"
+    "ruff, py_compile, and git diff --check -> passed",
+    "backend/tests/scripts workflow suite 366 passed, 2 skipped; focused concurrency tests 5 passed; CI green"
   ],
   "verification_budget": {
     "budget": "standard",
