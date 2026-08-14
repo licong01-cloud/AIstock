@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1091",
-  "closed_at": null,
+  "closed_at": "2026-08-14T03:41:40Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-08-14T03:04:39.473717Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b0895c97b80b8103a04cc456dbae5de2843f5d9",
+  "fixed_at": "2026-08-14T03:41:40Z",
   "github_issue_number": 3471,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3471",
   "last_seen_at": "2026-08-14T03:04:39.473717Z",
@@ -121,6 +121,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -128,7 +130,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -141,7 +143,8 @@
     "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k active_index -q -> 5 passed",
     "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py backend/tests/test_aistock_guardrail_scan.py -q -> 366 passed, 2 skipped on merged final workflow code",
     "python -m nox -s validation_module_registry_l0 -> passed",
-    "python -m nox -s guardrail_changed_files -> passed, files=3 blocking=0"
+    "python -m nox -s guardrail_changed_files -> passed, files=3 blocking=0",
+    "shared BUG-1087/BUG-1091 source fix: workflow suite 366 passed, 2 skipped; focused concurrency tests 5 passed; CI green"
   ],
   "verification_budget": {
     "budget": "standard",
