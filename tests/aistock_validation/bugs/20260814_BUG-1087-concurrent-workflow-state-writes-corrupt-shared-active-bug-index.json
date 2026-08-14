@@ -143,7 +143,7 @@
   },
   "validation_evidence": [
     "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k active_index -q -> 5 passed",
-    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py backend/tests/test_aistock_guardrail_scan.py -q -> 360 passed, 2 skipped",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py backend/tests/test_aistock_guardrail_scan.py -q -> 366 passed, 2 skipped on merged final workflow code",
     "python -m nox -s validation_module_registry_l0 -> passed",
     "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation --output-format summary -> passed",
     "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --module validation --output-format summary -> passed",
