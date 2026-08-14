@@ -88,7 +88,11 @@ def _write_runtime_catalog(root: Path) -> Path:
                 "targets": {
                     "backend-main": {
                         "runtime_kind": "backend",
-                        "source_globs": ["backend/**/*.py", "requirements*.txt"],
+                        "source_globs": [
+                            "backend/**/*.py",
+                            "scripts/qe_sector_risk_overlay_artifacts.py",
+                            "requirements*.txt",
+                        ],
                         "production_port": 8001,
                         "isolated_validation_ports": [8011, 8012],
                         "probe_origins": ["http://127.0.0.1:8001"],
@@ -1298,6 +1302,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["backend/tests/scripts/test_aistock_issue_workflow.py"],
         root=isolated_workflow_root,
     )
+    sector_risk_artifact = workflow._classify_runtime_impact(
+        ["scripts/qe_sector_risk_overlay_artifacts.py"],
+        root=isolated_workflow_root,
+    )
     offline_hmm_preparation = workflow._classify_runtime_impact(
         ["scripts/hmm_risk/prepare_state_model_set.py"],
         root=isolated_workflow_root,
@@ -1371,6 +1379,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert bug_registry_metadata_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_files"] == []
     assert backend_test["runtime_impact"] == "none"
+    assert sector_risk_artifact["runtime_impact"] == "backend"
+    assert sector_risk_artifact["target_ids"] == ["backend-main"]
     assert offline_hmm_preparation["runtime_impact"] == "none"
     assert offline_hmm_preparation["runtime_files"] == []
     assert offline_hmm_d1["runtime_impact"] == "none"
