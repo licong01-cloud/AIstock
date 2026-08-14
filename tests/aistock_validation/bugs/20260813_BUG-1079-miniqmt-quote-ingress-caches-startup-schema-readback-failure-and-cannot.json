@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1079",
-  "closed_at": null,
+  "closed_at": "2026-08-14T02:34:01.573564Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -130,8 +130,8 @@
   },
   "first_seen_at": "2026-08-13T17:31:47.868395Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4e2c3b7ca74dd3b3a7dd9e0d1427afdd6b88f6a1",
+  "fixed_at": "2026-08-13T18:01:56Z",
   "github_issue_number": 3430,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3430",
   "last_seen_at": "2026-08-13T17:31:47.868395Z",
@@ -139,8 +139,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3438",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_miniqmt_quote_activation.py -q",
   "required_verification": [
@@ -158,8 +159,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1079/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1079",
+      "catalog_sha256": "9212831ad8a6d18ed8e13020c10493ea90f42d6f11cbf74022157d442d25645f",
+      "contract_digest": "4f58697ecda75cbf36ffae77d341ccacb30dc3df0f1b8cfbdbf6c6867271929a",
+      "expected_identity": "4e2c3b7ca74dd3b3a7dd9e0d1427afdd6b88f6a1",
+      "generated_at": "2026-08-14T02:12:11.590557Z",
+      "mode": "read_only",
+      "observed_identity": "e25753dc88c329ba076713e68d110eab7af6a6f3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2c39757ad00687c16566b215f206b51fefcd5c1633033045324be5866260a78c",
+      "receipt_sha256": "765ac96d33c088428594f264564185cf06567c69c7e06fad393a4addda6e8d6d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "4cc1d61c5cae042fb1c34e32679a6d91d3e70ed0cf7bb6333bb17f909b25915b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -169,7 +187,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -178,6 +196,9 @@
     "fingerprint": "fc125b97f36d88e2c63272fd",
     "source_event_id": "FE-20260813-fc125b97f36d"
   },
+  "validation_evidence": [
+    "Post-restart runtime identity e25753dc includes source merge 4e2c3b7c; MiniQMT quote ingress activation reports READY with production_ddl_gate applied_and_verified."
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
