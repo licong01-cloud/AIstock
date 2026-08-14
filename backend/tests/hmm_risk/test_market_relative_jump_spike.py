@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import math
 from datetime import date, timedelta
 from pathlib import Path
@@ -284,6 +285,9 @@ def test_semantic_mapping_is_score_based_and_ties_fail() -> None:
             np.asarray([[0.0, 0, 0, 0, 0], [0.0, 0, 0, 0, 0], [1.0, 0, 0, 0, 0]]),
         )
     assert captured.value.reason_code == subject.REASON_SEMANTIC_TIE
+    with pytest.raises(subject.JumpSpikeError) as invalid:
+        subject.semantic_mapping("unknown", subject.RELATIVE_FEATURES, np.zeros((3, 5)))
+    assert invalid.value.reason_code == subject.REASON_INPUT_IDENTITY
 
 
 def test_relative_metrics_require_real_cross_section_and_future_boundary() -> None:
@@ -577,3 +581,30 @@ def test_cli_loader_request_stops_at_development_and_has_no_defaults() -> None:
     assert captured.value.reason_code == subject.REASON_HOLDOUT
     with pytest.raises(SystemExit):
         cli.main([])
+
+
+def test_cli_writes_typed_failure_sibling_without_touching_source(tmp_path: Path) -> None:
+    request = tmp_path / "invalid-request.json"
+    request.write_text("{not-json", encoding="utf-8")
+    output = tmp_path / "candidate.json"
+
+    result = cli.main(
+        [
+            "--request",
+            str(request),
+            "--output",
+            str(output),
+            "--db-env-prefix",
+            "UNUSED_FOR_INVALID_REQUEST",
+        ]
+    )
+
+    assert result == 1
+    assert not output.exists()
+    failure = tmp_path / "candidate.failure.json"
+    payload = json.loads(failure.read_text(encoding="utf-8"))
+    assert payload["status"] == "NOT_AVAILABLE_FOR_PROMOTION"
+    assert payload["failure_reason_code"] == subject.REASON_INPUT_IDENTITY
+    assert payload["failure_receipt_write"] is True
+    assert payload["database_write"] is False
+    assert payload["runtime_action"] is False

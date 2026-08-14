@@ -659,18 +659,20 @@ def fit_jump_model(
 
 def semantic_mapping(component: str, feature_names: Sequence[str], centers: np.ndarray) -> dict[int, str]:
     if component == "market":
-        if centers.shape[0] != 2:
-            raise _fail(REASON_INPUT_IDENTITY, "market model must have two states", stage="semantic")
+        if tuple(feature_names) != MARKET_FEATURES or centers.shape != (2, len(MARKET_FEATURES)):
+            raise _fail(REASON_INPUT_IDENTITY, "market semantic identity is invalid", stage="semantic")
         daily_index = tuple(feature_names).index("daily_return")
         volatility_index = tuple(feature_names).index("volatility_Nd")
         scores = centers[:, daily_index] - centers[:, volatility_index]
         labels = ("risk_off", "risk_on")
-    else:
-        if centers.shape[0] != 3:
-            raise _fail(REASON_INPUT_IDENTITY, "relative model must have three states", stage="semantic")
+    elif component in {"L1_relative", "L2_relative"}:
+        if tuple(feature_names) != RELATIVE_FEATURES or centers.shape != (3, len(RELATIVE_FEATURES)):
+            raise _fail(REASON_INPUT_IDENTITY, "relative semantic identity is invalid", stage="semantic")
         excess_index = tuple(feature_names).index("excess_return_Nd")
         scores = centers[:, excess_index]
         labels = ("fading", "neutral", "trending")
+    else:
+        raise _fail(REASON_INPUT_IDENTITY, "semantic component identity is invalid", stage="semantic")
     if not np.isfinite(scores).all():
         raise _fail(REASON_SEMANTIC_TIE, "semantic score is non-finite", stage="semantic")
     order = np.argsort(scores, kind="stable")
@@ -709,8 +711,11 @@ def _benchmark_rows(dataset_manifest: Mapping[str, Any]) -> dict[date, float]:
     for item in rows:
         if not isinstance(item, list) or len(item) != 2:
             raise _fail(REASON_INPUT_IDENTITY, "benchmark manifest row is invalid", stage="input")
-        day = _as_date(item[0])
-        value = float(item[1])
+        try:
+            day = _as_date(item[0])
+            value = float(item[1])
+        except (TypeError, ValueError) as exc:
+            raise _fail(REASON_INPUT_IDENTITY, "benchmark manifest row is invalid", stage="input") from exc
         if day in output or not math.isfinite(value):
             raise _fail(REASON_INPUT_IDENTITY, "benchmark manifest is duplicate or non-finite", stage="input")
         output[day] = value
@@ -723,7 +728,10 @@ def _daily_returns(panel: pd.DataFrame) -> dict[tuple[str, date], float]:
         raise _fail(REASON_INPUT_IDENTITY, "panel daily_return is missing", stage="metric")
     output: dict[tuple[str, date], float] = {}
     for row in frame.itertuples(index=False):
-        value = float(getattr(row, "daily_return"))
+        try:
+            value = float(getattr(row, "daily_return"))
+        except (TypeError, ValueError):
+            continue
         if math.isfinite(value):
             output[(str(getattr(row, "sector_code")), getattr(row, "trade_date"))] = value
     return output
