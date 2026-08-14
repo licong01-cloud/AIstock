@@ -1488,6 +1488,44 @@ def test_bug_1032_offline_hmm_state_model_set_preserves_real_backend_detection(
     assert mixed["target_ids"] == ["backend-main"]
 
 
+def test_bug_1093_offline_hmm_jump_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/market_relative_jump_spike.py",
+        "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
+        "scripts/hmm_risk/run_market_relative_jump_spike.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_unregistered = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_runtime_candidate.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_unregistered["runtime_impact"] == "backend"
+    assert nearby_unregistered["target_ids"] == ["backend-main"]
+
+
 def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
     isolated_workflow_root: Path,
 ) -> None:
