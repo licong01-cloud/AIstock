@@ -2649,6 +2649,43 @@ C-008/B3历史artifact、selection、D6或READY；旧B3的两个family、四leve
     C-011方向批准、文档完成、聚合或spike均不增加F-011/F-013产品验收计数；当前canonical模型、FULL_READY、COVERAGE_AVAILABLE、
     generator、API/UI、database/runtime write均为0/未执行。
 
+#### 4.3.4.1 P2-2 既有 child evidence 单遍聚合合同
+
+P2-2 不建立通用 evidence 平台，也不重新执行 HMM。唯一输入为已完成且 parent receipt 精确绑定的
+`TRANSITION-DWELL-B` parent 与两个 fresh-process child；实现必须逐 child 单遍读取，核验 parent report、child canonical hash、
+entry payload hash 与 profile payload hash，只抽取 `aggregate_receipt.l2_domain_receipts`、`level_repeat.entries` 和 `profiles`，并跳过
+`models` 大 payload。禁止整 child 复制、整对象 JSON load、重新 materialize observation、refit、D5/D6、seed/family selection 或
+model/READY 写入。
+
+聚合 schema 固定为 `hmm_risk_phase2_p2_2_evidence_aggregation_v1`，至少包含：
+
+1. 每个 `seed × sector` 的 D3/D4 status、typed rejected stage/reason、early/late structure status/reason、主导失败类别和跨窗口持续失败标志；
+2. 主导 stage 顺序仅用于诊断归类：`fit → likelihood → covariance → train_occupancy → model_entry`；不存在 D3/D4 rejection 时，再按
+   `posterior → transition/run/dwell → occupancy/coverage → other_structure` 归类，不改变任何正式 acceptance；
+3. 仅当 D3/D4 accepted 且同一 K=3 entry 的 early/late 均 structural-unobserved 时，允许标记
+   `K3_STRUCTURE_COLLAPSE_SUGGESTS_K2_HYPOTHESIS`。该标记必须同时写入 `k2_fit_performed=false`、`k_selected=false`；不得据此选择 K=2；
+4. coverage denominator 固定为 source child 的 131 个 canonical L2 sector。size/liquidity 仅使用冻结 train receipts 的逐 sector
+   `median(price_expected_weight)` 与 `median(moneyflow_contributor_amount)` 做诊断 quintile；不得访问 validation/future utility；
+5. child 不携带 L2→L1 parent/industry authority，因此 P2-2 对 L1/industry bias 必须写
+   `insufficient_evidence/hmm_risk_p2_2_child_artifact_l1_mapping_unavailable`，不得按代码前缀猜测、访问数据库补写或隐藏该缺口。P2-3
+   exact coverage contract 必须另行绑定 canonical hierarchy mapping 后才能形成 FULL_READY/COVERAGE_AVAILABLE 代表性结论；
+6. 两 fresh process 的 compact records 必须 canonical 相同；coverage 必须按 `(sector_code,trade_date)` 唯一键闭合，并证明 131 个 sector 共享同一冻结日期集合，输出保存日期起止与 canonical date-set hash；输出使用并发首次写入也不得覆盖既有结果的 collision-safe append-only write。任何 hash、denominator、array closure、
+   finite proxy 或 process identity 不一致均 fail closed，不产生 `diagnostic_complete`；
+7. 输出必须显式保留 `refit/selection/family_selection/D5/D6/model/READY/database/runtime=false` 和
+   `formal_product_thresholds_applied=false`。聚合完成只允许进入 P2-3 精确设计，不增加 F-011/F-013 完成计数。
+
+2026-08-14 首次正式执行结果：parent=`transition_dwell_b_postbug1068_20260813_29417ceb/transition_dwell_b.json`，两 child
+canonical/payload closure一致；聚合输出 schema=`hmm_risk_phase2_p2_2_evidence_aggregation_v1`、receipt SHA-256=
+`8aed2bc4c22037120fe6757e75fed8dc7407d8dcd12b4275f6a08e0c29194698`、`1048/1048` seed×sector records。主导类别为
+`accepted=879`、`transition_run_dwell=149`、`occupancy_coverage=17`、`train_occupancy=3`；10个sector至少一个seed跨early/late
+持续失败，其中`801155.SI`为8/8、`801038.SI`为7/8、`801141.SI`为6/8。9个D3/D4 accepted sector只形成
+`K3_STRUCTURE_COLLAPSE_SUGGESTS_K2_HYPOTHESIS`，未执行K=2 fit或K选择。size/liquidity quintile诊断未显示失败只集中在最低
+quintile。冻结domain分母为每sector相同的601日集合（`2022-01-04..2024-06-28`，date-set SHA-256=`b48fb5e911295d1c16920178b6ea48285c5890455aeaa31ad03ef7e11841f715`），`78362`个valid与`369`个typed invalid receipts按唯一`(sector_code,trade_date)`闭合`131×601=78731`；仅
+`801114.SI`与`801952.SI`同时出现在10个persistent sector和32个存在invalid date的sector中，不能把主导结构失败归因于domain缺口。
+L1 parent/industry mapping仍为typed insufficient。所有refit/selection/family selection/D5/D6/model/READY/DB/runtime
+flags均为false。该证据把P2-3的唯一spike建议收敛为`market_regime + sector_relative_strength`部署结构，并优先评估jump estimator；
+精确estimator、K、fold、metric、coverage与family/restart合同仍为`PENDING_USER_APPROVAL`，本次不得实施。
+
 ### 4.4 InputManifest
 
 `hmm_risk_input_manifest_v1` 至少包含：
