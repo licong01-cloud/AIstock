@@ -283,6 +283,32 @@ def test_sector_data_materialization_files_select_only_local_data_plan(tmp_path:
     assert payload["unmapped_code_files"] == []
 
 
+def test_daily_basic_operator_files_select_local_data_plan(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/backfill_tushare_daily_basic_fields.py",
+            "scripts/ingest_tushare_daily_basic.py",
+            "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
+            "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_plan_keys"] == ["l0", "data_sync_autonomy_backend"]
+    assert payload["backend_sessions"] == ["data_sync_autonomy_backend"]
+    assert payload["catalog_impacted_modules"] == [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center",
+    ]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_advisory_snapshot_blob_ref_migrations_select_historical_range_plan(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [

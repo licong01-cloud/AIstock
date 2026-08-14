@@ -79,12 +79,23 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
 
 
 def _write_runtime_catalog(root: Path) -> Path:
+    for script_name in (
+        "scripts/backfill_tushare_daily_basic_fields.py",
+        "scripts/ingest_tushare_daily_basic.py",
+    ):
+        script_path = root / script_name
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text("# one-shot operator fixture\n", encoding="utf-8")
     path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         yaml.safe_dump(
             {
                 "schema_version": "aistock_runtime_target_catalog_v1",
+                "non_runtime_source_paths": [
+                    "scripts/backfill_tushare_daily_basic_fields.py",
+                    "scripts/ingest_tushare_daily_basic.py",
+                ],
                 "targets": {
                     "backend-main": {
                         "runtime_kind": "backend",
@@ -1440,6 +1451,143 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_contract["blocking"] == []
 
 
+def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_activation(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "scripts/backfill_tushare_daily_basic_fields.py",
+        "scripts/ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+        "tests/aistock_validation/bugs/BUG-1089.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ]
+    record = _bug(
+        bug_id="BUG-1089",
+        module="local_data",
+        allowed_write_scope=changed_files,
+        file_scope_contract=_file_scope_contract(changed_files),
+        required_verification=["validation_module_registry_l0"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+            "post_restart_effective_gate": "not_required",
+            "target_id": None,
+            "target_ids": [],
+        },
+    )
+    issue = _write_json(isolated_workflow_root / "bug-1089.json", record)
+
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert workflow._classify_runtime_impact(
+        ["scripts/unlisted_operator.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "unknown"
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=changed_files,
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s validation_module_registry_l0 -> passed"],
+        plan_only=True,
+        allow_missing_evidence=False,
+        code_intelligence_summary_override=_fake_code_intelligence_summary(),
+    )
+
+    assert payload["closure_ready"] is True
+    assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["runtime_contract"]["runtime_impact"] == "none"
+    assert payload["runtime_contract"]["blocking"] == []
+    assert payload["backend_restart"]["required"] is False
+
+
+def test_runtime_catalog_non_runtime_paths_are_exact_and_do_not_overlap_targets(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["non_runtime_source_paths"] = ["scripts/**/*.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="exact paths without wildcards"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    catalog["non_runtime_source_paths"] = ["backend/services/example.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="overlaps runtime targets"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+
+def test_runtime_catalog_non_runtime_paths_reject_future_alias_and_non_operator_entries(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+
+    invalid_entries = [
+        (["scripts\\backfill_tushare_daily_basic_fields.py"], "invalid relative path"),
+        (["scripts/FUTURE_OPERATOR.py"], "existing repository file"),
+        ([123], "entries must be strings"),
+    ]
+    for entries, expected_message in invalid_entries:
+        catalog["non_runtime_source_paths"] = entries
+        catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+        with pytest.raises(workflow.WorkflowError, match=expected_message):
+            workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    non_operator = isolated_workflow_root / "tools" / "offline.py"
+    non_operator.parent.mkdir(parents=True)
+    non_operator.write_text("# not an operator-script namespace\n", encoding="utf-8")
+    catalog["non_runtime_source_paths"] = ["tools/offline.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="Python operator scripts under scripts"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    catalog_path.write_text("- not-a-mapping\n", encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="must be a mapping"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+    assert workflow._classify_runtime_impact(
+        ["scripts/backfill_tushare_daily_basic_fields.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "unknown"
+
+
+def test_runtime_catalog_non_runtime_paths_reject_case_alias_and_symlink(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["non_runtime_source_paths"] = ["scripts/BACKFILL_TUSHARE_DAILY_BASIC_FIELDS.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="existing repository file|canonical repository path casing"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    alias = isolated_workflow_root / "scripts" / "daily_basic_alias.py"
+    alias.write_text("# symlink alias fixture\n", encoding="utf-8")
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda candidate: candidate == alias or original_is_symlink(candidate),
+    )
+    catalog["non_runtime_source_paths"] = ["scripts/daily_basic_alias.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="symbolic-link alias"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+
 def test_bug_1032_offline_hmm_state_model_set_preserves_real_backend_detection(
     isolated_workflow_root: Path,
 ) -> None:
@@ -1486,6 +1634,44 @@ def test_bug_1032_offline_hmm_state_model_set_preserves_real_backend_detection(
     assert mixed["runtime_impact"] == "backend"
     assert mixed["runtime_files"] == ["backend/services/example.py"]
     assert mixed["target_ids"] == ["backend-main"]
+
+
+def test_bug_1093_offline_hmm_jump_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/market_relative_jump_spike.py",
+        "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
+        "scripts/hmm_risk/run_market_relative_jump_spike.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_unregistered = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_runtime_candidate.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_unregistered["runtime_impact"] == "backend"
+    assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
 def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
@@ -11241,6 +11427,75 @@ def test_cleanup_after_merge_uses_pr_merge_commit_when_origin_drifted(
     assert payload["merge_verification"]["method"] == "squash_merge_head_oid_changed_paths_equivalent_to_merge_commit"
     assert payload["merge_verification"]["path_equivalence"]["target_ref"] == "merge123"
     assert payload["merge_verification"]["merge_commit_path_equivalence"]["verified"] is True
+
+
+@pytest.mark.parametrize(("merge_in_origin", "expected_verified"), [(True, True), (False, False)])
+def test_cleanup_merge_verification_uses_exact_pr_head_identity_when_allocator_path_differs(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    merge_in_origin: bool,
+    expected_verified: bool,
+) -> None:
+    branch = "bug/BUG-199-allocator-preservation"
+    head_oid = "a" * 40
+    merge_commit = "b" * 40
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": pr_url,
+                "headRefName": branch,
+                "headRefOid": head_oid,
+                "mergeCommit": {"oid": merge_commit},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, cwd=None, check=True: head_oid if args[:2] == ["rev-parse", "--verify"] else "",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_commit_is_ancestor",
+        lambda ancestor, descendant, root: merge_in_origin
+        if (ancestor, descendant) == (merge_commit, "origin/main")
+        else False,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_ref",
+        lambda *args, **kwargs: {
+            "verified": False,
+            "reason": "changed_paths_differ",
+            "changed_files": ["tests/aistock_validation/bugs/.bug_id_allocator.json"],
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_origin",
+        lambda *args, **kwargs: {"verified": False, "reason": "changed_paths_differ"},
+    )
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: False)
+
+    payload = workflow._cleanup_merge_verification(
+        branch,
+        "https://github.example/pull/199",
+        False,
+        cwd=isolated_workflow_root,
+    )
+
+    assert payload["verified"] is expected_verified
+    assert payload["pr_head_identity"]["merge_commit_in_origin_main"] is merge_in_origin
+    if expected_verified:
+        assert payload["method"] == "merged_pr_exact_head_identity_in_origin_main"
+        assert payload["squash_merge_verified"] is True
+    else:
+        assert payload["method"] is None
 
 
 def test_cleanup_after_merge_blocks_when_squash_pr_head_tree_differs(
