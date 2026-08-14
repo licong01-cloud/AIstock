@@ -90,6 +90,7 @@ def _write_runtime_catalog(root: Path) -> Path:
                         "runtime_kind": "backend",
                         "source_globs": [
                             "backend/**/*.py",
+                            "scripts/score_weighted_strategy.py",
                             "scripts/qe_sector_risk_overlay_artifacts.py",
                             "requirements*.txt",
                         ],
@@ -1302,6 +1303,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["backend/tests/scripts/test_aistock_issue_workflow.py"],
         root=isolated_workflow_root,
     )
+    score_weighted_asset = workflow._classify_runtime_impact(
+        ["scripts/score_weighted_strategy.py"],
+        root=isolated_workflow_root,
+    )
     sector_risk_artifact = workflow._classify_runtime_impact(
         ["scripts/qe_sector_risk_overlay_artifacts.py"],
         root=isolated_workflow_root,
@@ -1379,6 +1384,9 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert bug_registry_metadata_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_files"] == []
     assert backend_test["runtime_impact"] == "none"
+    assert score_weighted_asset["runtime_impact"] == "backend"
+    assert score_weighted_asset["target_ids"] == ["backend-main"]
+    assert score_weighted_asset["runtime_files"] == ["scripts/score_weighted_strategy.py"]
     assert sector_risk_artifact["runtime_impact"] == "backend"
     assert sector_risk_artifact["target_ids"] == ["backend-main"]
     assert offline_hmm_preparation["runtime_impact"] == "none"
