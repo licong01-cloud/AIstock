@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1022",
-  "closed_at": null,
+  "closed_at": "2026-08-13T17:35:30.079343Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -124,8 +124,8 @@
   },
   "first_seen_at": "2026-08-11T09:27:37.903132Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a7bc06a33ec6ddd52165934e9f5645dca8421dee",
+  "fixed_at": "2026-08-11T10:54:44Z",
   "github_issue_number": 3282,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3282",
   "last_seen_at": "2026-08-11T09:27:37.903132Z",
@@ -133,6 +133,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3283",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -154,8 +155,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1022\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1022",
+      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
+      "contract_digest": "ec358f84f2fe5f956a5bd21e20df5c640774c0902e1fb7190c62cae173e7e7db",
+      "expected_identity": "a7bc06a33ec6ddd52165934e9f5645dca8421dee",
+      "generated_at": "2026-08-13T17:34:47.820861Z",
+      "mode": "read_only",
+      "observed_identity": "5151eebb7661204457b7f5be79de1424df2d4844",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7cfe9d456472a13c83063e457078374ab93313cd1263f50ce77485a5c4c25bb9",
+      "receipt_sha256": "6a0df5c3ac05c35a7ae0b1402efa528256ab9c6feb30eb7d899aad1fbe59fd24",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1a084b761ea6f032a8f9caae4d3c6a647a4c515f6e42090f91266ba387667ac8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -165,7 +183,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "qe"
   ],
@@ -184,7 +202,8 @@
     "rtk nox -s guardrail_changed_files on 3 staged CI-mapping files -> files=3 findings=0 blocking=0 mapped=3",
     "python scripts/aistock_feature_workflow.py validate --design docs/analysis/sector_rotation_factors_develop_spec_20260710.md --tier F2 -> PASS 30/30 warnings=0",
     "git diff --check -> passed",
-    "DESIGN-COMPLIANCE-001 second-round source review -> PASS all four items"
+    "DESIGN-COMPLIANCE-001 second-round source review -> PASS all four items",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1022 --target backend-main --expected-identity a7bc06a33ec6ddd52165934e9f5645dca8421dee -> passed (workflow_gate=verified, ancestor identity, health/identity/business smoke complete)"
   ],
   "verification_budget": {
     "budget": "standard",

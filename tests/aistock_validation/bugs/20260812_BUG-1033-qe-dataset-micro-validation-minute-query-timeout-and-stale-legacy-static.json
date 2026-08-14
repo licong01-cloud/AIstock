@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1033",
-  "closed_at": null,
+  "closed_at": "2026-08-13T18:50:45.135935Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -239,9 +239,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1033-final-runtime-close-20260813\\tmp\\issue_workflow\\BUG-1033\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1033",
+      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
+      "contract_digest": "06b0a0b42e62fad1bbf70c0a25b66b1b7aadab6f26787394ce2da82a62aa8044",
+      "expected_identity": "9bba196894ca765f4bf837dcac601a2fc30f4323",
+      "generated_at": "2026-08-13T18:50:27.037059Z",
+      "mode": "read_only",
+      "observed_identity": "5151eebb7661204457b7f5be79de1424df2d4844",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c22022eec9b951b8338bad15ed8182924142747aca6a78e8a1d282c81e9aee96",
+      "receipt_sha256": "86b997825312cf532dc1284d7022028573354f5a8265012048d66d1301d607d4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "60637103f1e6dfbe74cbcc8f6757fca3f2972dd5d490436cee431d2d63859f7b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -251,7 +267,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -264,7 +280,8 @@
     "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider -> 348 passed, 2 skipped",
     "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership mapped=14 unmapped=0 ambiguous=0",
     "python -m nox -s guardrail_changed_files -> passed; l0 scanned 10 changed files with blocking=0",
-    "python -m nox -s qlib_data_backend -> 15 passed"
+    "python -m nox -s qlib_data_backend -> 15 passed",
+    "python -m nox -s qlib_data_backend -> 15 passed (source PR receipt)"
   ],
   "validation_receipts": [
     {
