@@ -570,6 +570,128 @@ def test_top_level_orchestrator_preserves_partial_attempts_on_unknown_failure(
     assert len(captured.value.evidence["fit_attempts"]) == 5
 
 
+def test_component_orchestration_rejects_incomplete_lambda_and_refits_selected_lambda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    folds = (
+        {
+            "fold": f"fold-{index}",
+            "train_start": date(2024, 1, 2),
+            "train_end": date(2024, 1, 2 + index),
+            "validation_start": date(2024, 1, 3 + index),
+            "validation_end": date(2024, 1, 3 + index),
+            "train_days": 1,
+            "validation_days": 1,
+        }
+        for index in range(1, 4)
+    )
+    folded = tuple(folds)
+    monkeypatch.setattr(subject, "FOLDS", folded)
+    monkeypatch.setattr(subject, "LAMBDA_GRID", (0.25, 0.5))
+    monkeypatch.setattr(subject, "RESTART_SEEDS", (42,))
+
+    def fake_prepare(
+        panel: pd.DataFrame,
+        *,
+        component: str,
+        level: str,
+        feature_names: tuple[str, ...],
+        start: date,
+        **kwargs: object,
+    ) -> subject.PreparedComponent:
+        del panel, kwargs
+        values = np.zeros((1, len(feature_names)), dtype=np.float64)
+        return subject.PreparedComponent(
+            component=component,
+            level=level,
+            feature_names=tuple(feature_names),
+            expected_sector_count=31,
+            minimum_daily_count=28,
+            canonical_codes=("S1",),
+            sequences=(subject.SequenceData(start.isoformat(), (start,), (0,), values),),
+            preprocessor=subject.Preprocessor(
+                tuple(feature_names),
+                tuple(-1.0 for _ in feature_names),
+                tuple(1.0 for _ in feature_names),
+                tuple(0.0 for _ in feature_names),
+                tuple(1.0 for _ in feature_names),
+                1,
+                "a" * 64,
+            ),
+            unavailable_items=(),
+            valid_row_count=1,
+            valid_identity_sha256="b" * 64,
+        )
+
+    def fake_restarts(
+        component: subject.PreparedComponent,
+        *,
+        state_count: int,
+        jump_penalty: float,
+        attempt_log: list[dict[str, object]],
+        context: dict[str, object],
+    ) -> tuple[subject.JumpFit, list[dict[str, object]]]:
+        attempt = {**context, "seed": 42, "jump_penalty": jump_penalty, "status": "fit_completed"}
+        attempt_log.append(attempt)
+        fit = subject.JumpFit(
+            centers=np.full((state_count, len(component.feature_names)), jump_penalty, dtype=np.float64),
+            paths=(np.zeros(1, dtype=np.int64),),
+            objective=jump_penalty,
+            normalized_objective=jump_penalty,
+            iterations=1,
+            seed=42,
+            jump_penalty=jump_penalty,
+            row_count=1,
+            feature_count=len(component.feature_names),
+        )
+        return fit, [attempt]
+
+    def fake_states(
+        component: subject.PreparedComponent,
+        paths: tuple[np.ndarray, ...],
+        mapping: dict[int, str],
+    ) -> dict[tuple[str, date], str]:
+        del mapping
+        return {(component.sequences[0].key, component.sequences[0].dates[0]): str(int(paths[0][0]))}
+
+    def fake_metrics(states: dict[tuple[str, date], str], *args: object, **kwargs: object) -> dict[str, object]:
+        del args
+        penalty_code = int(next(iter(states.values())))
+        fold_start = kwargs["validation_start"]
+        valid = not (penalty_code == 25 and fold_start == folded[1]["validation_start"])
+        return {
+            "metric_valid": valid,
+            "mean_rank_ic": penalty_code / 100.0 if valid else None,
+            "mean_spread": penalty_code / 200.0 if valid else None,
+        }
+
+    monkeypatch.setattr(subject, "prepare_component", fake_prepare)
+    monkeypatch.setattr(subject, "_run_restarts", fake_restarts)
+    monkeypatch.setattr(subject, "semantic_mapping", lambda *args, **kwargs: {0: "fading", 1: "neutral", 2: "trending"})
+    monkeypatch.setattr(
+        subject,
+        "causal_states",
+        lambda component, centers, jump_penalty: (np.asarray([int(jump_penalty * 100)], dtype=np.int64),),
+    )
+    monkeypatch.setattr(subject, "state_rows", fake_states)
+    monkeypatch.setattr(subject, "relative_fold_metrics", fake_metrics)
+
+    attempt_log: list[dict[str, object]] = []
+    result = subject._run_component(
+        "L1_relative",
+        inputs={"panel": pd.DataFrame()},
+        calendar=(subject.DEVELOPMENT_START, subject.DEVELOPMENT_END),
+        benchmark={},
+        attempt_log=attempt_log,
+    )
+
+    assert [item["lambda_eligible"] for item in result["lambda_receipts"]] == [False, True]
+    assert result["selected_lambda"] == 0.5
+    assert result["final_selected_seed"] == 42
+    assert len(attempt_log) == 7
+    assert result["holdout_accessed"] is False
+
+
 def test_cli_loader_request_stops_at_development_and_has_no_defaults() -> None:
     source = {"source_start": "2021-01-01", "source_end": subject.DEVELOPMENT_END.isoformat()}
     result = cli._loader_request({"source": source})
