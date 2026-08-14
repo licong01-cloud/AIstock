@@ -761,6 +761,15 @@ rules:
     layer: backend_dependency_manifest
     risk_level: high
     ownership_reason: The pinned Python dependency manifests control reproducible backend runtime package identity and production dependency aftercare.
+  - rule_id: aistock_windows_backend_launcher
+    priority: 90
+    include:
+      - start_all_ai_stock.bat
+    primary_module: platform.config
+    impact_modules: [platform.api]
+    layer: runtime_launcher
+    risk_level: high
+    ownership_reason: The canonical Windows launcher selects the production backend interpreter and must preserve deterministic backend runtime identity.
   - rule_id: hmm_evolution_services
     priority: 90
     include:
