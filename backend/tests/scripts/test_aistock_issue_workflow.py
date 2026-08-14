@@ -88,7 +88,12 @@ def _write_runtime_catalog(root: Path) -> Path:
                 "targets": {
                     "backend-main": {
                         "runtime_kind": "backend",
-                        "source_globs": ["backend/**/*.py", "requirements*.txt"],
+                        "source_globs": [
+                            "backend/**/*.py",
+                            "scripts/score_weighted_strategy.py",
+                            "scripts/qe_sector_risk_overlay_artifacts.py",
+                            "requirements*.txt",
+                        ],
                         "production_port": 8001,
                         "isolated_validation_ports": [8011, 8012],
                         "probe_origins": ["http://127.0.0.1:8001"],
@@ -1298,6 +1303,14 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["backend/tests/scripts/test_aistock_issue_workflow.py"],
         root=isolated_workflow_root,
     )
+    score_weighted_asset = workflow._classify_runtime_impact(
+        ["scripts/score_weighted_strategy.py"],
+        root=isolated_workflow_root,
+    )
+    sector_risk_artifact = workflow._classify_runtime_impact(
+        ["scripts/qe_sector_risk_overlay_artifacts.py"],
+        root=isolated_workflow_root,
+    )
     offline_hmm_preparation = workflow._classify_runtime_impact(
         ["scripts/hmm_risk/prepare_state_model_set.py"],
         root=isolated_workflow_root,
@@ -1371,6 +1384,11 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert bug_registry_metadata_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_files"] == []
     assert backend_test["runtime_impact"] == "none"
+    assert score_weighted_asset["runtime_impact"] == "backend"
+    assert score_weighted_asset["target_ids"] == ["backend-main"]
+    assert score_weighted_asset["runtime_files"] == ["scripts/score_weighted_strategy.py"]
+    assert sector_risk_artifact["runtime_impact"] == "backend"
+    assert sector_risk_artifact["target_ids"] == ["backend-main"]
     assert offline_hmm_preparation["runtime_impact"] == "none"
     assert offline_hmm_preparation["runtime_files"] == []
     assert offline_hmm_d1["runtime_impact"] == "none"
@@ -7280,7 +7298,7 @@ def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
 ) -> None:
     commands: list[list[str]] = []
 
-    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
         commands.append(args)
         assert args[:3] == ["gh", "pr", "view"]
         return {
@@ -7290,7 +7308,7 @@ def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
             "stderr": "",
         }
 
-    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
 
     payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
 
@@ -7302,9 +7320,199 @@ def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
             "view",
             "https://github.example/pull/199",
             "--json",
-            "state,mergeStateStatus,statusCheckRollup,url,headRefOid",
+            "state,mergeStateStatus,mergeable,statusCheckRollup,url,headRefOid,baseRefName",
         ]
     ]
+
+
+def test_merge_read_transport_failures_recover_through_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "a" * 40
+    merge_sha = "b" * 40
+    commands: list[list[str]] = []
+
+    def ok(payload: Any) -> dict[str, Any]:
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] in (["gh", "pr", "view"], ["gh", "pr", "checks"]):
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"] and args[2].endswith("/pulls/199"):
+            return ok(
+                {
+                    "state": "open",
+                    "merged": False,
+                    "mergeable": True,
+                    "mergeable_state": "clean",
+                    "head": {"sha": head_sha},
+                    "base": {"ref": "main"},
+                    "html_url": "https://github.example/pull/199",
+                }
+            )
+        if args[:2] == ["gh", "api"] and "/branches/main/protection/required_status_checks" in args[2]:
+            return ok({"contexts": ["CI verdict"], "checks": [{"context": "CI verdict", "app_id": 15368}]})
+        if args[:2] == ["gh", "api"] and "/check-runs?" in args[2]:
+            return ok(
+                {
+                    "total_count": 1,
+                    "check_runs": [
+                        {
+                            "id": 9,
+                            "name": "CI verdict",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "app": {"id": 15368},
+                        }
+                    ],
+                }
+            )
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "headRefOid": head_sha, "mergeCommit": {"oid": merge_sha}},
+        },
+    )
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["verified"]["pr"]["mergeCommit"]["oid"] == merge_sha
+    assert [item["stage"] for item in payload["read_fallbacks"]] == ["pr_view", "required_checks"]
+    assert sum(args[:3] == ["gh", "pr", "view"] for args in commands) == 2
+    assert sum(args[:3] == ["gh", "pr", "checks"] for args in commands) == 2
+    assert sum(args[:3] == ["gh", "pr", "merge"] for args in commands) == 1
+    assert not any(args[:2] == ["gh", "api"] and args[2].endswith("/status") for args in commands)
+
+
+def test_merge_read_non_transport_failure_is_not_retried_or_fallbacked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        return {"ok": False, "returncode": 1, "stdout": "", "stderr": "HTTP 403: forbidden"}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: pytest.fail(f"unexpected REST fallback: {pr_url}"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="403"):
+        workflow._merge_pr_view_with_transport_fallback("https://github.example/pull/199")
+
+    assert len(commands) == 1
+
+
+def test_rest_required_check_fallback_keeps_pending_check_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {"head_sha": head_sha, "base_ref": "main", "url": pr_url},
+    )
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        if "/branches/main/protection/required_status_checks" in args[2]:
+            payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
+        elif "/check-runs?" in args[2]:
+            payload = {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "id": 9,
+                        "name": "CI verdict",
+                        "status": "in_progress",
+                        "conclusion": None,
+                        "app": {"id": 15368},
+                    }
+                ],
+            }
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._rest_required_pr_check_result(
+        "https://github.example/pull/199",
+        expected_head=head_sha,
+        base_ref="main",
+    )
+
+    assert workflow._required_pr_check_summary(result)["pending"] == ["CI verdict"]
+
+
+def test_rest_required_check_fallback_rejects_head_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_head = "a" * 40
+    observed_head = "b" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {"head_sha": observed_head, "base_ref": "main", "url": pr_url},
+    )
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: pytest.fail("REST checks must not run"))
+
+    with pytest.raises(workflow.WorkflowError, match="PR head changed"):
+        workflow._rest_required_pr_check_result(
+            "https://github.example/pull/199",
+            expected_head=expected_head,
+            base_ref="main",
+        )
+
+
+def test_rest_required_check_fallback_honors_required_app_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "a" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {"head_sha": head_sha, "base_ref": "main", "url": pr_url},
+    )
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        if "/branches/main/protection/required_status_checks" in args[2]:
+            payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
+        elif "/check-runs?" in args[2]:
+            payload = {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "id": 9,
+                        "name": "CI verdict",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "app": {"id": 99999},
+                    }
+                ],
+            }
+        elif args[2].endswith("/status"):
+            pytest.fail("an app-bound required check must not fall back to a legacy commit status")
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._rest_required_pr_check_result(
+        "https://github.example/pull/199",
+        expected_head=head_sha,
+        base_ref="main",
+    )
+
+    assert workflow._required_pr_check_summary(result)["pending"] == ["CI verdict"]
 
 
 def test_merge_transport_failure_falls_back_once_to_head_pinned_rest(

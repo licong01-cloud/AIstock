@@ -1,61 +1,62 @@
 {
-  "actual": "R12P child backtests first fail with OSError WinError 1920 while scanning child workspace bak_basic.h5; after filtering WSL factor symlinks, the 16.9MB combined_prediction.pkl would exceed the 10MB qe_file_sync per-file limit.",
+  "actual": "qe_20260716_011004_21b2 Loop5 的 results_only 返回 results_only_retry_failed，agent_analysis error=invalid literal for int() with base 10: 'count'；RankIC 与 experiment_id 已写入但状态仍 failed。",
   "allowed_write_scope": [
-    "backend/services/multi_alpha/remote_dispatch.py",
-    "backend/tests/test_multi_alpha_remote_dispatch.py",
-    "tests/aistock_validation/bugs/20260718_BUG-753-qe-remote-combine-small-file-scan-dereferences-wsl-factor-symlinks.json",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/tests/unified_engine/test_qe_results_only_retry.py",
+    "tests/aistock_validation/bugs/20260715_BUG-666-qe-results-only-realdictrow-tuple.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-753",
-  "closed_at": "2026-08-13T18:53:40.499008Z",
+  "bug_id": "BUG-666",
+  "closed_at": "2026-08-13T18:23:10.814810Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-18T08:04:55.118560Z",
-  "description": "Remote combine small-file packaging dereferences DrvFS Linux factor symlinks before filtering them and incorrectly routes the large combined prediction through the 10MB small-file channel instead of the existing content-addressed Artifact Store.",
+  "created_at": "2026-07-15T21:40:00.405620Z",
+  "description": "qe_20260716_011004_21b2 Loop5 的 results_only 返回 results_only_retry_failed，agent_analysis error=invalid literal for int() with base 10: 'count'；RankIC 与 experiment_id 已写入但状态仍 failed。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260718-06f460b4a5f8",
-      "timestamp": "2026-07-18T08:04:55.118556Z"
+      "note": "Promoted from IC-20260715-502e594ab8be",
+      "timestamp": "2026-07-15T21:40:00.405617Z"
     },
     {
-      "action": "historical_source_merge_reconciled",
+      "action": "historical_equivalent_fix_reconciled",
       "actor": "codex",
-      "note": "Source fix was merged as 37083a2b / PR #2419; current-blueprint audit retains content-addressed Artifact Store routing and pre-stat dataset filtering, so only runtime/registry closure remained.",
-      "timestamp": "2026-08-13T18:48:00Z"
+      "note": "Current-blueprint audit found the same named-row status recomputation fix and direct RealDictRow regression test already merged in 423a60a7 via PR #2391; stale PR #2203 must not be rebased or merged.",
+      "timestamp": "2026-08-13T18:20:00Z"
     }
   ],
   "evidence_uris": [
-    "macb_453ca2d0c5b21b40_20240701_20260629_20260718T070807607324Z"
+    "backend/services/quantevolver/qe_evolution_service.py:6568",
+    "qe_20260716_011004_21b2_Loop5 agent_analysis"
   ],
-  "expected": "Filter dataset artifacts by name and suffix before any Windows stat/dereference; send only declared runtime files through qe_file_sync; publish combined_prediction.pkl through the content-addressed Artifact Store and link it in the remote workspace.",
+  "expected": "results_only 对完整既有制品完成幂等注册，按字典字段读取 status/count，Loop 状态为 completed，父任务按全部 loop 的真实状态重算；不得重复训练或回测。",
   "file_scope_contract": {
     "changed_files": [
-      "backend/services/multi_alpha/remote_dispatch.py",
-      "backend/tests/test_multi_alpha_remote_dispatch.py"
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_custom_evo_status.py"
     ]
   },
-  "first_seen_at": "2026-07-18T08:04:55.118560Z",
+  "first_seen_at": "2026-07-15T21:40:00.405620Z",
   "fix_branch": null,
-  "fix_commit": "37083a2b4bcf0d8fae0528174bfd7a7c5c0e0e08",
-  "fixed_at": "2026-07-18T08:32:21Z",
-  "github_issue_number": 2416,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2416",
-  "last_seen_at": "2026-07-18T08:04:55.118560Z",
-  "module": "multi_alpha",
+  "fix_commit": "423a60a7439f522a1ed8f3cb91cc43a823ea7548",
+  "fixed_at": "2026-07-17T19:31:40Z",
+  "github_issue_number": 2202,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2202",
+  "last_seen_at": "2026-07-15T21:40:00.405620Z",
+  "module": "quantevolver",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2419",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2391",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -q -p no:cacheprovider",
+  "reproduce_command": "MCP qe_custom_evo_retry_loop_confirmed(task_id=qe_20260716_011004_21b2, loop_index=5, retry_mode=results_only)",
   "required_verification": [
     "l0",
     "qe_read_backend"
@@ -64,28 +65,28 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1",
     "fresh_process_evidence": [
-      "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -q loads the tracked remote packaging fix in a fresh pytest process"
+      "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_status.py -q loads merged named-row status recomputation in a fresh pytest process"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "passed",
-    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-753-final-runtime-close-20260813\\tmp\\issue_workflow\\BUG-753\\post-restart-verify.json",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-666-historical-reconcile-20260813\\tmp\\issue_workflow\\BUG-666\\post-restart-verify.json",
     "post_restart_receipt_summary": {
-      "bug_id": "BUG-753",
+      "bug_id": "BUG-666",
       "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
-      "contract_digest": "599d0d3132810c53f19feb0d2d338841897011deb17955494c3e7bd234abb331",
-      "expected_identity": "37083a2b4bcf0d8fae0528174bfd7a7c5c0e0e08",
-      "generated_at": "2026-08-13T18:53:14.183862Z",
+      "contract_digest": "3bb7dfb5eefae24fe9cdf3a0b3b2f4e25f9580b5cb2d554ab2441e06773f9895",
+      "expected_identity": "423a60a7439f522a1ed8f3cb91cc43a823ea7548",
+      "generated_at": "2026-08-13T18:21:48.626363Z",
       "mode": "read_only",
       "observed_identity": "5151eebb7661204457b7f5be79de1424df2d4844",
       "post_restart_effective_gate": "passed",
-      "probe_evidence_digest": "a19a63e8df3d3527014510e9475f25b01a72aa47537ebeb9096497a38acaf5a7",
-      "receipt_sha256": "a0eab62d4e85fe1cdb6ad927e721989e075d88e6a81eb0a324087f81369f6d6b",
+      "probe_evidence_digest": "80ed714d5a78f67f24cd088317e907fd9c088751f7193efba0bc5de13620b38c",
+      "receipt_sha256": "6fd382014e0d27b72f5d0f539cbc76a5a17530e41d0083917a8ad64deeab75fb",
       "response_content_persisted": false,
-      "runtime_identity_proof_digest": "4b8a83cb4fb00b8c76f822f76794ce05db2af8826d502fe88b878fa68e2862c8",
+      "runtime_identity_proof_digest": "44b9771c6be0afa79c609072622deb80d4f05cf5575e38e8880e09986d2e7e21",
       "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
       "target_id": "backend-main"
     },
@@ -101,21 +102,21 @@
   "severity": "P1",
   "status": "verified",
   "suspected_modules": [
-    "multi_alpha"
+    "quantevolver"
   ],
-  "title": "QE remote combine small-file scan dereferences WSL factor symlinks",
+  "title": "QE results_only 重算父任务状态时将 RealDictRow 错当 tuple",
   "trigger_condition": {
-    "fingerprint": "06f460b4a5f871c05fc63553",
-    "source_event_id": "FE-20260718-06f460b4a5f8"
+    "fingerprint": "502e594ab8beb80ca4c1caad",
+    "source_event_id": "FE-20260715-502e594ab8be"
   },
   "validation_evidence": [
-    "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -q -> 53 passed, 1 skipped"
+    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_status.py -q -> 8 passed"
   ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
-        "multi_alpha",
+        "quantevolver",
         "qe_read"
       ],
       "plans": [
@@ -173,7 +174,7 @@
       "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
-          "multi_alpha",
+          "quantevolver",
           "qe_read"
         ],
         "plans": [

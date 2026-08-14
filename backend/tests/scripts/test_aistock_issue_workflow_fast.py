@@ -19,24 +19,20 @@ def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: 
 def test_merge_uses_only_github_required_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
 
-    monkeypatch.setattr(
-        workflow,
-        "_execute_checked",
-        lambda args, **kwargs: _result(
-            stdout=json.dumps(
-                {
-                    "state": "OPEN",
-                    "statusCheckRollup": [
-                        {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
-                        {"name": "advisory", "status": "COMPLETED", "conclusion": "FAILURE"},
-                    ],
-                }
-            )
-        ),
-    )
-
     def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
         commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return _result(
+                stdout=json.dumps(
+                    {
+                        "state": "OPEN",
+                        "statusCheckRollup": [
+                            {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                            {"name": "advisory", "status": "COMPLETED", "conclusion": "FAILURE"},
+                        ],
+                    }
+                )
+            )
         if args[:3] == ["gh", "pr", "checks"]:
             return _result(
                 stdout=json.dumps(

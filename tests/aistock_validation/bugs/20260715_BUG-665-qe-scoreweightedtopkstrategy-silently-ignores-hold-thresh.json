@@ -1,95 +1,75 @@
 {
-  "actual": "R12P child backtests first fail with OSError WinError 1920 while scanning child workspace bak_basic.h5; after filtering WSL factor symlinks, the 16.9MB combined_prediction.pkl would exceed the 10MB qe_file_sync per-file limit.",
+  "actual": "hold_thresh is accepted, rendered and passed to the strategy constructor, but base ScoreWeightedTopkStrategy sells any selected holding regardless of age.",
   "allowed_write_scope": [
-    "backend/services/multi_alpha/remote_dispatch.py",
-    "backend/tests/test_multi_alpha_remote_dispatch.py",
-    "tests/aistock_validation/bugs/20260718_BUG-753-qe-remote-combine-small-file-scan-dereferences-wsl-factor-symlinks.json",
+    "scripts/score_weighted_strategy.py",
+    "scripts/score_weighted_strategy_v2.py",
+    "scripts/register_score_weighted_strategy.py",
+    "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260715_BUG-665-qe-scoreweightedtopkstrategy-silently-ignores-hold-thresh.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-753",
-  "closed_at": "2026-08-13T18:53:40.499008Z",
+  "bug_id": "BUG-665",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-18T08:04:55.118560Z",
-  "description": "Remote combine small-file packaging dereferences DrvFS Linux factor symlinks before filtering them and incorrectly routes the large combined prediction through the 10MB small-file channel instead of the existing content-addressed Artifact Store.",
+  "created_at": "2026-07-15T20:39:56.603341Z",
+  "description": "hold_thresh is accepted, rendered and passed to the strategy constructor, but base ScoreWeightedTopkStrategy sells any selected holding regardless of age.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260718-06f460b4a5f8",
-      "timestamp": "2026-07-18T08:04:55.118556Z"
+      "note": "Promoted from IC-20260715-fb03ed52a6aa",
+      "timestamp": "2026-07-15T20:39:56.603338Z"
     },
     {
-      "action": "historical_source_merge_reconciled",
+      "action": "current_blueprint_reimplementation",
       "actor": "codex",
-      "note": "Source fix was merged as 37083a2b / PR #2419; current-blueprint audit retains content-addressed Artifact Store routing and pre-stat dataset filtering, so only runtime/registry closure remained.",
-      "timestamp": "2026-08-13T18:48:00Z"
+      "note": "Supersedes conflicting PR #2201 on current main. Preserves the current file-only QE data plane and capacity architecture; changes only normal ScoreWeightedTopkStrategy holding-period semantics and direct tests.",
+      "timestamp": "2026-08-13T18:09:08.7466067Z"
     }
   ],
   "evidence_uris": [
-    "macb_453ca2d0c5b21b40_20240701_20260629_20260718T070807607324Z"
+    "qe_20260716_042842_fd61 Loop1/Loop2 generated configs use hold_thresh 10/20 while scripts/score_weighted_strategy.py generate_trade_decision never reads hold_thresh"
   ],
-  "expected": "Filter dataset artifacts by name and suffix before any Windows stat/dereference; send only declared runtime files through qe_file_sync; publish combined_prediction.pkl through the content-addressed Artifact Store and link it in the remote workspace.",
-  "file_scope_contract": {
-    "changed_files": [
-      "backend/services/multi_alpha/remote_dispatch.py",
-      "backend/tests/test_multi_alpha_remote_dispatch.py"
-    ]
-  },
-  "first_seen_at": "2026-07-18T08:04:55.118560Z",
+  "expected": "QE ScoreWeightedTopkStrategy must preserve TopkDropoutStrategy minimum holding-period semantics for normal ranking exits, expose explicit diagnostics, and retain explicitly defined forced-risk exit precedence.",
+  "first_seen_at": "2026-07-15T20:39:56.603341Z",
   "fix_branch": null,
-  "fix_commit": "37083a2b4bcf0d8fae0528174bfd7a7c5c0e0e08",
-  "fixed_at": "2026-07-18T08:32:21Z",
-  "github_issue_number": 2416,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2416",
-  "last_seen_at": "2026-07-18T08:04:55.118560Z",
-  "module": "multi_alpha",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2200,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2200",
+  "last_seen_at": "2026-07-15T20:39:56.603341Z",
+  "module": "quantevolver",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2419",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -q -p no:cacheprovider",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_score_weighted_hold_thresh.py -q",
   "required_verification": [
-    "l0",
-    "qe_read_backend"
+    "l0"
   ],
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/strategies",
     "fresh_process_evidence": [
-      "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -q loads the tracked remote packaging fix in a fresh pytest process"
+      "WSL rdagent-gpu Python -I loaded persisted scripts/score_weighted_strategy.py and asserted hold-threshold helper -> passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "passed",
-    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-753-final-runtime-close-20260813\\tmp\\issue_workflow\\BUG-753\\post-restart-verify.json",
-    "post_restart_receipt_summary": {
-      "bug_id": "BUG-753",
-      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
-      "contract_digest": "599d0d3132810c53f19feb0d2d338841897011deb17955494c3e7bd234abb331",
-      "expected_identity": "37083a2b4bcf0d8fae0528174bfd7a7c5c0e0e08",
-      "generated_at": "2026-08-13T18:53:14.183862Z",
-      "mode": "read_only",
-      "observed_identity": "5151eebb7661204457b7f5be79de1424df2d4844",
-      "post_restart_effective_gate": "passed",
-      "probe_evidence_digest": "a19a63e8df3d3527014510e9475f25b01a72aa47537ebeb9096497a38acaf5a7",
-      "receipt_sha256": "a0eab62d4e85fe1cdb6ad927e721989e075d88e6a81eb0a324087f81369f6d6b",
-      "response_content_persisted": false,
-      "runtime_identity_proof_digest": "4b8a83cb4fb00b8c76f822f76794ce05db2af8826d502fe88b878fa68e2862c8",
-      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
-      "target_id": "backend-main"
-    },
-    "runtime_identity_match": true,
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -99,28 +79,22 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "verified",
+  "status": "open",
   "suspected_modules": [
-    "multi_alpha"
+    "quantevolver"
   ],
-  "title": "QE remote combine small-file scan dereferences WSL factor symlinks",
+  "title": "QE ScoreWeightedTopkStrategy silently ignores hold_thresh",
   "trigger_condition": {
-    "fingerprint": "06f460b4a5f871c05fc63553",
-    "source_event_id": "FE-20260718-06f460b4a5f8"
+    "fingerprint": "fb03ed52a6aa833c5bd827a9",
+    "source_event_id": "FE-20260715-fb03ed52a6aa"
   },
-  "validation_evidence": [
-    "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -q -> 53 passed, 1 skipped"
-  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
-        "multi_alpha",
-        "qe_read"
+        "quantevolver"
       ],
-      "plans": [
-        "qe_read_backend"
-      ],
+      "plans": [],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
@@ -173,12 +147,9 @@
       "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
-          "multi_alpha",
-          "qe_read"
+          "quantevolver"
         ],
-        "plans": [
-          "qe_read_backend"
-        ],
+        "plans": [],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
