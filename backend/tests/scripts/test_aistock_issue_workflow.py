@@ -7302,9 +7302,291 @@ def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
             "view",
             "https://github.example/pull/199",
             "--json",
-            "state,mergeStateStatus,statusCheckRollup,url",
+            "state,mergeStateStatus,statusCheckRollup,url,headRefOid",
         ]
     ]
+
+
+def test_merge_transport_failure_falls_back_once_to_head_pinned_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    merge_sha = "b" * 40
+    commands: list[list[str]] = []
+    readback_count = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal readback_count
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": head_sha}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:4] == ["gh", "api", "--method", "PUT"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"merged": True, "message": "Pull Request successfully merged", "sha": merge_sha}),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"]:
+            readback_count += 1
+            merged = readback_count == 2
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "closed" if merged else "open",
+                        "merged": merged,
+                        "merged_at": "2026-08-14T00:00:00Z" if merged else None,
+                        "merge_commit_sha": merge_sha if merged else None,
+                        "head": {"sha": head_sha},
+                        "html_url": "https://github.example/pull/199",
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["recovered_from_transport_error"] is True
+    assert payload["already_merged"] is False
+    assert payload["verified"]["source"] == "github_rest"
+    assert payload["verified"]["pr"]["mergeCommit"]["oid"] == merge_sha
+    rest_merge_commands = [args for args in commands if args[:4] == ["gh", "api", "--method", "PUT"]]
+    assert rest_merge_commands == [
+        [
+            "gh",
+            "api",
+            "--method",
+            "PUT",
+            f"repos/{workflow.GITHUB_REPO}/pulls/199/merge",
+            "-f",
+            f"sha={head_sha}",
+            "-f",
+            "merge_method=squash",
+        ]
+    ]
+
+
+def test_bug_merge_transport_fallback_records_recovery_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "a" * 40
+    merge_sha = "b" * 40
+    events: list[str] = []
+    readback_count = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal readback_count
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": head_sha}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "TLS handshake timeout"}
+        if args[:4] == ["gh", "api", "--method", "PUT"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"merged": True, "sha": merge_sha}),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"]:
+            readback_count += 1
+            merged = readback_count == 2
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "closed" if merged else "open",
+                        "merged": merged,
+                        "merge_commit_sha": merge_sha if merged else None,
+                        "head": {"sha": head_sha},
+                        "html_url": "https://github.example/pull/199",
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_append_event",
+        lambda bug_id, **kwargs: events.append(str(kwargs.get("event"))) or {"bug_id": bug_id},
+    )
+
+    payload = workflow._merge_pr_if_ready_for_bug("BUG-199", "https://github.example/pull/199")
+
+    assert payload["recovered_from_transport_error"] is True
+    assert "command:gh_rest_head_pinned_merge_fallback" in events
+    assert "merge_graphql_transport_rest_fallback" in events
+
+
+def test_merge_transport_fallback_fails_closed_on_head_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_head = "a" * 40
+    observed_head = "c" * 40
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": expected_head}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps([{"name": "CI verdict", "bucket": "pass"}]),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {"state": "open", "merged": False, "head": {"sha": observed_head}, "html_url": "https://github.example/pull/199"}
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="PR head changed"):
+        workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert not any(args[:4] == ["gh", "api", "--method", "PUT"] for args in commands)
+
+
+def test_merge_non_transport_error_does_not_use_rest_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": "a" * 40}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps([{"name": "CI verdict", "bucket": "pass"}]),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "merge queue policy rejected"}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: (_ for _ in ()).throw(workflow.WorkflowError(f"not merged: {pr_url}")),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="merge queue policy rejected"):
+        workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert not any(args[:2] == ["gh", "api"] for args in commands)
+
+
+def test_merge_success_uses_rest_only_when_graphql_verification_transport_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    merge_sha = "b" * 40
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": head_sha}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps([{"name": "CI verdict", "bucket": "pass"}]),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        if args[:2] == ["gh", "api"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "closed",
+                        "merged": True,
+                        "merged_at": "2026-08-14T00:00:00Z",
+                        "merge_commit_sha": merge_sha,
+                        "head": {"sha": head_sha},
+                        "html_url": "https://github.example/pull/199",
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: (_ for _ in ()).throw(workflow.WorkflowError(f"Post {pr_url}/graphql: EOF")),
+    )
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["recovered_from_transport_error"] is True
+    assert payload["rest_fallback"]["reason"] == "graphql_verification_transport_failure"
+    assert payload["verified"]["pr"]["mergeCommit"]["oid"] == merge_sha
+    assert not any(args[:4] == ["gh", "api", "--method", "PUT"] for args in commands)
 
 
 def test_close_sync_pr_commit_only_stages_bug_registry_files(

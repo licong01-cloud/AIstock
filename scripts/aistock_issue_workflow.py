@@ -12877,9 +12877,261 @@ def _production_gates_payload(args: argparse.Namespace | None = None) -> dict[st
     }
 
 
+def _github_pr_number_from_url(pr_url: str) -> int | None:
+    match = re.search(r"/pull/(\d+)(?:$|[/?#])", pr_url.strip())
+    return int(match.group(1)) if match else None
+
+
+def _github_pull_rest_readback(pr_url: str) -> dict[str, Any]:
+    pr_number = _github_pr_number_from_url(pr_url)
+    if pr_number is None:
+        raise WorkflowError(f"cannot derive GitHub PR number from URL: {pr_url}")
+    result = _run_read_command_with_retry(
+        ["gh", "api", f"repos/{GITHUB_REPO}/pulls/{pr_number}"],
+        cwd=REPO_ROOT,
+        timeout=30,
+    )
+    if not result.get("ok"):
+        raise WorkflowError(
+            result.get("stderr") or result.get("stdout") or f"cannot inspect PR {pr_number} through GitHub REST"
+        )
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"cannot parse GitHub REST PR readback for {pr_number}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise WorkflowError(f"GitHub REST PR readback for {pr_number} is not an object")
+    head = payload.get("head") or {}
+    return {
+        "pr_number": pr_number,
+        "state": str(payload.get("state") or "").upper(),
+        "merged": bool(payload.get("merged")),
+        "merged_at": payload.get("merged_at"),
+        "merge_commit": str(payload.get("merge_commit_sha") or "").strip() or None,
+        "head_sha": str(head.get("sha") or "").strip(),
+        "url": str(payload.get("html_url") or pr_url),
+    }
+
+
+def _verified_pr_from_rest_readback(readback: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "checked": True,
+        "merged": True,
+        "source": "github_rest",
+        "pr": {
+            "state": "MERGED",
+            "mergedAt": readback.get("merged_at"),
+            "mergeCommit": {"oid": readback.get("merge_commit")},
+            "url": readback.get("url"),
+            "headRefOid": readback.get("head_sha"),
+        },
+    }
+
+
+def _head_pinned_rest_merge_after_transport_failure(
+    *,
+    pr_url: str,
+    expected_head: str,
+    graphql_error: str,
+    bug_id: str | None = None,
+) -> dict[str, Any]:
+    normalized_head = expected_head.strip().lower()
+    if not _FULL_GIT_COMMIT_RE.fullmatch(normalized_head):
+        raise WorkflowError("GraphQL merge transport fallback requires the verified full PR head SHA")
+
+    before = _github_pull_rest_readback(pr_url)
+    if before["head_sha"].lower() != normalized_head:
+        raise WorkflowError(
+            "PR head changed before GitHub REST merge fallback: "
+            f"expected={normalized_head}, observed={before['head_sha'] or 'missing'}"
+        )
+    if before["merged"]:
+        return {
+            "used": True,
+            "rest_merge_attempted": False,
+            "remote_already_merged": True,
+            "reason": "graphql_transport_failure",
+            "graphql_error": graphql_error[:1000],
+            "expected_head": normalized_head,
+            "merge_commit": before.get("merge_commit"),
+            "verified": _verified_pr_from_rest_readback(before),
+        }
+    if before["state"] != "OPEN":
+        raise WorkflowError(
+            f"GitHub REST merge fallback requires an open PR; observed state={before['state'] or 'missing'}"
+        )
+
+    endpoint = f"repos/{GITHUB_REPO}/pulls/{before['pr_number']}/merge"
+    command = [
+        "gh",
+        "api",
+        "--method",
+        "PUT",
+        endpoint,
+        "-f",
+        f"sha={normalized_head}",
+        "-f",
+        "merge_method=squash",
+    ]
+    if bug_id:
+        merge_result = _execute_workflow_command(
+            bug_id,
+            command,
+            state="merged",
+            cwd=REPO_ROOT,
+            timeout=60,
+            event="command:gh_rest_head_pinned_merge_fallback",
+            allow_failure=True,
+        )
+    else:
+        merge_result = _run_command(command, cwd=REPO_ROOT, timeout=60)
+
+    after = _github_pull_rest_readback(pr_url)
+    if after["head_sha"].lower() != normalized_head:
+        raise WorkflowError(
+            "PR head changed during GitHub REST merge fallback: "
+            f"expected={normalized_head}, observed={after['head_sha'] or 'missing'}"
+        )
+    if not after["merged"]:
+        message = str(merge_result.get("stderr") or merge_result.get("stdout") or "GitHub REST merge failed")
+        if _looks_like_github_transport_failure(message):
+            raise GitHubOutcomeUnknownError(
+                f"{message}; head-pinned GitHub REST merge outcome is unknown and readback is not merged"
+            )
+        raise WorkflowError(message)
+
+    try:
+        merge_payload = json.loads(str(merge_result.get("stdout") or "{}")) if merge_result.get("ok") else {}
+    except json.JSONDecodeError:
+        merge_payload = {}
+    response_merge_commit = str((merge_payload or {}).get("sha") or "").strip()
+    if response_merge_commit and after.get("merge_commit") != response_merge_commit:
+        raise WorkflowError(
+            "GitHub REST merge commit readback mismatch: "
+            f"response={response_merge_commit}, observed={after.get('merge_commit') or 'missing'}"
+        )
+
+    return {
+        "used": True,
+        "rest_merge_attempted": True,
+        "remote_already_merged": False,
+        "reason": "graphql_transport_failure",
+        "graphql_error": graphql_error[:1000],
+        "expected_head": normalized_head,
+        "merge_commit": after.get("merge_commit"),
+        "merge_result": merge_result,
+        "verified": _verified_pr_from_rest_readback(after),
+    }
+
+
+def _complete_pr_merge_attempt(
+    *,
+    pr_url: str,
+    expected_head: str,
+    check_summary: dict[str, Any],
+    merge_result: dict[str, Any],
+    bug_id: str | None = None,
+) -> dict[str, Any]:
+    if merge_result.get("ok"):
+        try:
+            verified = _verify_pr_merged(pr_url)
+        except WorkflowError as exc:
+            message = str(exc)
+            if not _looks_like_github_transport_failure(message):
+                raise
+            readback = _github_pull_rest_readback(pr_url)
+            if readback["head_sha"].lower() != expected_head.strip().lower():
+                raise WorkflowError(
+                    "PR head changed before GitHub REST merge verification: "
+                    f"expected={expected_head or 'missing'}, observed={readback['head_sha'] or 'missing'}"
+                ) from exc
+            if not readback["merged"]:
+                raise GitHubOutcomeUnknownError(
+                    f"{message}; gh pr merge reported success but GitHub REST readback is not merged"
+                ) from exc
+            fallback = {
+                "used": True,
+                "rest_merge_attempted": False,
+                "remote_already_merged": True,
+                "reason": "graphql_verification_transport_failure",
+                "graphql_error": message[:1000],
+                "expected_head": expected_head.strip().lower(),
+                "merge_commit": readback.get("merge_commit"),
+            }
+            if bug_id:
+                _append_event(
+                    bug_id,
+                    event="merge_graphql_verification_rest_readback",
+                    state="merged",
+                    result="recovered",
+                    evidence={
+                        "pr_url": pr_url,
+                        "expected_head": expected_head,
+                        "merge_commit": readback.get("merge_commit"),
+                    },
+                )
+            return {
+                "already_merged": False,
+                "check_summary": check_summary,
+                "merge_result": merge_result,
+                "verified": _verified_pr_from_rest_readback(readback),
+                "recovered_from_transport_error": True,
+                "rest_fallback": fallback,
+            }
+        return {
+            "already_merged": False,
+            "check_summary": check_summary,
+            "merge_result": merge_result,
+            "verified": verified,
+        }
+
+    message = str(merge_result.get("stderr") or merge_result.get("stdout") or "gh pr merge failed")
+    if _looks_like_github_transport_failure(message):
+        fallback = _head_pinned_rest_merge_after_transport_failure(
+            pr_url=pr_url,
+            expected_head=expected_head,
+            graphql_error=message,
+            bug_id=bug_id,
+        )
+        if bug_id:
+            _append_event(
+                bug_id,
+                event="merge_graphql_transport_rest_fallback",
+                state="merged",
+                result="recovered",
+                evidence={
+                    "pr_url": pr_url,
+                    "expected_head": expected_head,
+                    "rest_merge_attempted": fallback["rest_merge_attempted"],
+                    "merge_commit": fallback.get("merge_commit"),
+                },
+            )
+        return {
+            "already_merged": bool(fallback["remote_already_merged"]),
+            "check_summary": check_summary,
+            "merge_result": merge_result,
+            "verified": fallback["verified"],
+            "recovered_from_local_merge_error": True,
+            "recovered_from_transport_error": True,
+            "rest_fallback": fallback,
+        }
+
+    try:
+        verified = _verify_pr_merged(pr_url)
+    except WorkflowError as exc:
+        raise WorkflowError(message) from exc
+    return {
+        "already_merged": True,
+        "check_summary": check_summary,
+        "merge_result": merge_result,
+        "verified": verified,
+        "recovered_from_local_merge_error": True,
+    }
+
+
 def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
     view = _execute_checked(
-        ["gh", "pr", "view", pr_url, "--json", "state,mergeStateStatus,statusCheckRollup,url"],
+        ["gh", "pr", "view", pr_url, "--json", "state,mergeStateStatus,statusCheckRollup,url,headRefOid"],
         cwd=REPO_ROOT,
         timeout=60,
     )
@@ -12897,29 +13149,18 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _run_command(["gh", "pr", "merge", pr_url, "--squash"], cwd=REPO_ROOT, timeout=180)
-    try:
-        verified = _verify_pr_merged(pr_url)
-    except WorkflowError as exc:
-        if not result.get("ok"):
-            raise WorkflowError(
-                result.get("stderr") or result.get("stdout") or f"gh pr merge failed before verification: {exc}"
-            ) from exc
-        raise
-    if not result.get("ok"):
-        return {
-            "already_merged": True,
-            "check_summary": check_summary,
-            "merge_result": result,
-            "verified": verified,
-            "recovered_from_local_merge_error": True,
-        }
-    return {"already_merged": False, "check_summary": check_summary, "merge_result": result, "verified": verified}
+    return _complete_pr_merge_attempt(
+        pr_url=pr_url,
+        expected_head=str(payload.get("headRefOid") or ""),
+        check_summary=check_summary,
+        merge_result=result,
+    )
 
 
 def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
     view = _execute_workflow_command(
         bug_id,
-        ["gh", "pr", "view", pr_url, "--json", "state,mergeStateStatus,statusCheckRollup,url"],
+        ["gh", "pr", "view", pr_url, "--json", "state,mergeStateStatus,statusCheckRollup,url,headRefOid"],
         state="ci_green",
         cwd=REPO_ROOT,
         timeout=60,
@@ -12951,15 +13192,14 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         event="command:gh_pr_merge",
         allow_failure=True,
     )
-    try:
-        verified = _verify_pr_merged(pr_url)
-    except WorkflowError as exc:
-        if not result.get("ok"):
-            raise WorkflowError(
-                result.get("stderr") or result.get("stdout") or f"gh pr merge failed before verification: {exc}"
-            ) from exc
-        raise
-    if not result.get("ok"):
+    completed = _complete_pr_merge_attempt(
+        pr_url=pr_url,
+        expected_head=str(payload.get("headRefOid") or ""),
+        check_summary=check_summary,
+        merge_result=result,
+        bug_id=bug_id,
+    )
+    if completed.get("recovered_from_local_merge_error") and not completed.get("recovered_from_transport_error"):
         _append_event(
             bug_id,
             event="merge_remote_verified_after_local_error",
@@ -12968,17 +13208,10 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
             evidence={
                 "pr_url": pr_url,
                 "merge_error": result.get("stderr") or result.get("stdout"),
-                "merge_commit": _merge_commit_from_pr_check(verified),
+                "merge_commit": _merge_commit_from_pr_check(completed.get("verified")),
             },
         )
-        return {
-            "already_merged": True,
-            "check_summary": check_summary,
-            "merge_result": result,
-            "verified": verified,
-            "recovered_from_local_merge_error": True,
-        }
-    return {"already_merged": False, "check_summary": check_summary, "merge_result": result, "verified": verified}
+    return completed
 
 
 def _close_sync_changed_files(close_sync: dict[str, Any]) -> list[str]:
