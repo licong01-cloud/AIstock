@@ -185,7 +185,7 @@ def _parse_ymd(val) -> dt.date | None:
         if len(s) == 8:
             return dt.date(int(s[:4]), int(s[4:6]), int(s[6:]))
         return dt.date.fromisoformat(s)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -307,7 +307,15 @@ def _upsert_daily_basic(conn, rows: List[Dict[str, Any]]) -> int:
 
 
 def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, job_id: uuid.UUID, batch_sleep: float) -> Dict[str, Any]:
-    stats = {"total_days": 0, "success_days": 0, "failed_days": 0, "inserted_rows": 0}
+    stats = {
+        "total_days": 0,
+        "success_days": 0,
+        "failed_days": 0,
+        "inserted_rows": 0,
+        "progress_update_failures": 0,
+        "progress_rollback_failures": 0,
+        "progress_log_failures": 0,
+    }
     days = _date_range(start_date, end_date)
     stats["total_days"] = len(days)
     for d in days:
@@ -325,16 +333,22 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
             _update_job_progress(conn, job_id, stats)
             conn.commit()
         except Exception as exc:  # noqa: BLE001
+            stats["progress_update_failures"] += 1
+            stats["last_progress_error"] = str(exc)
             try:
                 conn.rollback()
-            except Exception:
-                pass
+            except Exception as rollback_exc:  # noqa: BLE001
+                stats["progress_rollback_failures"] += 1
+                stats["last_progress_rollback_error"] = str(rollback_exc)
+                print(f"[ERROR] failed to rollback job progress transaction: {rollback_exc}")
             msg = f"failed to update job progress: {exc}"
             print(f"[WARN] {msg}")
             try:
                 _log(conn, job_id, "warn", msg)
-            except Exception:
-                pass
+            except Exception as log_exc:  # noqa: BLE001
+                stats["progress_log_failures"] += 1
+                stats["last_progress_log_error"] = str(log_exc)
+                print(f"[ERROR] failed to persist job progress warning: {log_exc}")
         if batch_sleep > 0:
             time.sleep(batch_sleep)
     return stats

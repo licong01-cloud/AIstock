@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from decimal import Decimal
 from typing import Any
 
@@ -42,6 +43,54 @@ class _Cursor:
 class _Connection:
     def cursor(self) -> _Cursor:
         return _Cursor()
+
+
+def test_parse_ymd_only_swallows_expected_date_errors() -> None:
+    class _UnexpectedStringFailure:
+        def __str__(self) -> str:
+            raise RuntimeError("unexpected string conversion failure")
+
+    assert ingestion._parse_ymd("20260616") == dt.date(2026, 6, 16)
+    assert ingestion._parse_ymd("not-a-date") is None
+    with pytest.raises(RuntimeError, match="unexpected string conversion failure"):
+        ingestion._parse_ymd(_UnexpectedStringFailure())
+
+
+def test_run_ingestion_reports_progress_rollback_and_log_failures(monkeypatch: Any) -> None:
+    class _BrokenProgressConnection:
+        def rollback(self) -> None:
+            raise RuntimeError("rollback failed")
+
+    trade_date = dt.date(2026, 6, 16)
+    monkeypatch.setattr(ingestion, "_date_range", lambda *_args: [trade_date])
+    monkeypatch.setattr(ingestion, "_fetch_daily_basic_for_date", lambda *_args: [])
+    monkeypatch.setattr(ingestion, "_upsert_daily_basic", lambda *_args: 0)
+
+    def fail_progress(*_args: object) -> None:
+        raise RuntimeError("progress failed")
+
+    def fail_log(*_args: object) -> None:
+        raise RuntimeError("log failed")
+
+    monkeypatch.setattr(ingestion, "_update_job_progress", fail_progress)
+    monkeypatch.setattr(ingestion, "_log", fail_log)
+
+    stats = ingestion.run_ingestion(
+        _BrokenProgressConnection(),
+        object(),
+        "init",
+        trade_date,
+        trade_date,
+        uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        0,
+    )
+
+    assert stats["progress_update_failures"] == 1
+    assert stats["progress_rollback_failures"] == 1
+    assert stats["progress_log_failures"] == 1
+    assert stats["last_progress_error"] == "progress failed"
+    assert stats["last_progress_rollback_error"] == "rollback failed"
+    assert stats["last_progress_log_error"] == "log failed"
 
 
 def test_upsert_normalizes_non_finite_provider_values(
