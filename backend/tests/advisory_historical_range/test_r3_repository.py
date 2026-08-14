@@ -16,23 +16,29 @@ from backend.services.advisory_historical_range.artifact_store import (
     HistoricalRangeArtifactStore,
 )
 from backend.services.advisory_historical_range.models import (
+    DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION,
+    DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2,
     OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
     HistoricalRangeArtifactKind,
     HistoricalRangeContractError,
     HistoricalRangeCandidateFactV1,
+    HistoricalRangeDayAttemptReceiptPayloadV1,
+    HistoricalRangeDayReceiptPayloadV2,
     HistoricalRangeDayStatus,
     HistoricalRangeExecutionOperationV1,
     HistoricalRangeListItemFactV1,
+    HistoricalRangeListVersionFactV1,
     HistoricalRangeOperationStatus,
     HistoricalRangeOperationAttemptV1,
     HistoricalRangeOperationType,
     HistoricalRangeOutcomeRefreshReceiptV1,
     HistoricalRangeRunExecutionReceiptV1,
+    derive_list_content_hash,
     derive_prefixed_id,
 )
 from backend.services.advisory_historical_range.repository import PostgresHistoricalRangeRepository
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
-from backend.tests.advisory_historical_range.conftest import digest
+from backend.tests.advisory_historical_range.conftest import artifact_ref, digest
 
 
 def test_decision_cutoff_is_shanghai_close_normalized_to_utc() -> None:
@@ -232,6 +238,348 @@ def test_successful_day_readback_allows_only_its_typed_direct_predecessor_for_de
     assert "validate_recursive_upstream=False" in mark_readback
     assert "mark_set.predecessor_day_receipt_ref != receipt.previous_day_receipt_ref" in mark_readback
     assert "decision mark upstream set differs from its typed direct lineage" in mark_readback
+
+
+def test_range_receipt_recursion_accepts_failed_attempt_with_typed_predecessor() -> None:
+    resolved_hash = digest("resolved-request")
+    range_run_id = "range-1"
+    first_day_id = "day-1"
+    failed_day_id = "day-2"
+    request_ref = artifact_ref(HistoricalRangeArtifactKind.REQUEST, "request")
+    first_candidate_ref = artifact_ref(HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT, "candidate-1")
+    first_mark_ref = artifact_ref(HistoricalRangeArtifactKind.DECISION_MARK_SET, "mark-1")
+    first_list = HistoricalRangeListVersionFactV1(
+        list_version_id="list-1",
+        day_run_id=first_day_id,
+        range_run_id=range_run_id,
+        target_count=1,
+        active_count=0,
+        enter_count=0,
+        hold_count=0,
+        exit_count=0,
+        watch_count=0,
+        summary_json={"candidate_outcome": "VALID_NO_CANDIDATE"},
+        list_content_hash=digest("placeholder"),
+    )
+    first_list = first_list.model_copy(update={"list_content_hash": derive_list_content_hash(first_list, (), ())})
+    first_receipt = HistoricalRangeDayReceiptPayloadV2(
+        range_run_id=range_run_id,
+        day_run_id=first_day_id,
+        terminal_status="VALID_NO_CANDIDATE",
+        day_input_hash=digest("day-1-input"),
+        candidate_artifact_ref=first_candidate_ref,
+        decision_mark_set_ref=first_mark_ref,
+        list_version=first_list,
+        items=(),
+        episode_snapshots=(),
+    )
+    first_receipt_ref = artifact_ref(HistoricalRangeArtifactKind.DAY_RECEIPT, "success-day-1")
+    failed_candidate_ref = artifact_ref(HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT, "candidate-2")
+    failed_mark_ref = artifact_ref(HistoricalRangeArtifactKind.DECISION_MARK_SET, "mark-2")
+    failed_receipt = HistoricalRangeDayAttemptReceiptPayloadV1(
+        day_run_id=failed_day_id,
+        attempt_no=1,
+        fencing_token=1,
+        worker_id="worker-1",
+        lease_token_hash=digest("lease-1"),
+        status="FAILED",
+        attempt_input_hash=digest("day-2-input"),
+        input_hash_kind="DAY_INPUT",
+        candidate_artifact_ref=failed_candidate_ref,
+        decision_mark_set_ref=failed_mark_ref,
+        previous_list_hash=first_list.list_content_hash,
+        previous_day_receipt_ref=first_receipt_ref,
+        stage="DAY_INPUT",
+        reason_codes=("ADVISORY_HR_DETERMINISTIC_CONTRACT_FAILURE",),
+    )
+    failed_receipt_ref = artifact_ref(HistoricalRangeArtifactKind.DAY_RECEIPT, "failed-day-2")
+    range_receipt_ref = artifact_ref(HistoricalRangeArtifactKind.RANGE_RECEIPT, "range-partial")
+
+    def envelope(ref, *, range_id=None, day_id=None, schema="test_v1", payload=None, upstream=()):
+        return SimpleNamespace(
+            artifact_kind=ref.artifact_kind,
+            resolved_request_hash=resolved_hash,
+            range_run_id=range_id,
+            day_run_id=day_id,
+            payload_schema_version=schema,
+            payload=payload or {},
+            upstream_refs=tuple(
+                sorted(
+                    upstream,
+                    key=lambda item: (
+                        item.artifact_kind.value,
+                        item.semantic_content_hash,
+                        item.relative_path,
+                    ),
+                )
+            ),
+        )
+
+    artifacts = {
+        request_ref.semantic_content_hash: envelope(request_ref),
+        first_candidate_ref.semantic_content_hash: envelope(
+            first_candidate_ref, range_id=range_run_id, day_id=first_day_id, upstream=(request_ref,)
+        ),
+        first_mark_ref.semantic_content_hash: envelope(
+            first_mark_ref, range_id=range_run_id, day_id=first_day_id, upstream=(request_ref,)
+        ),
+        first_receipt_ref.semantic_content_hash: envelope(
+            first_receipt_ref,
+            range_id=range_run_id,
+            day_id=first_day_id,
+            schema=DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2,
+            payload=first_receipt.model_dump(mode="json"),
+            upstream=(first_candidate_ref, first_mark_ref),
+        ),
+        failed_candidate_ref.semantic_content_hash: envelope(
+            failed_candidate_ref, range_id=range_run_id, day_id=failed_day_id, upstream=(request_ref,)
+        ),
+        failed_mark_ref.semantic_content_hash: envelope(
+            failed_mark_ref,
+            range_id=range_run_id,
+            day_id=failed_day_id,
+            upstream=(request_ref, first_receipt_ref),
+        ),
+        failed_receipt_ref.semantic_content_hash: envelope(
+            failed_receipt_ref,
+            range_id=range_run_id,
+            day_id=failed_day_id,
+            schema=DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION,
+            payload=failed_receipt.model_dump(mode="json"),
+            upstream=(request_ref, failed_candidate_ref, failed_mark_ref, first_receipt_ref),
+        ),
+        range_receipt_ref.semantic_content_hash: envelope(
+            range_receipt_ref,
+            range_id=range_run_id,
+            payload={"status": "PARTIAL"},
+            upstream=(first_receipt_ref, failed_receipt_ref),
+        ),
+    }
+    store = SimpleNamespace(load=lambda ref: artifacts[ref.semantic_content_hash])
+    repository = PostgresHistoricalRangeRepository(conn_factory=lambda: None, artifact_store=store)
+    result = repository._load_artifact(
+        range_receipt_ref,
+        expected_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT,
+        resolved_request_hash=resolved_hash,
+        range_run_id=range_run_id,
+    )
+
+    assert result.upstream_refs == tuple(
+        sorted(
+            (first_receipt_ref, failed_receipt_ref),
+            key=lambda item: (
+                item.artifact_kind.value,
+                item.semantic_content_hash,
+                item.relative_path,
+            ),
+        )
+    )
+
+    failed_envelope = artifacts[failed_receipt_ref.semantic_content_hash]
+    failed_envelope.upstream_refs = tuple(
+        item for item in failed_envelope.upstream_refs if item != first_receipt_ref
+    )
+    repository = PostgresHistoricalRangeRepository(conn_factory=lambda: None, artifact_store=store)
+    with pytest.raises(ValueError, match="typed predecessor receipt must be an exact upstream"):
+        repository._load_artifact(
+            range_receipt_ref,
+            expected_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT,
+            resolved_request_hash=resolved_hash,
+            range_run_id=range_run_id,
+        )
+
+
+def test_cached_predecessor_closure_does_not_break_third_day_mark_validation() -> None:
+    resolved_hash = digest("resolved-request")
+    range_run_id = "range-1"
+    request_ref = artifact_ref(HistoricalRangeArtifactKind.REQUEST, "request")
+
+    def ref(kind, seed):
+        return artifact_ref(kind, seed)
+
+    def empty_list(day_id, list_id, *, previous=None):
+        fact = HistoricalRangeListVersionFactV1(
+            list_version_id=list_id,
+            day_run_id=day_id,
+            range_run_id=range_run_id,
+            previous_list_version_id=previous[0] if previous else None,
+            previous_list_hash=previous[1] if previous else None,
+            previous_day_receipt_hash=(previous[2].semantic_content_hash if previous else None),
+            target_count=1,
+            active_count=0,
+            enter_count=0,
+            hold_count=0,
+            exit_count=0,
+            watch_count=0,
+            summary_json={"candidate_outcome": "VALID_NO_CANDIDATE"},
+            list_content_hash=digest(f"placeholder-{day_id}"),
+        )
+        return fact.model_copy(update={"list_content_hash": derive_list_content_hash(fact, (), ())})
+
+    def envelope(ref_value, *, day_id=None, schema="test_v1", payload=None, upstream=()):
+        is_scoped = day_id is not None or ref_value.artifact_kind is HistoricalRangeArtifactKind.RANGE_RECEIPT
+        return SimpleNamespace(
+            artifact_kind=ref_value.artifact_kind,
+            resolved_request_hash=resolved_hash,
+            range_run_id=range_run_id if is_scoped else None,
+            day_run_id=day_id,
+            payload_schema_version=schema,
+            payload=payload or {},
+            upstream_refs=tuple(
+                sorted(
+                    upstream,
+                    key=lambda item: (
+                        item.artifact_kind.value,
+                        item.semantic_content_hash,
+                        item.relative_path,
+                    ),
+                )
+            ),
+        )
+
+    day1, day2, day3 = "day-1", "day-2", "day-3"
+    candidate1 = ref(HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT, "candidate-1")
+    mark1 = ref(HistoricalRangeArtifactKind.DECISION_MARK_SET, "mark-1")
+    list1 = empty_list(day1, "list-1")
+    receipt1_payload = HistoricalRangeDayReceiptPayloadV2(
+        range_run_id=range_run_id,
+        day_run_id=day1,
+        terminal_status="VALID_NO_CANDIDATE",
+        day_input_hash=digest("input-1"),
+        candidate_artifact_ref=candidate1,
+        decision_mark_set_ref=mark1,
+        list_version=list1,
+        items=(),
+        episode_snapshots=(),
+    )
+    receipt1 = ref(HistoricalRangeArtifactKind.DAY_RECEIPT, "receipt-1")
+
+    candidate2 = ref(HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT, "candidate-2")
+    mark2 = ref(HistoricalRangeArtifactKind.DECISION_MARK_SET, "mark-2")
+    list2 = empty_list(
+        day2,
+        "list-2",
+        previous=(list1.list_version_id, list1.list_content_hash, receipt1),
+    )
+    receipt2_payload = HistoricalRangeDayReceiptPayloadV2(
+        range_run_id=range_run_id,
+        day_run_id=day2,
+        terminal_status="VALID_NO_CANDIDATE",
+        day_input_hash=digest("input-2"),
+        candidate_artifact_ref=candidate2,
+        decision_mark_set_ref=mark2,
+        previous_day_receipt_ref=receipt1,
+        list_version=list2,
+        items=(),
+        episode_snapshots=(),
+    )
+    receipt2 = ref(HistoricalRangeArtifactKind.DAY_RECEIPT, "receipt-2")
+
+    candidate3 = ref(HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT, "candidate-3")
+    mark3 = ref(HistoricalRangeArtifactKind.DECISION_MARK_SET, "mark-3")
+    failed_payload = HistoricalRangeDayAttemptReceiptPayloadV1(
+        day_run_id=day3,
+        attempt_no=1,
+        fencing_token=1,
+        worker_id="worker-1",
+        lease_token_hash=digest("lease"),
+        status="FAILED",
+        attempt_input_hash=digest("input-3"),
+        input_hash_kind="DAY_INPUT",
+        candidate_artifact_ref=candidate3,
+        decision_mark_set_ref=mark3,
+        previous_list_hash=list2.list_content_hash,
+        previous_day_receipt_ref=receipt2,
+        stage="DAY_INPUT",
+        reason_codes=("ADVISORY_HR_DETERMINISTIC_CONTRACT_FAILURE",),
+    )
+    failed_receipt = ref(HistoricalRangeArtifactKind.DAY_RECEIPT, "failed-3")
+    range_receipt = ref(HistoricalRangeArtifactKind.RANGE_RECEIPT, "range-partial")
+
+    artifacts = {
+        request_ref.semantic_content_hash: envelope(request_ref),
+        candidate1.semantic_content_hash: envelope(candidate1, day_id=day1, upstream=(request_ref,)),
+        mark1.semantic_content_hash: envelope(mark1, day_id=day1, upstream=(request_ref,)),
+        receipt1.semantic_content_hash: envelope(
+            receipt1,
+            day_id=day1,
+            schema=DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2,
+            payload=receipt1_payload.model_dump(mode="json"),
+            upstream=(candidate1, mark1),
+        ),
+        candidate2.semantic_content_hash: envelope(candidate2, day_id=day2, upstream=(request_ref,)),
+        mark2.semantic_content_hash: envelope(mark2, day_id=day2, upstream=(request_ref, receipt1)),
+        receipt2.semantic_content_hash: envelope(
+            receipt2,
+            day_id=day2,
+            schema=DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2,
+            payload=receipt2_payload.model_dump(mode="json"),
+            upstream=(candidate2, receipt1, mark2),
+        ),
+        candidate3.semantic_content_hash: envelope(candidate3, day_id=day3, upstream=(request_ref,)),
+        mark3.semantic_content_hash: envelope(mark3, day_id=day3, upstream=(request_ref, receipt2)),
+        failed_receipt.semantic_content_hash: envelope(
+            failed_receipt,
+            day_id=day3,
+            schema=DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION,
+            payload=failed_payload.model_dump(mode="json"),
+            upstream=(request_ref, candidate3, receipt2, mark3),
+        ),
+        range_receipt.semantic_content_hash: envelope(
+            range_receipt,
+            payload={"status": "PARTIAL"},
+            upstream=(receipt1, receipt2, failed_receipt),
+        ),
+    }
+    store = SimpleNamespace(load=lambda ref_value: artifacts[ref_value.semantic_content_hash])
+    repository = PostgresHistoricalRangeRepository(conn_factory=lambda: None, artifact_store=store)
+
+    repository._load_artifact(
+        mark2,
+        expected_kind=HistoricalRangeArtifactKind.DECISION_MARK_SET,
+        resolved_request_hash=resolved_hash,
+        range_run_id=range_run_id,
+        day_run_id=day2,
+        allow_direct_predecessor_day_run_id=day1,
+    )
+    result = repository._load_artifact(
+        range_receipt,
+        expected_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT,
+        resolved_request_hash=resolved_hash,
+        range_run_id=range_run_id,
+    )
+
+    assert result.payload == {"status": "PARTIAL"}
+
+
+def test_visited_upstream_still_enforces_consumer_day_identity() -> None:
+    resolved_hash = digest("resolved-request")
+    upstream_ref = artifact_ref(HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT, "shared-upstream")
+    upstream = SimpleNamespace(
+        artifact_kind=upstream_ref.artifact_kind,
+        resolved_request_hash=resolved_hash,
+        range_run_id="range-1",
+        day_run_id="day-1",
+        payload_schema_version="test_v1",
+        payload={},
+        upstream_refs=(),
+    )
+    consumer = SimpleNamespace(
+        artifact_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT,
+        day_run_id=None,
+        upstream_refs=(upstream_ref,),
+    )
+    store = SimpleNamespace(load=lambda _ref: upstream)
+    repository = PostgresHistoricalRangeRepository(conn_factory=lambda: None, artifact_store=store)
+
+    with pytest.raises(ValueError, match="upstream artifact belongs to a different day run"):
+        repository._load_upstream_closure(
+            envelope=consumer,
+            resolved_request_hash=resolved_hash,
+            range_run_id="range-1",
+            day_run_id="day-2",
+            visited={upstream_ref.semantic_content_hash},
+        )
 
 
 def test_non_running_operation_retains_historical_fencing_without_active_lease() -> None:
