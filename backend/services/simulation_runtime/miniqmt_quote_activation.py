@@ -676,6 +676,13 @@ class MiniQMTQuoteIngressActivation:
     supervisor: QuoteIngressSupervisor | None = None
     controller_factory: Any | None = None
     context_adapter: MiniQMTQuoteContextAuthorityAdapter | None = None
+    _startup_schema_gate_reader: Callable[[], str] | None = field(default=None, repr=False)
+    _startup_subscriber_factory: Callable[[], Any] | None = field(default=None, repr=False)
+    _startup_qmt_client_factory: Callable[[], Any] | None = field(default=None, repr=False)
+    _startup_context_adapter_factory: Callable[
+        [QuoteEvaluationContextStore, Any], MiniQMTQuoteContextAuthorityAdapter
+    ] | None = field(default=None, repr=False)
+    _startup_recovery_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _shutdown: bool = False
     _shutdown_requested: bool = field(default=False, repr=False)
     _kernel_product_runtimes: dict[str, Any] = field(default_factory=dict)
@@ -901,17 +908,23 @@ class MiniQMTQuoteIngressActivation:
         return self._health(include_dependency_health=True)
 
     def _health(self, *, include_dependency_health: bool) -> dict[str, Any]:
-        process_config = replace(self.config, enabled=self.process_switch_enabled)
-        supervisor = self._current_supervisor()
+        with self._startup_recovery_lock:
+            status = self.status
+            production_ddl_gate_snapshot = self.production_ddl_gate
+            reason_code = self.reason_code
+            failure = dict(self.failure) if self.failure is not None else None
+            controller_factory = self.controller_factory
+            process_config = replace(self.config, enabled=self.process_switch_enabled)
+            supervisor = self._current_supervisor()
         runtime_config = (
-            self.controller_factory.runtime_config
-            if isinstance(self.controller_factory, DrainOnlyB0QuoteV2ControllerFactory)
+            controller_factory.runtime_config
+            if isinstance(controller_factory, DrainOnlyB0QuoteV2ControllerFactory)
             else self.config
         )
         production_ddl_gate = (
-            self.controller_factory.production_ddl_gate
-            if isinstance(self.controller_factory, DrainOnlyB0QuoteV2ControllerFactory)
-            else self.production_ddl_gate
+            controller_factory.production_ddl_gate
+            if isinstance(controller_factory, DrainOnlyB0QuoteV2ControllerFactory)
+            else production_ddl_gate_snapshot
         )
         with self._kernel_retry_lock:
             runtime_snapshot = tuple(sorted(self._kernel_product_runtimes.items()))
@@ -984,7 +997,7 @@ class MiniQMTQuoteIngressActivation:
         effective_status = (
             "STOPPED"
             if self._shutdown
-            else ("SHUTDOWN_UNKNOWN" if self._shutdown_requested else ("DEGRADED" if retry_degraded else self.status))
+            else ("SHUTDOWN_UNKNOWN" if self._shutdown_requested else ("DEGRADED" if retry_degraded else status))
         )
         payload: dict[str, Any] = {
             "schema_version": "miniqmt_quote_ingress_activation_v1",
@@ -997,11 +1010,11 @@ class MiniQMTQuoteIngressActivation:
             "runtime_config_enabled": runtime_config.enabled,
             "evidence_cadence_seconds": runtime_config.evidence_cadence_seconds,
             "production_ddl_gate": production_ddl_gate,
-            "reason_code": self.reason_code,
+            "reason_code": reason_code,
             "factory_available": (
-                self.controller_factory is not None and not self._shutdown and not self._shutdown_requested
+                controller_factory is not None and not self._shutdown and not self._shutdown_requested
             ),
-            "failure": dict(self.failure) if self.failure is not None else None,
+            "failure": failure,
             "kernel_retry_active_count": sum(item["state"] != "HEALTHY" for item in retry_health.values()),
             "kernel_registration_drop_count_by_reason": dict(sorted(registration_drop_count_snapshot.items())),
             "last_kernel_registration_drop": last_registration_drop_snapshot,
@@ -1090,8 +1103,8 @@ class MiniQMTQuoteIngressActivation:
         context_adapter = self._current_context_adapter()
         if context_adapter is not None and not self._shutdown:
             payload["quote_context"] = context_adapter.health()
-        if isinstance(self.controller_factory, DrainOnlyB0QuoteV2ControllerFactory):
-            payload["drain_factory"] = self.controller_factory.health()
+        if isinstance(controller_factory, DrainOnlyB0QuoteV2ControllerFactory):
+            payload["drain_factory"] = controller_factory.health()
         payload["kernel_product_runtimes"] = [
             {
                 "runtime_id": runtime_id,
@@ -1112,10 +1125,62 @@ class MiniQMTQuoteIngressActivation:
     def begin_lifecycle_epoch(self) -> dict[str, Any]:
         if self._shutdown or self._shutdown_requested:
             raise RuntimeError("stopped or shutdown-fenced MiniQMT quote activation cannot begin a lifecycle epoch")
+        self._recover_enabled_startup_if_needed()
         supervisor = self._current_supervisor()
         if supervisor is not None:
             supervisor.begin_lifecycle_epoch()
         return self._health(include_dependency_health=False)
+
+    def _recover_enabled_startup_if_needed(self) -> None:
+        if self.status != "BLOCKED" or not self.process_switch_enabled:
+            return
+        with self._startup_recovery_lock:
+            if self.status != "BLOCKED" or not self.process_switch_enabled:
+                return
+            if (
+                self._startup_schema_gate_reader is None
+                or self._startup_subscriber_factory is None
+                or self._startup_qmt_client_factory is None
+                or self._startup_context_adapter_factory is None
+            ):
+                return
+            try:
+                production_ddl_gate = str(self._startup_schema_gate_reader())
+            except Exception as exc:  # noqa: BLE001 - keep startup recovery fail-closed and visible
+                self.production_ddl_gate = "readback_failed"
+                self.reason_code = "MINIQMT_QUOTE_EVENT_SCHEMA_READBACK_FAILED"
+                self.failure = {"exception_type": type(exc).__name__, "message": str(exc)}
+                logger.error(
+                    "MiniQMT quote ingress startup recovery schema readback failed; B0_QUOTE_V2 remains unavailable",
+                    exc_info=True,
+                )
+                return
+            self.production_ddl_gate = production_ddl_gate
+            if production_ddl_gate != MINIQMT_QUOTE_EVENT_SCHEMA_GATE_APPLIED:
+                self.reason_code = "MINIQMT_QUOTE_EVENT_SCHEMA_NOT_APPLIED"
+                self.failure = None
+                return
+            try:
+                supervisor, controller_factory, context_adapter = _build_runtime_components(
+                    runtime_config=self.config,
+                    subscriber_factory=self._startup_subscriber_factory,
+                    qmt_client_factory=self._startup_qmt_client_factory,
+                    context_adapter_factory=self._startup_context_adapter_factory,
+                )
+            except Exception as exc:  # noqa: BLE001 - dependency construction remains typed and retryable
+                self.reason_code = "MINIQMT_QUOTE_INGRESS_ACTIVATION_BUILD_FAILED"
+                self.failure = {"exception_type": type(exc).__name__, "message": str(exc)}
+                logger.error(
+                    "MiniQMT quote ingress startup recovery dependency construction failed",
+                    exc_info=True,
+                )
+                return
+            self.supervisor = supervisor
+            self.controller_factory = controller_factory
+            self.context_adapter = context_adapter
+            self.status = "READY"
+            self.reason_code = None
+            self.failure = None
 
     def _execute_kernel_watchdog_worker(
         self,
@@ -4301,6 +4366,10 @@ def build_miniqmt_quote_ingress_activation_from_env(
             process_switch_enabled=requested_config.enabled,
             reason_code="MINIQMT_QUOTE_EVENT_SCHEMA_READBACK_FAILED",
             failure={"exception_type": type(exc).__name__, "message": str(exc)},
+            _startup_schema_gate_reader=schema_gate_reader,
+            _startup_subscriber_factory=effective_subscriber_factory,
+            _startup_qmt_client_factory=effective_qmt_client_factory,
+            _startup_context_adapter_factory=context_adapter_factory,
         )
     if production_ddl_gate != MINIQMT_QUOTE_EVENT_SCHEMA_GATE_APPLIED:
         logger.error(
@@ -4313,6 +4382,10 @@ def build_miniqmt_quote_ingress_activation_from_env(
             production_ddl_gate=production_ddl_gate,
             process_switch_enabled=requested_config.enabled,
             reason_code="MINIQMT_QUOTE_EVENT_SCHEMA_NOT_APPLIED",
+            _startup_schema_gate_reader=schema_gate_reader,
+            _startup_subscriber_factory=effective_subscriber_factory,
+            _startup_qmt_client_factory=effective_qmt_client_factory,
+            _startup_context_adapter_factory=context_adapter_factory,
         )
 
     supervisor, controller_factory, context_adapter = _build_runtime_components(
