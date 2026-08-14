@@ -151,6 +151,8 @@ from backend.services.strategy_package.live_inference import (
     LiveInferencePreflightResult,
 )
 from backend.services.strategy_package.execution_policy import (
+    LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID,
+    LOCALSIM_TWAP_ONLY_REASON_CODE,
     compute_execution_policy_sha256,
     normalize_execution_policy_json,
 )
@@ -4022,6 +4024,16 @@ class FakeLocalSimMarketDataProvider:
         return replace(
             source_input,
             minute_bars=[bar for bar in source_input.minute_bars if bar.bar_time <= until_time.replace(tzinfo=None)],
+        )
+
+
+class TwapSixBarLocalSimMarketDataProvider(FakeLocalSimMarketDataProvider):
+    def load_symbol_input(self, **kwargs: Any) -> MinuteExecutionMarketInput:
+        return super().load_symbol_input(
+            **{
+                **kwargs,
+                "min_bars": max(6, int(kwargs.get("min_bars") or 0)),
+            }
         )
 
 
@@ -17113,8 +17125,8 @@ def test_production_context_provider_uses_tdx_realtime_for_same_day_localsim() -
     assert ctx.market_data_source == MinuteDataSource.TDX_REALTIME.value
 
 
-def test_production_context_provider_policy_authority_rejects_incomplete_release_without_portfolio_fallback() -> None:
-    """LocalSim must not use stale portfolio V25 when the release snapshot is incomplete."""
+def test_production_context_provider_twap_only_mode_does_not_depend_on_incomplete_source_policy() -> None:
+    """LocalSIM selects its explicit TWAP policy without consulting stale portfolio V25."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
     policy_id = "vnpy_asset:SNIPER_MINIQMT:final_multistrategy_dry_run_20260603"
@@ -17147,37 +17159,23 @@ def test_production_context_provider_policy_authority_rejects_incomplete_release
     )
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
 
-    with pytest.raises(RuntimeConfigInvalidError, match="fields are not exact") as exc_info:
-        provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
+    context = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
 
-    assert exc_info.value.context["reason_code"] == ("LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID")
-    assert exc_info.value.context["missing_fields"] == ["policy_json"]
-    assert exc_info.value.context["portfolio_policy_consulted"] is False
-    assert "retire incomplete historical LocalSIM releases" in exc_info.value.context["required_action"]
+    assert context.execution_policy_payload["policy_version_id"] == LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID
+    assert context.execution_policy_payload["policy_json"]["algo_code"] == "TWAP"
+    assert context.local_broker is not None
 
 
 @pytest.mark.parametrize(
-    ("release_field", "drifted_value", "expected_context"),
+    ("release_field", "drifted_value"),
     [
-        (
-            "execution_policy_version_id",
-            "exec_policy_runtime_identity_drift",
-            {
-                "expected_policy_id": "exec_policy_runtime_identity_drift",
-                "snapshot_policy_id": "exec_policy_close_price",
-            },
-        ),
-        (
-            "execution_policy_sha256",
-            "0" * 64,
-            {"expected_policy_sha256": "0" * 64},
-        ),
+        ("execution_policy_version_id", "exec_policy_runtime_identity_drift"),
+        ("execution_policy_sha256", "0" * 64),
     ],
 )
-def test_production_context_provider_policy_authority_rejects_release_snapshot_identity_conflict(
+def test_production_context_provider_twap_only_mode_is_independent_of_source_policy_identity(
     release_field: str,
     drifted_value: str,
-    expected_context: dict[str, str],
 ) -> None:
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
@@ -17213,32 +17211,28 @@ def test_production_context_provider_policy_authority_rejects_release_snapshot_i
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
     )
 
-    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
-        provider.load_context(
-            runtime_release=drifted_release,
-            binding=binding,
-            trade_date=TRADE_DATE,
-        )
+    context = provider.load_context(
+        runtime_release=drifted_release,
+        binding=binding,
+        trade_date=TRADE_DATE,
+    )
 
-    assert exc_info.value.context["reason_code"] == ("LOCALSIM_EXECUTION_POLICY_IDENTITY_CONFLICT")
-    for key, value in expected_context.items():
-        assert exc_info.value.context[key] == value
-    assert exc_info.value.context["portfolio_policy_consulted"] is False
-    assert exc_info.value.context["manifest_policy_consulted"] is False
+    assert context.execution_policy_payload["policy_version_id"] == LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID
+    assert context.execution_policy_payload["policy_json"]["algo_code"] == "TWAP"
 
 
-def test_production_context_provider_policy_authority_uses_runtime_release_snapshot_over_portfolio_default() -> None:
-    """Runtime release policy_json is authoritative when present."""
+def test_production_context_provider_selects_explicit_twap_only_policy_for_v25_release() -> None:
+    """LocalSIM validates the source release, then selects its explicit TWAP runtime policy."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
     release = _make_test_release(
-        execution_policy_version_id="exec_policy_runtime_close",
-        execution_policy_sha256="sha_runtime_close",
+        execution_policy_version_id="exec_policy_runtime_v25",
+        execution_policy_sha256="sha_runtime_v25",
         execution_policy={
-            "policy_version_id": "exec_policy_runtime_close",
-            "policy_sha256": "sha_runtime_close",
+            "policy_version_id": "exec_policy_runtime_v25",
+            "policy_sha256": "sha_runtime_v25",
             "policy_json": {
-                "algo_code": "CLOSE_PRICE",
+                "algo_code": "V25_1_SMALL_CAP",
                 "algo_config": {"allow_partial_fill": True},
             },
         },
@@ -17262,7 +17256,7 @@ def test_production_context_provider_policy_authority_uses_runtime_release_snaps
             },
         },
     )
-    market_data = FakeLocalSimMarketDataProvider()
+    market_data = TwapSixBarLocalSimMarketDataProvider()
     provider = ProductionSimulationRunContextProvider(
         paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
         price_loader=lambda symbols, trade_date: {symbol: 10.0 for symbol in symbols},
@@ -17270,7 +17264,10 @@ def test_production_context_provider_policy_authority_uses_runtime_release_snaps
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
 
     ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
-    assert ctx.execution_policy_payload == release.release_config_json["execution_policy"]
+    assert ctx.execution_policy_payload["policy_version_id"] == LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID
+    assert ctx.execution_policy_payload["policy_json"]["algo_code"] == "TWAP"
+    assert ctx.execution_policy_payload["policy_json"]["fallback_algo_code"] is None
+    assert LOCALSIM_TWAP_ONLY_REASON_CODE == "LOCALSIM_TWAP_ONLY_POLICY"
     assert ctx.local_broker is not None
     ctx.local_broker._market_data_provider = market_data
     handle = ctx.local_broker.submit_order_intent(
@@ -17314,7 +17311,7 @@ def test_production_context_provider_policy_authority_never_uses_portfolio_polic
         },
     )
     paper_repo = FakePaperRepository(portfolio, positions={}, cash=1_000_000)
-    market_data = FakeLocalSimMarketDataProvider()
+    market_data = TwapSixBarLocalSimMarketDataProvider()
     provider = ProductionSimulationRunContextProvider(
         paper_repository_factory=lambda: paper_repo,
         price_loader=lambda symbols, trade_date: {symbol: 10.0 for symbol in symbols},
@@ -17322,7 +17319,8 @@ def test_production_context_provider_policy_authority_never_uses_portfolio_polic
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
 
     ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=TRADE_DATE)
-    assert ctx.execution_policy_payload == release.release_config_json["execution_policy"]
+    assert ctx.execution_policy_payload["policy_version_id"] == LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID
+    assert ctx.execution_policy_payload["policy_json"]["algo_code"] == "TWAP"
     assert ctx.local_broker is not None
     ctx.local_broker._market_data_provider = market_data
     handle = ctx.local_broker.submit_order_intent(
@@ -17339,6 +17337,35 @@ def test_production_context_provider_policy_authority_never_uses_portfolio_polic
 
     assert ctx.local_broker.query_status(handle).state == "filled"
     assert market_data.calls[-1]["require_day_features"] is False
+
+
+def test_existing_localsim_v25_plan_is_rejected_before_runtime_context_loading() -> None:
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    legacy_plan = SimpleNamespace(
+        plan_id="plan_legacy_localsim_v25",
+        execution_policy_version_id="exec_policy_v25_1_small_cap",
+        plan_payload_json={
+            "execution_policy": {
+                "payload": {
+                    "policy_version_id": "exec_policy_v25_1_small_cap",
+                    "policy_sha256": "legacy_v25_sha",
+                    "policy_json": {"algo_code": "V25_1_SMALL_CAP", "algo_config": {}},
+                }
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        ProductionSimulationLifecycleScheduler._assert_local_sim_plan_uses_twap(
+            binding=binding,
+            plan=legacy_plan,
+        )
+
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED"
+    assert exc_info.value.context["plan_algo_code"] == "V25_1_SMALL_CAP"
+    assert exc_info.value.context["broker_call_attempted"] is False
+    assert exc_info.value.context["fallback_used"] is False
 
 
 def test_scheduler_rejects_stale_selection_evidence_for_new_trade_date():
