@@ -48,7 +48,6 @@ from backend.services.simulation_runtime.models import LocalSimMarketMarkV1
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
     BrokerMarketSourceMismatchError,
-    BrokerRejectedError,
     BrokerSubmitError,
     DataUnavailableError,
     RiskRuleError,
