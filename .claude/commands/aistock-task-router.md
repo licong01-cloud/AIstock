@@ -23,7 +23,7 @@ Use this as Claude Code's lightweight entry for broad or unclear AIstock work. T
 - Load one selected lane plus its task card and direct artifacts.
 - If `doctor` reports client entry staleness, run `python F:\Dev\AIstock\scripts\aistock_issue_workflow.py verify-clients --workflow-only --selected-lane <lane>` against this window's explicit client home. Always use the canonical CLI, even while the task itself is in another worktree. Verification uses the clean canonical `main` aligned with `origin/main` as merged client authority: an older/ahead task checkout is advisory and must never be installed over the profile. Only router/current-lane profile drift blocks the task; unrelated lane drift is warning-only.
 - When verification returns `request_single_owner_sync`, do not self-install from the active task window. One explicit owner runs the emitted target-profile command from merged canonical authority; every other window only reruns the emitted verification command. `continue_without_install` means proceed without install or restart.
-- AIstock workflows must use RTK under `TOOL-RTK-001` from the sole development standard and never make RTK or telemetry a task/PR/CI gate; this router does not redefine it.
+- Follow `TOOL-RTK-001` from the sole development standard; this router does not redefine it.
 - Every user backend has `backend_restart_owner=user`; no lane, validation, merge, aftercare or cleanup grants process-control authority.
 - Read-only requests remain diagnostic and return evidence without repository or runtime mutation.
 - Ordinary BUG work uses the Context Pack; design documents are added when cited by the issue/user or when T3 classification requires them.

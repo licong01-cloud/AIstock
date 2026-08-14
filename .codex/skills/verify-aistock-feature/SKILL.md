@@ -11,7 +11,7 @@ Use this skill only after the task is confirmed as new feature delivery or archi
 
 ## Context Budget
 
-- AIstock workflows must use RTK under `TOOL-RTK-001` from the sole development standard and never make RTK or telemetry a task/PR/CI gate; this lane does not redefine it.
+- Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine it.
 - Read project rules once, then this skill plus the approved Feature Card/design.
 - Use `Design Acceptance Index` ids after the first design read; do not repeatedly load the full design.
 - Do not read BUG workflow, docs workflow, quickstarts, archived standards, or unrelated module designs.

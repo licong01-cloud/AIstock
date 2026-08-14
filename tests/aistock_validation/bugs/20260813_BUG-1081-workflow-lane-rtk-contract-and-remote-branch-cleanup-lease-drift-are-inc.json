@@ -36,6 +36,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260813-8c6cd7945176",
       "timestamp": "2026-08-13T19:09:08.575641Z"
+    },
+    {
+      "action": "superseded_by_newer_main_authority",
+      "actor": "codex",
+      "note": "Safe-sync review found that origin/main commit 269f9c3824b80ee89475846436cf7353d688a057 already fixes the cleanup SHA readback and makes compact lane references authoritative. The stale literal lane edits and the extra idempotent-absence behavior were removed; this PR now records the upstream-equivalent resolution only.",
+      "timestamp": "2026-08-14T02:09:47.053431Z"
     }
   ],
   "evidence_uris": [],
@@ -300,8 +306,8 @@
   },
   "first_seen_at": "2026-08-13T19:09:08.575658Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "269f9c3824b80ee89475846436cf7353d688a057",
+  "fixed_at": "2026-08-13T19:45:19Z",
   "github_issue_number": 3452,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3452",
   "last_seen_at": "2026-08-13T19:09:08.575658Z",
@@ -330,7 +336,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],

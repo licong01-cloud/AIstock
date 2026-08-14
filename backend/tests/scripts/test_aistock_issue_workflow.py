@@ -6243,8 +6243,8 @@ def test_workflow_policy_sources_are_compact_and_semantically_consistent() -> No
     for relative in lane_paths:
         text = (root / relative).read_text(encoding="utf-8")
         assert "TOOL-RTK-001" in text, relative
-        assert "must use RTK" in text, relative
-        assert "never make RTK or telemetry a task/PR/CI gate" in text, relative
+        assert "must use RTK" not in text, relative
+        assert "sole development standard" in text, relative
 
     for relative in (
         ".codex/skills/aistock-task-router/SKILL.md",
@@ -9764,28 +9764,6 @@ def test_remote_branch_delete_stops_on_sha_drift(
             branch=branch,
             expected_remote_ref=expected,
         )
-
-
-def test_remote_branch_delete_treats_concurrent_absence_as_idempotent(
-    isolated_workflow_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    branch = "bug/BUG-199-workflow"
-    expected = f"{'a' * 40}\trefs/heads/{branch}"
-    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "")
-    monkeypatch.setattr(
-        workflow,
-        "_execute_checked",
-        lambda *args, **kwargs: pytest.fail("already absent branch must not be deleted again"),
-    )
-
-    result = workflow._delete_remote_branch_with_lease(
-        root=isolated_workflow_root,
-        branch=branch,
-        expected_remote_ref=expected,
-    )
-
-    assert result == {"expected_sha": "a" * 40, "already_absent": True}
 
 
 def test_cleanup_after_merge_apply_refreshes_origin_before_merge_check(

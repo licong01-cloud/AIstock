@@ -11,7 +11,7 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 
 ## Context
 
-- AIstock workflows must use RTK under `TOOL-RTK-001` from the sole development standard and never make RTK or telemetry a task/PR/CI gate; this lane does not redefine fallback, trust, telemetry, or CI semantics.
+- Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine RTK fallback, trust, telemetry, or CI semantics.
 - Read project rules once, then use this skill, `task-card.md`, the compact Context Pack and direct code references.
 - After compaction/restart, run `resume` and use the Context Resume Digest hashes.
 - Machine JSON supports failure diagnosis and state recovery; normal execution uses compact Markdown/stdout artifacts.
