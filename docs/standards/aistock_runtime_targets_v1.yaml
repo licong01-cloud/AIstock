@@ -12,6 +12,7 @@ targets:
       - backend/**/*.py
       - scripts/qe_sector_risk_overlay_strategy.py
       - scripts/score_weighted_strategy.py
+      - scripts/qe_sector_risk_overlay_artifacts.py
       - scripts/qe_build_frozen_risk_policy.py
       - scripts/qe_build_frozen_suspend_filter.py
       - scripts/qrun_limit.py
