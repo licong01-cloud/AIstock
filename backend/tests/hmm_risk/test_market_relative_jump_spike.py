@@ -110,6 +110,70 @@ def test_validation_reuses_train_preprocessor_without_refitting() -> None:
     assert validation.preprocessor == train.preprocessor
 
 
+def test_exact_fold_contract_and_preprocess_numeric_authority() -> None:
+    assert subject.FOLDS == (
+        {
+            "fold": "fold-1",
+            "train_start": date(2022, 1, 4),
+            "train_end": date(2023, 9, 1),
+            "validation_start": date(2023, 9, 4),
+            "validation_end": date(2024, 3, 14),
+            "train_days": 405,
+            "validation_days": 126,
+        },
+        {
+            "fold": "fold-2",
+            "train_start": date(2022, 1, 4),
+            "train_end": date(2024, 3, 14),
+            "validation_start": date(2024, 3, 15),
+            "validation_end": date(2024, 9, 18),
+            "train_days": 531,
+            "validation_days": 126,
+        },
+        {
+            "fold": "fold-3",
+            "train_start": date(2022, 1, 4),
+            "train_end": date(2024, 9, 18),
+            "validation_start": date(2024, 9, 19),
+            "validation_end": date(2025, 3, 31),
+            "train_days": 657,
+            "validation_days": 126,
+        },
+    )
+    calendar = _dates(2)
+    rows = []
+    for day, values in zip(calendar, ((0.0, 1.0, 10.0, 20.0), (2.0, 3.0, 12.0, 22.0)), strict=True):
+        rows.extend(
+            {"trade_date": pd.Timestamp(day), "l1_code": f"S{index}", "x": value} for index, value in enumerate(values)
+        )
+    panel = pd.DataFrame(rows).set_index(["trade_date", "l1_code"]).sort_index()
+    prepared = subject.prepare_component(
+        panel,
+        component="L1_relative",
+        level="L1",
+        feature_names=("x",),
+        calendar=calendar,
+        start=calendar[0],
+        end=calendar[-1],
+        expected_days=2,
+        expected_sector_count=4,
+        minimum_daily_count=4,
+        relative=True,
+    )
+    processor = prepared.preprocessor
+    clipped = np.clip(
+        panel["x"].to_numpy(dtype=np.float64),
+        processor.lower[0],
+        processor.upper[0],
+    )
+    expected_mean = math.fsum(clipped.tolist()) / len(clipped)
+    expected_variance = math.fsum((float(value) - expected_mean) ** 2 for value in clipped) / len(clipped)
+    assert processor.mean[0] == expected_mean
+    assert processor.std[0] == math.sqrt(expected_variance)
+    first_day = sorted(sequence.values[0, 0] for sequence in prepared.sequences)
+    assert first_day[1] == pytest.approx(-first_day[2])
+
+
 def test_optimal_path_matches_brute_force_oracle() -> None:
     values = np.asarray([[0.0], [0.2], [4.8], [5.0]], dtype=np.float64)
     centers = np.asarray([[0.0], [5.0]], dtype=np.float64)
@@ -123,6 +187,13 @@ def test_optimal_path_matches_brute_force_oracle() -> None:
 
     expected = min(itertools.product(range(2), repeat=len(values)), key=lambda path: (objective(path), path))
     assert actual.tolist() == list(expected)
+
+    tied = subject._optimal_segment_path(
+        np.asarray([[0.0]], dtype=np.float64),
+        np.asarray([[-1.0], [1.0]], dtype=np.float64),
+        penalty,
+    )
+    assert tied.tolist() == [0]
 
 
 def test_causal_inference_resets_cost_at_each_gap() -> None:
@@ -730,3 +801,51 @@ def test_cli_writes_typed_failure_sibling_without_touching_source(tmp_path: Path
     assert payload["failure_receipt_write"] is True
     assert payload["database_write"] is False
     assert payload["runtime_action"] is False
+
+
+def test_cli_rejects_holdout_source_before_database_loader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = tmp_path / "holdout-request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "schema_version": subject.REQUEST_SCHEMA_VERSION,
+                "contract_version": subject.CONTRACT_VERSION,
+                "expected_producer_commit": "a" * 40,
+                "holdout_start": subject.HOLDOUT_START.isoformat(),
+                "holdout_end": subject.HOLDOUT_END.isoformat(),
+                "forbidden_holdout_date_set_sha256": "b" * 64,
+                "source": {
+                    "source_start": "2021-01-01",
+                    "source_end": subject.HOLDOUT_START.isoformat(),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: pytest.fail("database loader must not run for a holdout source"),
+    )
+    output = tmp_path / "holdout-candidate.json"
+
+    result = cli.main(
+        [
+            "--request",
+            str(request),
+            "--output",
+            str(output),
+            "--db-env-prefix",
+            "UNUSED",
+        ]
+    )
+
+    assert result == 1
+    payload = json.loads((tmp_path / "holdout-candidate.failure.json").read_text(encoding="utf-8"))
+    assert payload["failure_reason_code"] == subject.REASON_HOLDOUT
+    assert payload["completed_fit_count"] == 0
+    assert payload["database_write"] is False
