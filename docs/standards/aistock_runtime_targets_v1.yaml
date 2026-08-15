@@ -1,16 +1,23 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-08-13"
+updated_at: "2026-08-15"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
   post_restart_verify_mode: read_only
   tracked_artifact_writes: forbidden
+non_runtime_source_paths:
+  - scripts/backfill_tushare_daily_basic_fields.py
+  - scripts/cleanup_simulation_history.py
+  - scripts/ingest_tushare_daily_basic.py
+  - scripts/simulation_history_cleanup_core.py
 targets:
   backend-main:
     runtime_kind: backend
     source_globs:
       - backend/**/*.py
       - scripts/qe_sector_risk_overlay_strategy.py
+      - scripts/score_weighted_strategy.py
+      - scripts/qe_sector_risk_overlay_artifacts.py
       - scripts/qe_build_frozen_risk_policy.py
       - scripts/qe_build_frozen_suspend_filter.py
       - scripts/qrun_limit.py

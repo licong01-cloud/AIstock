@@ -79,16 +79,32 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
 
 
 def _write_runtime_catalog(root: Path) -> Path:
+    for script_name in (
+        "scripts/backfill_tushare_daily_basic_fields.py",
+        "scripts/ingest_tushare_daily_basic.py",
+    ):
+        script_path = root / script_name
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text("# one-shot operator fixture\n", encoding="utf-8")
     path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         yaml.safe_dump(
             {
                 "schema_version": "aistock_runtime_target_catalog_v1",
+                "non_runtime_source_paths": [
+                    "scripts/backfill_tushare_daily_basic_fields.py",
+                    "scripts/ingest_tushare_daily_basic.py",
+                ],
                 "targets": {
                     "backend-main": {
                         "runtime_kind": "backend",
-                        "source_globs": ["backend/**/*.py", "requirements*.txt"],
+                        "source_globs": [
+                            "backend/**/*.py",
+                            "scripts/score_weighted_strategy.py",
+                            "scripts/qe_sector_risk_overlay_artifacts.py",
+                            "requirements*.txt",
+                        ],
                         "production_port": 8001,
                         "isolated_validation_ports": [8011, 8012],
                         "probe_origins": ["http://127.0.0.1:8001"],
@@ -1298,6 +1314,14 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["backend/tests/scripts/test_aistock_issue_workflow.py"],
         root=isolated_workflow_root,
     )
+    score_weighted_asset = workflow._classify_runtime_impact(
+        ["scripts/score_weighted_strategy.py"],
+        root=isolated_workflow_root,
+    )
+    sector_risk_artifact = workflow._classify_runtime_impact(
+        ["scripts/qe_sector_risk_overlay_artifacts.py"],
+        root=isolated_workflow_root,
+    )
     offline_hmm_preparation = workflow._classify_runtime_impact(
         ["scripts/hmm_risk/prepare_state_model_set.py"],
         root=isolated_workflow_root,
@@ -1371,6 +1395,11 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert bug_registry_metadata_tool["runtime_impact"] == "none"
     assert bug_registry_metadata_tool["runtime_files"] == []
     assert backend_test["runtime_impact"] == "none"
+    assert score_weighted_asset["runtime_impact"] == "backend"
+    assert score_weighted_asset["target_ids"] == ["backend-main"]
+    assert score_weighted_asset["runtime_files"] == ["scripts/score_weighted_strategy.py"]
+    assert sector_risk_artifact["runtime_impact"] == "backend"
+    assert sector_risk_artifact["target_ids"] == ["backend-main"]
     assert offline_hmm_preparation["runtime_impact"] == "none"
     assert offline_hmm_preparation["runtime_files"] == []
     assert offline_hmm_d1["runtime_impact"] == "none"
@@ -1422,6 +1451,146 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_contract["blocking"] == []
 
 
+def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_activation(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "scripts/backfill_tushare_daily_basic_fields.py",
+        "scripts/ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+        "tests/aistock_validation/bugs/BUG-1089.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ]
+    record = _bug(
+        bug_id="BUG-1089",
+        module="local_data",
+        allowed_write_scope=changed_files,
+        file_scope_contract=_file_scope_contract(changed_files),
+        required_verification=["validation_module_registry_l0"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+            "post_restart_effective_gate": "not_required",
+            "target_id": None,
+            "target_ids": [],
+        },
+    )
+    issue = _write_json(isolated_workflow_root / "bug-1089.json", record)
+
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert workflow._classify_runtime_impact(
+        ["scripts/unlisted_operator.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "unknown"
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=changed_files,
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[
+            "python -m nox -s validation_module_registry_l0 -> passed",
+            "python -m nox -s data_sync_autonomy_backend -> passed",
+        ],
+        plan_only=True,
+        allow_missing_evidence=False,
+        code_intelligence_summary_override=_fake_code_intelligence_summary(),
+    )
+
+    assert payload["closure_ready"] is True
+    assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["runtime_contract"]["runtime_impact"] == "none"
+    assert payload["runtime_contract"]["blocking"] == []
+    assert payload["backend_restart"]["required"] is False
+
+
+def test_runtime_catalog_non_runtime_paths_are_exact_and_do_not_overlap_targets(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["non_runtime_source_paths"] = ["scripts/**/*.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="exact paths without wildcards"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    catalog["non_runtime_source_paths"] = ["backend/services/example.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="overlaps runtime targets"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+
+def test_runtime_catalog_non_runtime_paths_reject_future_alias_and_non_operator_entries(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+
+    invalid_entries = [
+        (["scripts\\backfill_tushare_daily_basic_fields.py"], "invalid relative path"),
+        (["scripts/FUTURE_OPERATOR.py"], "existing repository file"),
+        ([123], "entries must be strings"),
+    ]
+    for entries, expected_message in invalid_entries:
+        catalog["non_runtime_source_paths"] = entries
+        catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+        with pytest.raises(workflow.WorkflowError, match=expected_message):
+            workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    non_operator = isolated_workflow_root / "tools" / "offline.py"
+    non_operator.parent.mkdir(parents=True)
+    non_operator.write_text("# not an operator-script namespace\n", encoding="utf-8")
+    catalog["non_runtime_source_paths"] = ["tools/offline.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="Python operator scripts under scripts"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    catalog_path.write_text("- not-a-mapping\n", encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="must be a mapping"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+    assert workflow._classify_runtime_impact(
+        ["scripts/backfill_tushare_daily_basic_fields.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "unknown"
+
+
+def test_runtime_catalog_non_runtime_paths_reject_case_alias_and_symlink(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["non_runtime_source_paths"] = ["scripts/BACKFILL_TUSHARE_DAILY_BASIC_FIELDS.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="existing repository file|canonical repository path casing"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    alias = isolated_workflow_root / "scripts" / "daily_basic_alias.py"
+    alias.write_text("# symlink alias fixture\n", encoding="utf-8")
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda candidate: candidate == alias or original_is_symlink(candidate),
+    )
+    catalog["non_runtime_source_paths"] = ["scripts/daily_basic_alias.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="symbolic-link alias"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+
 def test_bug_1032_offline_hmm_state_model_set_preserves_real_backend_detection(
     isolated_workflow_root: Path,
 ) -> None:
@@ -1468,6 +1637,44 @@ def test_bug_1032_offline_hmm_state_model_set_preserves_real_backend_detection(
     assert mixed["runtime_impact"] == "backend"
     assert mixed["runtime_files"] == ["backend/services/example.py"]
     assert mixed["target_ids"] == ["backend-main"]
+
+
+def test_bug_1093_offline_hmm_jump_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/market_relative_jump_spike.py",
+        "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
+        "scripts/hmm_risk/run_market_relative_jump_spike.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_unregistered = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_runtime_candidate.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_unregistered["runtime_impact"] == "backend"
+    assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
 def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
@@ -7280,7 +7487,7 @@ def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
 ) -> None:
     commands: list[list[str]] = []
 
-    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
         commands.append(args)
         assert args[:3] == ["gh", "pr", "view"]
         return {
@@ -7290,7 +7497,7 @@ def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
             "stderr": "",
         }
 
-    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
 
     payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
 
@@ -7302,9 +7509,199 @@ def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
             "view",
             "https://github.example/pull/199",
             "--json",
-            "state,mergeStateStatus,statusCheckRollup,url,headRefOid",
+            "state,mergeStateStatus,mergeable,statusCheckRollup,url,headRefOid,baseRefName",
         ]
     ]
+
+
+def test_merge_read_transport_failures_recover_through_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "a" * 40
+    merge_sha = "b" * 40
+    commands: list[list[str]] = []
+
+    def ok(payload: Any) -> dict[str, Any]:
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] in (["gh", "pr", "view"], ["gh", "pr", "checks"]):
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"] and args[2].endswith("/pulls/199"):
+            return ok(
+                {
+                    "state": "open",
+                    "merged": False,
+                    "mergeable": True,
+                    "mergeable_state": "clean",
+                    "head": {"sha": head_sha},
+                    "base": {"ref": "main"},
+                    "html_url": "https://github.example/pull/199",
+                }
+            )
+        if args[:2] == ["gh", "api"] and "/branches/main/protection/required_status_checks" in args[2]:
+            return ok({"contexts": ["CI verdict"], "checks": [{"context": "CI verdict", "app_id": 15368}]})
+        if args[:2] == ["gh", "api"] and "/check-runs?" in args[2]:
+            return ok(
+                {
+                    "total_count": 1,
+                    "check_runs": [
+                        {
+                            "id": 9,
+                            "name": "CI verdict",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "app": {"id": 15368},
+                        }
+                    ],
+                }
+            )
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "headRefOid": head_sha, "mergeCommit": {"oid": merge_sha}},
+        },
+    )
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["verified"]["pr"]["mergeCommit"]["oid"] == merge_sha
+    assert [item["stage"] for item in payload["read_fallbacks"]] == ["pr_view", "required_checks"]
+    assert sum(args[:3] == ["gh", "pr", "view"] for args in commands) == 2
+    assert sum(args[:3] == ["gh", "pr", "checks"] for args in commands) == 2
+    assert sum(args[:3] == ["gh", "pr", "merge"] for args in commands) == 1
+    assert not any(args[:2] == ["gh", "api"] and args[2].endswith("/status") for args in commands)
+
+
+def test_merge_read_non_transport_failure_is_not_retried_or_fallbacked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        return {"ok": False, "returncode": 1, "stdout": "", "stderr": "HTTP 403: forbidden"}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: pytest.fail(f"unexpected REST fallback: {pr_url}"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="403"):
+        workflow._merge_pr_view_with_transport_fallback("https://github.example/pull/199")
+
+    assert len(commands) == 1
+
+
+def test_rest_required_check_fallback_keeps_pending_check_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {"head_sha": head_sha, "base_ref": "main", "url": pr_url},
+    )
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        if "/branches/main/protection/required_status_checks" in args[2]:
+            payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
+        elif "/check-runs?" in args[2]:
+            payload = {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "id": 9,
+                        "name": "CI verdict",
+                        "status": "in_progress",
+                        "conclusion": None,
+                        "app": {"id": 15368},
+                    }
+                ],
+            }
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._rest_required_pr_check_result(
+        "https://github.example/pull/199",
+        expected_head=head_sha,
+        base_ref="main",
+    )
+
+    assert workflow._required_pr_check_summary(result)["pending"] == ["CI verdict"]
+
+
+def test_rest_required_check_fallback_rejects_head_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_head = "a" * 40
+    observed_head = "b" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {"head_sha": observed_head, "base_ref": "main", "url": pr_url},
+    )
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: pytest.fail("REST checks must not run"))
+
+    with pytest.raises(workflow.WorkflowError, match="PR head changed"):
+        workflow._rest_required_pr_check_result(
+            "https://github.example/pull/199",
+            expected_head=expected_head,
+            base_ref="main",
+        )
+
+
+def test_rest_required_check_fallback_honors_required_app_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "a" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {"head_sha": head_sha, "base_ref": "main", "url": pr_url},
+    )
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        if "/branches/main/protection/required_status_checks" in args[2]:
+            payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
+        elif "/check-runs?" in args[2]:
+            payload = {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "id": 9,
+                        "name": "CI verdict",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "app": {"id": 99999},
+                    }
+                ],
+            }
+        elif args[2].endswith("/status"):
+            pytest.fail("an app-bound required check must not fall back to a legacy commit status")
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._rest_required_pr_check_result(
+        "https://github.example/pull/199",
+        expected_head=head_sha,
+        base_ref="main",
+    )
+
+    assert workflow._required_pr_check_summary(result)["pending"] == ["CI verdict"]
 
 
 def test_merge_transport_failure_falls_back_once_to_head_pinned_rest(
@@ -11033,6 +11430,75 @@ def test_cleanup_after_merge_uses_pr_merge_commit_when_origin_drifted(
     assert payload["merge_verification"]["method"] == "squash_merge_head_oid_changed_paths_equivalent_to_merge_commit"
     assert payload["merge_verification"]["path_equivalence"]["target_ref"] == "merge123"
     assert payload["merge_verification"]["merge_commit_path_equivalence"]["verified"] is True
+
+
+@pytest.mark.parametrize(("merge_in_origin", "expected_verified"), [(True, True), (False, False)])
+def test_cleanup_merge_verification_uses_exact_pr_head_identity_when_allocator_path_differs(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    merge_in_origin: bool,
+    expected_verified: bool,
+) -> None:
+    branch = "bug/BUG-199-allocator-preservation"
+    head_oid = "a" * 40
+    merge_commit = "b" * 40
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": pr_url,
+                "headRefName": branch,
+                "headRefOid": head_oid,
+                "mergeCommit": {"oid": merge_commit},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, cwd=None, check=True: head_oid if args[:2] == ["rev-parse", "--verify"] else "",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_commit_is_ancestor",
+        lambda ancestor, descendant, root: merge_in_origin
+        if (ancestor, descendant) == (merge_commit, "origin/main")
+        else False,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_ref",
+        lambda *args, **kwargs: {
+            "verified": False,
+            "reason": "changed_paths_differ",
+            "changed_files": ["tests/aistock_validation/bugs/.bug_id_allocator.json"],
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_origin",
+        lambda *args, **kwargs: {"verified": False, "reason": "changed_paths_differ"},
+    )
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: False)
+
+    payload = workflow._cleanup_merge_verification(
+        branch,
+        "https://github.example/pull/199",
+        False,
+        cwd=isolated_workflow_root,
+    )
+
+    assert payload["verified"] is expected_verified
+    assert payload["pr_head_identity"]["merge_commit_in_origin_main"] is merge_in_origin
+    if expected_verified:
+        assert payload["method"] == "merged_pr_exact_head_identity_in_origin_main"
+        assert payload["squash_merge_verified"] is True
+    else:
+        assert payload["method"] is None
 
 
 def test_cleanup_after_merge_blocks_when_squash_pr_head_tree_differs(

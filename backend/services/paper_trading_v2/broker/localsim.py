@@ -58,6 +58,7 @@ from backend.services.trading_core.errors import (
     ExecutionAlgoError,
     InvalidStateTransitionError,
     RiskRuleError,
+    RuntimeConfigInvalidError,
     TradingCoreError,
 )
 from backend.services.trading_core.execution_algo_capabilities import require_execution_algo_supports_mode
@@ -657,7 +658,7 @@ class LocalSimBackend(BrokerBackend):
                         trade_date=intent.target_trade_date,
                         source=self._data_source,
                         min_bars=1,
-                        require_day_features=self._algo_requires_day_features(),
+                        require_day_features=False,
                     )
             except BrokerConnectivityError as exc:
                 if self._data_source != MinuteDataSource.TDX_REALTIME:
@@ -1401,7 +1402,7 @@ class LocalSimBackend(BrokerBackend):
                 source=self._data_source,
                 until_time=as_of_time,
                 require_suspend_status=True,
-                require_day_features=self._algo_requires_day_features(),
+                require_day_features=False,
             )
         except DataUnavailableError as exc:
             raise BrokerConnectivityError(
@@ -2016,10 +2017,6 @@ class LocalSimBackend(BrokerBackend):
                 },
             )
 
-    def _algo_requires_day_features(self) -> bool:
-        algo_code = str(self._execution_policy.get("algo_code") or "").strip().upper()
-        return algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}
-
     @staticmethod
     def _resolve_execution_policy(
         *,
@@ -2036,7 +2033,21 @@ class LocalSimBackend(BrokerBackend):
                 "manifest_policy_consulted": False,
             },
         )
-        return dict(snapshot["policy_json"])
+        policy_json = dict(snapshot["policy_json"])
+        algo_code = str(policy_json.get("algo_code") or "").strip().upper()
+        if algo_code != "TWAP":
+            raise RuntimeConfigInvalidError(
+                "LocalSimBackend only accepts the explicit TWAP runtime policy",
+                context={
+                    "reason_code": "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED",
+                    "package_id": manifest.package_id,
+                    "manifest_sha256": manifest.manifest_sha256,
+                    "algo_code": algo_code or None,
+                    "required_algo_code": "TWAP",
+                    "fallback_used": False,
+                },
+            )
+        return policy_json
 
     def _build_status(self, handle_id: str, order: Order) -> OrderHandleStatus:
         state = _ORDER_STATUS_TO_HANDLE_STATE.get(order.status)

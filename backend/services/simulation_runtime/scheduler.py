@@ -66,7 +66,8 @@ from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
 )
 from backend.services.strategy_package.execution_policy import (
-    validate_frozen_execution_policy_snapshot,
+    LOCALSIM_TWAP_ONLY_REASON_CODE,
+    local_sim_twap_only_policy_snapshot,
 )
 from backend.services.strategy_package.models import AlphaMode, PackageStatus, StrategyPackageManifest
 from backend.services.strategy_package.multi_alpha_live import multi_alpha_selection_artifact_runtime_hash
@@ -1389,28 +1390,31 @@ class ProductionSimulationRunContextProvider:
         binding: SimulationReleaseBinding,
         portfolio: Any,
     ) -> dict[str, Any]:
-        release_policy = self._release_execution_policy_payload(runtime_release)
-        return validate_frozen_execution_policy_snapshot(
-            release_policy,
-            expected_policy_id=runtime_release.execution_policy_version_id,
-            expected_policy_sha256=runtime_release.execution_policy_sha256,
-            context={
-                "stage": "LOCAL_SIM_RUNTIME_POLICY_RESOLUTION",
+        release_policy = self._release_execution_policy_payload(runtime_release) or {}
+        requested_policy_json = release_policy.get("policy_json")
+        requested_algo_code = (
+            str(requested_policy_json.get("algo_code") or "").strip().upper()
+            if isinstance(requested_policy_json, dict)
+            else None
+        )
+        effective_policy = local_sim_twap_only_policy_snapshot()
+        logger.info(
+            "LocalSIM execution policy selected",
+            extra={
+                "reason_code": LOCALSIM_TWAP_ONLY_REASON_CODE,
                 "strategy_id": binding.strategy_id,
                 "binding_id": binding.binding_id,
                 "release_id": runtime_release.release_id,
-                "portfolio_id": getattr(portfolio, "portfolio_id", None),
-                "package_id": runtime_release.package_id,
-                "broker_backend": binding.broker_backend.value,
-                "strategy_package_revalidation_performed": False,
-                "portfolio_policy_consulted": False,
-                "manifest_policy_consulted": False,
-                "required_action": (
-                    "use a runtime release frozen with a complete execution-policy snapshot; "
-                    "retire incomplete historical LocalSIM releases without synthesizing policy data"
-                ),
+                "requested_policy_id": runtime_release.execution_policy_version_id,
+                "requested_policy_sha256": runtime_release.execution_policy_sha256,
+                "requested_algo_code": requested_algo_code,
+                "effective_policy_id": effective_policy["policy_version_id"],
+                "effective_algo_code": "TWAP",
+                "source_policy_consulted_for_execution": False,
+                "fallback_used": False,
             },
         )
+        return effective_policy
 
     def _load_positions_with_injected_loader(self, strategy_id: str, trade_date: date) -> dict[str, PositionLot]:
         if self._position_loader is None:
@@ -8372,6 +8376,7 @@ class SimulationLifecycleScheduler:
         trade_date: date,
         as_of_time: datetime | None,
     ) -> SimulationRunContext:
+        self._assert_local_sim_plan_uses_twap(binding=binding, plan=plan)
         loader = getattr(self.context_provider, "load_existing_plan_context", None)
         if callable(loader):
             return loader(
@@ -8386,6 +8391,38 @@ class SimulationLifecycleScheduler:
             binding=binding,
             trade_date=trade_date,
             as_of_time=as_of_time,
+        )
+
+    @staticmethod
+    def _assert_local_sim_plan_uses_twap(
+        *,
+        binding: SimulationReleaseBinding,
+        plan: ExecutionPlan,
+    ) -> None:
+        if binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM:
+            return
+        policy_container = plan.plan_payload_json.get("execution_policy")
+        payload = policy_container.get("payload") if isinstance(policy_container, dict) else None
+        policy_json = payload.get("policy_json") if isinstance(payload, dict) else None
+        if not isinstance(policy_json, dict):
+            policy_json = payload if isinstance(payload, dict) else {}
+        algo_code = str(policy_json.get("algo_code") or "").strip().upper()
+        plan_policy_id = str(plan.execution_policy_version_id or "").strip()
+        if algo_code == "TWAP":
+            return
+        raise RuntimeConfigInvalidError(
+            "LocalSIM existing execution plan is not eligible under the TWAP-only runtime policy",
+            context={
+                "reason_code": "LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED",
+                "binding_id": binding.binding_id,
+                "plan_id": plan.plan_id,
+                "plan_execution_policy_version_id": plan_policy_id or None,
+                "plan_algo_code": algo_code or None,
+                "required_algo_code": "TWAP",
+                "broker_call_attempted": False,
+                "fallback_used": False,
+                "required_action": "create a new LocalSIM execution plan under the TWAP-only runtime policy",
+            },
         )
 
     @staticmethod

@@ -1685,6 +1685,8 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
     if not path.exists():
         raise WorkflowError(f"runtime target catalog is missing: {_repo_rel(path, root)}")
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise WorkflowError("runtime target catalog must be a mapping")
     if payload.get("schema_version") != "aistock_runtime_target_catalog_v1":
         raise WorkflowError("runtime target catalog schema_version must be aistock_runtime_target_catalog_v1")
     targets = payload.get("targets")
@@ -1703,6 +1705,97 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
             if port in seen_ports:
                 raise WorkflowError(f"runtime target production_port conflict: {port} ({seen_ports[port]}, {target_id})")
             seen_ports[port] = str(target_id)
+    raw_non_runtime_paths = payload.get("non_runtime_source_paths", [])
+    if not isinstance(raw_non_runtime_paths, list):
+        raise WorkflowError("runtime target catalog non_runtime_source_paths must be a list")
+    non_runtime_paths: list[str] = []
+    non_runtime_path_keys: set[str] = set()
+    root_resolved = root.resolve()
+    for raw_path in raw_non_runtime_paths:
+        if not isinstance(raw_path, str):
+            raise WorkflowError("runtime target catalog non_runtime_source_paths entries must be strings")
+        path_value = raw_path.strip()
+        if (
+            not path_value
+            or "\\" in path_value
+            or path_value.startswith(("/", "./"))
+            or re.match(r"^[A-Za-z]:(?:/|$)", path_value)
+            or any(part in {"", ".", ".."} for part in path_value.split("/"))
+        ):
+            raise WorkflowError(
+                f"runtime target catalog non_runtime_source_paths contains an invalid relative path: {raw_path}"
+            )
+        if any(character in path_value for character in "*?["):
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths requires exact paths without wildcards: "
+                f"{path_value}"
+            )
+        if path_value in non_runtime_paths:
+            raise WorkflowError(
+                f"runtime target catalog non_runtime_source_paths contains a duplicate: {path_value}"
+            )
+        overlapping_targets = sorted(
+            str(target_id)
+            for target_id, target in targets.items()
+            if any(
+                _runtime_glob_matches(path_value, str(pattern))
+                for pattern in flow._as_list(target.get("source_globs"))
+            )
+        )
+        if overlapping_targets:
+            raise WorkflowError(
+                "runtime target catalog non-runtime path overlaps runtime targets: "
+                f"{path_value} -> {overlapping_targets}"
+            )
+        if not path_value.startswith("scripts/") or not path_value.endswith(".py"):
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths only accepts Python operator scripts under scripts/: "
+                f"{path_value}"
+            )
+        candidate = root.joinpath(*path_value.split("/"))
+        try:
+            resolved_candidate = candidate.resolve(strict=True)
+            resolved_relative = resolved_candidate.relative_to(root_resolved).as_posix()
+        except (FileNotFoundError, OSError, ValueError):
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths entry must be an existing repository file: "
+                f"{path_value}"
+            ) from None
+        if not candidate.is_file():
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths entry must be a regular file: "
+                f"{path_value}"
+            )
+        if candidate.is_symlink() or resolved_relative.casefold() != path_value.casefold():
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths entry must not use a symbolic-link alias: "
+                f"{path_value}"
+            )
+        cursor = root
+        canonical_parts: list[str] = []
+        for part in path_value.split("/"):
+            matches = [entry for entry in cursor.iterdir() if entry.name.casefold() == part.casefold()]
+            if len(matches) != 1:
+                raise WorkflowError(
+                    "runtime target catalog non_runtime_source_paths entry has ambiguous or missing path casing: "
+                    f"{path_value}"
+                )
+            cursor = matches[0]
+            canonical_parts.append(cursor.name)
+        canonical_path = "/".join(canonical_parts)
+        if canonical_path != path_value:
+            raise WorkflowError(
+                "runtime target catalog non_runtime_source_paths entry must use canonical repository path casing: "
+                f"{path_value} -> {canonical_path}"
+            )
+        normalized_key = os.path.normcase(path_value).casefold()
+        if normalized_key in non_runtime_path_keys:
+            raise WorkflowError(
+                f"runtime target catalog non_runtime_source_paths contains a duplicate: {path_value}"
+            )
+        non_runtime_path_keys.add(normalized_key)
+        non_runtime_paths.append(path_value)
+    payload["non_runtime_source_paths"] = non_runtime_paths
     return payload
 
 
@@ -1727,9 +1820,11 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
     impacts: set[str] = set()
     runtime_files: list[str] = []
     target_ids: set[str] = set()
-    catalog_targets: dict[str, Any] = {}
+    catalog: dict[str, Any] = {}
     with contextlib.suppress(WorkflowError):
-        catalog_targets = (_load_runtime_target_catalog(root).get("targets") or {})
+        catalog = _load_runtime_target_catalog(root)
+    catalog_targets = catalog.get("targets") or {}
+    catalog_non_runtime_files = set(flow._as_list(catalog.get("non_runtime_source_paths")))
     known_non_runtime_prefixes = (
         ".github/",
         "backend/tests/",
@@ -1743,6 +1838,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
         "backend/services/hmm_risk/b3_mixed_dimension.py",
         "backend/services/hmm_risk/b3_training.py",
+        "backend/services/hmm_risk/market_relative_jump_spike.py",
         "backend/services/hmm_risk/state_model_set.py",
         "scripts/advisory_short_rebound_batch_b.py",
         "scripts/aistock_bug_id_allocator.py",
@@ -1760,6 +1856,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/nightly_session_runner.py",
         "scripts/ci_change_classifier.py",
         "scripts/hmm_risk/prepare_state_model_set.py",
+        "scripts/hmm_risk/run_market_relative_jump_spike.py",
         "noxfile.py",
     }
     known_client_files = {
@@ -1770,7 +1867,11 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         if path in known_client_files or lower.startswith((".codex/", ".claude/")):
             impacts.add("client")
             continue
-        if path in known_non_runtime_files or lower.startswith(known_non_runtime_prefixes):
+        if (
+            path in known_non_runtime_files
+            or path in catalog_non_runtime_files
+            or lower.startswith(known_non_runtime_prefixes)
+        ):
             impacts.add("none")
             continue
         matched_targets: list[tuple[str, str]] = []
@@ -12523,6 +12624,48 @@ def _cleanup_merge_verification(
             }
         )
         return payload
+
+    pr = pr_check.get("pr") if isinstance(pr_check, dict) else None
+    pr_head_name = str((pr or {}).get("headRefName") or "") if isinstance(pr, dict) else ""
+    local_head = _git(
+        ["rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}"],
+        cwd=root,
+        check=False,
+    ).strip().lower()
+    normalized_head = str(head_oid or "").strip().lower()
+    normalized_merge_commit = str(merge_commit or "").strip().lower()
+    merge_commit_in_origin_main = bool(
+        _FULL_GIT_COMMIT_RE.fullmatch(normalized_merge_commit)
+        and _git_commit_is_ancestor(normalized_merge_commit, "origin/main", root=root)
+    )
+    exact_pr_head_identity = bool(
+        pr_head_name == branch
+        and _FULL_GIT_COMMIT_RE.fullmatch(normalized_head)
+        and local_head == normalized_head
+        and merge_commit_in_origin_main
+    )
+    payload["pr_head_identity"] = {
+        "verified": exact_pr_head_identity,
+        "pr_head_name": pr_head_name or None,
+        "expected_branch": branch,
+        "pr_head_oid": normalized_head or None,
+        "local_branch_oid": local_head or None,
+        "merge_commit": normalized_merge_commit or None,
+        "merge_commit_in_origin_main": merge_commit_in_origin_main,
+    }
+    if exact_pr_head_identity:
+        payload.update(
+            {
+                "method": "merged_pr_exact_head_identity_in_origin_main",
+                "verified": True,
+                "squash_merge_verified": True,
+                "tree_equivalent_to_origin_main": False,
+                "tree_equivalence_ref": normalized_head,
+                "tree_equivalence_target": normalized_merge_commit,
+            }
+        )
+        return payload
+
     if head_oid and merge_commit:
         merge_commit_equivalence = _git_squash_head_equivalent_to_ref(
             head_oid,
@@ -12886,10 +13029,11 @@ def _github_pull_rest_readback(pr_url: str) -> dict[str, Any]:
     pr_number = _github_pr_number_from_url(pr_url)
     if pr_number is None:
         raise WorkflowError(f"cannot derive GitHub PR number from URL: {pr_url}")
-    result = _run_read_command_with_retry(
+    result = _run_transport_read_with_retry(
         ["gh", "api", f"repos/{GITHUB_REPO}/pulls/{pr_number}"],
         cwd=REPO_ROOT,
         timeout=30,
+        attempts=2,
     )
     if not result.get("ok"):
         raise WorkflowError(
@@ -12902,13 +13046,17 @@ def _github_pull_rest_readback(pr_url: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise WorkflowError(f"GitHub REST PR readback for {pr_number} is not an object")
     head = payload.get("head") or {}
+    base = payload.get("base") or {}
     return {
         "pr_number": pr_number,
         "state": str(payload.get("state") or "").upper(),
         "merged": bool(payload.get("merged")),
+        "mergeable": payload.get("mergeable"),
+        "mergeable_state": str(payload.get("mergeable_state") or "").upper(),
         "merged_at": payload.get("merged_at"),
         "merge_commit": str(payload.get("merge_commit_sha") or "").strip() or None,
         "head_sha": str(head.get("sha") or "").strip(),
+        "base_ref": str(base.get("ref") or "").strip(),
         "url": str(payload.get("html_url") or pr_url),
     }
 
@@ -12926,6 +13074,309 @@ def _verified_pr_from_rest_readback(readback: dict[str, Any]) -> dict[str, Any]:
             "headRefOid": readback.get("head_sha"),
         },
     }
+
+
+def _run_merge_read_with_retry(
+    args: list[str],
+    *,
+    bug_id: str | None,
+    event: str,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    result = _run_transport_read_with_retry(args, cwd=REPO_ROOT, timeout=60, attempts=2)
+    if bug_id:
+        _append_event(
+            bug_id,
+            event=event,
+            state="ci_green",
+            command=" ".join(args),
+            cwd=REPO_ROOT,
+            duration_seconds=time.monotonic() - started,
+            result="ok" if result.get("ok") else "failed",
+            evidence={
+                "attempts": result.get("attempts"),
+                "returncode": result.get("returncode"),
+                "stdout_excerpt": str(result.get("stdout") or "")[:1000],
+                "stderr_excerpt": str(result.get("stderr") or "")[:1000],
+            },
+        )
+    return result
+
+
+def _run_transport_read_with_retry(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 30,
+    attempts: int = 2,
+) -> dict[str, Any]:
+    total = max(1, int(attempts))
+    last: dict[str, Any] = {"ok": False, "returncode": None, "stdout": "", "stderr": "not run"}
+    for index in range(total):
+        last = _run_command(args, cwd=cwd, timeout=timeout)
+        if last.get("ok"):
+            return {**last, "attempts": index + 1}
+        message = str(last.get("stderr") or last.get("stdout") or "")
+        if not _looks_like_github_transport_failure(message) or index + 1 >= total:
+            return {**last, "attempts": index + 1}
+        time.sleep(0.5)
+    return {**last, "attempts": total}
+
+
+def _merge_pr_view_with_transport_fallback(
+    pr_url: str,
+    *,
+    bug_id: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    command = [
+        "gh",
+        "pr",
+        "view",
+        pr_url,
+        "--json",
+        "state,mergeStateStatus,mergeable,statusCheckRollup,url,headRefOid,baseRefName",
+    ]
+    result = _run_merge_read_with_retry(
+        command,
+        bug_id=bug_id,
+        event="command:gh_pr_view_before_merge",
+    )
+    if result.get("ok"):
+        try:
+            payload = json.loads(str(result.get("stdout") or "{}"))
+        except json.JSONDecodeError as exc:
+            raise WorkflowError(f"cannot parse pre-merge PR view: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise WorkflowError("pre-merge PR view returned a non-object payload")
+        fallback = None
+    else:
+        message = str(result.get("stderr") or result.get("stdout") or "pre-merge PR view failed")
+        if not _looks_like_github_transport_failure(message):
+            raise WorkflowError(message)
+        readback = _github_pull_rest_readback(pr_url)
+        payload = {
+            "state": "MERGED" if readback["merged"] else readback["state"],
+            "mergeStateStatus": readback["mergeable_state"],
+            "mergeable": (
+                "MERGEABLE" if readback["mergeable"] is True else (
+                    "CONFLICTING" if readback["mergeable"] is False else "UNKNOWN"
+                )
+            ),
+            "url": readback["url"],
+            "headRefOid": readback["head_sha"],
+            "baseRefName": readback["base_ref"],
+            "statusCheckRollup": [],
+        }
+        fallback = {
+            "stage": "pr_view",
+            "source": "github_rest",
+            "graphql_attempts": result.get("attempts"),
+            "head_sha": readback["head_sha"],
+        }
+        if bug_id:
+            _append_event(
+                bug_id,
+                event="merge_graphql_view_rest_fallback",
+                state="ci_green",
+                result="recovered",
+                evidence={"pr_url": pr_url, **fallback},
+            )
+
+    state = str(payload.get("state") or "").upper()
+    mergeable = str(payload.get("mergeable") or "").upper()
+    merge_state = str(payload.get("mergeStateStatus") or "").upper()
+    if state not in {"OPEN", "MERGED"}:
+        raise WorkflowError(f"PR is neither open nor merged: state={state or 'missing'}")
+    if state == "OPEN" and (mergeable == "CONFLICTING" or merge_state == "DIRTY"):
+        raise WorkflowError("PR cannot be cleanly merged")
+    return payload, fallback
+
+
+def _parse_rest_object(result: dict[str, Any], *, context: str) -> dict[str, Any]:
+    if not result.get("ok"):
+        raise WorkflowError(str(result.get("stderr") or result.get("stdout") or f"{context} failed"))
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"{context} returned invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise WorkflowError(f"{context} returned a non-object payload")
+    return payload
+
+
+def _rest_required_pr_check_result(
+    pr_url: str,
+    *,
+    expected_head: str,
+    base_ref: str,
+) -> dict[str, Any]:
+    readback = _github_pull_rest_readback(pr_url)
+    normalized_head = expected_head.strip().lower()
+    if not _FULL_GIT_COMMIT_RE.fullmatch(normalized_head):
+        raise WorkflowError("REST required-check fallback requires the verified full PR head SHA")
+    if readback["head_sha"].lower() != normalized_head:
+        raise WorkflowError(
+            "PR head changed before REST required-check fallback: "
+            f"expected={normalized_head}, observed={readback['head_sha'] or 'missing'}"
+        )
+    observed_base = readback["base_ref"]
+    if base_ref and observed_base != base_ref:
+        raise WorkflowError(
+            f"PR base changed before REST required-check fallback: expected={base_ref}, observed={observed_base or 'missing'}"
+        )
+    effective_base = observed_base or base_ref
+    if not effective_base:
+        raise WorkflowError("REST required-check fallback requires the PR base branch")
+
+    encoded_base = urllib.parse.quote(effective_base, safe="")
+    protection_result = _run_transport_read_with_retry(
+        ["gh", "api", f"repos/{GITHUB_REPO}/branches/{encoded_base}/protection/required_status_checks"],
+        cwd=REPO_ROOT,
+        timeout=30,
+        attempts=2,
+    )
+    protection_message = str(protection_result.get("stderr") or protection_result.get("stdout") or "")
+    no_required_checks = any(
+        marker in protection_message.casefold()
+        for marker in ("branch not protected", "required status checks are not enabled")
+    )
+    if not protection_result.get("ok") and no_required_checks:
+        requirements: list[tuple[str, int | None]] = []
+    else:
+        protection = _parse_rest_object(protection_result, context="required-status-check protection readback")
+        requirements = []
+        for item in protection.get("checks") or []:
+            if not isinstance(item, dict) or not str(item.get("context") or "").strip():
+                continue
+            try:
+                parsed_app_id = int(item.get("app_id")) if item.get("app_id") is not None else None
+            except (TypeError, ValueError) as exc:
+                raise WorkflowError("required-status-check protection returned an invalid app_id") from exc
+            requirements.append((str(item["context"]), None if parsed_app_id == -1 else parsed_app_id))
+        known_contexts = {context for context, _ in requirements}
+        for context in protection.get("contexts") or []:
+            name = str(context or "").strip()
+            if name and name not in known_contexts:
+                requirements.append((name, None))
+
+    if not requirements:
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "[]",
+            "stderr": "",
+            "source": "github_rest",
+            "head_sha": normalized_head,
+        }
+
+    check_runs_result = _run_transport_read_with_retry(
+        ["gh", "api", f"repos/{GITHUB_REPO}/commits/{normalized_head}/check-runs?per_page=100"],
+        cwd=REPO_ROOT,
+        timeout=30,
+        attempts=2,
+    )
+    check_runs_payload = _parse_rest_object(check_runs_result, context="required check-runs readback")
+    check_runs = [item for item in check_runs_payload.get("check_runs") or [] if isinstance(item, dict)]
+    if int(check_runs_payload.get("total_count") or len(check_runs)) > len(check_runs):
+        raise WorkflowError("required check-runs readback exceeds the supported single page")
+
+    missing_status_contexts: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for context, app_id in requirements:
+        matches = [
+            item
+            for item in check_runs
+            if str(item.get("name") or "") == context
+            and (
+                app_id is None
+                or int(((item.get("app") or {}).get("id") or -1)) == app_id
+            )
+        ]
+        if not matches:
+            if app_id is None:
+                missing_status_contexts.add(context)
+            else:
+                rows.append(
+                    {
+                        "name": context,
+                        "state": "pending",
+                        "bucket": "pending",
+                        "workflow": "github-rest",
+                    }
+                )
+            continue
+        latest = max(matches, key=lambda item: int(item.get("id") or 0))
+        status = str(latest.get("status") or "").upper()
+        conclusion = str(latest.get("conclusion") or "").upper()
+        bucket = (
+            "pending" if status != "COMPLETED" else (
+                "pass" if conclusion in NON_BLOCKING_CHECK_CONCLUSIONS else "fail"
+            )
+        )
+        rows.append({"name": context, "state": conclusion or status, "bucket": bucket, "workflow": "github-rest"})
+
+    if missing_status_contexts:
+        status_result = _run_transport_read_with_retry(
+            ["gh", "api", f"repos/{GITHUB_REPO}/commits/{normalized_head}/status"],
+            cwd=REPO_ROOT,
+            timeout=30,
+            attempts=2,
+        )
+        status_payload = _parse_rest_object(status_result, context="required commit-status readback")
+        statuses = [item for item in status_payload.get("statuses") or [] if isinstance(item, dict)]
+        for context in sorted(missing_status_contexts):
+            match = next((item for item in statuses if str(item.get("context") or "") == context), None)
+            state = str((match or {}).get("state") or "pending").lower()
+            bucket = "pass" if state == "success" else ("pending" if state in {"pending", "expected"} else "fail")
+            rows.append({"name": context, "state": state, "bucket": bucket, "workflow": "github-rest"})
+
+    return {
+        "ok": True,
+        "returncode": 0,
+        "stdout": json.dumps(rows),
+        "stderr": "",
+        "source": "github_rest",
+        "head_sha": normalized_head,
+    }
+
+
+def _merge_required_check_result_with_transport_fallback(
+    pr_url: str,
+    *,
+    payload: dict[str, Any],
+    bug_id: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    command = ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"]
+    result = _run_merge_read_with_retry(
+        command,
+        bug_id=bug_id,
+        event="command:gh_pr_required_checks_before_merge",
+    )
+    if result.get("ok"):
+        return result, None
+    message = str(result.get("stderr") or result.get("stdout") or "required PR check query failed")
+    if not _looks_like_github_transport_failure(message):
+        return result, None
+    rest_result = _rest_required_pr_check_result(
+        pr_url,
+        expected_head=str(payload.get("headRefOid") or ""),
+        base_ref=str(payload.get("baseRefName") or ""),
+    )
+    fallback = {
+        "stage": "required_checks",
+        "source": "github_rest",
+        "graphql_attempts": result.get("attempts"),
+        "head_sha": rest_result.get("head_sha"),
+    }
+    if bug_id:
+        _append_event(
+            bug_id,
+            event="merge_graphql_required_checks_rest_fallback",
+            state="ci_green",
+            result="recovered",
+            evidence={"pr_url": pr_url, **fallback},
+        )
+    return rest_result, fallback
 
 
 def _head_pinned_rest_merge_after_transport_failure(
@@ -13130,18 +13581,15 @@ def _complete_pr_merge_attempt(
 
 
 def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
-    view = _execute_checked(
-        ["gh", "pr", "view", pr_url, "--json", "state,mergeStateStatus,statusCheckRollup,url,headRefOid"],
-        cwd=REPO_ROOT,
-        timeout=60,
-    )
-    payload = json.loads(str(view.get("stdout") or "{}"))
+    payload, view_fallback = _merge_pr_view_with_transport_fallback(pr_url)
     if payload.get("state") == "MERGED":
-        return {"already_merged": True, "view": payload}
-    required_result = _run_command(
-        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
-        cwd=REPO_ROOT,
-        timeout=60,
+        result = {"already_merged": True, "view": payload}
+        if view_fallback:
+            result["read_fallbacks"] = [view_fallback]
+        return result
+    required_result, checks_fallback = _merge_required_check_result_with_transport_fallback(
+        pr_url,
+        payload=payload,
     )
     check_summary = _required_pr_check_summary(required_result)
     failed = check_summary["failed"]
@@ -13149,34 +13597,29 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _run_command(["gh", "pr", "merge", pr_url, "--squash"], cwd=REPO_ROOT, timeout=180)
-    return _complete_pr_merge_attempt(
+    completed = _complete_pr_merge_attempt(
         pr_url=pr_url,
         expected_head=str(payload.get("headRefOid") or ""),
         check_summary=check_summary,
         merge_result=result,
     )
+    read_fallbacks = [item for item in (view_fallback, checks_fallback) if item]
+    if read_fallbacks:
+        completed["read_fallbacks"] = read_fallbacks
+    return completed
 
 
 def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
-    view = _execute_workflow_command(
-        bug_id,
-        ["gh", "pr", "view", pr_url, "--json", "state,mergeStateStatus,statusCheckRollup,url,headRefOid"],
-        state="ci_green",
-        cwd=REPO_ROOT,
-        timeout=60,
-        event="command:gh_pr_view_before_merge",
-    )
-    payload = json.loads(str(view.get("stdout") or "{}"))
+    payload, view_fallback = _merge_pr_view_with_transport_fallback(pr_url, bug_id=bug_id)
     if payload.get("state") == "MERGED":
-        return {"already_merged": True, "view": payload}
-    required_result = _execute_workflow_command(
-        bug_id,
-        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
-        state="ci_green",
-        cwd=REPO_ROOT,
-        timeout=60,
-        event="command:gh_pr_required_checks_before_merge",
-        allow_failure=True,
+        result = {"already_merged": True, "view": payload}
+        if view_fallback:
+            result["read_fallbacks"] = [view_fallback]
+        return result
+    required_result, checks_fallback = _merge_required_check_result_with_transport_fallback(
+        pr_url,
+        payload=payload,
+        bug_id=bug_id,
     )
     check_summary = _required_pr_check_summary(required_result)
     failed = check_summary["failed"]
@@ -13211,6 +13654,9 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
                 "merge_commit": _merge_commit_from_pr_check(completed.get("verified")),
             },
         )
+    read_fallbacks = [item for item in (view_fallback, checks_fallback) if item]
+    if read_fallbacks:
+        completed["read_fallbacks"] = read_fallbacks
     return completed
 
 

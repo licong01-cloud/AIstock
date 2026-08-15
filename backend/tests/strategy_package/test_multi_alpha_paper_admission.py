@@ -519,7 +519,10 @@ def test_localsim_full_day_runs_admitted_single_and_multi_without_package_revali
     )
 
     assert result.run.status.value == "SUCCEEDED"
-    assert result.run.runtime_config["validated_execution_policy"]["policy_sha256"] == policy.policy_sha256
+    execution_context = result.run.runtime_config["validated_execution_policy"]
+    assert execution_context["validated_execution_policy_id"] == "localsim_twap_only_v1"
+    assert execution_context["runtime_policy_selection"]["requested_policy_sha256"] == policy.policy_sha256
+    assert execution_context["runtime_policy_selection"]["fallback_used"] is False
     assert paper_repo.orders[result.run.run_id]
     assert paper_repo.fills[result.run.run_id]
     assert paper_repo.cash_entries[result.run.run_id]

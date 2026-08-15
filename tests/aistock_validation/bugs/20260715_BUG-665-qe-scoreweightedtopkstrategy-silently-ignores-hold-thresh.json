@@ -1,0 +1,221 @@
+{
+  "actual": "hold_thresh is accepted, rendered and passed to the strategy constructor, but base ScoreWeightedTopkStrategy sells any selected holding regardless of age.",
+  "allowed_write_scope": [
+    "scripts/score_weighted_strategy.py",
+    "scripts/score_weighted_strategy_v2.py",
+    "scripts/register_score_weighted_strategy.py",
+    "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260715_BUG-665-qe-scoreweightedtopkstrategy-silently-ignores-hold-thresh.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-665",
+  "closed_at": "2026-08-14T04:57:20.984834Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-15T20:39:56.603341Z",
+  "description": "hold_thresh is accepted, rendered and passed to the strategy constructor, but base ScoreWeightedTopkStrategy sells any selected holding regardless of age.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260715-fb03ed52a6aa",
+      "timestamp": "2026-07-15T20:39:56.603338Z"
+    },
+    {
+      "action": "current_blueprint_reimplementation",
+      "actor": "codex",
+      "note": "Supersedes conflicting PR #2201 on current main. Preserves the current file-only QE data plane and capacity architecture; changes only normal ScoreWeightedTopkStrategy holding-period semantics and direct tests.",
+      "timestamp": "2026-08-13T18:09:08.7466067Z"
+    }
+  ],
+  "evidence_uris": [
+    "qe_20260716_042842_fd61 Loop1/Loop2 generated configs use hold_thresh 10/20 while scripts/score_weighted_strategy.py generate_trade_decision never reads hold_thresh"
+  ],
+  "expected": "QE ScoreWeightedTopkStrategy must preserve TopkDropoutStrategy minimum holding-period semantics for normal ranking exits, expose explicit diagnostics, and retain explicitly defined forced-risk exit precedence.",
+  "file_scope_contract": {
+    "changed_files": [
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/score_weighted_strategy.py",
+      "tests/aistock_validation/bugs/20260715_BUG-665-qe-scoreweightedtopkstrategy-silently-ignores-hold-thresh.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ]
+  },
+  "first_seen_at": "2026-07-15T20:39:56.603341Z",
+  "fix_branch": null,
+  "fix_commit": "86798c9fd9b13f4fa02851d9e56eb7de06ab42d7",
+  "fixed_at": "2026-08-14T04:20:31Z",
+  "github_issue_number": 2200,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2200",
+  "last_seen_at": "2026-07-15T20:39:56.603341Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3444",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_score_weighted_hold_thresh.py -q",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/strategies",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu Python -I loaded persisted scripts/score_weighted_strategy.py and asserted hold-threshold helper -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-665/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-665",
+      "catalog_sha256": "1789479752137e76ba2434813e2646a13e5d5b1281125d340a0950799468ef04",
+      "contract_digest": "bf7203514bf98fb09b3b4b74f735354781c53e2c05ae145013bb37d59b111303",
+      "expected_identity": "86798c9fd9b13f4fa02851d9e56eb7de06ab42d7",
+      "generated_at": "2026-08-14T04:56:22.004742Z",
+      "mode": "read_only",
+      "observed_identity": "6196bc540dd5f8b3c09f8978b35bf79c5c3c8df3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7fdd610541aa465bef1603faccf111d7927bc9c2fb979faf5a5203dfe6e6f98d",
+      "receipt_sha256": "17ee022c80f6f7411557ef853bda869fc9b88d52c04053b8bce57ea99bd319d4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "87c80e5fb8dee659080df08610506dd090caf0cac905ae6d3b9c9e544d8141bc",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE ScoreWeightedTopkStrategy silently ignores hold_thresh",
+  "trigger_condition": {
+    "fingerprint": "fb03ed52a6aa833c5bd827a9",
+    "source_event_id": "FE-20260715-fb03ed52a6aa"
+  },
+  "validation_evidence": [
+    "focused hold-threshold/runtime-catalog tests 5 passed; validation module registry 8 passed; PR CI green",
+    "post-restart-verify verified after user restart; focused tests 5 passed; module registry 8 passed; source PR CI green"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
