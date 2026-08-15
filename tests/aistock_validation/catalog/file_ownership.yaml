@@ -559,6 +559,16 @@ rules:
     layer: product_feature
     risk_level: critical
     ownership_reason: Paper v2 controls simulated execution, positions, cash, and session state.
+  - rule_id: paper_v2_history_cleanup_cli
+    priority: 96
+    include:
+      - scripts/cleanup_simulation_history.py
+      - scripts/simulation_history_cleanup_core.py
+    primary_module: paper_v2
+    impact_modules: [miniqmt_execution_runtime, strategy_package]
+    layer: script
+    risk_level: critical
+    ownership_reason: Governed simulation-history cleanup mutates the Paper v2, unified simulation, StrategyPackage runtime-release, and MiniQMT K2 persistence graphs.
   - rule_id: miniqmt_execution_runtime_services
     priority: 95
     include:

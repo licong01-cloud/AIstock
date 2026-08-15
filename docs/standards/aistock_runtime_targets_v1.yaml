@@ -1,5 +1,5 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-08-14"
+updated_at: "2026-08-15"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
@@ -7,7 +7,9 @@ policy:
   tracked_artifact_writes: forbidden
 non_runtime_source_paths:
   - scripts/backfill_tushare_daily_basic_fields.py
+  - scripts/cleanup_simulation_history.py
   - scripts/ingest_tushare_daily_basic.py
+  - scripts/simulation_history_cleanup_core.py
 targets:
   backend-main:
     runtime_kind: backend
