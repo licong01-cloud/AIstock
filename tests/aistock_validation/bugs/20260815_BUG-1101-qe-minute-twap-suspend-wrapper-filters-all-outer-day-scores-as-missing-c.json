@@ -97,12 +97,14 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "WSL rdagent-gpu Python loaded the tracked patched qrun_limit_minute.py in a fresh process and rejected the unchanged MA-E16 2026-06 minute replay before qlib.init with QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH (4898/4898 uncovered)"
+      "WSL rdagent-gpu Python loaded the tracked patched qrun_limit_minute.py in a fresh process and rejected the unchanged MA-E16 2026-06 minute replay before qlib.init with QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH (4898/4898 uncovered)",
+      "final-head fc8797d2: WSL new process exited 1 before qlib.init with QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH expected=4898 uncovered=4898 against unchanged active minute provider"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
