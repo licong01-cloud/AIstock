@@ -40,6 +40,12 @@
       "actor": "codex",
       "note": "Workflow changed-file inference classifies scripts/qrun_limit_minute.py as backend-main runtime impact. Runtime fields were corrected without downgrade; restart remains user-owned.",
       "timestamp": "2026-08-15T06:10:00Z"
+    },
+    {
+      "action": "formal_review_boundary_fix",
+      "actor": "codex",
+      "note": "Pre-merge review corrected day-versus-minute membership comparison to trading-date semantics so an instrument beginning at 09:30 on its first eligible day is not falsely rejected, added stable invalid-window handling, and proved non-minute paths remain unchanged.",
+      "timestamp": "2026-08-15T07:25:31Z"
     }
   ],
   "evidence_uris": [

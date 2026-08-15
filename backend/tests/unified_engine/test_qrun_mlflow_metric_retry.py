@@ -110,8 +110,14 @@ def test_qrun_minute_quote_universe_requires_day_minute_window_parity(tmp_path, 
     with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH"):
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
-    minute_all.write_text("000001.SZ\t2024-01-02 09:30:00\t2026-06-30 15:00:00\n", encoding="utf-8")
+    # Instrument membership is a trading-day contract: a minute span beginning
+    # at 09:30 on its first listed day must cover the day-level 00:00 boundary.
+    minute_all.write_text("000001.SZ\t2026-06-01 09:30:00\t2026-06-30 15:00:00\n", encoding="utf-8")
     runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    config["port_analysis_config"]["backtest"]["start_time"] = "not-a-date"
+    with pytest.raises(RuntimeError, match="QE_MINUTE_BACKTEST_WINDOW_INVALID"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
 
 def test_qrun_pred_backtest_rejects_nonempty_prediction_with_zero_execution(tmp_path, monkeypatch) -> None:
@@ -136,6 +142,20 @@ def test_qrun_pred_backtest_rejects_nonempty_prediction_with_zero_execution(tmp_
 
     recorder.indicators = pd.DataFrame({"count": [1, 0], "deal_amount": [1000.0, 0.0]})
     runner._validate_pred_backtest_has_execution(recorder, config, prediction)
+
+
+def test_qrun_minute_guards_do_not_change_non_minute_backtests(tmp_path, monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    config = _minute_config(tmp_path / "missing-minute")
+    config["port_analysis_config"]["backtest"]["exchange_kwargs"]["freq"] = "day"
+
+    class Recorder:
+        def load_object(self, _name: str):
+            raise AssertionError("non-minute guard must not inspect execution artifacts")
+
+    prediction = pd.DataFrame()
+    runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+    runner._validate_pred_backtest_has_execution(Recorder(), config, prediction)
 
 
 

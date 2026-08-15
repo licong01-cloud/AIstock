@@ -1659,6 +1659,20 @@ def _read_instrument_spans(path: Path) -> dict[str, list[tuple[pd.Timestamp, pd.
     return spans
 
 
+def _minute_backtest_window(config: dict) -> tuple[pd.Timestamp, pd.Timestamp]:
+    backtest = (config.get("port_analysis_config") or {}).get("backtest") or {}
+    try:
+        window_start = pd.Timestamp(backtest.get("start_time"))
+        window_end = pd.Timestamp(backtest.get("end_time"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(
+            "QE_MINUTE_BACKTEST_WINDOW_INVALID: start_time/end_time are invalid"
+        ) from exc
+    if pd.isna(window_start) or pd.isna(window_end) or window_end < window_start:
+        raise RuntimeError("QE_MINUTE_BACKTEST_WINDOW_INVALID: start_time/end_time are invalid")
+    return window_start, window_end
+
+
 def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | None = None) -> None:
     """Require the minute quote universe to cover the day universe for the replay window."""
 
@@ -1690,22 +1704,22 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
     minute_path = minute_root / "instruments" / f"{market}.txt"
     day_spans = _read_instrument_spans(day_path)
     minute_spans = _read_instrument_spans(minute_path)
-    window_start = pd.Timestamp(backtest.get("start_time"))
-    window_end = pd.Timestamp(backtest.get("end_time"))
-    if pd.isna(window_start) or pd.isna(window_end) or window_end < window_start:
-        raise RuntimeError("QE_MINUTE_BACKTEST_WINDOW_INVALID: start_time/end_time are invalid")
+    window_start, window_end = _minute_backtest_window(config)
+    required_window_start = window_start.normalize()
+    required_window_end = window_end.normalize()
 
     expected = 0
     uncovered: list[str] = []
     for symbol, spans in day_spans.items():
         for day_start, day_end in spans:
-            required_start = max(day_start, window_start)
-            required_end = min(day_end, window_end)
+            required_start = max(day_start.normalize(), required_window_start)
+            required_end = min(day_end.normalize(), required_window_end)
             if required_end < required_start:
                 continue
             expected += 1
             if not any(
-                minute_start <= required_start and minute_end >= required_end
+                minute_start.normalize() <= required_start
+                and minute_end.normalize() >= required_end
                 for minute_start, minute_end in minute_spans.get(symbol, [])
             ):
                 uncovered.append(
@@ -1738,9 +1752,7 @@ def _validate_pred_backtest_has_execution(recorder, config: dict, pred_df: pd.Da
 
     if not _is_minute_nested_backtest(config):
         return
-    backtest = (config.get("port_analysis_config") or {}).get("backtest") or {}
-    start = pd.Timestamp(backtest.get("start_time"))
-    end = pd.Timestamp(backtest.get("end_time"))
+    start, end = _minute_backtest_window(config)
     dates = pd.to_datetime(pred_df.index.get_level_values(0))
     prediction_rows = int(((dates >= start) & (dates <= end)).sum())
     if prediction_rows <= 0:
