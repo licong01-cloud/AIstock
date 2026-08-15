@@ -2,7 +2,9 @@
   "actual": "A monthly --candidate-only request produced by DatasetReleaseControlService includes supplied_preview_token, but MonthlyResolutionProcessor requires the exact _MONTHLY_FIELDS set without that field. The healthy qe_hmm_full_v2 Worker therefore moves every valid operator submission to BLOCKED_CONTRACT with BLOCKED_RESOLUTION_REQUEST_INVALID before run creation. Preserve strict unknown-field rejection while accepting and validating the optional signed preview-token field; keep reconciler/legacy requests without the field compatible.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260815_BUG-1103-dataset-release-worker-rejects-valid-monthly-supplied-preview-token.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/dataset_release/resolution_processor.py",
+    "backend/tests/dataset_release/test_resolution_processor.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1103",
@@ -20,13 +22,27 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260815-1eb1460ca0e9",
       "timestamp": "2026-08-15T17:38:24.539019Z"
+    },
+    {
+      "action": "expand_scope_for_contract_fix",
+      "actor": "codex",
+      "note": "Scope expanded to the resolution request field contract and its direct tests; control service, control SQLite, Worker lifecycle, and dataset bytes remain unchanged.",
+      "timestamp": "2026-08-15T17:41:00Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "dataset-release-submission:dss_8ba842e383afa98f34fa1802a71cc730",
+    "dataset-release-cas:78025679b62f1d73f67bf200e100b9fa638851eb954c8fbdf934bf9f8b1b33d7"
+  ],
+  "expected": "A valid monthly request may include the control service's signed supplied_preview_token, while reconciler/legacy monthly requests may omit it. The Worker must retain exact-field fail-closed behavior for every other unknown field and reject malformed preview-token values.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/resolution_processor.py",
+      "backend/tests/dataset_release/test_resolution_processor.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1103-dataset-release-worker-rejects-valid-monthly-supplied-preview-token.json",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +52,12 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/dataset_release/resolution_processor.py",
+      "backend/tests/dataset_release/test_resolution_processor.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1103-dataset-release-worker-rejects-valid-monthly-supplied-preview-token.json",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ]
   },
   "first_seen_at": "2026-08-15T17:38:24.539039Z",
   "fix_branch": null,
@@ -52,7 +73,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only; python scripts/dataset_release_worker.py --serve --profile configs/datasets/qe_backtest_monthly_v2.yaml --control-root X:/AIstock_dataset_release_control",
   "required_verification": [
     "l0"
   ],
