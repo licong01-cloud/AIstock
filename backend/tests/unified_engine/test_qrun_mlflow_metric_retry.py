@@ -5,6 +5,7 @@ import sys
 import types
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 
@@ -65,6 +66,76 @@ class _FakeRecorder:
 
     def get_local_dir(self) -> str:
         return str(self._run_dir)
+
+
+def _minute_config(minute_root: Path, day_root: Path | None = None) -> dict:
+    day_root = day_root or minute_root.parent / "day"
+    return {
+        "market": "filtered_pool_20260630",
+        "qlib_init": {"provider_uri": {"day": str(day_root), "1min": str(minute_root)}},
+        "port_analysis_config": {
+            "executor": {"class": "NestedExecutor"},
+            "backtest": {
+                "start_time": "2026-06-01",
+                "end_time": "2026-06-29",
+                "exchange_kwargs": {"freq": "1min"},
+            },
+        },
+    }
+
+
+def test_qrun_minute_quote_universe_requires_day_minute_window_parity(tmp_path, monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    day_root = tmp_path / "day"
+    minute_root = tmp_path / "minute"
+    day_instruments = day_root / "instruments"
+    minute_instruments = minute_root / "instruments"
+    day_instruments.mkdir(parents=True)
+    minute_instruments.mkdir(parents=True)
+    (day_instruments / "all.txt").write_text(
+        "000001.SZ\t2018-08-01\t2026-06-30\n",
+        encoding="utf-8",
+    )
+    config = _minute_config(minute_root, day_root)
+
+    with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_FILE_MISSING"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    minute_all = minute_instruments / "all.txt"
+    minute_all.write_text("000001.SZ\tnot-a-date\t2026-06-30\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_FILE_INVALID"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    minute_all.write_text("000001.SZ\t2024-01-02 09:30:00\t2026-04-28 15:00:00\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    minute_all.write_text("000001.SZ\t2024-01-02 09:30:00\t2026-06-30 15:00:00\n", encoding="utf-8")
+    runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+
+def test_qrun_pred_backtest_rejects_nonempty_prediction_with_zero_execution(tmp_path, monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    config = _minute_config(tmp_path / "minute")
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2026-06-01", "2026-06-02"]), ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    prediction = pd.DataFrame({"score": [0.1, 0.2]}, index=index)
+
+    class Recorder:
+        indicators = pd.DataFrame({"count": [0, 0], "deal_amount": [0.0, 0.0]})
+
+        def load_object(self, name: str):
+            assert name == "portfolio_analysis/indicators_normal_1day.pkl"
+            return self.indicators
+
+    recorder = Recorder()
+    with pytest.raises(RuntimeError, match="QE_MINUTE_BACKTEST_ZERO_TRADES"):
+        runner._validate_pred_backtest_has_execution(recorder, config, prediction)
+
+    recorder.indicators = pd.DataFrame({"count": [1, 0], "deal_amount": [1000.0, 0.0]})
+    runner._validate_pred_backtest_has_execution(recorder, config, prediction)
 
 
 

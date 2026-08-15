@@ -24,6 +24,7 @@
 # ruff: noqa: E402
 import argparse
 from contextlib import contextmanager
+import hashlib
 import os
 import random
 import re
@@ -1617,6 +1618,155 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
     (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _is_minute_nested_backtest(config: dict) -> bool:
+    port_config = config.get("port_analysis_config") or {}
+    executor = port_config.get("executor") or {}
+    backtest = port_config.get("backtest") or {}
+    exchange_kwargs = backtest.get("exchange_kwargs") or {}
+    return executor.get("class") == "NestedExecutor" and str(exchange_kwargs.get("freq")) == "1min"
+
+
+def _read_instrument_spans(path: Path) -> dict[str, list[tuple[pd.Timestamp, pd.Timestamp]]]:
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise RuntimeError(f"QE_MINUTE_INSTRUMENT_FILE_MISSING: {path}")
+    spans: dict[str, list[tuple[pd.Timestamp, pd.Timestamp]]] = {}
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not raw_line.strip():
+            continue
+        parts = raw_line.split("\t")
+        if len(parts) != 3:
+            raise RuntimeError(
+                "QE_MINUTE_INSTRUMENT_FILE_INVALID: "
+                f"path={path} line={line_number} expected_three_tab_fields"
+            )
+        symbol = parts[0].strip().upper()
+        try:
+            start = pd.Timestamp(parts[1].strip())
+            end = pd.Timestamp(parts[2].strip())
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "QE_MINUTE_INSTRUMENT_FILE_INVALID: "
+                f"path={path} line={line_number} invalid_timestamp"
+            ) from exc
+        if not symbol or pd.isna(start) or pd.isna(end) or end < start:
+            raise RuntimeError(
+                "QE_MINUTE_INSTRUMENT_FILE_INVALID: "
+                f"path={path} line={line_number} invalid_span"
+            )
+        spans.setdefault(symbol, []).append((start, end))
+    if not spans:
+        raise RuntimeError(f"QE_MINUTE_INSTRUMENT_FILE_EMPTY: {path}")
+    return spans
+
+
+def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | None = None) -> None:
+    """Require the minute quote universe to cover the day universe for the replay window."""
+
+    if not _is_minute_nested_backtest(config):
+        return
+    backtest = (config.get("port_analysis_config") or {}).get("backtest") or {}
+    exchange_kwargs = backtest.get("exchange_kwargs") or {}
+    codes = exchange_kwargs.get("codes")
+    if codes is None:
+        market = "all"
+    elif isinstance(codes, str):
+        market = codes.strip()
+    elif isinstance(codes, dict):
+        market = str(codes.get("market") or "").strip()
+    else:
+        # Explicit code lists do not use an instruments/<market>.txt lookup.
+        return
+    provider_uri = (config.get("qlib_init") or {}).get("provider_uri")
+    if not isinstance(provider_uri, dict) or not provider_uri.get("day") or not provider_uri.get("1min"):
+        raise RuntimeError(
+            "QE_MINUTE_PROVIDER_URI_MISSING: minute NestedExecutor requires day and 1min provider roots"
+        )
+    if not market:
+        raise RuntimeError("QE_MINUTE_QUOTE_UNIVERSE_MISSING: exchange quote market is empty")
+
+    day_root = Path(str(provider_uri["day"])).expanduser()
+    minute_root = Path(str(provider_uri["1min"])).expanduser()
+    day_path = day_root / "instruments" / f"{market}.txt"
+    minute_path = minute_root / "instruments" / f"{market}.txt"
+    day_spans = _read_instrument_spans(day_path)
+    minute_spans = _read_instrument_spans(minute_path)
+    window_start = pd.Timestamp(backtest.get("start_time"))
+    window_end = pd.Timestamp(backtest.get("end_time"))
+    if pd.isna(window_start) or pd.isna(window_end) or window_end < window_start:
+        raise RuntimeError("QE_MINUTE_BACKTEST_WINDOW_INVALID: start_time/end_time are invalid")
+
+    expected = 0
+    uncovered: list[str] = []
+    for symbol, spans in day_spans.items():
+        for day_start, day_end in spans:
+            required_start = max(day_start, window_start)
+            required_end = min(day_end, window_end)
+            if required_end < required_start:
+                continue
+            expected += 1
+            if not any(
+                minute_start <= required_start and minute_end >= required_end
+                for minute_start, minute_end in minute_spans.get(symbol, [])
+            ):
+                uncovered.append(
+                    f"{symbol}:{required_start.isoformat()}..{required_end.isoformat()}"
+                )
+    if expected <= 0:
+        raise RuntimeError(
+            "QE_MINUTE_DAY_UNIVERSE_EMPTY: "
+            f"market={market} window={window_start.date()}..{window_end.date()}"
+        )
+    if uncovered:
+        raise RuntimeError(
+            "QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH: "
+            f"market={market} expected={expected} uncovered={len(uncovered)} examples={uncovered[:5]}"
+        )
+
+    workspace_pool = (cwd or Path.cwd()) / f"{market}.txt"
+    if workspace_pool.is_file():
+        installed_sha = hashlib.sha256(minute_path.read_bytes()).hexdigest()
+        workspace_sha = hashlib.sha256(workspace_pool.read_bytes()).hexdigest()
+        if installed_sha != workspace_sha:
+            raise RuntimeError(
+                "QE_MINUTE_STOCK_POOL_SHA_MISMATCH: "
+                f"workspace_sha256={workspace_sha} installed_sha256={installed_sha}"
+            )
+
+
+def _validate_pred_backtest_has_execution(recorder, config: dict, pred_df: pd.DataFrame) -> None:
+    """Reject a non-empty minute prediction replay that silently produces no orders."""
+
+    if not _is_minute_nested_backtest(config):
+        return
+    backtest = (config.get("port_analysis_config") or {}).get("backtest") or {}
+    start = pd.Timestamp(backtest.get("start_time"))
+    end = pd.Timestamp(backtest.get("end_time"))
+    dates = pd.to_datetime(pred_df.index.get_level_values(0))
+    prediction_rows = int(((dates >= start) & (dates <= end)).sum())
+    if prediction_rows <= 0:
+        raise RuntimeError(
+            "QE_MINUTE_PREDICTION_WINDOW_EMPTY: "
+            f"no prediction rows cover {start.date()}..{end.date()}"
+        )
+
+    indicators = recorder.load_object("portfolio_analysis/indicators_normal_1day.pkl")
+    if not isinstance(indicators, pd.DataFrame) or indicators.empty:
+        raise RuntimeError("QE_MINUTE_EXECUTION_INDICATORS_MISSING: daily execution indicators are empty")
+    missing_columns = {"count", "deal_amount"}.difference(indicators.columns)
+    if missing_columns:
+        raise RuntimeError(
+            "QE_MINUTE_EXECUTION_INDICATORS_INCOMPLETE: "
+            f"missing_columns={sorted(missing_columns)}"
+        )
+    count = pd.to_numeric(indicators["count"], errors="coerce").fillna(0).sum()
+    deal_amount = pd.to_numeric(indicators["deal_amount"], errors="coerce").fillna(0).sum()
+    if float(count) <= 0 and float(deal_amount) <= 0:
+        raise RuntimeError(
+            "QE_MINUTE_BACKTEST_ZERO_TRADES: "
+            f"prediction_rows={prediction_rows} count={float(count)} deal_amount={float(deal_amount)}"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("yaml_path", nargs="?", default="conf.yaml")
@@ -1645,6 +1795,7 @@ def _run_main(args):
     rendered = render_yaml_template(args.yaml_path)
     yaml = YAML(typ="safe", pure=True)
     config = yaml.load(rendered)
+    _validate_minute_instrument_coverage_contract(config, cwd=Path.cwd())
 
     # BUG-989 zero-DB data plane: rebuild qe_event_risk_policy.json from the
     # frozen qlib bin dataset (pinned by qe_frozen_build_spec.json) before
@@ -1877,6 +2028,8 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
             )
             r.generate()
             print(f"[INFO] Completed: {rec_class}")
+
+        _validate_pred_backtest_has_execution(recorder, config, pred_df)
 
         recorder.save_objects(config=config)
         _persist_sector_risk_overlay(recorder, config)

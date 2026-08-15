@@ -1,8 +1,10 @@
 {
-  "actual": "MA-E16 frozen-prediction 1min TWAP execution-parity canary completed with exit 0 but every day had count=0/deal_amount=0 and ffr/pa/pos=NaN. Root cause: qe_suspend_filter_score_weighted_strategy._has_close_price evaluates the minute Exchange at the outer daily decision interval, so _filter_scores_without_close removes all candidates before order generation. Fix must preserve suspend/risk fail-closed behavior, validate minute NestedExecutor outer-day semantics, and reject silent zero-trade false success where applicable. No backend process control, DDL/DML, dependency install, or backtest database data plane.",
+  "actual": "MA-E16 frozen-prediction 1min TWAP execution-parity canary completed with exit 0 but every day had count=0/deal_amount=0 and ffr/pa/pos=NaN. Runtime evidence showed the minute Exchange had quote_stock_count=0 and quote_df_rows=0. Both active qlib_minute_bin and the named 20260630 minute candidate contain feature/calendar data through 2026-06, but instruments/all.txt still ends at 2026-04-28; the day provider all.txt reaches 2026-06-30. Qlib therefore resolves an empty minute quote universe for the replay window, and the runner publishes a false zero-trade success.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260815_BUG-1101-qe-minute-twap-suspend-wrapper-filters-all-outer-day-scores-as-missing-c.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/qrun_limit_minute.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1101",
@@ -13,20 +15,41 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-15T05:35:11.264441Z",
-  "description": "MA-E16 frozen-prediction 1min TWAP execution-parity canary completed with exit 0 but every day had count=0/deal_amount=0 and ffr/pa/pos=NaN. Root cause: qe_suspend_filter_score_weighted_strategy._has_close_price evaluates the minute Exchange at the outer daily decision interval, so _filter_scores_without_close removes all candidates before order generation. Fix must preserve suspend/risk fail-closed behavior, validate minute NestedExecutor outer-day semantics, and reject silent zero-trade false success where applicable. No backend process control, DDL/DML, dependency install, or backtest database data plane.",
+  "description": "Add a file-only minute-runner preflight that proves the minute quote-universe instrument spans cover the day-provider universe over the requested replay window, including the implicit Qlib all universe. Reject missing/invalid/stale instrument metadata before Qlib init, and reject a non-empty minute pred-backtest that still produces no orders/deals. Preserve suspend/risk policy semantics and the zero-database backtest data plane. Correcting or activating the minute dataset remains a separately reported candidate-data action; this BUG must not overwrite an active dataset.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260815-d7008106cd6a",
       "timestamp": "2026-08-15T05:35:11.264429Z"
+    },
+    {
+      "action": "correct_root_cause_and_expand_scope",
+      "actor": "codex",
+      "note": "Minute provider instruments/all.txt ends at 2026-04-28 while its data and the day universe reach 2026-06. Scope narrowed to qrun file-parity and zero-trade fail-closed guards; candidate dataset correction remains separate from source delivery.",
+      "timestamp": "2026-08-15T05:48:00Z"
+    },
+    {
+      "action": "fresh_process_fail_closed_verified",
+      "actor": "codex",
+      "note": "The patched runner loaded in a fresh WSL rdagent-gpu process and rejected the unchanged 2026-06 canary before Qlib init with QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH: expected=4898 uncovered=4898. The old runner had completed 20/20 dates with count=0 and deal_amount=0.",
+      "timestamp": "2026-08-15T06:07:21Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:\\Dev\\RD-Agent-main\\qe_workspace\\ma_e16_twap_canary_l9_20260815\\canary_input_receipt.json",
+    "F:\\Dev\\RD-Agent-main\\qe_workspace\\ma_e16_twap_canary_l9_20260815\\canary_run.log",
+    "F:\\Dev\\RD-Agent-main\\qe_workspace\\ma_e16_twap_canary_l9_20260815\\bug1101_fixed_canary_run.log"
+  ],
+  "expected": "A minute TWAP run must prove that its minute instrument spans cover the day quote universe throughout the replay window and must fail with a stable reason before backtest when coverage is stale. A non-empty prediction replay that still produces no orders/deals must also fail instead of publishing portfolio metrics as a success.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "scripts/qrun_limit_minute.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1101-qe-minute-twap-suspend-wrapper-filters-all-outer-day-scores-as-missing-c.json",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +59,12 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/qrun_limit_minute.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1101-qe-minute-twap-suspend-wrapper-filters-all-outer-day-scores-as-missing-c.json",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ]
   },
   "first_seen_at": "2026-08-15T05:35:11.264441Z",
   "fix_branch": null,
@@ -52,15 +80,17 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/qrun_limit_minute.py conf_canary.yaml --pred-backtest combined_prediction.pkl  # minute provider all.txt ends before the replay window => exit 0 with count=0 before fix",
   "required_verification": [
     "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu Python loaded the tracked patched qrun_limit_minute.py in a fresh process and rejected the unchanged MA-E16 2026-06 minute replay before qlib.init with QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH (4898/4898 uncovered)"
+    ],
+    "persistence_basis": "tracked_source",
     "post_restart_effective_gate": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -73,7 +103,7 @@
   "suspected_modules": [
     "quantevolver"
   ],
-  "title": "QE minute TWAP suspend wrapper filters all outer-day scores as missing close and returns zero-trade success",
+  "title": "QE minute TWAP accepts stale minute instruments universe and publishes zero-trade success",
   "trigger_condition": {
     "fingerprint": "d7008106cd6a9c6bf924aa21",
     "source_event_id": "FE-20260815-d7008106cd6a"
@@ -172,5 +202,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "scope_expanded_for_fix"
 }
