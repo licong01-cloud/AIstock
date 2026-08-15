@@ -28,6 +28,12 @@
       "actor": "codex",
       "note": "Added the two mapped hmm.risk files to allowed scope and preserved typed and unexpected lambda-selection evidence without changing model selection semantics.",
       "timestamp": "2026-08-15T05:59:27.0274458Z"
+    },
+    {
+      "action": "verify_formal_failure_evidence",
+      "actor": "codex",
+      "note": "Fixed producer f8ed689b preserved all six market lambda receipts; canonical lambda hash 6c35ee6b89f6bbbf61d25040311bb78623cae23a5f361bf9142fa30ab5f6a48b and report hash 4c6498a8a70896c4b23aebaec4babddcefa0accaa7770376f811ddef0ad23320. All six candidates fail only because fold-2 has TP=0 and FN=0, making recall/F1 unavailable under the unchanged contract.",
+      "timestamp": "2026-08-15T06:32:18.0982002Z"
     }
   ],
   "evidence_uris": [],
@@ -60,7 +66,7 @@
   "fixed_at": null,
   "github_issue_number": 3508,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3508",
-  "last_seen_at": "2026-08-15T05:40:28.598994Z",
+  "last_seen_at": "2026-08-15T06:32:18.0982002Z",
   "module": "hmm.risk",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
