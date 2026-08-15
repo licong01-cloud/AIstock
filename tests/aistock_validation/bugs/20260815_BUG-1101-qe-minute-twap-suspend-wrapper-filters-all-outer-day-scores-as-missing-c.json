@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1101",
-  "closed_at": null,
+  "closed_at": "2026-08-15T17:04:09.693852Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -110,9 +110,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1101\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1101",
+      "catalog_sha256": "b5bd59f2d31c7ef5688f7dc062c7d6214045f8411c5eb25da58b589719f39238",
+      "contract_digest": "ec358f84f2fe5f956a5bd21e20df5c640774c0902e1fb7190c62cae173e7e7db",
+      "expected_identity": "eff0a86a1fe9c088c6d6e4b33f67f543f7aecd7c",
+      "generated_at": "2026-08-15T17:02:02.825458Z",
+      "mode": "read_only",
+      "observed_identity": "45dbd30cc2de0789d22adfc60ce547512fbf3d6f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0b4801d06cd25e357ee53934342b11f15d6d78a9310d72021661010c7f1d63f9",
+      "receipt_sha256": "2ef2f4be572e7b4496ec11fc601670d3e91c9341606fcf830466889ffb0c345d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b4b09bdbfba8ff4d349b257e446eec3328488995a6ec703d4d99c7906884e933",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -122,7 +138,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -142,7 +158,8 @@
     "rtk nox -s qe_read_backend -> 34 passed",
     "rtk nox -s qe_sector_risk_overlay_backend -> 74 passed",
     "rtk ruff check scripts/qrun_limit_minute.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> passed",
-    "git diff --check origin/main...HEAD -> passed"
+    "git diff --check origin/main...HEAD -> passed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1101 --target backend-main --expected-identity eff0a86a1fe9c088c6d6e4b33f67f543f7aecd7c -> verified"
   ],
   "verification_budget": {
     "budget": "standard",
