@@ -1,6 +1,11 @@
 {
-  "actual": "The existing Paper v2 bulk-delete only removes portfolio-owned rows and cannot clean simulation_release_binding, simulation_daily_run, execution_plan, or runtime release history. Production currently contains 357 obsolete LocalSIM portfolios, 245 stale unfinished LocalSIM orders, old RUNNING/auto-run flags, 59 obsolete unified bindings, 58 obsolete simulation runs, 49 obsolete execution plans, 53 obsolete runtime releases, and four legacy QMT bindings. Implement a dry-run-first, fail-closed cleanup tool that preserves pkg_378eb9c91e104c64935404e257e932ee and pkg_ma_8ec5e389fa2c5e484a1ac7e9, validates in the existing DEV database, applies only after explicit production authorization, preserves StrategyPackage definitions and selection evidence, and provides exact readback receipts.",
+  "actual": "The existing Paper v2 bulk-delete only removes portfolio-owned rows and cannot clean the unified simulation or MiniQMT persistence graphs. Production contains 357 obsolete LocalSIM portfolios, 245 stale unfinished LocalSIM orders, old RUNNING/auto-run flags, 59 obsolete unified bindings, 58 obsolete simulation runs, 49 obsolete execution plans, four legacy QMT bindings, 25 unbound pre-refactor MiniQMT SIM runtimes with 29657 events, 768 algo instances and 229 child orders, plus two legacy internal SIM virtual accounts with 82 intents, 81 order-ledger rows, 522 trades, 463 cash-ledger rows, 443 position lots and 198 status events.",
   "allowed_write_scope": [
+    "scripts/cleanup_simulation_history.py",
+    "scripts/simulation_history_cleanup_core.py",
+    "backend/tests/paper_trading_v2/test_history_cleanup.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/bugs/20260815_BUG-1099-paper-v2-simulation-runtime-historical-localsim-and-miniqmt-cleanup-is-i.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -13,17 +18,23 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-15T05:12:14.642886Z",
-  "description": "The existing Paper v2 bulk-delete only removes portfolio-owned rows and cannot clean simulation_release_binding, simulation_daily_run, execution_plan, or runtime release history. Production currently contains 357 obsolete LocalSIM portfolios, 245 stale unfinished LocalSIM orders, old RUNNING/auto-run flags, 59 obsolete unified bindings, 58 obsolete simulation runs, 49 obsolete execution plans, 53 obsolete runtime releases, and four legacy QMT bindings. Implement a dry-run-first, fail-closed cleanup tool that preserves pkg_378eb9c91e104c64935404e257e932ee and pkg_ma_8ec5e389fa2c5e484a1ac7e9, validates in the existing DEV database, applies only after explicit production authorization, preserves StrategyPackage definitions and selection evidence, and provides exact readback receipts.",
+  "description": "Implement one governed, digest-pinned transaction that removes obsolete LocalSIM portfolios, unified simulation rows, pre-refactor MiniQMT K2 runtime rows, and legacy internal MiniQMT SIM ledgers while preserving pkg_378eb9c91e104c64935404e257e932ee, pkg_ma_8ec5e389fa2c5e484a1ac7e9, all StrategyPackage definitions, all selection evidence and runtime-release ancestry, and external broker or terminal history.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260815-d12425366e84",
       "timestamp": "2026-08-15T05:12:14.642867Z"
+    },
+    {
+      "action": "dev_dml_validate_rollback",
+      "actor": "codex",
+      "note": "Existing DEV Paper v2 graph plus transaction-scoped K2 and legacy QMT ledger fixtures were fully deleted, read back as zero candidates, and rolled back; fixture tables were absent after rollback.",
+      "timestamp": "2026-08-15T05:48:35Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "A dry-run-first and fail-closed maintenance CLI must preserve the two explicitly retained package IDs, all StrategyPackage definitions, all selection evidence and its runtime-release ancestry, and all external broker history; DEV must execute and roll back the DML with exact readback before immutable merged code may apply the digest-pinned production transaction.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -39,7 +50,7 @@
     "scope_files": []
   },
   "first_seen_at": "2026-08-15T05:12:14.642886Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-1099-paper-v2-simulation-runtime-historical-localsim-20260815",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 3506,
@@ -47,12 +58,14 @@
   "last_seen_at": "2026-08-15T05:12:14.642886Z",
   "module": "paper_v2",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not delete StrategyPackage definitions, selection evidence, or external MiniQMT broker and terminal history.",
+    "Do not create a separate test database or require a database export or backup."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "authorized_pending_immutable_merge",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/cleanup_simulation_history.py --target production --env-file F:\\Dev\\AIstock\\.env --keep-package-id pkg_378eb9c91e104c64935404e257e932ee --keep-package-id pkg_ma_8ec5e389fa2c5e484a1ac7e9 --miniqmt-cutoff 2026-08-13",
   "required_verification": [
     "l0",
     "paper_v2_backend"
@@ -72,7 +85,9 @@
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "paper_v2"
+    "paper_v2",
+    "miniqmt_execution_runtime",
+    "strategy_package"
   ],
   "title": "[Paper v2/Simulation Runtime] Historical LocalSIM and MiniQMT cleanup is incomplete and blocked by stale pre-refactor state",
   "trigger_condition": {
@@ -124,6 +139,12 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_history_cleanup.py -q -> 7 passed",
+    "python -m nox -s validation_module_registry_l0 paper_v2_backend -> 8 module-registry tests passed; paper_v2_backend 1061 passed, 2 skipped, 2 xfailed",
+    "DEV validate-rollback -> Paper v2, K2 runtime, and legacy internal QMT SIM ledger candidates deleted with exact readback, then transaction and fixture DDL rolled back",
+    "production dry-run -> two keep packages present; 357 old portfolios, 25 old K2 runtimes, 2 old QMT virtual accounts selected; all package definitions, 294 selection evidence rows, 53 evidence-linked old releases, and 4 current MiniQMT runtimes protected"
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
