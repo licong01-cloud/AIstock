@@ -70,6 +70,54 @@ def test_production_resolution_processor_uses_supervised_source_stage(
     assert isinstance(processor.source_stage, SupervisedResolutionSourceStage)
 
 
+def test_monthly_control_request_is_accepted_by_resolution_processor(tmp_path) -> None:
+    profile = load_dataset_profile(V2_PROFILE_PATH)
+    store = ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(store.root)
+    service = DatasetReleaseControlService(
+        (
+            DatasetReleaseProfileBinding(
+                profile_id=profile.profile,
+                semantic_profile_digest=profile.semantic_profile_digest,
+                cutoff_policy=profile.cutoff_policy,
+                store=store,
+                cas=cas,
+                cutoff_resolver=lambda _: date(2026, 7, 31),
+            ),
+        )
+    )
+    observed_at = datetime(2026, 8, 11, tzinfo=UTC)
+    preview = service.preview_monthly(
+        profile_id=profile.profile,
+        cutoff_policy="auto-previous-month",
+        scope="full",
+        candidate_only=True,
+        now=observed_at,
+    )
+    submitted = service.submit_monthly(
+        profile_id=profile.profile,
+        cutoff_policy="auto-previous-month",
+        scope="full",
+        candidate_only=True,
+        principal="operator",
+        idempotency_key="monthly-control-processor-contract",
+        route="cli:monthly",
+        now=observed_at,
+        preview_token=preview["preview_token"],
+    )
+
+    request = MonthlyResolutionProcessor(
+        profile,
+        store,
+        cas,
+        source_authority=object(),
+    )._read_request(store.get_submission(submitted["submission_id"]))
+
+    assert request.profile == profile.profile
+    assert request.cutoff == date(2026, 7, 31)
+    assert request.logical_request_key == submitted["logical_request_key"]
+
+
 def test_resolution_resource_spec_restores_waiting_pressure_rung(
     dataset_profile,
     tmp_path,

@@ -208,7 +208,6 @@ class DatasetReleaseControlService:
         request_payload = {
             key: value for key, value in preview.items() if key not in {"preview_token", "preview_expires_at"}
         }
-        request_payload["supplied_preview_token"] = preview_token
         worker_health = self._worker_health(binding, now=observed_at)
         submitted = ResolutionService(binding.store, binding.cas).submit(
             identity=SubmissionIdentity(
