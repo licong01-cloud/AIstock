@@ -28,10 +28,11 @@ from backend.services.hmm_risk.state_model_set import (
     sha256_bytes,
 )
 
-CONTRACT_VERSION = "C-011-P2-3-A"
-ALGORITHM_VERSION = "hmm_risk_market_relative_jump_v1"
-REPORT_SCHEMA_VERSION = "hmm_risk_market_relative_jump_spike_report_v1"
-REQUEST_SCHEMA_VERSION = "hmm_risk_market_relative_jump_spike_request_v1"
+CONTRACT_VERSION = "C-011-P2-3-D3-MARKET-ZERO-EVENT-A"
+ALGORITHM_VERSION = "hmm_risk_market_relative_jump_v2"
+REPORT_SCHEMA_VERSION = "hmm_risk_market_relative_jump_spike_report_v2"
+REQUEST_SCHEMA_VERSION = "hmm_risk_market_relative_jump_spike_request_v2"
+MARKET_FOLD_METRICS_SCHEMA_VERSION = "hmm_risk_jump_market_fold_metrics_v2"
 
 DEVELOPMENT_START = date(2022, 1, 4)
 DEVELOPMENT_END = date(2025, 3, 31)
@@ -879,39 +880,83 @@ def risk_metrics(outcomes: Sequence[bool], predictions: Sequence[bool]) -> dict[
     fp = sum(bool(not actual and predicted) for actual, predicted in zip(outcomes, predictions, strict=True))
     fn = sum(bool(actual and not predicted) for actual, predicted in zip(outcomes, predictions, strict=True))
     tn = len(outcomes) - tp - fp - fn
-    if tp + fp <= 0 or tp + fn <= 0:
-        return {
-            "metric_valid": False,
-            "reason_code": REASON_SELECTION_METRIC,
-            "tp": tp,
-            "fp": fp,
-            "fn": fn,
-            "tn": tn,
-        }
-    precision = tp / (tp + fp)
-    recall = tp / (tp + fn)
-    if precision + recall <= 0.0:
-        return {
-            "metric_valid": False,
-            "reason_code": REASON_SELECTION_METRIC,
-            "tp": tp,
-            "fp": fp,
-            "fn": fn,
-            "tn": tn,
-        }
-    f1 = 2.0 * precision * recall / (precision + recall)
-    base_rate = (tp + fn) / len(outcomes)
-    return {
-        "metric_valid": all(math.isfinite(value) for value in (precision, recall, f1, base_rate)),
+    event_count = tp + fn
+    negative_count = fp + tn
+    predicted_positive_count = tp + fp
+    counts = {
         "tp": tp,
         "fp": fp,
         "fn": fn,
         "tn": tn,
+        "event_count": event_count,
+        "negative_count": negative_count,
+        "predicted_positive_count": predicted_positive_count,
+    }
+    if negative_count <= 0:
+        return {
+            "metric_valid": False,
+            "reason_code": REASON_SELECTION_METRIC,
+            **counts,
+        }
+    false_positive_rate = fp / negative_count
+    specificity = tn / negative_count
+    if event_count == 0:
+        valid = all(math.isfinite(value) for value in (false_positive_rate, specificity))
+        return {
+            "metric_valid": valid,
+            "selection_metric_kind": "zero_event_negative_control",
+            "event_metric_valid": False,
+            "zero_event_metric_valid": valid,
+            **counts,
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "base_rate": 0.0,
+            "precision_lift": None,
+            "false_positive_rate": false_positive_rate,
+            "specificity": specificity,
+        }
+    if predicted_positive_count <= 0:
+        return {
+            "metric_valid": False,
+            "reason_code": REASON_SELECTION_METRIC,
+            **counts,
+            "selection_metric_kind": "event_bearing",
+            "event_metric_valid": False,
+            "zero_event_metric_valid": False,
+            "false_positive_rate": false_positive_rate,
+            "specificity": specificity,
+        }
+    precision = tp / predicted_positive_count
+    recall = tp / event_count
+    if precision + recall <= 0.0:
+        return {
+            "metric_valid": False,
+            "reason_code": REASON_SELECTION_METRIC,
+            **counts,
+            "selection_metric_kind": "event_bearing",
+            "event_metric_valid": False,
+            "zero_event_metric_valid": False,
+            "false_positive_rate": false_positive_rate,
+            "specificity": specificity,
+        }
+    f1 = 2.0 * precision * recall / (precision + recall)
+    base_rate = (tp + fn) / len(outcomes)
+    return {
+        "metric_valid": all(
+            math.isfinite(value) for value in (precision, recall, f1, base_rate, false_positive_rate, specificity)
+        ),
+        "selection_metric_kind": "event_bearing",
+        "event_metric_valid": True,
+        "zero_event_metric_valid": False,
+        **counts,
         "precision": precision,
         "recall": recall,
         "f1": f1,
         "base_rate": base_rate,
         "precision_lift": precision - base_rate,
+        "false_positive_rate": false_positive_rate,
+        "specificity": specificity,
     }
 
 
@@ -937,7 +982,7 @@ def market_fold_metrics(
         label = states.get(("market", day))
         if label not in {"risk_on", "risk_off"}:
             return {
-                "schema_version": "hmm_risk_jump_market_fold_metrics_v1",
+                "schema_version": MARKET_FOLD_METRICS_SCHEMA_VERSION,
                 **date_identity,
                 "metric_valid": False,
                 "reason_code": REASON_SELECTION_METRIC,
@@ -952,7 +997,7 @@ def market_fold_metrics(
                 minimum = min(minimum, cumulative - 1.0)
         except (KeyError, ValueError):
             return {
-                "schema_version": "hmm_risk_jump_market_fold_metrics_v1",
+                "schema_version": MARKET_FOLD_METRICS_SCHEMA_VERSION,
                 **date_identity,
                 "metric_valid": False,
                 "reason_code": REASON_SELECTION_METRIC,
@@ -962,11 +1007,21 @@ def market_fold_metrics(
         outcomes.append(minimum <= -0.05)
         predictions.append(label == "risk_off")
     metrics = risk_metrics(outcomes, predictions)
+    market_event_identity = {
+        "eligible_decision_date_set_sha256": date_identity["eligible_decision_date_set_sha256"],
+        "outcomes": outcomes,
+    }
+    prediction_identity = {
+        "eligible_decision_date_set_sha256": date_identity["eligible_decision_date_set_sha256"],
+        "predictions": predictions,
+    }
     body = {
-        "schema_version": "hmm_risk_jump_market_fold_metrics_v1",
+        "schema_version": MARKET_FOLD_METRICS_SCHEMA_VERSION,
         **date_identity,
         "eligible_date_count": len(eligible),
         "available_date_count": len(outcomes),
+        "market_risk_event_sha256": canonical_sha256(market_event_identity),
+        "market_risk_prediction_sha256": canonical_sha256(prediction_identity),
         **metrics,
     }
     return {**body, "receipt_sha256": canonical_sha256(body)}
@@ -1318,20 +1373,197 @@ def _run_restarts(
     return selected, receipts
 
 
+def _market_lambda_score(fold_receipts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    invalid: dict[str, Any] = {
+        "lambda_eligible": False,
+        "market_selection_reason_code": REASON_SELECTION_METRIC,
+        "market_event_bearing_fold_count": 0,
+        "market_zero_event_fold_count": 0,
+        "market_fold_event_sha256": [],
+        "pooled_confusion_counts": None,
+        "pooled_micro_f1": None,
+        "pooled_precision_lift": None,
+        "max_zero_event_false_positive_rate": None,
+    }
+    if len(fold_receipts) != len(FOLDS):
+        return invalid
+    if [item.get("fold") for item in fold_receipts] != [item["fold"] for item in FOLDS]:
+        return invalid
+
+    total_tp = total_fp = total_fn = total_tn = 0
+    event_fold_count = 0
+    zero_event_fold_count = 0
+    zero_event_false_positive_rates: list[float] = []
+    fold_event_hashes: list[str] = []
+    for fold_receipt in fold_receipts:
+        metrics = fold_receipt.get("metrics")
+        if (
+            not isinstance(metrics, Mapping)
+            or metrics.get("schema_version") != MARKET_FOLD_METRICS_SCHEMA_VERSION
+            or metrics.get("metric_valid") is not True
+        ):
+            return invalid
+        counts: dict[str, int] = {}
+        for field in ("tp", "fp", "fn", "tn"):
+            value = metrics.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                return invalid
+            counts[field] = value
+        available_date_count = metrics.get("available_date_count")
+        eligible_date_count = metrics.get("eligible_date_count")
+        if (
+            not isinstance(available_date_count, int)
+            or isinstance(available_date_count, bool)
+            or not isinstance(eligible_date_count, int)
+            or isinstance(eligible_date_count, bool)
+            or available_date_count <= 0
+            or available_date_count != eligible_date_count
+            or sum(counts.values()) != available_date_count
+        ):
+            return invalid
+        event_hash = metrics.get("market_risk_event_sha256")
+        if (
+            not isinstance(event_hash, str)
+            or len(event_hash) != 64
+            or any(character not in "0123456789abcdef" for character in event_hash)
+        ):
+            return invalid
+        fold_event_hashes.append(event_hash)
+
+        event_count = counts["tp"] + counts["fn"]
+        negative_count = counts["fp"] + counts["tn"]
+        if negative_count <= 0:
+            return invalid
+        kind = metrics.get("selection_metric_kind")
+        if event_count > 0:
+            if kind != "event_bearing" or metrics.get("event_metric_valid") is not True:
+                return invalid
+            values = (metrics.get("f1"), metrics.get("precision_lift"))
+            if not all(
+                isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+                for value in values
+            ):
+                return invalid
+            event_fold_count += 1
+        else:
+            false_positive_rate = metrics.get("false_positive_rate")
+            specificity = metrics.get("specificity")
+            if (
+                kind != "zero_event_negative_control"
+                or metrics.get("zero_event_metric_valid") is not True
+                or metrics.get("recall") is not None
+                or metrics.get("f1") is not None
+                or not isinstance(false_positive_rate, (int, float))
+                or isinstance(false_positive_rate, bool)
+                or not isinstance(specificity, (int, float))
+                or isinstance(specificity, bool)
+                or not math.isfinite(float(false_positive_rate))
+                or not math.isfinite(float(specificity))
+            ):
+                return invalid
+            zero_event_false_positive_rates.append(float(false_positive_rate))
+            zero_event_fold_count += 1
+        total_tp += counts["tp"]
+        total_fp += counts["fp"]
+        total_fn += counts["fn"]
+        total_tn += counts["tn"]
+
+    if event_fold_count < 2 or event_fold_count + zero_event_fold_count != len(FOLDS):
+        return {
+            **invalid,
+            "market_event_bearing_fold_count": event_fold_count,
+            "market_zero_event_fold_count": zero_event_fold_count,
+            "market_fold_event_sha256": fold_event_hashes,
+        }
+    predicted_positive_count = total_tp + total_fp
+    event_count = total_tp + total_fn
+    observation_count = total_tp + total_fp + total_fn + total_tn
+    if predicted_positive_count <= 0 or event_count <= 0 or observation_count <= 0:
+        return invalid
+    precision = total_tp / predicted_positive_count
+    recall = total_tp / event_count
+    if precision + recall <= 0.0:
+        return invalid
+    micro_f1 = 2.0 * precision * recall / (precision + recall)
+    base_rate = event_count / observation_count
+    precision_lift = precision - base_rate
+    score_values = (micro_f1, precision_lift)
+    if not all(math.isfinite(value) for value in score_values):
+        return invalid
+    max_zero_event_fpr = max(zero_event_false_positive_rates) if zero_event_false_positive_rates else None
+    body = {
+        "lambda_eligible": True,
+        "market_selection_reason_code": None,
+        "market_event_bearing_fold_count": event_fold_count,
+        "market_zero_event_fold_count": zero_event_fold_count,
+        "market_fold_event_sha256": fold_event_hashes,
+        "pooled_confusion_counts": {
+            "tp": total_tp,
+            "fp": total_fp,
+            "fn": total_fn,
+            "tn": total_tn,
+        },
+        "pooled_micro_f1": micro_f1,
+        "pooled_precision_lift": precision_lift,
+        "max_zero_event_false_positive_rate": max_zero_event_fpr,
+    }
+    return body
+
+
 def _select_lambda(receipts: Sequence[Mapping[str, Any]], *, component: str) -> float:
     eligible = [item for item in receipts if item.get("lambda_eligible") is True]
     if not eligible:
-        raise _fail(REASON_SELECTION, "no lambda has three valid development folds", stage="lambda_selection")
+        raise _fail(
+            REASON_SELECTION, "no lambda satisfies the development-fold selection contract", stage="lambda_selection"
+        )
     if component == "market":
-        score_fields = ("median_f1", "median_precision_lift")
+        fold_event_identities: set[tuple[str, ...]] = set()
+        zero_event_fold_counts: set[int] = set()
+        for item in eligible:
+            event_identity = item.get("market_fold_event_sha256")
+            zero_event_fold_count = item.get("market_zero_event_fold_count")
+            if (
+                not isinstance(event_identity, list)
+                or len(event_identity) != len(FOLDS)
+                or any(
+                    not isinstance(value, str)
+                    or len(value) != 64
+                    or any(character not in "0123456789abcdef" for character in value)
+                    for value in event_identity
+                )
+                or not isinstance(zero_event_fold_count, int)
+                or isinstance(zero_event_fold_count, bool)
+                or not 0 <= zero_event_fold_count <= len(FOLDS)
+            ):
+                raise _fail(REASON_SELECTION_METRIC, "market fold identity is unavailable", stage="lambda_selection")
+            fold_event_identities.add(tuple(event_identity))
+            zero_event_fold_counts.add(zero_event_fold_count)
+        if len(fold_event_identities) != 1 or len(zero_event_fold_counts) != 1:
+            raise _fail(REASON_SELECTION_METRIC, "market fold identity is inconsistent", stage="lambda_selection")
+        score_fields = (
+            ("pooled_micro_f1", True),
+            ("pooled_precision_lift", True),
+        )
+        if next(iter(zero_event_fold_counts), 0):
+            score_fields += (("max_zero_event_false_positive_rate", False),)
     else:
-        score_fields = ("median_rank_ic", "median_spread")
+        score_fields = (("median_rank_ic", True), ("median_spread", True))
+    for item in eligible:
+        jump_penalty = item.get("jump_penalty")
+        if isinstance(jump_penalty, bool) or jump_penalty not in LAMBDA_GRID:
+            raise _fail(
+                REASON_SELECTION_METRIC, "lambda identity is outside the approved grid", stage="lambda_selection"
+            )
     remaining = eligible
-    for field in score_fields:
-        values = [float(item[field]) for item in remaining]
-        if not values or not all(math.isfinite(value) for value in values):
+    for field, maximize in score_fields:
+        raw_values = [item.get(field) for item in remaining]
+        if not raw_values or not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+            for value in raw_values
+        ):
             raise _fail(REASON_SELECTION_METRIC, f"{field} is unavailable", stage="lambda_selection")
-        best = max(values)
+        values = [float(value) for value in raw_values]
+        best = max(values) if maximize else min(values)
         remaining = [item for item in remaining if abs(float(item[field]) - best) <= LAMBDA_METRIC_TOLERANCE]
     return float(min(remaining, key=lambda item: LAMBDA_GRID.index(float(item["jump_penalty"])))["jump_penalty"])
 
@@ -1480,15 +1712,11 @@ def _run_component(
                 "holdout_accessed": False,
             }
             fold_receipts.append({**fold_body, "receipt_sha256": canonical_sha256(fold_body)})
-        metric_valid = all(item["metric_valid"] is True for item in fold_receipts)
         if name == "market":
-            f1 = [float(item["metrics"]["f1"]) for item in fold_receipts] if metric_valid else []
-            lift = [float(item["metrics"]["precision_lift"]) for item in fold_receipts] if metric_valid else []
-            score = {
-                "median_f1": float(np.median(f1)) if f1 else None,
-                "median_precision_lift": float(np.median(lift)) if lift else None,
-            }
+            score = _market_lambda_score(fold_receipts)
+            metric_valid = score["lambda_eligible"] is True
         else:
+            metric_valid = all(item["metric_valid"] is True for item in fold_receipts)
             ic = [float(item["metrics"]["mean_rank_ic"]) for item in fold_receipts] if metric_valid else []
             spread = [float(item["metrics"]["mean_spread"]) for item in fold_receipts] if metric_valid else []
             score = {
