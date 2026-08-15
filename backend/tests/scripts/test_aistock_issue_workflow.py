@@ -1498,7 +1498,10 @@ def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_
         changed_files=changed_files,
         base="origin/main",
         head="HEAD",
-        validation_evidence=["python -m nox -s validation_module_registry_l0 -> passed"],
+        validation_evidence=[
+            "python -m nox -s validation_module_registry_l0 -> passed",
+            "python -m nox -s data_sync_autonomy_backend -> passed",
+        ],
         plan_only=True,
         allow_missing_evidence=False,
         code_intelligence_summary_override=_fake_code_intelligence_summary(),
