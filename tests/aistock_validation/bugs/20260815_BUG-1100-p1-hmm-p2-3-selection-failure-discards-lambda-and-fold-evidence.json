@@ -1,6 +1,8 @@
 {
   "actual": "C-011-P2-3-A formal spike completed all 144 market development fits but failed with hmm_risk_jump_selection_unavailable. _run_component computes six lambda_receipts with per-fold selection metrics, then _select_lambda raises without attaching them; run_p2_3_spike persists only fit_attempts. The durable failure receipt therefore cannot identify which fold metric or typed reason made every lambda ineligible and forces an expensive refit. Preserve immutable lambda/fold metric evidence and hashes in the typed failure receipt without changing lambda eligibility, thresholds, selection, holdout access, fit count, model/READY, database, or runtime semantics.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/market_relative_jump_spike.py",
+    "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
     "tests/aistock_validation/bugs/20260815_BUG-1100-p1-hmm-p2-3-selection-failure-discards-lambda-and-fold-evidence.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,13 +22,23 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260815-3d404980206a",
       "timestamp": "2026-08-15T05:40:28.598974Z"
+    },
+    {
+      "action": "expand_scope_and_implement_fix",
+      "actor": "codex",
+      "note": "Added the two mapped hmm.risk files to allowed scope and preserved typed and unexpected lambda-selection evidence without changing model selection semantics.",
+      "timestamp": "2026-08-15T05:59:27.0274458Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Every lambda-selection failure preserves the computed lambda/fold metric receipts, their canonical hash, and any typed or unexpected exception evidence without changing selection behavior.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/market_relative_jump_spike.py",
+      "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1100-p1-hmm-p2-3-selection-failure-discards-lambda-and-fold-evidence.json"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +48,11 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/market_relative_jump_spike.py",
+      "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1100-p1-hmm-p2-3-selection-failure-discards-lambda-and-fold-evidence.json"
+    ]
   },
   "first_seen_at": "2026-08-15T05:40:28.598994Z",
   "fix_branch": null,
@@ -52,7 +68,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "conda run -n AIstock python -m pytest backend/tests/hmm_risk/test_market_relative_jump_spike.py::test_component_selection_failure_preserves_lambda_fold_evidence -q",
   "required_verification": [
     "l0",
     "hmm_risk_backend"
@@ -183,5 +199,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "scope_ready"
 }

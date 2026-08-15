@@ -641,6 +641,54 @@ def test_top_level_orchestrator_preserves_partial_attempts_on_unknown_failure(
     assert len(captured.value.evidence["fit_attempts"]) == 5
 
 
+def test_top_level_orchestrator_preserves_typed_component_failure_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calendar = [subject.DEVELOPMENT_START + timedelta(days=index) for index in range(782)]
+    calendar.append(subject.DEVELOPMENT_END)
+    request = {
+        "schema_version": subject.REQUEST_SCHEMA_VERSION,
+        "contract_version": subject.CONTRACT_VERSION,
+        "expected_producer_commit": "a" * 40,
+        "holdout_start": subject.HOLDOUT_START.isoformat(),
+        "holdout_end": subject.HOLDOUT_END.isoformat(),
+        "forbidden_holdout_date_set_sha256": "b" * 64,
+        "source": {"identity": "synthetic"},
+    }
+    inputs = {
+        "trading_dates": tuple(calendar),
+        "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
+        "mapping_manifest": {"rows": []},
+    }
+    lambda_receipts = [{"jump_penalty": 0.25, "lambda_eligible": False, "folds": []}]
+
+    def fail_with_evidence(name: str, **kwargs: object) -> dict[str, object]:
+        attempt_log = kwargs["attempt_log"]
+        assert isinstance(attempt_log, list)
+        attempt_log.append({"component": name, "status": "fit_completed"})
+        raise subject.JumpSpikeError(
+            subject.REASON_SELECTION,
+            "no lambda has three valid development folds",
+            stage="lambda_selection",
+            evidence={
+                "component": name,
+                "lambda_receipt_count": 1,
+                "lambda_receipts_sha256": subject.canonical_sha256(lambda_receipts),
+                "lambda_receipts": lambda_receipts,
+            },
+        )
+
+    monkeypatch.setattr(subject, "_run_component", fail_with_evidence)
+    with pytest.raises(subject.JumpSpikeError) as captured:
+        subject.run_p2_3_spike(inputs, request, producer_commit="a" * 40)
+
+    assert captured.value.evidence["component"] == "market"
+    assert captured.value.evidence["lambda_receipts"] == lambda_receipts
+    assert captured.value.evidence["lambda_receipts_sha256"] == subject.canonical_sha256(lambda_receipts)
+    assert captured.value.evidence["completed_fit_count"] == 1
+    assert captured.value.evidence["fit_attempts"] == [{"component": "market", "status": "fit_completed"}]
+
+
 def test_component_orchestration_rejects_incomplete_lambda_and_refits_selected_lambda(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -761,6 +809,138 @@ def test_component_orchestration_rejects_incomplete_lambda_and_refits_selected_l
     assert result["final_selected_seed"] == 42
     assert len(attempt_log) == 7
     assert result["holdout_accessed"] is False
+
+
+def test_component_selection_failure_preserves_lambda_fold_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fold = {
+        "fold": "fold-1",
+        "train_start": date(2024, 1, 2),
+        "train_end": date(2024, 1, 2),
+        "validation_start": date(2024, 1, 3),
+        "validation_end": date(2024, 1, 3),
+        "train_days": 1,
+        "validation_days": 1,
+    }
+    monkeypatch.setattr(subject, "FOLDS", (fold,))
+    monkeypatch.setattr(subject, "LAMBDA_GRID", (0.25,))
+    monkeypatch.setattr(subject, "RESTART_SEEDS", (42,))
+
+    def fake_prepare(
+        panel: pd.DataFrame,
+        *,
+        component: str,
+        level: str,
+        feature_names: tuple[str, ...],
+        start: date,
+        **kwargs: object,
+    ) -> subject.PreparedComponent:
+        del panel, kwargs
+        values = np.zeros((1, len(feature_names)), dtype=np.float64)
+        return subject.PreparedComponent(
+            component=component,
+            level=level,
+            feature_names=tuple(feature_names),
+            expected_sector_count=131,
+            minimum_daily_count=118,
+            canonical_codes=("S1",),
+            sequences=(subject.SequenceData("market", (start,), (0,), values),),
+            preprocessor=subject.Preprocessor(
+                tuple(feature_names),
+                tuple(-1.0 for _ in feature_names),
+                tuple(1.0 for _ in feature_names),
+                tuple(0.0 for _ in feature_names),
+                tuple(1.0 for _ in feature_names),
+                1,
+                "a" * 64,
+            ),
+            unavailable_items=(),
+            valid_row_count=1,
+            valid_identity_sha256="b" * 64,
+        )
+
+    def fake_restarts(
+        component: subject.PreparedComponent,
+        *,
+        state_count: int,
+        jump_penalty: float,
+        attempt_log: list[dict[str, object]],
+        context: dict[str, object],
+    ) -> tuple[subject.JumpFit, list[dict[str, object]]]:
+        attempt = {**context, "seed": 42, "jump_penalty": jump_penalty, "status": "fit_completed"}
+        attempt_log.append(attempt)
+        fit = subject.JumpFit(
+            centers=np.zeros((state_count, len(component.feature_names)), dtype=np.float64),
+            paths=(np.zeros(1, dtype=np.int64),),
+            objective=1.0,
+            normalized_objective=1.0,
+            iterations=1,
+            seed=42,
+            jump_penalty=jump_penalty,
+            row_count=1,
+            feature_count=len(component.feature_names),
+        )
+        return fit, [attempt]
+
+    monkeypatch.setattr(subject, "prepare_component", fake_prepare)
+    monkeypatch.setattr(subject, "_run_restarts", fake_restarts)
+    monkeypatch.setattr(subject, "semantic_mapping", lambda *args, **kwargs: {0: "risk_off", 1: "risk_on"})
+    monkeypatch.setattr(subject, "causal_states", lambda *args, **kwargs: (np.zeros(1, dtype=np.int64),))
+    monkeypatch.setattr(
+        subject,
+        "state_rows",
+        lambda *args, **kwargs: {("market", fold["validation_start"]): "risk_off"},
+    )
+    monkeypatch.setattr(
+        subject,
+        "market_fold_metrics",
+        lambda *args, **kwargs: {
+            "metric_valid": False,
+            "reason_code": subject.REASON_SELECTION_METRIC,
+        },
+    )
+
+    attempt_log: list[dict[str, object]] = []
+    with pytest.raises(subject.JumpSpikeError) as captured:
+        subject._run_component(
+            "market",
+            inputs={"l2_panel": pd.DataFrame()},
+            calendar=(subject.DEVELOPMENT_START, subject.DEVELOPMENT_END),
+            benchmark={},
+            attempt_log=attempt_log,
+        )
+
+    assert captured.value.reason_code == subject.REASON_SELECTION
+    assert captured.value.stage == "lambda_selection"
+    assert captured.value.evidence["component"] == "market"
+    assert captured.value.evidence["lambda_receipt_count"] == 1
+    lambda_receipts = captured.value.evidence["lambda_receipts"]
+    assert lambda_receipts[0]["lambda_eligible"] is False
+    assert lambda_receipts[0]["folds"][0]["metrics"]["reason_code"] == subject.REASON_SELECTION_METRIC
+    assert captured.value.evidence["lambda_receipts_sha256"] == subject.canonical_sha256(lambda_receipts)
+
+    def fail_select(*args: object, **kwargs: object) -> float:
+        del args, kwargs
+        raise TypeError("broken")
+
+    monkeypatch.setattr(subject, "_select_lambda", fail_select)
+    with pytest.raises(subject.JumpSpikeError) as unexpected:
+        subject._run_component(
+            "market",
+            inputs={"l2_panel": pd.DataFrame()},
+            calendar=(subject.DEVELOPMENT_START, subject.DEVELOPMENT_END),
+            benchmark={},
+            attempt_log=[],
+        )
+    assert unexpected.value.reason_code == subject.REASON_UNEXPECTED
+    assert unexpected.value.stage == "lambda_selection"
+    assert unexpected.value.evidence["exception_type"] == "TypeError"
+    assert unexpected.value.evidence["error_message"] == "broken"
+    assert unexpected.value.evidence["lambda_receipt_count"] == 1
+    assert unexpected.value.evidence["lambda_receipts_sha256"] == subject.canonical_sha256(
+        unexpected.value.evidence["lambda_receipts"]
+    )
 
 
 def test_cli_loader_request_stops_at_development_and_has_no_defaults() -> None:

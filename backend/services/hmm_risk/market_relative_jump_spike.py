@@ -1503,7 +1503,35 @@ def _run_component(
             **score,
         }
         lambda_receipts.append({**lambda_body, "receipt_sha256": canonical_sha256(lambda_body)})
-    selected_lambda = _select_lambda(lambda_receipts, component=name)
+    try:
+        selected_lambda = _select_lambda(lambda_receipts, component=name)
+    except Exception as exc:
+        if isinstance(exc, JumpSpikeError):
+            reason_code = exc.reason_code
+            message = str(exc)
+            stage = exc.stage
+            original_evidence = exc.evidence
+        else:
+            reason_code = REASON_UNEXPECTED
+            message = "unexpected lambda selection failure"
+            stage = "lambda_selection"
+            original_evidence = {
+                "exception_type": type(exc).__name__,
+                "error_message": str(exc),
+            }
+        evidence = {
+            **original_evidence,
+            "component": name,
+            "lambda_receipt_count": len(lambda_receipts),
+            "lambda_receipts_sha256": canonical_sha256(lambda_receipts),
+            "lambda_receipts": lambda_receipts,
+        }
+        raise JumpSpikeError(
+            reason_code,
+            message,
+            stage=stage,
+            evidence=evidence,
+        ) from exc
     final = prepare_component(
         panel,
         component=name,
