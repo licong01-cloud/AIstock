@@ -1,0 +1,209 @@
+{
+  "actual": "C-011-P2-3-A formal spike completed all 144 market development fits but failed with hmm_risk_jump_selection_unavailable. _run_component computes six lambda_receipts with per-fold selection metrics, then _select_lambda raises without attaching them; run_p2_3_spike persists only fit_attempts. The durable failure receipt therefore cannot identify which fold metric or typed reason made every lambda ineligible and forces an expensive refit. Preserve immutable lambda/fold metric evidence and hashes in the typed failure receipt without changing lambda eligibility, thresholds, selection, holdout access, fit count, model/READY, database, or runtime semantics.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/market_relative_jump_spike.py",
+    "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
+    "tests/aistock_validation/bugs/20260815_BUG-1100-p1-hmm-p2-3-selection-failure-discards-lambda-and-fold-evidence.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1100",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-15T05:40:28.598994Z",
+  "description": "C-011-P2-3-A formal spike completed all 144 market development fits but failed with hmm_risk_jump_selection_unavailable. _run_component computes six lambda_receipts with per-fold selection metrics, then _select_lambda raises without attaching them; run_p2_3_spike persists only fit_attempts. The durable failure receipt therefore cannot identify which fold metric or typed reason made every lambda ineligible and forces an expensive refit. Preserve immutable lambda/fold metric evidence and hashes in the typed failure receipt without changing lambda eligibility, thresholds, selection, holdout access, fit count, model/READY, database, or runtime semantics.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260815-3d404980206a",
+      "timestamp": "2026-08-15T05:40:28.598974Z"
+    },
+    {
+      "action": "expand_scope_and_implement_fix",
+      "actor": "codex",
+      "note": "Added the two mapped hmm.risk files to allowed scope and preserved typed and unexpected lambda-selection evidence without changing model selection semantics.",
+      "timestamp": "2026-08-15T05:59:27.0274458Z"
+    },
+    {
+      "action": "verify_formal_failure_evidence",
+      "actor": "codex",
+      "note": "Fixed producer f8ed689b preserved all six market lambda receipts; canonical lambda hash 6c35ee6b89f6bbbf61d25040311bb78623cae23a5f361bf9142fa30ab5f6a48b and report hash 4c6498a8a70896c4b23aebaec4babddcefa0accaa7770376f811ddef0ad23320. All six candidates fail only because fold-2 has TP=0 and FN=0, making recall/F1 unavailable under the unchanged contract.",
+      "timestamp": "2026-08-15T06:32:18.0982002Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Every lambda-selection failure preserves the computed lambda/fold metric receipts, their canonical hash, and any typed or unexpected exception evidence without changing selection behavior.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/market_relative_jump_spike.py",
+      "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1100-p1-hmm-p2-3-selection-failure-discards-lambda-and-fold-evidence.json"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/market_relative_jump_spike.py",
+      "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1100-p1-hmm-p2-3-selection-failure-discards-lambda-and-fold-evidence.json"
+    ]
+  },
+  "first_seen_at": "2026-08-15T05:40:28.598994Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3508,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3508",
+  "last_seen_at": "2026-08-15T06:32:18.0982002Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "conda run -n AIstock python -m pytest backend/tests/hmm_risk/test_market_relative_jump_spike.py::test_component_selection_failure_preserves_lambda_fold_evidence -q",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "P1 HMM P2-3 selection failure discards lambda and fold evidence",
+  "trigger_condition": {
+    "fingerprint": "3d404980206a3f0957599862",
+    "source_event_id": "FE-20260815-3d404980206a"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "scope_ready"
+}
