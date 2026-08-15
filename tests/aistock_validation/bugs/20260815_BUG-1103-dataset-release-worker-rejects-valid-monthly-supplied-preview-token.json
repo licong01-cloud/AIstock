@@ -1,9 +1,10 @@
 {
-  "actual": "A monthly --candidate-only request produced by DatasetReleaseControlService includes supplied_preview_token, but MonthlyResolutionProcessor requires the exact _MONTHLY_FIELDS set without that field. The healthy qe_hmm_full_v2 Worker therefore moves every valid operator submission to BLOCKED_CONTRACT with BLOCKED_RESOLUTION_REQUEST_INVALID before run creation. Preserve strict unknown-field rejection while accepting and validating the optional signed preview-token field; keep reconciler/legacy requests without the field compatible.",
+  "actual": "A monthly --candidate-only request produced by DatasetReleaseControlService persisted the control-surface supplied_preview_token inside the canonical Worker request. MonthlyResolutionProcessor correctly requires the exact _MONTHLY_FIELDS set without that field, so the healthy qe_hmm_full_v2 Worker moved the valid operator submission to BLOCKED_CONTRACT with BLOCKED_RESOLUTION_REQUEST_INVALID before run creation.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260815_BUG-1103-dataset-release-worker-rejects-valid-monthly-supplied-preview-token.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "backend/services/dataset_release/resolution_processor.py",
+    "backend/services/dataset_release/control_service.py",
+    "backend/tests/dataset_release/test_control_service.py",
     "backend/tests/dataset_release/test_resolution_processor.py"
   ],
   "assigned_agent": null,
@@ -15,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-15T17:38:24.539039Z",
-  "description": "A monthly --candidate-only request produced by DatasetReleaseControlService includes supplied_preview_token, but MonthlyResolutionProcessor requires the exact _MONTHLY_FIELDS set without that field. The healthy qe_hmm_full_v2 Worker therefore moves every valid operator submission to BLOCKED_CONTRACT with BLOCKED_RESOLUTION_REQUEST_INVALID before run creation. Preserve strict unknown-field rejection while accepting and validating the optional signed preview-token field; keep reconciler/legacy requests without the field compatible.",
+  "description": "Keep preview-token validation, response status, and mismatch audit events at the control surface, but do not persist the token in the canonical monthly Worker request. Preserve the Worker's exact-field fail-closed contract for all unknown fields and keep reconciler or legacy requests compatible without schema relaxation.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,17 +29,24 @@
       "actor": "codex",
       "note": "Scope expanded to the resolution request field contract and its direct tests; control service, control SQLite, Worker lifecycle, and dataset bytes remain unchanged.",
       "timestamp": "2026-08-15T17:41:00Z"
+    },
+    {
+      "action": "design_review_corrected_fix_ownership",
+      "actor": "codex",
+      "note": "Approved design keeps token validation/status at the control surface and the Worker request schema strict. Final scope fixes the producer payload and its direct test; no Worker parser relaxation.",
+      "timestamp": "2026-08-15T17:48:00Z"
     }
   ],
   "evidence_uris": [
     "dataset-release-submission:dss_8ba842e383afa98f34fa1802a71cc730",
     "dataset-release-cas:78025679b62f1d73f67bf200e100b9fa638851eb954c8fbdf934bf9f8b1b33d7"
   ],
-  "expected": "A valid monthly request may include the control service's signed supplied_preview_token, while reconciler/legacy monthly requests may omit it. The Worker must retain exact-field fail-closed behavior for every other unknown field and reject malformed preview-token values.",
+  "expected": "The control surface validates preview_token and reports valid/stale_or_mismatch status, but persists only the canonical monthly Worker request fields. Token mismatch remains visible and does not block source resolution, while the Worker retains exact-field fail-closed behavior for unknown fields.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/resolution_processor.py",
+      "backend/services/dataset_release/control_service.py",
+      "backend/tests/dataset_release/test_control_service.py",
       "backend/tests/dataset_release/test_resolution_processor.py",
       "tests/aistock_validation/bugs/20260815_BUG-1103-dataset-release-worker-rejects-valid-monthly-supplied-preview-token.json",
       "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -53,7 +61,8 @@
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/services/dataset_release/resolution_processor.py",
+      "backend/services/dataset_release/control_service.py",
+      "backend/tests/dataset_release/test_control_service.py",
       "backend/tests/dataset_release/test_resolution_processor.py",
       "tests/aistock_validation/bugs/20260815_BUG-1103-dataset-release-worker-rejects-valid-monthly-supplied-preview-token.json",
       "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -80,13 +89,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "A fresh Python pytest process loaded the patched control service and strict MonthlyResolutionProcessor, persisted no supplied_preview_token for valid or drifted tokens, retained PREVIEW_TOKEN_STALE_OR_MISMATCH audit visibility, and accepted the generated canonical Worker request."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

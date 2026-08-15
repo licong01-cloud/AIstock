@@ -138,6 +138,59 @@ def test_submit_is_durable_idempotent_and_never_creates_a_run_in_api(tmp_path) -
         service.submit_monthly(**{**arguments, "scope": "sample"})
 
 
+def test_submit_records_preview_status_without_changing_worker_request_schema(tmp_path) -> None:
+    service = _service(tmp_path)
+    observed_at = datetime(2026, 8, 11, tzinfo=UTC)
+    preview = service.preview_monthly(
+        profile_id="qe_hmm_full_v1",
+        cutoff_policy="auto-previous-month",
+        scope="full",
+        candidate_only=True,
+        now=observed_at,
+    )
+    submitted = service.submit_monthly(
+        profile_id="qe_hmm_full_v1",
+        cutoff_policy="auto-previous-month",
+        scope="full",
+        candidate_only=True,
+        principal="operator:one",
+        idempotency_key="monthly-preview-token",
+        route="POST:/api/v1/dataset-releases/runs",
+        now=observed_at,
+        preview_token=preview["preview_token"],
+    )
+    binding = service._bindings["qe_hmm_full_v1"]
+    row = binding.store.get_submission(submitted["submission_id"])
+    request = binding.cas.get_json_bounded(row["request_ref"], max_bytes=2 * 1024**2)["request"]
+
+    assert submitted["preview_token_status"] == "valid"
+    assert "supplied_preview_token" not in request
+
+    drifted = service.submit_monthly(
+        profile_id="qe_hmm_full_v1",
+        cutoff_policy="auto-previous-month",
+        scope="full",
+        candidate_only=True,
+        principal="operator:one",
+        idempotency_key="monthly-preview-token-drifted",
+        route="POST:/api/v1/dataset-releases/runs",
+        now=observed_at,
+        preview_token=f"{preview['preview_token']}drift",
+    )
+    drifted_row = binding.store.get_submission(drifted["submission_id"])
+    drifted_request = binding.cas.get_json_bounded(
+        drifted_row["request_ref"], max_bytes=2 * 1024**2
+    )["request"]
+    drifted_event_types = [
+        event["type"]
+        for event in binding.store.list_events(submission_id=drifted["submission_id"])
+    ]
+
+    assert drifted["preview_token_status"] == "stale_or_mismatch"
+    assert "supplied_preview_token" not in drifted_request
+    assert drifted_event_types == ["SUBMISSION_QUEUED", "PREVIEW_TOKEN_STALE_OR_MISMATCH"]
+
+
 def test_initial_migration_submission_binds_fixed_plan_not_wall_clock_cutoff(tmp_path) -> None:
     service = _initial_service(tmp_path)
     result = service.submit_initial_migration(
