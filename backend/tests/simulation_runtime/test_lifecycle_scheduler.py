@@ -9926,6 +9926,99 @@ def test_scheduler_historical_failed_localsim_authority_corruption_is_backed_off
     assert corrupt_control[0]["error"]["context"]["reason_code"] == ("SIMULATION_SCHEDULER_RETRY_CONTROL_HASH_DRIFT")
 
 
+def test_scheduler_historical_recovery_backoff_uses_stable_identity_and_failure_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    repo.update_simulation_daily_run(
+        run.run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={"last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value},
+    )
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+    started_at = datetime(2026, 5, 22, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    completed_at = [started_at + timedelta(minutes=3), started_at + timedelta(minutes=7)]
+    monkeypatch.setattr(scheduler, "_scheduler_now", lambda: completed_at.pop(0))
+    retry_claim_calls = 0
+    claim_retry_attempt = repo.claim_simulation_retry_attempt
+
+    def count_retry_claims(**kwargs: Any) -> Any:
+        nonlocal retry_claim_calls
+        retry_claim_calls += 1
+        return claim_retry_attempt(**kwargs)
+
+    monkeypatch.setattr(repo, "claim_simulation_retry_attempt", count_retry_claims)
+    deep_recovery_calls = 0
+
+    def fail_after_mutating_attempt_evidence() -> dict[str, Any]:
+        nonlocal deep_recovery_calls
+        deep_recovery_calls += 1
+        repo.update_simulation_daily_run(
+            run.run_id,
+            payload_patch={
+                "economic_commit_staged": {
+                    "attempt": deep_recovery_calls,
+                    "as_of_time": (started_at + timedelta(minutes=deep_recovery_calls)).isoformat(),
+                }
+            },
+        )
+        raise DataUnavailableError(
+            "LocalSim mark authority conflicts with the historical trade date",
+            context={
+                "reason_code": "LOCALSIM_MARK_AS_OF_DATE_CONFLICT",
+                "as_of_time": (started_at + timedelta(minutes=deep_recovery_calls)).isoformat(),
+            },
+        )
+
+    first = scheduler._run_recovery_item_isolated(  # noqa: SLF001
+        stage="STALE_LOCALSIM_FAILED_RUN_RECOVERY",
+        run=repo.get_simulation_daily_run(run.run_id),
+        raise_on_error=False,
+        func=fail_after_mutating_attempt_evidence,
+        as_of_time=started_at,
+    )
+    assert first is not None
+    first_entry = first["retry_control"]
+    assert first_entry["last_failed_at"] == (started_at + timedelta(minutes=3)).astimezone(UTC).isoformat()
+    assert first_entry["next_retry_at"] == (started_at + timedelta(minutes=4)).astimezone(UTC).isoformat()
+
+    deferred = scheduler._run_recovery_item_isolated(  # noqa: SLF001
+        stage="STALE_LOCALSIM_FAILED_RUN_RECOVERY",
+        run=repo.get_simulation_daily_run(run.run_id),
+        raise_on_error=False,
+        func=fail_after_mutating_attempt_evidence,
+        as_of_time=started_at + timedelta(minutes=3, seconds=30),
+    )
+    assert deferred is not None
+    assert deferred["status"] == "RECOVERY_BACKOFF"
+    assert retry_claim_calls == 1
+    assert deep_recovery_calls == 1
+
+    second = scheduler._run_recovery_item_isolated(  # noqa: SLF001
+        stage="STALE_LOCALSIM_FAILED_RUN_RECOVERY",
+        run=repo.get_simulation_daily_run(run.run_id),
+        raise_on_error=False,
+        func=fail_after_mutating_attempt_evidence,
+        as_of_time=started_at + timedelta(minutes=4),
+    )
+    assert second is not None
+    second_entry = second["retry_control"]
+    assert retry_claim_calls == 2
+    assert deep_recovery_calls == 2
+    assert second_entry["source_fingerprint"] == first_entry["source_fingerprint"]
+    assert second_entry["failure_fingerprint"] == first_entry["failure_fingerprint"]
+    assert second_entry["consecutive_failure_count"] == 2
+    assert second_entry["attempt_count"] == 2
+    assert second_entry["last_failed_at"] == (started_at + timedelta(minutes=7)).astimezone(UTC).isoformat()
+    assert second_entry["next_retry_at"] == (started_at + timedelta(minutes=9)).astimezone(UTC).isoformat()
+    assert second_entry["last_error"]["context"]["as_of_time"] == (started_at + timedelta(minutes=2)).isoformat()
+    changed_authority = repo.get_simulation_daily_run(run.run_id).model_copy(update={"binding_hash": "f" * 64})
+    assert scheduler._simulation_retry_source_fingerprint(  # noqa: SLF001
+        run=changed_authority,
+        retry_key="RECOVERY:STALE_LOCALSIM_FAILED_RUN_RECOVERY",
+    ) != second_entry["source_fingerprint"]
+
+
 @pytest.mark.parametrize(
     ("corruption", "reason_code"),
     [

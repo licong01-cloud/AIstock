@@ -392,14 +392,149 @@ def test_relative_metrics_require_real_cross_section_and_future_boundary() -> No
 def test_risk_and_newey_west_metrics_fail_closed() -> None:
     metrics = subject.risk_metrics([True, False, True, False], [True, False, False, False])
     assert metrics["metric_valid"] is True
+    assert metrics["selection_metric_kind"] == "event_bearing"
     assert metrics["tp"] == 1
     assert metrics["precision"] == 1.0
     assert metrics["recall"] == 0.5
-    assert subject.risk_metrics([False, False], [False, False])["metric_valid"] is False
+    zero_event = subject.risk_metrics([False, False], [False, False])
+    assert zero_event["metric_valid"] is True
+    assert zero_event["selection_metric_kind"] == "zero_event_negative_control"
+    assert zero_event["event_metric_valid"] is False
+    assert zero_event["zero_event_metric_valid"] is True
+    assert zero_event["recall"] is None
+    assert zero_event["f1"] is None
+    assert zero_event["false_positive_rate"] == 0.0
+    assert zero_event["specificity"] == 1.0
     nw = subject.newey_west_t([0.01, 0.02, 0.03, 0.01, 0.04, 0.02], lag=1)
     assert nw["metric_valid"] is True
     assert math.isfinite(nw["t_stat"])
     assert subject.newey_west_t([1.0, 1.0, 1.0], lag=1)["metric_valid"] is False
+
+
+def test_market_lambda_score_uses_zero_event_fold_as_negative_control() -> None:
+    def fold(outcomes: list[bool], predictions: list[bool], identity: str) -> dict[str, object]:
+        metrics = subject.risk_metrics(outcomes, predictions)
+        metrics.update(
+            {
+                "schema_version": subject.MARKET_FOLD_METRICS_SCHEMA_VERSION,
+                "eligible_date_count": len(outcomes),
+                "available_date_count": len(outcomes),
+                "market_risk_event_sha256": identity * 64,
+            }
+        )
+        return {"metrics": metrics}
+
+    folds = [
+        fold([True, False, False], [True, True, False], "a"),
+        fold([False, False, False], [True, False, False], "b"),
+        fold([True, True, False], [True, False, False], "c"),
+    ]
+    for index, fold_receipt in enumerate(folds, start=1):
+        fold_receipt["fold"] = f"fold-{index}"
+    score = subject._market_lambda_score(folds)
+    assert score["lambda_eligible"] is True
+    assert score["market_event_bearing_fold_count"] == 2
+    assert score["market_zero_event_fold_count"] == 1
+    assert score["pooled_confusion_counts"] == {"tp": 2, "fp": 2, "fn": 1, "tn": 4}
+    assert score["pooled_micro_f1"] == pytest.approx(4 / 7)
+    assert score["pooled_precision_lift"] == pytest.approx(1 / 2 - 1 / 3)
+    assert score["max_zero_event_false_positive_rate"] == pytest.approx(1 / 3)
+    assert folds[1]["metrics"]["f1"] is None
+
+
+def test_market_lambda_score_requires_two_event_bearing_folds() -> None:
+    folds = []
+    for index, (outcomes, predictions) in enumerate(
+        (
+            ([True, False], [True, False]),
+            ([False, False], [False, False]),
+            ([False, False], [True, False]),
+        )
+    ):
+        metrics = subject.risk_metrics(outcomes, predictions)
+        metrics.update(
+            {
+                "schema_version": subject.MARKET_FOLD_METRICS_SCHEMA_VERSION,
+                "eligible_date_count": len(outcomes),
+                "available_date_count": len(outcomes),
+                "market_risk_event_sha256": str(index) * 64,
+            }
+        )
+        folds.append({"fold": f"fold-{index + 1}", "metrics": metrics})
+    score = subject._market_lambda_score(folds)
+    assert score["lambda_eligible"] is False
+    assert score["market_event_bearing_fold_count"] == 1
+    assert score["market_zero_event_fold_count"] == 2
+
+
+def test_market_lambda_score_rejects_v1_schema_and_incomplete_date_coverage() -> None:
+    folds = []
+    for index, (outcomes, predictions) in enumerate(
+        (
+            ([True, False], [True, False]),
+            ([False, False], [False, False]),
+            ([True, False], [True, False]),
+        )
+    ):
+        metrics = subject.risk_metrics(outcomes, predictions)
+        metrics.update(
+            {
+                "schema_version": subject.MARKET_FOLD_METRICS_SCHEMA_VERSION,
+                "eligible_date_count": len(outcomes),
+                "available_date_count": len(outcomes),
+                "market_risk_event_sha256": format(index + 10, "x") * 64,
+            }
+        )
+        folds.append({"fold": f"fold-{index + 1}", "metrics": metrics})
+
+    old_schema = [{**item, "metrics": {**item["metrics"], "schema_version": "v1"}} for item in folds]
+    assert subject._market_lambda_score(old_schema)["lambda_eligible"] is False
+
+    incomplete = [{**item, "metrics": dict(item["metrics"])} for item in folds]
+    incomplete[1]["metrics"]["available_date_count"] = 1
+    assert subject._market_lambda_score(incomplete)["lambda_eligible"] is False
+
+
+def test_market_lambda_selection_is_pooled_then_zero_event_fpr_then_grid_order() -> None:
+    event_hashes = ["a" * 64, "b" * 64, "c" * 64]
+
+    def receipt(
+        jump_penalty: float,
+        *,
+        micro_f1: float,
+        precision_lift: float,
+        max_zero_event_fpr: float,
+    ) -> dict[str, object]:
+        return {
+            "jump_penalty": jump_penalty,
+            "lambda_eligible": True,
+            "market_fold_event_sha256": event_hashes,
+            "market_zero_event_fold_count": 1,
+            "pooled_micro_f1": micro_f1,
+            "pooled_precision_lift": precision_lift,
+            "max_zero_event_false_positive_rate": max_zero_event_fpr,
+        }
+
+    receipts = [
+        receipt(0.25, micro_f1=0.20, precision_lift=0.01, max_zero_event_fpr=0.60),
+        receipt(0.5, micro_f1=0.20005, precision_lift=0.02005, max_zero_event_fpr=0.50),
+        receipt(1.0, micro_f1=0.20004, precision_lift=0.02000, max_zero_event_fpr=0.40),
+        receipt(2.0, micro_f1=0.18, precision_lift=0.10, max_zero_event_fpr=0.10),
+    ]
+    assert subject._select_lambda(receipts, component="market") == 1.0
+
+    earlier_grid_tie = [
+        receipt(0.25, micro_f1=0.2, precision_lift=0.02, max_zero_event_fpr=0.4),
+        receipt(0.5, micro_f1=0.2, precision_lift=0.02, max_zero_event_fpr=0.4),
+    ]
+    assert subject._select_lambda(earlier_grid_tie, component="market") == 0.25
+
+    inconsistent_identity = [dict(item) for item in earlier_grid_tie]
+    inconsistent_identity[1]["market_fold_event_sha256"] = ["a" * 64, "b" * 64, "d" * 64]
+    with pytest.raises(subject.JumpSpikeError) as captured:
+        subject._select_lambda(inconsistent_identity, component="market")
+    assert captured.value.reason_code == subject.REASON_SELECTION_METRIC
+    assert captured.value.stage == "lambda_selection"
 
 
 def test_report_write_is_external_immutable_and_readable(tmp_path: Path) -> None:

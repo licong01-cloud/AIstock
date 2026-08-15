@@ -4149,12 +4149,16 @@ class SimulationLifecycleScheduler:
         except Exception as exc:  # noqa: BLE001 - one bad durable run must not starve other runs or bindings.
             if raise_on_error:
                 raise
+            failure_observed_at = max(
+                self._scheduler_time(as_of_time),
+                self._scheduler_now(),
+            )
             failed_run = self._record_simulation_retry_failure(
                 run=self.repository.get_simulation_daily_run(run.run_id),
                 retry_key=retry_key,
                 failure_stage=stage,
                 exc=exc,
-                as_of_time=as_of_time,
+                as_of_time=failure_observed_at,
                 expected_claim_token=retry_decision.claim_token,
                 source_fingerprint=source_fingerprint,
             )
@@ -4187,6 +4191,23 @@ class SimulationLifecycleScheduler:
                     "qmt_batch_status",
                     "qmt_batch_result",
                     "pre_trade_blocked_order_generation",
+                )
+                if key in payload
+            }
+        elif retry_key.startswith(_SIMULATION_RECOVERY_RETRY_KEY_PREFIX):
+            # Recovery attempts may durably advance evidence before failing. Those writes
+            # describe progress for the same frozen run authority and must not make the
+            # next scheduler tick look like a new source. Keep only the bounded preflight
+            # carriers whose repair must bypass backoff; deep execution/economic evidence
+            # remains excluded. Frozen run/binding/release/plan identity is hashed below.
+            payload = {
+                key: deepcopy(payload.get(key))
+                for key in (
+                    "local_sim_projection_outbox_v1",
+                    "local_sim_projection_readback_failure",
+                    "local_sim_projection_terminal_failure",
+                    "local_sim_projection_readback_terminal_failure",
+                    "local_sim_persistence",
                 )
                 if key in payload
             }
@@ -4264,12 +4285,20 @@ class SimulationLifecycleScheduler:
                 "simulation retry failure evidence must be an object",
                 context={"reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"},
             )
+        reason_code = normalized_error.get("reason_code")
         failure_fingerprint = canonical_json_sha256(
             {
-                "schema_version": "simulation_scheduler_retry_failure_identity_v1",
+                "schema_version": "simulation_scheduler_retry_failure_identity_v2",
                 "retry_key": retry_key,
                 "failure_stage": failure_stage,
-                "error": normalized_error,
+                "error_identity": {
+                    "type": normalized_error.get("type"),
+                    "reason_code": reason_code,
+                    # Typed failures use reason_code as their economic identity. Keep
+                    # message identity only for untyped failures while persisting the
+                    # complete latest error below for diagnostics.
+                    "message": normalized_error.get("message") if reason_code is None else None,
+                },
             }
         )
         return self.repository.record_simulation_retry_failure(
