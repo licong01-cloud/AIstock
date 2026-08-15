@@ -122,7 +122,7 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "fresh_process_evidence": [
-      "Fresh Python process loaded committed source 278bc800 after merging origin/main c4b211e1 and passed test_scheduler_historical_recovery_backoff_uses_stable_identity_and_failure_completion, including zero retry-claim calls during the non-due tick; no production backend restart or database write"
+      "Fresh Python process loaded committed scheduler source 278bc800 on merged origin/main c4b211e1; targeted retry-backoff test passed and proved zero repository retry-claim calls during the non-due tick; no production backend restart or database write"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
