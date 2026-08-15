@@ -9939,6 +9939,15 @@ def test_scheduler_historical_recovery_backoff_uses_stable_identity_and_failure_
     started_at = datetime(2026, 5, 22, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     completed_at = [started_at + timedelta(minutes=3), started_at + timedelta(minutes=7)]
     monkeypatch.setattr(scheduler, "_scheduler_now", lambda: completed_at.pop(0))
+    retry_claim_calls = 0
+    claim_retry_attempt = repo.claim_simulation_retry_attempt
+
+    def count_retry_claims(**kwargs: Any) -> Any:
+        nonlocal retry_claim_calls
+        retry_claim_calls += 1
+        return claim_retry_attempt(**kwargs)
+
+    monkeypatch.setattr(repo, "claim_simulation_retry_attempt", count_retry_claims)
     deep_recovery_calls = 0
 
     def fail_after_mutating_attempt_evidence() -> dict[str, Any]:
@@ -9982,6 +9991,7 @@ def test_scheduler_historical_recovery_backoff_uses_stable_identity_and_failure_
     )
     assert deferred is not None
     assert deferred["status"] == "RECOVERY_BACKOFF"
+    assert retry_claim_calls == 1
     assert deep_recovery_calls == 1
 
     second = scheduler._run_recovery_item_isolated(  # noqa: SLF001
@@ -9993,6 +10003,7 @@ def test_scheduler_historical_recovery_backoff_uses_stable_identity_and_failure_
     )
     assert second is not None
     second_entry = second["retry_control"]
+    assert retry_claim_calls == 2
     assert deep_recovery_calls == 2
     assert second_entry["source_fingerprint"] == first_entry["source_fingerprint"]
     assert second_entry["failure_fingerprint"] == first_entry["failure_fingerprint"]
