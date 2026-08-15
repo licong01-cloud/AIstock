@@ -93,7 +93,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "A fresh Python pytest process loaded the patched control service and strict MonthlyResolutionProcessor, persisted no supplied_preview_token for valid or drifted tokens, retained PREVIEW_TOKEN_STALE_OR_MISMATCH audit visibility, and accepted the generated canonical Worker request."
+      "A fresh Python pytest process loaded the patched control service and strict MonthlyResolutionProcessor, persisted no supplied_preview_token for valid or drifted tokens, retained PREVIEW_TOKEN_STALE_OR_MISMATCH audit visibility, and accepted the generated canonical Worker request.",
+      "python -m pytest backend/tests/dataset_release/test_control_service.py::test_submit_records_preview_status_without_changing_worker_request_schema backend/tests/dataset_release/test_resolution_processor.py::test_monthly_control_request_is_accepted_by_resolution_processor -q -p no:cacheprovider -> passed (2 tests)"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
