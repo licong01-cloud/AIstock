@@ -1,0 +1,234 @@
+{
+  "actual": "MA-E16 frozen-prediction 1min TWAP execution-parity canary completed with exit 0 but every day had count=0/deal_amount=0 and ffr/pa/pos=NaN. Runtime evidence showed the minute Exchange had quote_stock_count=0 and quote_df_rows=0. Both active qlib_minute_bin and the named 20260630 minute candidate contain feature/calendar data through 2026-06, but instruments/all.txt still ends at 2026-04-28; the day provider all.txt reaches 2026-06-30. Qlib therefore resolves an empty minute quote universe for the replay window, and the runner publishes a false zero-trade success.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260815_BUG-1101-qe-minute-twap-suspend-wrapper-filters-all-outer-day-scores-as-missing-c.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/qrun_limit_minute.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1101",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-15T05:35:11.264441Z",
+  "description": "Add a file-only minute-runner preflight that proves the minute quote-universe instrument spans cover the day-provider universe over the requested replay window, including the implicit Qlib all universe. Reject missing/invalid/stale instrument metadata before Qlib init, and reject a non-empty minute pred-backtest that still produces no orders/deals. Preserve suspend/risk policy semantics and the zero-database backtest data plane. Correcting or activating the minute dataset remains a separately reported candidate-data action; this BUG must not overwrite an active dataset.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260815-d7008106cd6a",
+      "timestamp": "2026-08-15T05:35:11.264429Z"
+    },
+    {
+      "action": "correct_root_cause_and_expand_scope",
+      "actor": "codex",
+      "note": "Minute provider instruments/all.txt ends at 2026-04-28 while its data and the day universe reach 2026-06. Scope narrowed to qrun file-parity and zero-trade fail-closed guards; candidate dataset correction remains separate from source delivery.",
+      "timestamp": "2026-08-15T05:48:00Z"
+    },
+    {
+      "action": "fresh_process_fail_closed_verified",
+      "actor": "codex",
+      "note": "The patched runner loaded in a fresh WSL rdagent-gpu process and rejected the unchanged 2026-06 canary before Qlib init with QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH: expected=4898 uncovered=4898. The old runner had completed 20/20 dates with count=0 and deal_amount=0.",
+      "timestamp": "2026-08-15T06:07:21Z"
+    },
+    {
+      "action": "runtime_contract_reclassified_from_changed_files",
+      "actor": "codex",
+      "note": "Workflow changed-file inference classifies scripts/qrun_limit_minute.py as backend-main runtime impact. Runtime fields were corrected without downgrade; restart remains user-owned.",
+      "timestamp": "2026-08-15T06:10:00Z"
+    },
+    {
+      "action": "formal_review_boundary_fix",
+      "actor": "codex",
+      "note": "Pre-merge review corrected day-versus-minute membership comparison to trading-date semantics so an instrument beginning at 09:30 on its first eligible day is not falsely rejected, added stable invalid-window handling, and proved non-minute paths remain unchanged.",
+      "timestamp": "2026-08-15T07:25:31Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\RD-Agent-main\\qe_workspace\\ma_e16_twap_canary_l9_20260815\\canary_input_receipt.json",
+    "F:\\Dev\\RD-Agent-main\\qe_workspace\\ma_e16_twap_canary_l9_20260815\\canary_run.log",
+    "F:\\Dev\\RD-Agent-main\\qe_workspace\\ma_e16_twap_canary_l9_20260815\\bug1101_fixed_canary_run.log"
+  ],
+  "expected": "A minute TWAP run must prove that its minute instrument spans cover the day quote universe throughout the replay window and must fail with a stable reason before backtest when coverage is stale. A non-empty prediction replay that still produces no orders/deals must also fail instead of publishing portfolio metrics as a success.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/qrun_limit_minute.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1101-qe-minute-twap-suspend-wrapper-filters-all-outer-day-scores-as-missing-c.json",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/qrun_limit_minute.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "tests/aistock_validation/bugs/20260815_BUG-1101-qe-minute-twap-suspend-wrapper-filters-all-outer-day-scores-as-missing-c.json",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ]
+  },
+  "first_seen_at": "2026-08-15T05:35:11.264441Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3507,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3507",
+  "last_seen_at": "2026-08-15T05:35:11.264441Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/qrun_limit_minute.py conf_canary.yaml --pred-backtest combined_prediction.pkl  # minute provider all.txt ends before the replay window => exit 0 with count=0 before fix",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu Python loaded the tracked patched qrun_limit_minute.py in a fresh process and rejected the unchanged MA-E16 2026-06 minute replay before qlib.init with QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH (4898/4898 uncovered)",
+      "final-head fc8797d2: WSL new process exited 1 before qlib.init with QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH expected=4898 uncovered=4898 against unchanged active minute provider"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE minute TWAP accepts stale minute instruments universe and publishes zero-trade success",
+  "trigger_condition": {
+    "fingerprint": "d7008106cd6a9c6bf924aa21",
+    "source_event_id": "FE-20260815-d7008106cd6a"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -q -> 22 passed",
+    "python -m ruff check scripts/qrun_limit_minute.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> passed",
+    "python -m py_compile scripts/qrun_limit_minute.py -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership files=14 mapped=14",
+    "fresh WSL rdagent-gpu qrun_limit_minute.py against unchanged MA-E16 canary -> fail closed before qlib.init with QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH expected=4898 uncovered=4898"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "scope_expanded_for_fix"
+}
