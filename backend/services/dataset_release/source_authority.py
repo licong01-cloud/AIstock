@@ -789,6 +789,18 @@ ORDER BY cal_date
 """
 
 _SOURCE_WRITER_LEDGER_SQL = """
+WITH latest_data_sync_attempt AS (
+    SELECT DISTINCT ON (attempt.target_id)
+           attempt.attempt_id,attempt.target_id,attempt.attempt_no,
+           attempt.status,attempt.created_at,attempt.started_at,
+           attempt.finished_at,attempt.error_message,attempt.context_json,
+           target.dataset,target.data_source
+    FROM market.data_sync_attempts AS attempt
+    JOIN market.data_sync_targets AS target ON target.target_id=attempt.target_id
+    WHERE target.dataset = ANY(%(datasets)s)
+    ORDER BY attempt.target_id,attempt.attempt_no DESC,
+             attempt.created_at DESC,attempt.attempt_id DESC
+)
 SELECT ledger_kind,ledger_identity,status,created_at,started_at,finished_at,
        opaque_payload
 FROM (
@@ -803,15 +815,13 @@ FROM (
            attempt.created_at,attempt.started_at,attempt.finished_at,
            jsonb_build_object(
                'target_id',attempt.target_id,
-               'dataset',target.dataset,
-               'data_source',target.data_source,
+               'dataset',attempt.dataset,
+               'data_source',attempt.data_source,
                'error_message',attempt.error_message,
                'context_json',attempt.context_json
            )::text AS opaque_payload
-    FROM market.data_sync_attempts AS attempt
-    JOIN market.data_sync_targets AS target ON target.target_id=attempt.target_id
+    FROM latest_data_sync_attempt AS attempt
     WHERE (attempt.created_at >= %(start)s OR attempt.status='started')
-      AND target.dataset = ANY(%(datasets)s)
 ) AS writer_ledger
 ORDER BY ledger_kind,ledger_identity
 """
@@ -942,6 +952,7 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
                     (
                         "attempt_id",
                         "target_id",
+                        "attempt_no",
                         "status",
                         "created_at",
                         "started_at",
