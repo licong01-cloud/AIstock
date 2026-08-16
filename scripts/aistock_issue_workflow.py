@@ -1839,6 +1839,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/services/hmm_risk/b3_mixed_dimension.py",
         "backend/services/hmm_risk/b3_training.py",
         "backend/services/hmm_risk/market_relative_jump_spike.py",
+        "backend/services/hmm_risk/market_relative_ridge_candidate.py",
         "backend/services/hmm_risk/state_model_set.py",
         "scripts/advisory_short_rebound_batch_b.py",
         "scripts/aistock_bug_id_allocator.py",
@@ -1857,6 +1858,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/ci_change_classifier.py",
         "scripts/hmm_risk/prepare_state_model_set.py",
         "scripts/hmm_risk/run_market_relative_jump_spike.py",
+        "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
         "noxfile.py",
     }
     known_client_files = {
