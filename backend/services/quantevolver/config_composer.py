@@ -2380,7 +2380,7 @@ class ConfigComposer:
                 llm_hypothesis=llm_hypothesis,
             )
 
-        return {
+        result = {
             "experiment_files": experiment_files,
             "wsl_command": wsl_command,
             "wsl_command_core": " && ".join(auto_core_parts),
@@ -2390,12 +2390,10 @@ class ConfigComposer:
             "factor_count": len(factor_names),
             "has_custom_factors": has_custom_factors,
             "long_trend_evaluation_descriptor": normalized_long_trend_descriptor,
-            "canonical_pit_dataset_binding": (
-                formal_dataset_binding.as_dict()
-                if formal_dataset_binding is not None
-                else None
-            ),
         }
+        if formal_dataset_binding is not None:
+            result["canonical_pit_dataset_binding"] = formal_dataset_binding.as_dict()
+        return result
 
     # ── 内存生成辅助方法 ──
 
@@ -4762,7 +4760,7 @@ class ConfigComposer:
         lines.append("def _cache_universe_mismatch(entry, expected):")
         lines.append("    required_keys = ('universe_key', 'index_policy', 'universe_fingerprint_sha256')")
         lines.append("    if expected.get('release_id'):")
-        lines.append("        required_keys += ('authority_id', 'universe_rule_version', 'rule_parameters_digest', 'release_id', 'release_cutoff', 'release_manifest_digest', 'formal_usage_mode')")
+        lines.append("        required_keys += ('data_freshness_profile', 'coverage_semantics', 'authority_id', 'universe_rule_version', 'rule_parameters_digest', 'release_id', 'release_cutoff', 'release_manifest_digest', 'formal_usage_mode')")
         lines.append("    for key in required_keys:")
         lines.append("        if expected.get(key) and entry.get(key) != expected.get(key):")
         lines.append("            return key")

@@ -174,6 +174,25 @@ class FactorUniverseMaskService:
             "formal_usage_mode": self._formal_binding.usage_mode,
         }
 
+    def _require_formal_window(
+        self,
+        *,
+        start_date: dt.date,
+        end_date: dt.date,
+        universe_key: str,
+    ) -> None:
+        if universe_key != OFFICIAL_FACTOR_UNIVERSE_KEY:
+            raise ValueError("formal frozen PIT does not accept a universe_key override")
+        if self._formal_binding is None or self._frozen_snapshot is None:
+            raise RuntimeError("formal frozen PIT state is not configured")
+        require_qe_formal_dataset_window(
+            self._formal_binding,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if start_date < self._frozen_snapshot.scope_start:
+            raise ValueError("QE request starts before the formal frozen PIT scope")
+
     def ensure_ready(
         self,
         *,
@@ -186,17 +205,11 @@ class FactorUniverseMaskService:
         start = _as_date(start_date)
         end = _as_date(end_date)
         if self.is_formal_frozen:
-            if universe_key != OFFICIAL_FACTOR_UNIVERSE_KEY:
-                raise ValueError("formal frozen PIT does not accept a universe_key override")
-            assert self._formal_binding is not None
-            assert self._frozen_snapshot is not None
-            require_qe_formal_dataset_window(
-                self._formal_binding,
+            self._require_formal_window(
                 start_date=start,
                 end_date=end,
+                universe_key=universe_key,
             )
-            if start < self._frozen_snapshot.scope_start:
-                raise ValueError("QE request starts before the formal frozen PIT scope")
             return {"state": self._formal_state(), "action": "read_frozen_artifact"}
         universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         assert self._pit_service is not None
@@ -242,10 +255,11 @@ class FactorUniverseMaskService:
         start = _as_date(start_date)
         end = _as_date(end_date)
         if self.is_formal_frozen:
-            if universe_key != OFFICIAL_FACTOR_UNIVERSE_KEY:
-                raise ValueError("formal frozen PIT does not accept a universe_key override")
-            if ensure:
-                self.ensure_ready(start_date=start, end_date=end)
+            self._require_formal_window(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+            )
             state = self._formal_state()
             assert self._formal_binding is not None
             meta = FactorUniverseMetadata(
@@ -358,10 +372,11 @@ class FactorUniverseMaskService:
         start = _as_date(start_date)
         end = _as_date(end_date)
         if self.is_formal_frozen:
-            if universe_key != OFFICIAL_FACTOR_UNIVERSE_KEY:
-                raise ValueError("formal frozen PIT does not accept a universe_key override")
-            if ensure:
-                self.ensure_ready(start_date=start, end_date=end)
+            self._require_formal_window(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+            )
             assert self._frozen_snapshot is not None
             return sorted(
                 {
@@ -400,10 +415,11 @@ class FactorUniverseMaskService:
         start = _as_date(start_date)
         end = _as_date(end_date)
         if self.is_formal_frozen:
-            if universe_key != OFFICIAL_FACTOR_UNIVERSE_KEY:
-                raise ValueError("formal frozen PIT does not accept a universe_key override")
-            if ensure:
-                self.ensure_ready(start_date=start, end_date=end)
+            self._require_formal_window(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+            )
             wanted = (
                 None
                 if instruments is None
@@ -507,6 +523,11 @@ class FactorUniverseMaskService:
         start = _as_date(start_date)
         end = _as_date(end_date)
         if self.is_formal_frozen:
+            self._require_formal_window(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+            )
             if trading_dates is None:
                 raise ValueError(
                     "formal frozen PIT eligible index requires explicit frozen trading_dates"

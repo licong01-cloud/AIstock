@@ -211,6 +211,18 @@ def test_formal_qe_binding_roundtrips_through_experiment_config_without_default_
             model_id="lgbm",
             canonical_pit_dataset=unsafe_sidecar,
         )
+    coerced_pin = request.as_dict()
+    coerced_pin["runtime_pins"]["suspend_source_contract"] = 123
+    with pytest.raises(ValueError, match="runtime pins values must be strings"):
+        QEFormalRuntimePins.from_mapping(coerced_pin["runtime_pins"])
+    noncanonical_digest = request.as_dict()
+    noncanonical_digest["expected_manifest_digest"] = request.expected_manifest_digest.upper()
+    with pytest.raises(ValueError, match="expected_manifest_digest is not canonical"):
+        ExperimentConfig(
+            factor_names=["DemoFactor"],
+            model_id="lgbm",
+            canonical_pit_dataset=noncanonical_digest,
+        )
 
 
 def test_formal_qe_binding_rejects_sample_and_legacy_reproduction() -> None:
@@ -269,6 +281,25 @@ def test_formal_factor_universe_reads_only_frozen_snapshot(monkeypatch) -> None:
     ]
     with pytest.raises(ValueError, match="exceeds the formal frozen dataset cutoff"):
         service.ensure_ready(start_date="2026-07-31", end_date="2026-08-01")
+    with pytest.raises(ValueError, match="exceeds the formal frozen dataset cutoff"):
+        service.load_spans(
+            start_date="2026-07-31",
+            end_date="2026-08-01",
+            ensure=False,
+        )
+    with pytest.raises(ValueError, match="does not accept a universe_key override"):
+        service.build_eligible_index(
+            start_date="2025-07-17",
+            end_date="2025-07-21",
+            universe_key="unapproved_override",
+            trading_dates=dates,
+        )
+    with pytest.raises(ValueError, match="exceeds the formal frozen dataset cutoff"):
+        service.build_eligible_index(
+            start_date="2026-08-01",
+            end_date="2026-08-01",
+            trading_dates=[],
+        )
 
 
 def test_formal_factor_universe_rejects_snapshot_identity_drift() -> None:
@@ -386,6 +417,26 @@ def test_composer_persists_binding_and_factor_cache_identity(monkeypatch, tmp_pa
     assert namespace["_cache_universe_mismatch"](cached, expected_universe) == ""
     cached["release_manifest_digest"] = "d" * 64
     assert namespace["_cache_universe_mismatch"](cached, expected_universe) == "release_manifest_digest"
+    cached = dict(expected_universe)
+    cached["coverage_semantics"] = "legacy_coverage"
+    assert namespace["_cache_universe_mismatch"](cached, expected_universe) == "coverage_semantics"
+    cached = dict(expected_universe)
+    cached["data_freshness_profile"] = "legacy_freshness"
+    assert namespace["_cache_universe_mismatch"](cached, expected_universe) == "data_freshness_profile"
+
+    legacy_result = composer.compose_experiment_in_memory(
+        factor_names=config.factor_names,
+        model_id=None,
+        data_split=split,
+        custom_params=ExperimentConfig(
+            factor_names=["DemoFactor"],
+            model_id="lgbm",
+        ).build_custom_params(),
+        skip_db_save=True,
+        execution_algo="CLOSE_PRICE",
+        execution_algo_params={},
+    )
+    assert "canonical_pit_dataset_binding" not in legacy_result
 
 
 def test_long_trend_reader_requires_same_formal_release_identity(tmp_path: Path) -> None:

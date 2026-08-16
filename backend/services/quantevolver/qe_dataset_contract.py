@@ -150,6 +150,8 @@ class QEFormalDatasetBinding:
             raise ValueError("QE formal dataset binding schema/fields are invalid")
         if value.get("schema_version") != QE_FORMAL_DATASET_BINDING_SCHEMA:
             raise ValueError("QE formal dataset binding schema_version is invalid")
+        if any(not isinstance(value[field], str) for field in required - {"schema_version"}):
+            raise ValueError("QE formal dataset binding values must be strings")
         try:
             cutoff = dt.date.fromisoformat(str(value["cutoff"]))
         except ValueError as exc:
@@ -253,6 +255,8 @@ class QEFormalRuntimePins:
             raise ValueError("QE formal runtime pins schema/fields are invalid")
         if value.get("schema_version") != QE_FORMAL_RUNTIME_PINS_SCHEMA:
             raise ValueError("QE formal runtime pins schema_version is invalid")
+        if any(not isinstance(value[field], str) for field in required):
+            raise ValueError("QE formal runtime pins values must be strings")
         return cls(**{key: str(value[key]) for key in required if key != "schema_version"}).validated()
 
     def validated(self) -> "QEFormalRuntimePins":
@@ -266,14 +270,24 @@ class QEFormalRuntimePins:
             "suspend_parquet_sha256",
             "suspend_manifest_sha256",
         ):
-            raw = str(getattr(self, field))
+            value = getattr(self, field)
+            if not isinstance(value, str):
+                raise ValueError(f"QE formal runtime pins {field} must be a string")
+            raw = value
             if ensure_sha256(raw, field=field) != raw:
                 raise ValueError(f"QE formal runtime pins {field} is not canonical")
         for field in ("qlib_bin_snapshot_id", "suspend_dataset_id"):
-            raw = str(getattr(self, field) or "")
+            value = getattr(self, field)
+            if not isinstance(value, str):
+                raise ValueError(f"QE formal runtime pins {field} must be a string")
+            raw = value
             if raw != raw.strip() or not _DATASET_ID_RE.fullmatch(raw):
                 raise ValueError(f"QE formal runtime pins {field} is not canonical")
-        source_contract = str(self.suspend_source_contract or "")
+        if not isinstance(self.suspend_source_contract, str):
+            raise ValueError(
+                "QE formal runtime pins suspend_source_contract must be a string"
+            )
+        source_contract = self.suspend_source_contract
         if (
             source_contract != source_contract.strip()
             or not _SOURCE_CONTRACT_RE.fullmatch(source_contract)
@@ -345,6 +359,10 @@ class QEFormalDatasetRequest:
             raise ValueError("QE formal dataset request schema/fields are invalid")
         if value.get("schema_version") != QE_FORMAL_DATASET_REQUEST_SCHEMA:
             raise ValueError("QE formal dataset request schema_version is invalid")
+        if not isinstance(value.get("usage_mode"), str) or not isinstance(
+            value.get("expected_manifest_digest"), str
+        ):
+            raise ValueError("QE formal dataset request identity values must be strings")
         manifest = value.get("release_manifest")
         if not isinstance(manifest, Mapping):
             raise ValueError("QE formal dataset request release_manifest is invalid")
@@ -361,10 +379,16 @@ class QEFormalDatasetRequest:
     def binding(self) -> QEFormalDatasetBinding:
         if self.schema_version != QE_FORMAL_DATASET_REQUEST_SCHEMA:
             raise ValueError("QE formal dataset request schema_version is invalid")
+        if not isinstance(self.expected_manifest_digest, str):
+            raise ValueError("QE formal dataset request expected_manifest_digest must be a string")
         expected_digest = ensure_sha256(
             self.expected_manifest_digest,
             field="expected_manifest_digest",
         )
+        if expected_digest != self.expected_manifest_digest:
+            raise ValueError(
+                "QE formal dataset request expected_manifest_digest is not canonical"
+            )
         binding = require_qe_formal_dataset_binding(
             self.release_manifest,
             usage_mode=self.usage_mode,
