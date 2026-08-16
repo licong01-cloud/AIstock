@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1109",
-  "closed_at": null,
+  "closed_at": "2026-08-16T18:57:30.577947Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -93,7 +93,7 @@
   },
   "first_seen_at": "2026-08-16T14:17:59.446627Z",
   "fix_branch": "bug/BUG-1109-monthly-dataset-source-freeze-mistakes-supersede-20260816",
-  "fix_commit": "8ce951ba228a591bf3a2babfbb2795215faeb045",
+  "fix_commit": "6538d32db38abec56e260647ab1ebed9b9abe5c4",
   "fixed_at": "2026-08-16T14:39:43.248463Z",
   "github_issue_number": 3535,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3535",
@@ -102,6 +102,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3536",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -122,8 +123,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1109\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1109",
+      "catalog_sha256": "b5bd59f2d31c7ef5688f7dc062c7d6214045f8411c5eb25da58b589719f39238",
+      "contract_digest": "885284dba41b7054676bc9d50841f0bc01718c99fde02ddddd45dea3b40a4605",
+      "expected_identity": "6538d32db38abec56e260647ab1ebed9b9abe5c4",
+      "generated_at": "2026-08-16T18:51:54.462485Z",
+      "mode": "read_only",
+      "observed_identity": "6538d32db38abec56e260647ab1ebed9b9abe5c4",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "9eeeeb9de27dff1baba317743eb890756305bb56af528d7c24ef41d26e975319",
+      "receipt_sha256": "994b201be6d182d8bdb3b50c0013672574a00fb16eefbc5fb8c4c377b0bde5ea",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0b773d47ca7e195967cbcaa87c48e1e236a20ee12ecd6be4015c826c757a14a8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -133,7 +151,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -149,7 +167,9 @@
     "python -m nox -s qlib_data_backend -> 15 passed",
     "python -m ruff check backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_source_authority.py -> passed",
     "python -m py_compile backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_source_authority.py -> passed",
-    "git diff --check -> passed"
+    "git diff --check -> passed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1109 --target backend-main --expected-identity 6538d32db38abec56e260647ab1ebed9b9abe5c4 -> passed: workflow_gate verified, identity exact, three probes HTTP 200",
+    "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only -> passed BUG-1109 acceptance: active-writer drift cleared; next independent blocker BLOCKED_SOURCE_REQUIRED_DATASET_EMPTY"
   ],
   "verification_budget": {
     "budget": "standard",
