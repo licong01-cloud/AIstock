@@ -1,3 +1,4 @@
+# ruff: noqa: F401, F541
 """验证v25集成到QE实验框架"""
 import sys
 from pathlib import Path

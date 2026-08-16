@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 import sys
 sys.path.insert(0, '/mnt/f/Dev/AIstock')
 from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active

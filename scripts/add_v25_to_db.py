@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402, F401
 """添加v25到execution_algorithm_catalog数据库"""
 import sys
 import os

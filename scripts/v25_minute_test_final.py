@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402, F541
 """v25分钟级执行验证 - 独立测试"""
 import sys
 import logging

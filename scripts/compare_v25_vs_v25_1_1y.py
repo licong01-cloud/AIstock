@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Qlib comparison backtest: V25 vs V25.1 on identical alpha.
 
 Same alpha (5-day momentum reversal), same TopkDropoutStrategy outer, same
