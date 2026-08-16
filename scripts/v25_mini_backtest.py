@@ -21,6 +21,10 @@ logger = logging.getLogger('v25_mini_backtest')
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
+
+require_execution_algo_active("V25_TWO_STAGE", operation="legacy_cli_v25_mini_backtest", semantic_path="cli.execution_algo")
+
 logger.info('=== v25 Mini Backtest ===')
 
 # 1. 验证v25集成
@@ -192,3 +196,4 @@ logger.info('\nNext steps:')
 logger.info('  1. Run full backtest with real market data')
 logger.info('  2. Compare PA with v24 baseline')
 logger.info('  3. Deploy to production experiments')
+# ruff: noqa: E402, F541

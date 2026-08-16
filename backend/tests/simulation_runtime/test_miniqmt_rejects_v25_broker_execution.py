@@ -7,10 +7,10 @@ from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyL
 from backend.services.simulation_runtime import (
     ExecutionPathNotCanonicalError,
     MiniQMTExecutionBridge,
-    MiniQMTUnsupportedExecutionAlgoError,
     SimulationBrokerBackend,
 )
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
+from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from backend.tests.simulation_runtime.test_target_rebalance_shared import _compiled_plan_for_bridge
 
 
@@ -34,10 +34,10 @@ def test_miniqmt_bridge_rejects_v25_broker_execution_before_request_build(algo_c
         managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
     )
 
-    with pytest.raises(MiniQMTUnsupportedExecutionAlgoError) as exc_info:
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
         bridge.build_managed_order_requests(plan=plan, binding=binding)
 
-    assert exc_info.value.error_code == "MINIQMT_UNSUPPORTED_EXECUTION_ALGO"
+    assert exc_info.value.error_code == "V25_EXECUTION_ALGO_RETIRED"
     assert exc_info.value.context["broker_backend"] == "minqmt_sim"
     assert exc_info.value.context["inferred_algo_code"] == algo_code
     assert "SNIPER_MINIQMT" in exc_info.value.context["required_action"]
@@ -62,7 +62,7 @@ def test_miniqmt_bridge_rejects_v25_policy_id_without_silent_direct_order_fallba
         managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
     )
 
-    with pytest.raises(MiniQMTUnsupportedExecutionAlgoError) as exc_info:
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
         bridge.build_managed_order_requests(plan=plan, binding=binding)
 
     assert exc_info.value.context["inferred_algo_code"] == "V25_1_SMALL_CAP"

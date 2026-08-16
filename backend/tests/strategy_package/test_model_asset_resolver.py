@@ -10,6 +10,9 @@ from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package import model_asset_resolver as resolver_module
 from backend.services.strategy_package.model_asset_resolver import ModelAssetResolver
 from backend.services.strategy_package.validators import StrategyPackageValidator
+from backend.services.trading_core.execution_algo_retirement import (
+    ExecutionAlgoRetiredError,
+)
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
@@ -134,7 +137,7 @@ def test_model_asset_resolver_fails_fast_on_worker_model_path(workspace_tmp) -> 
         ModelAssetResolver(cache_root=workspace_tmp / "cache").resolve_manifest_assets(manifest)
 
 
-def test_model_asset_resolver_copies_all_v25_model_assets(workspace_tmp) -> None:
+def test_model_asset_resolver_rejects_v25_before_copying_model_assets(workspace_tmp) -> None:
     external = workspace_tmp / "external"
     early = external / "v25_early.pt"
     late = external / "v25_late.pt"
@@ -152,19 +155,15 @@ def test_model_asset_resolver_copies_all_v25_model_assets(workspace_tmp) -> None
                 return [Path(original_path), early]
             return [Path(original_path), late]
 
-    resolved = MultiSourceResolver(cache_root=workspace_tmp / "cache").resolve_manifest_assets(manifest)
-    config = resolved.minute_execution_policy.algo_config
+    cache_root = workspace_tmp / "cache"
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
+        MultiSourceResolver(cache_root=cache_root).resolve_manifest_assets(manifest)
 
-    assert Path(config["early_model_path"]).read_bytes() == b"early-model"
-    assert Path(config["late_model_path"]).read_bytes() == b"late-model"
-    assert config["original_early_model_path"] == "/home/lc999/data/rl_models/v25/v25_early.pt"
-    assert config["original_late_model_path"] == "/home/lc999/data/rl_models/v25/v25_late.pt"
-    assert config["runtime_asset_cache_status"] == {"early_model_path": "copied", "late_model_path": "copied"}
-    assert resolved.manifest_sha256 != manifest.manifest_sha256
-    StrategyPackageValidator().validate_manifest(resolved)
+    assert exc_info.value.context["reason_code"] == "V25_EXECUTION_ALGO_RETIRED"
+    assert not cache_root.exists()
 
 
-def test_model_asset_resolver_promotes_legacy_aistock_cache_file_to_hashed_cache(workspace_tmp) -> None:
+def test_model_asset_resolver_does_not_promote_legacy_v25_cache_file(workspace_tmp) -> None:
     cache_root = workspace_tmp / "cache"
     legacy_dir = cache_root / "V25_TWO_STAGE"
     legacy_dir.mkdir(parents=True)
@@ -177,18 +176,11 @@ def test_model_asset_resolver_promotes_legacy_aistock_cache_file_to_hashed_cache
         "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt",
     )
 
-    resolved = ModelAssetResolver(cache_root=cache_root).resolve_manifest_assets(manifest)
-    config = resolved.minute_execution_policy.algo_config
-    cached_early = Path(config["early_model_path"])
-    cached_late = Path(config["late_model_path"])
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
+        ModelAssetResolver(cache_root=cache_root).resolve_manifest_assets(manifest)
 
-    assert cached_early != legacy_early
-    assert cached_late != legacy_late
-    assert cached_early.read_bytes() == b"legacy-early"
-    assert cached_late.read_bytes() == b"legacy-late"
-    assert (cached_early.with_suffix(cached_early.suffix + ".json")).exists()
-    assert (cached_late.with_suffix(cached_late.suffix + ".json")).exists()
-    assert config["runtime_asset_cache_status"] == {"early_model_path": "copied", "late_model_path": "copied"}
-    assert config["original_early_model_path"] == "/home/lc999/data/rl_models/v25/v25_early_net_joint_fixed.pt"
-    assert config["original_late_model_path"] == "/home/lc999/data/rl_models/v25/v25_late_net_joint_fixed.pt"
-    StrategyPackageValidator().validate_manifest(resolved)
+    assert exc_info.value.context["reason_code"] == "V25_EXECUTION_ALGO_RETIRED"
+    assert sorted(path.name for path in legacy_dir.iterdir()) == [
+        "v25_early_net_joint_fixed.pt",
+        "v25_late_net_joint_fixed.pt",
+    ]

@@ -22,6 +22,7 @@ from backend.services.strategy_package.validation_run import (
     PackageValidationType,
 )
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError, StrategyPackageValidationError
+from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 from backend.tests.strategy_package.test_multi_alpha_live_selection import _make_parent
 
@@ -693,53 +694,45 @@ def test_strategy_package_execution_policy_requires_successful_source_evidence()
         )
 
 
-def test_strategy_package_execution_policy_accepts_registered_v25_contract_without_paper_runtime() -> None:
+def test_strategy_package_execution_policy_rejects_retired_v25_contract() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest())
     repo.save_manifest(manifest)
     service = StrategyPackageService(repository=repo)
 
-    policy = service.create_execution_policy(
-        package_id=manifest.package_id,
-        policy_name="qe v25 two stage",
-        policy_json={"algo_code": "V25_TWO_STAGE", "algo_config": {"early_model_path": "missing_early.pt", "late_model_path": "missing_late.pt"}},
-        source_backtest_id="bt_1",
-        source_backtest_status="COMPLETED",
-        paper_enabled=False,
-    )
-
-    assert policy.algo_code == "V25_TWO_STAGE"
-
-    enabled = service.enable_execution_policy_for_paper(manifest.package_id, policy.policy_id)
-    assert enabled.paper_enabled is False
+    with pytest.raises(ExecutionAlgoRetiredError):
+        service.create_execution_policy(
+            package_id=manifest.package_id,
+            policy_name="qe v25 two stage",
+            policy_json={"algo_code": "V25_TWO_STAGE", "algo_config": {"early_model_path": "missing_early.pt", "late_model_path": "missing_late.pt"}},
+            source_backtest_id="bt_1",
+            source_backtest_status="COMPLETED",
+            paper_enabled=False,
+        )
 
 
-def test_strategy_package_keeps_v25_default_day_features_as_runtime_diagnostic() -> None:
+def test_strategy_package_rejects_retired_v25_diagnostic_defaults() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest())
     repo.save_manifest(manifest)
     service = StrategyPackageService(repository=repo)
 
-    policy = service.create_execution_policy(
-        package_id=manifest.package_id,
-        policy_name="qe v25 diagnostic defaults",
-        policy_json={
-            "algo_code": "V25_TWO_STAGE",
-            "algo_config": {
-                "early_model_path": "missing_early.pt",
-                "late_model_path": "missing_late.pt",
-                "allow_default_day_features": True,
+    with pytest.raises(ExecutionAlgoRetiredError):
+        service.create_execution_policy(
+            package_id=manifest.package_id,
+            policy_name="qe v25 diagnostic defaults",
+            policy_json={
+                "algo_code": "V25_TWO_STAGE",
+                "algo_config": {
+                    "early_model_path": "missing_early.pt",
+                    "late_model_path": "missing_late.pt",
+                    "allow_default_day_features": True,
+                },
             },
-        },
-        source_backtest_id="bt_1",
-        source_backtest_status="COMPLETED",
-        paper_enabled=False,
-    )
-
-    enabled = service.enable_execution_policy_for_paper(manifest.package_id, policy.policy_id)
-
-    assert enabled.policy_id == policy.policy_id
-    assert enabled.paper_enabled is False
+            source_backtest_id="bt_1",
+            source_backtest_status="COMPLETED",
+            paper_enabled=False,
+        )
 
 
 def test_strategy_package_execution_policy_stores_unregistered_algo_as_runtime_config() -> None:

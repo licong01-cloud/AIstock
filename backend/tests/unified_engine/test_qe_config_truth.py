@@ -27,6 +27,7 @@ from backend.routers.quantevolver_evolution import (
 from backend.services.quantevolver import qe_evolution_service as qes
 from backend.services.quantevolver import qe_reconciliation_coordinator as qerc
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
+from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from backend.services.quantevolver.config_composer import (
     PRECOMPUTED_HMM_COEFF_JSON_PARAM,
     ConfigComposer,
@@ -472,126 +473,47 @@ def _parse_conf_yaml_with_jinja_placeholders(yaml_text: str):
     return yaml.safe_load(rendered_for_assert)
 
 
-def test_v25_execution_algo_generates_v25_inner_strategy():
-    yaml_text = _base_yaml(
-        execution_algo="V25_TWO_STAGE",
-        execution_algo_params={"device": "cpu"},
-    )
-    inner_strategy = _slice_yaml_between(
-        yaml_text,
-        "            inner_strategy:",
-        "            # qe_execution_trace:",
-    )
-    outer_strategy = _slice_yaml_between(
-        yaml_text,
-        "    strategy:",
-        "    model:",
-    )
-
-    assert "class: TailTWAPWithV25TwoStageStrategy" in inner_strategy
-    assert "module_path: tail_twap_v25_strategy" in inner_strategy
-    assert "filter_suspended_on_signal: true" in inner_strategy
-    assert "suspend_filter_file: qe_suspend_filter.json" in inner_strategy
-    assert "suspend_filter_strict: true" in inner_strategy
-    assert "class: SuspendFilterTopkDropoutStrategy" not in outer_strategy
-    assert "filter_suspended_on_signal: true" not in outer_strategy
-    assert "effective_algo: V25_TWO_STAGE" in yaml_text
-    assert "early_model_path:" in yaml_text
-    assert "late_model_path:" in yaml_text
+def test_v25_execution_algo_is_retired_before_yaml_composition():
+    with pytest.raises(ExecutionAlgoRetiredError):
+        _base_yaml(execution_algo="V25_TWO_STAGE", execution_algo_params={"device": "cpu"})
 
 
-def test_v25_1_execution_algo_generates_v25_1_inner_strategy():
-    yaml_text = _base_yaml(
-        execution_algo="V25_1_SMALL_CAP",
-        execution_algo_params={"device": "cpu"},
-    )
-    inner_strategy = _slice_yaml_between(
-        yaml_text,
-        "            inner_strategy:",
-        "            # qe_execution_trace:",
-    )
-    outer_strategy = _slice_yaml_between(
-        yaml_text,
-        "    strategy:",
-        "    model:",
-    )
-
-    assert "class: TailTWAPWithV25_1SmallCapStrategy" in inner_strategy
-    assert "module_path: tail_twap_v25_1_strategy" in inner_strategy
-    assert "filter_suspended_on_signal: true" in inner_strategy
-    assert "suspend_filter_file: qe_suspend_filter.json" in inner_strategy
-    assert "suspend_filter_strict: true" in inner_strategy
-    assert "class: SuspendFilterTopkDropoutStrategy" not in outer_strategy
-    assert "effective_algo: V25_1_SMALL_CAP" in yaml_text
-    assert "early_model_path:" in yaml_text
-    assert "late_model_path:" in yaml_text
-    assert "min_cost:" in yaml_text
-    assert "commission_rate:" in yaml_text
-    assert "tolerance_bps:" in yaml_text
-    assert "max_buckets:" in yaml_text
-    assert "trade_unit: ~" in yaml_text
-    assert "board_lot_trade_unit: true" in yaml_text
+def test_v25_1_execution_algo_is_retired_before_yaml_composition():
+    with pytest.raises(ExecutionAlgoRetiredError):
+        _base_yaml(execution_algo="V25_1_SMALL_CAP", execution_algo_params={"device": "cpu"})
 
 
 def test_v25_1_execution_algo_yaml_preserves_ui_cost_params_for_wrapper_aliases():
-    yaml_text = _base_yaml(
-        execution_algo="V25_1_SMALL_CAP",
-        execution_algo_params={
-            "device": "cpu",
-            "min_cost": 5.0,
-            "commission_rate": 0.00025,
-            "tolerance_bps": 10.0,
-            "max_buckets": 12,
-        },
-    )
-    inner_strategy = _slice_yaml_between(
-        yaml_text,
-        "            inner_strategy:",
-        "            # qe_execution_trace:",
-    )
-
-    assert "min_cost: 5.0" in inner_strategy
-    assert "commission_rate: 0.00025" in inner_strategy
-    assert "tolerance_bps: 10.0" in inner_strategy
-    assert "max_buckets: 12" in inner_strategy
-    assert "v25_1_min_cost:" not in inner_strategy
-    assert "v25_1_commission_rate:" not in inner_strategy
-    assert "v25_1_tolerance_bps:" not in inner_strategy
-    assert "v25_1_max_buckets:" not in inner_strategy
+    with pytest.raises(ExecutionAlgoRetiredError):
+        _base_yaml(
+            execution_algo="V25_1_SMALL_CAP",
+            execution_algo_params={
+                "device": "cpu",
+                "min_cost": 5.0,
+                "commission_rate": 0.00025,
+                "tolerance_bps": 10.0,
+                "max_buckets": 12,
+            },
+        )
 
 
 def test_v25_1_execution_algo_receives_suspend_artifact_when_signal_filter_enabled():
-    yaml_text = _base_yaml(
-        execution_algo="V25_1_SMALL_CAP",
-        execution_algo_params={"device": "cpu"},
-        custom_params={
-            "filter_suspended_on_signal": True,
-            "suspend_filter_file": "qe_suspend_filter.json",
-            "suspend_filter_strict": True,
-        },
-    )
-
-    inner_strategy = _slice_yaml_between(
-        yaml_text,
-        "            inner_strategy:",
-        "            # qe_execution_trace:",
-    )
-    outer_strategy = _slice_yaml_between(
-        yaml_text,
-        "    strategy:",
-        "    model:",
-    )
-
-    assert "class: TailTWAPWithV25_1SmallCapStrategy" in inner_strategy
-    assert "filter_suspended_on_signal: true" in inner_strategy
-    assert "class: SuspendFilterTopkDropoutStrategy" in outer_strategy
-    assert "filter_suspended_on_signal: true" in outer_strategy
+    with pytest.raises(ExecutionAlgoRetiredError):
+        _base_yaml(
+            execution_algo="V25_1_SMALL_CAP",
+            execution_algo_params={"device": "cpu"},
+            custom_params={
+                "filter_suspended_on_signal": True,
+                "suspend_filter_file": "qe_suspend_filter.json",
+                "suspend_filter_strict": True,
+            },
+        )
 
 
 def test_qe_exchange_can_receive_wider_quote_universe_codes_for_forced_exit():
     yaml_text = _base_yaml(
-        execution_algo="V25_TWO_STAGE",
-        execution_algo_params={"device": "cpu"},
+        execution_algo="TWAP",
+        execution_algo_params={},
         custom_params={
             "quote_universe_codes": ["000001.SZ", "600000.SH"],
             "risk_policy": {
@@ -772,18 +694,13 @@ def test_qe_risk_policy_runtime_rejects_disabled_policy():
 
 
 def test_v25_execution_suspend_filter_wires_frozen_artifact():
-    custom_params, artifact = ConfigComposer()._prepare_suspend_filter_runtime(
-        custom_params={},
-        data_split=DATA_SPLIT,
-        strategy_info=None,
-        execution_algo="V25_TWO_STAGE",
-    )
-    # The artifact itself is rebuilt on the compute node from the frozen
-    # suspend_d candidate dataset pinned in qe_frozen_build_spec.json; the
-    # composer only wires the strict runtime contract.
-    assert artifact is None
-    assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
-    assert custom_params["suspend_filter_strict"] is True
+    with pytest.raises(ExecutionAlgoRetiredError):
+        ConfigComposer()._prepare_suspend_filter_runtime(
+            custom_params={},
+            data_split=DATA_SPLIT,
+            strategy_info=None,
+            execution_algo="V25_TWO_STAGE",
+        )
 
 
 def test_qe_risk_policy_suspend_filter_wires_frozen_artifact():
@@ -825,35 +742,16 @@ def test_hmm_precomputed_coefficients_skip_runtime_precompute(monkeypatch):
 
 
 def test_v25_execution_algo_receives_suspend_artifact_when_signal_filter_enabled():
-    yaml_text = _base_yaml(
-        execution_algo="V25_TWO_STAGE",
-        execution_algo_params={"device": "cpu"},
-        custom_params={
-            "filter_suspended_on_signal": True,
-            "suspend_filter_file": "qe_suspend_filter.json",
-            "suspend_filter_strict": True,
-        },
-    )
-
-    inner_strategy = _slice_yaml_between(
-        yaml_text,
-        "            inner_strategy:",
-        "            # qe_execution_trace:",
-    )
-    outer_strategy = _slice_yaml_between(
-        yaml_text,
-        "    strategy:",
-        "    model:",
-    )
-
-    assert "class: TailTWAPWithV25TwoStageStrategy" in inner_strategy
-    assert "filter_suspended_on_signal: true" in inner_strategy
-    assert "suspend_filter_file: qe_suspend_filter.json" in inner_strategy
-    assert "suspend_filter_strict: true" in inner_strategy
-    assert "class: SuspendFilterTopkDropoutStrategy" in outer_strategy
-    assert "filter_suspended_on_signal: true" in outer_strategy
-    assert "suspend_filter_file: qe_suspend_filter.json" in outer_strategy
-    assert "suspend_filter_strict: true" in outer_strategy
+    with pytest.raises(ExecutionAlgoRetiredError):
+        _base_yaml(
+            execution_algo="V25_TWO_STAGE",
+            execution_algo_params={"device": "cpu"},
+            custom_params={
+                "filter_suspended_on_signal": True,
+                "suspend_filter_file": "qe_suspend_filter.json",
+                "suspend_filter_strict": True,
+            },
+        )
 
 
 def test_v25_backend_algo_fails_before_optional_runtime_fallback():
@@ -870,11 +768,9 @@ def test_execution_algo_unknown_and_vwap_fail_fast():
 
 def test_backtest_freq_must_match_execution_algo():
     assert ConfigComposer._resolve_backtest_freq("CLOSE_PRICE", {}) == "day"
-    assert ConfigComposer._resolve_backtest_freq("V25_TWO_STAGE", {}) == "1min"
-    assert ConfigComposer._resolve_backtest_freq("V25_1_SMALL_CAP", {}) == "1min"
-    with pytest.raises(ValueError, match="requires backtest_freq=1min"):
+    with pytest.raises(ExecutionAlgoRetiredError):
         ConfigComposer._resolve_backtest_freq("V25_TWO_STAGE", {"backtest_freq": "day"})
-    with pytest.raises(ValueError, match="requires backtest_freq=1min"):
+    with pytest.raises(ExecutionAlgoRetiredError):
         ConfigComposer._resolve_backtest_freq("V25_1_SMALL_CAP", {"backtest_freq": "day"})
     with pytest.raises(ValueError, match="requires backtest_freq=day"):
         ConfigComposer._resolve_backtest_freq("CLOSE_PRICE", {"backtest_freq": "1min"})
@@ -2461,23 +2357,13 @@ def test_removed_gpu_resource_options_in_model_catalog_fail_during_config_compos
         _base_yaml(model_info=model_info)
 
 
-def test_gats_v25_minute_execution_config_remains_daily_signal_nested_executor():
-    yaml_text = _base_yaml(
-        model_info=_gats_model_info(),
-        custom_params={"execution_algo": "V25_TWO_STAGE"},
-        execution_algo="V25_TWO_STAGE",
-    )
-    conf = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
-
-    assert conf["task"]["model"]["class"] == "GATs"
-    assert conf["port_analysis_config"]["executor"]["class"] == "NestedExecutor"
-    assert conf["port_analysis_config"]["executor"]["kwargs"]["time_per_step"] == "day"
-    assert (
-        conf["port_analysis_config"]["executor"]["kwargs"]["inner_executor"]["kwargs"]["time_per_step"]
-        == "1min"
-    )
-    assert conf["port_analysis_config"]["strategy"]["kwargs"]["signal"] == "<PRED>"
-    assert conf["port_analysis_config"]["backtest"]["exchange_kwargs"]["freq"] == "1min"
+def test_gats_v25_minute_execution_config_is_retired_before_composition():
+    with pytest.raises(ExecutionAlgoRetiredError):
+        _base_yaml(
+            model_info=_gats_model_info(),
+            custom_params={"execution_algo": "V25_TWO_STAGE"},
+            execution_algo="V25_TWO_STAGE",
+        )
 
 
 def test_qlib_gats_minimal_fit_predict_non_degenerate_rank_ic(tmp_path):

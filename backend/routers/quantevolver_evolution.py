@@ -28,6 +28,7 @@ from ..services.quantevolver.qe_evolution_service import (
 from ..services.quantevolver.factor_value_loader import FactorValueLoader
 from ..services.quantevolver.correlation_engine import CorrelationEngine, CorrelationResult
 from ..services.quantevolver import correlation_compute_service as _correlation_compute_service
+from ..services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from ..db.pg_pool import get_conn
 from psycopg2.extras import RealDictCursor, execute_values
 
@@ -225,6 +226,8 @@ def _normalize_qe_execution_algo_for_request(execution_algo: Optional[str], cont
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         return ConfigComposer._normalize_execution_algo(execution_algo)
+    except ExecutionAlgoRetiredError as e:
+        raise HTTPException(status_code=422, detail=e.to_dict()) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"{context}: {e}") from e
 

@@ -24,8 +24,9 @@ from backend.execution_algos.v25_core import (
     classify_v25_minute_market_state,
 )
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
+from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
-from backend.services.trading_core.models import MinuteBar, OrderEventType, OrderIntent, OrderSide, OrderStatus
+from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide
 from backend.services.trading_core.oms import OMS
 
 
@@ -51,19 +52,6 @@ def _algo() -> V25TwoStageAlgo:
     algo._last_no_fill_reason = None
     algo._last_no_fill_context = {}
     return algo
-
-
-def _patch_registry_v25(monkeypatch) -> None:
-    def fake_init(self, config=None):
-        BaseExecutionAlgo.__init__(self, config=config or {})
-        self._core = _core()
-        self._plan = None
-        self._plan_key = None
-        self._plan_metadata = {}
-        self._last_no_fill_reason = None
-        self._last_no_fill_context = {}
-
-    monkeypatch.setattr(V25TwoStageAlgo, "__init__", fake_init)
 
 
 def _state(side: str = "BUY", quantity: int = 10000):
@@ -311,41 +299,36 @@ def test_v25_requires_day_features_in_authoritative_mode() -> None:
         )
 
 
-def test_minute_execution_engine_lets_v25_handle_limit_block_as_business_state(monkeypatch) -> None:
-    _patch_registry_v25(monkeypatch)
+def test_minute_execution_engine_rejects_v25_before_limit_state_handling() -> None:
     engine = MinuteExecutionEngine()
 
-    final_order, fills, events = engine.execute_order(
-        order=_order(quantity=300),
-        minute_bars=[_minute_bar(close=11.0)],
-        algo_code="V25_TWO_STAGE",
-        algo_config={},
-        market_context=_context(bars=1, observed_only=True),
-    )
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
+        engine.execute_order(
+            order=_order(quantity=300),
+            minute_bars=[_minute_bar(close=11.0)],
+            algo_code="V25_TWO_STAGE",
+            algo_config={},
+            market_context=_context(bars=1, observed_only=True),
+        )
 
-    assert final_order.status == OrderStatus.SUBMITTED
-    assert fills == []
-    assert len(events) == 1
-    assert events[0].event_type == OrderEventType.NO_FILL
-    assert events[0].reason == REASON_LIMIT_UP_BUY_BLOCKED
+    assert exc_info.value.context["reason_code"] == "V25_EXECUTION_ALGO_RETIRED"
+    assert exc_info.value.context["side_effect_started"] is False
 
 
-def test_minute_execution_engine_records_v25_zero_volume_no_fill_then_fills(monkeypatch) -> None:
-    _patch_registry_v25(monkeypatch)
+def test_minute_execution_engine_rejects_v25_before_reading_minute_bars() -> None:
     engine = MinuteExecutionEngine()
 
-    final_order, fills, events = engine.execute_order(
-        order=_order(quantity=10000),
-        minute_bars=[
-            _minute_bar(close=10.1, volume=0, minute=31),
-            _minute_bar(close=9.0, volume=10000, minute=32),
-        ],
-        algo_code="V25_TWO_STAGE",
-        algo_config={},
-        market_context=_context(bars=2, observed_only=True),
-    )
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
+        engine.execute_order(
+            order=_order(quantity=10000),
+            minute_bars=[
+                _minute_bar(close=10.1, volume=0, minute=31),
+                _minute_bar(close=9.0, volume=10000, minute=32),
+            ],
+            algo_code="V25_TWO_STAGE",
+            algo_config={},
+            market_context=_context(bars=2, observed_only=True),
+        )
 
-    assert final_order.status == OrderStatus.FILLED
-    assert sum(fill.quantity for fill in fills) == 10000
-    assert any(event.event_type == OrderEventType.NO_FILL for event in events)
-    assert events[0].reason == REASON_INTRADAY_HALT_OR_NO_BAR
+    assert exc_info.value.context["reason_code"] == "V25_EXECUTION_ALGO_RETIRED"
+    assert exc_info.value.context["side_effect_started"] is False

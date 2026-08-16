@@ -23,7 +23,7 @@ from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioSer
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
-from backend.services.strategy_package.model_asset_resolver import DEFAULT_MODEL_CACHE_ROOT
+from backend.services.strategy_package.execution_policy import ValidatedExecutionPolicy
 from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
@@ -36,6 +36,7 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError
+from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
 from backend.services.trading_core.models import AccountSnapshot, Fill, MinuteBar, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
@@ -536,6 +537,25 @@ def save_manifest_with_default_execution_policy(
     )
 
 
+def save_historical_manifest_execution_policy(
+    package_repo: InMemoryStrategyPackageRepository,
+    manifest,
+):
+    """Seed immutable pre-retirement policy history without a new-policy service call."""
+
+    package_repo.save_manifest(manifest)
+    return package_repo.save_execution_policy(
+        ValidatedExecutionPolicy(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256,
+            policy_name="historical_pre_retirement_policy",
+            policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
+            source_backtest_id="historical_pre_retirement_backtest",
+            source_backtest_status="COMPLETED",
+        )
+    )
+
+
 def test_update_failed_run_to_succeeded_raises_invalid_state_transition() -> None:
     paper_repo = InMemoryPaperTradingV2Repository()
     failed_run = paper_repo.create_run(
@@ -721,12 +741,12 @@ def test_create_portfolio_derives_platform_policy_from_qe_backtest_execution_con
     assert policy["policy_json"]["bar_freq"] == "1m"
     assert config["device"] == "cuda"
     assert config["min_cost"] == 5
-    assert config["early_model_path"] == str(DEFAULT_MODEL_CACHE_ROOT / "V25_1_SMALL_CAP" / "v25_early_net_joint_fixed.pt")
-    assert config["late_model_path"] == str(DEFAULT_MODEL_CACHE_ROOT / "V25_1_SMALL_CAP" / "v25_late_net_joint_fixed.pt")
+    assert "early_model_path" not in config
+    assert "late_model_path" not in config
     assert not package_repo.list_execution_policies(manifest.package_id)
 
 
-def test_create_portfolio_derives_platform_policy_using_model_cache_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_create_portfolio_does_not_resolve_v25_model_cache_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     monkeypatch.setenv("AISTOCK_MODEL_CACHE_DIR", str(tmp_path / "model_cache" / "execution"))
@@ -761,9 +781,8 @@ def test_create_portfolio_derives_platform_policy_using_model_cache_env(monkeypa
     )
 
     config = portfolio.execution_policy["policy_json"]["algo_config"]
-    expected_root = tmp_path / "model_cache" / "execution" / "V25_1_SMALL_CAP"
-    assert config["early_model_path"] == str(expected_root / "v25_early_net_joint_fixed.pt")
-    assert config["late_model_path"] == str(expected_root / "v25_late_net_joint_fixed.pt")
+    assert "early_model_path" not in config
+    assert "late_model_path" not in config
 
 
 def test_create_portfolio_rejects_missing_execution_context_without_manifest_policy() -> None:
@@ -1356,7 +1375,7 @@ def test_day_runner_v25_portfolio_uses_twap_without_requesting_day_features() ->
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest(algo_code="V25_1_SMALL_CAP", topk=2, n_drop=0)
-    save_manifest_with_default_execution_policy(package_repo, manifest)
+    save_historical_manifest_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -1706,7 +1725,7 @@ def test_localsim_rejects_new_v25_execution_policy_activation() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest(algo_code="V25_1_SMALL_CAP")
-    save_manifest_with_default_execution_policy(package_repo, manifest)
+    save_historical_manifest_execution_policy(package_repo, manifest)
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -1719,7 +1738,7 @@ def test_localsim_rejects_new_v25_execution_policy_activation() -> None:
         data_source=MinuteDataSource.DB_HISTORICAL,
     )
 
-    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
         service.activate_execution_policy(
             portfolio_id=portfolio.portfolio_id,
             trade_date=date(2024, 1, 2),
@@ -1728,8 +1747,8 @@ def test_localsim_rejects_new_v25_execution_policy_activation() -> None:
             reason="V25 must remain disabled for LocalSIM",
         )
 
-    assert exc_info.value.context["reason_code"] == "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED"
-    assert exc_info.value.context["requested_algo_code"] == "V25_1_SMALL_CAP"
+    assert exc_info.value.context["reason_code"] == "V25_EXECUTION_ALGO_RETIRED"
+    assert exc_info.value.context["algo_code"] == "V25_1_SMALL_CAP"
     assert exc_info.value.context["fallback_used"] is False
     assert paper_repo.list_execution_policy_activations(portfolio.portfolio_id) == []
 

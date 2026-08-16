@@ -1693,7 +1693,7 @@ class PaperTradingLiveMinuteExecutor:
         portfolio = self.repository.get_portfolio(session.portfolio_id)
         policy_json = run.runtime_config["validated_execution_policy"]["policy_json"]
         capability = require_execution_algo_supports_mode(policy_json, mode="LIVE_ONLY", package_id=portfolio.package_id)
-        require_day_features = capability.algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}
+        require_day_features = False
         algo_config = dict(policy_json.get("algo_config") or {})
         states = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
         if not states:
@@ -1768,7 +1768,7 @@ class PaperTradingLiveMinuteExecutor:
                 {
                     "live_step_mode": capability.live_step_mode,
                     "plan_horizon_bars": capability.plan_horizon_bars,
-                    "v25_realtime_streaming": capability.algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"},
+                    "v25_realtime_streaming": False,
                 }
             )
             final_order, updated_state, fills, events = self.execution_engine.execute_order_incremental(
