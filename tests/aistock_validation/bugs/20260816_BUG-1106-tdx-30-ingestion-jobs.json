@@ -1,133 +1,180 @@
 {
-  "actual": "test_gate5_workspace_payload_has_no_db_driver_credentials_or_market_sql fails because tail_twap_strategy.py is absent from the test helper's transitive seed closure.",
+  "actual": "35秒生产只读表级统计：seq_scan_delta=5、seq_tup_read_delta=59870，表估算11915行/约15MB且仅有 ingestion_jobs_pkey；同窗口行情表无扫描、业务DML为0。",
   "allowed_write_scope": [
-    "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
-    "tests/aistock_validation/bugs/20260816_BUG-1104-v25-retirement-leaves-qe-zero-db-payload-test-with-stale-tail-twap-disco.json",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
+    "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py",
+    "tests/aistock_validation/bugs/20260816_BUG-1106-tdx-30-ingestion-jobs.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1104",
-  "closed_at": "2026-08-16T08:36:48Z",
+  "bug_id": "BUG-1106",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-16T08:15:05.250076Z",
-  "description": "test_gate5_workspace_payload_has_no_db_driver_credentials_or_market_sql fails because tail_twap_strategy.py is absent from the test helper's transitive seed closure.",
+  "created_at": "2026-08-16T08:57:16.529641Z",
+  "description": "35秒生产只读表级统计：seq_scan_delta=5、seq_tup_read_delta=59870，表估算11915行/约15MB且仅有 ingestion_jobs_pkey；同窗口行情表无扫描、业务DML为0。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260816-336abfa62c5d",
-      "timestamp": "2026-08-16T08:15:05.250065Z"
+      "note": "Promoted from IC-20260816-36002cf10906",
+      "timestamp": "2026-08-16T08:57:16.529628Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "The payload inventory test explicitly seeds every authoritative workspace dependency and passes after V25 retirement.",
+  "evidence_uris": [
+    "production read-only sample 2026-08-16 after backend restart; /api/ingestion/jobs?active_only=true returned 0 jobs"
+  ],
+  "expected": "空闲调度周期只执行有界索引查询；无任务时不全表扫描 ingestion_jobs，且不产生业务写入。",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
+      "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
+    ],
     "changed_files": [
-      "backend/tests/unified_engine/test_qe_data_plane_zero_db.py"
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
     ],
     "ownership": {
       "changed_files": [
-        "backend/tests/unified_engine/test_qe_data_plane_zero_db.py"
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
+        "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
       ],
       "impacted_modules": [
+        "local_data",
+        "qlib_data",
         "qe.core",
-        "qe.single_experiment",
-        "qe.custom_evolution",
-        "qe.auto_evolution",
-        "qe.enhanced_metrics",
-        "qe.data_completeness"
+        "paper_v2",
+        "platform.db",
+        "qe.archive",
+        "selection_center",
+        "strategy_package",
+        "validation.center",
+        "tests.backend"
       ],
       "matched_rules": [
         {
-          "file": "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+          "file": "backend/ingestion/tdx_scheduler.py",
           "impact_modules": [
-            "qe.single_experiment",
-            "qe.custom_evolution",
-            "qe.auto_evolution",
-            "qe.enhanced_metrics",
-            "qe.data_completeness"
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
           ],
-          "primary_module": "qe.core",
+          "primary_module": "local_data",
           "risk_level": "high",
-          "rule_id": "qe_services"
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
         }
       ],
       "risk_levels": [
-        "high"
+        "high",
+        "medium"
       ],
       "suggested_scope": [
-        "backend/tests/unified_engine/test_qe_data_plane_zero_db.py"
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
+        "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/unified_engine/test_qe_data_plane_zero_db.py"
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
+      "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
     ]
   },
-  "first_seen_at": "2026-08-16T08:15:05.250076Z",
+  "first_seen_at": "2026-08-16T08:57:16.529641Z",
   "fix_branch": null,
-  "fix_commit": "e1b936261c8b61c9e77e368edb578e97b48f4337",
-  "fixed_at": "2026-08-16T08:36:48Z",
-  "github_issue_number": 3523,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3523",
-  "last_seen_at": "2026-08-16T08:15:05.250076Z",
-  "module": "qe",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3526,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3526",
+  "last_seen_at": "2026-08-16T08:57:16.529641Z",
+  "module": "local_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3524",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending_explicit_authorization",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/unified_engine/test_qe_data_plane_zero_db.py::test_gate5_workspace_payload_has_no_db_driver_credentials_or_market_sql -q",
+  "reproduce_command": "compare pg_stat_user_tables for market.ingestion_jobs across 35 seconds while no ingestion jobs are active",
   "required_verification": [
     "l0",
-    "qe_read_backend"
+    "data_sync_autonomy_backend",
+    "validation_catalog_integrity"
   ],
-  "risk_area": "regression",
+  "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "not_required",
-    "runtime_impact": "none",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "fixed",
+  "status": "open",
   "suspected_modules": [
-    "qe"
+    "local_data"
   ],
-  "title": "V25 retirement leaves QE zero-DB payload test with stale tail-TWAP discovery",
+  "title": "TDX 30秒刷新周期对 ingestion_jobs 执行多次全表扫描",
   "trigger_condition": {
-    "fingerprint": "336abfa62c5d53091c7a47e6",
-    "source_event_id": "FE-20260816-336abfa62c5d"
+    "fingerprint": "36002cf10906f8b9fe226af9",
+    "source_event_id": "FE-20260816-36002cf10906"
   },
-  "validation_evidence": [
-    "python -m pytest backend/tests/unified_engine/test_qe_data_plane_zero_db.py::test_gate5_workspace_payload_has_no_db_driver_credentials_or_market_sql -q -> 1 passed",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed",
-    "python -m nox -s qe_read_backend -> 34 passed"
-  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
       "modules": [
-        "qe",
-        "qe_read"
+        "local_data",
+        "data_sync_autonomy"
       ],
       "plans": [
-        "qe_read_backend"
+        "data_sync_autonomy_backend"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -159,7 +206,8 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "validation_catalog_integrity"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "25-35%"
@@ -181,11 +229,11 @@
       "budget": "light",
       "deferred_nightly_verification": {
         "modules": [
-          "qe",
-          "qe_read"
+          "local_data",
+          "data_sync_autonomy"
         ],
         "plans": [
-          "qe_read_backend"
+          "data_sync_autonomy_backend"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -217,7 +265,8 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "validation_catalog_integrity"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "25-35%"
