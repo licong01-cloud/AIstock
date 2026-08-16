@@ -37,9 +37,6 @@ from backend.services.hmm_risk.stock_fact_gap_repair import (  # noqa: E402
     verify_receipt,
 )
 
-DEFAULT_UNIVERSE = "shsz_st_pit_qe_dataset_qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2"
-DEFAULT_START = dt.date(2022, 1, 1)
-DEFAULT_END = dt.date(2024, 6, 30)
 PROVIDER_MAX_ATTEMPTS = 3
 PROVIDER_RETRY_SECONDS = (0.5, 1.0)
 
@@ -214,9 +211,9 @@ def fetch_provider_rows(plan: Mapping[str, Any], *, pro: Any | None = None) -> d
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Guarded HMM B3 daily-basic/moneyflow gap repair")
     parser.add_argument("mode", choices=("preflight", "apply", "readback", "rollback"))
-    parser.add_argument("--universe-key", default=DEFAULT_UNIVERSE)
-    parser.add_argument("--source-start", type=_date, default=DEFAULT_START)
-    parser.add_argument("--source-end", type=_date, default=DEFAULT_END)
+    parser.add_argument("--universe-key")
+    parser.add_argument("--source-start", type=_date)
+    parser.add_argument("--source-end", type=_date)
     parser.add_argument("--dataset", action="append", choices=("daily_basic", "moneyflow_ts"))
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--target", choices=("dev", "production"), required=True)
@@ -245,6 +242,12 @@ def run(argv: Iterable[str] | None = None) -> int:
             args.mode == "preflight" or not args.dataset,
             "--dataset is only valid for preflight; apply scope is bound by the plan hash",
         )
+        if args.mode == "preflight":
+            _require_cli(bool(str(args.universe_key or "").strip()), "preflight requires explicit --universe-key")
+            _require_cli(
+                args.source_start is not None and args.source_end is not None,
+                "preflight requires explicit --source-start and --source-end",
+            )
         conn = _connect(args.target)
         conn.autocommit = False
         store = PostgresGapStore(conn)

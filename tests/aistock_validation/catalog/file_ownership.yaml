@@ -811,6 +811,7 @@ rules:
       - backend/services/hmm_evolution/**
       - backend/db/init_hmm_evolution_schema.py
       - backend/tests/hmm_evolution/**
+      - backend/tests/test_qe_hmm_canonical_pit_integration.py
       - frontend/src/app/hmm-evolution/**
       - frontend/tests/hmm-evolution/**
       - scripts/hmm_acceptance/**

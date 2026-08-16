@@ -204,6 +204,16 @@ class TestIsolationConstraints:
                 f"Found forbidden API call '{api_call}' in backtest_source.py"
             )
 
+    def test_frozen_hmm_sources_do_not_import_online_pit_fact_readers(self):
+        source_paths = [
+            *Path("backend/services/hmm_data_source").glob("*.py"),
+            Path("backend/services/hmm_evolution/universe.py"),
+        ]
+        content = "\n".join(path.read_text(encoding="utf-8") for path in source_paths)
+
+        assert "hmm_risk.stock_fact_repository" not in content
+        assert "StockUniversePitService" not in content
+
     def test_no_paper_v2_api_calls(self):
         """验证不调用模拟盘 API"""
         source_dir = Path("backend/services/hmm_data_source")

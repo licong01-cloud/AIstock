@@ -110,6 +110,9 @@ def _seed(
     subject_type: HistoricalRangeOutcomeSubjectType,
     subject_id: str,
     ref: HistoricalRangeArtifactRefV1,
+    *,
+    exit_trade_date: date | None = None,
+    episode_closed: bool = False,
 ) -> HistoricalRangeOutcomeSubjectSeedV1:
     return HistoricalRangeOutcomeSubjectSeedV1(
         range_run_id="run-1",
@@ -121,7 +124,47 @@ def _seed(
         source_revision_refs=(ref,),
         intended_entry_trade_date=date(2026, 7, 2),
         earliest_sell_trade_date=date(2026, 7, 3),
-        exit_trade_date=(date(2026, 7, 10) if subject_type is HistoricalRangeOutcomeSubjectType.EPISODE else None),
+        exit_trade_date=(
+            exit_trade_date
+            if exit_trade_date is not None
+            else date(2026, 7, 10)
+            if subject_type is HistoricalRangeOutcomeSubjectType.EPISODE
+            else None
+        ),
+        episode_closed=episode_closed,
+    )
+
+
+def test_closed_episode_recommendation_exit_respects_earliest_sell() -> None:
+    day_ref = _ref(HistoricalRangeArtifactKind.DAY_RECEIPT, "d")
+    planner = HistoricalRangeOutcomePlanner(
+        subject_provider=_Seeds(
+            (
+                _seed(
+                    HistoricalRangeOutcomeSubjectType.EPISODE,
+                    "episode-short",
+                    day_ref,
+                    exit_trade_date=date(2026, 7, 2),
+                    episode_closed=True,
+                ),
+            )
+        ),
+        calendar=_Calendar(),
+        producer_code_hash="b" * 64,
+        outcome_contract_version="r4_v1",
+    )
+
+    result = planner.plan_slice(request=_request(), cursor=None, limit=100)
+
+    items = {item.projection: item for item in result.items}
+    assert items[HistoricalRangeOutcomeProjection.EXECUTABLE].exit_trade_date == date(2026, 7, 3)
+    assert items[HistoricalRangeOutcomeProjection.RECOMMENDATION].exit_trade_date == date(2026, 7, 3)
+    assert all(
+        item.decision_trade_date
+        < item.intended_entry_trade_date
+        < item.earliest_sell_trade_date
+        <= item.exit_trade_date
+        for item in items.values()
     )
 
 
