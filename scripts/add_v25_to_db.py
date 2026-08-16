@@ -6,6 +6,10 @@ import json
 
 sys.path.insert(0, '/mnt/f/Dev/AIstock')
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
+
+require_execution_algo_active("V25_TWO_STAGE", operation="legacy_cli_add_v25_to_db", semantic_path="cli.execution_algo")
+
 print('=== 添加v25到execution_algorithm_catalog ===\n')
 
 from backend.db.pg_pool import get_conn

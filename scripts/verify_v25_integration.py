@@ -4,6 +4,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
+
+require_execution_algo_active("V25_TWO_STAGE", operation="legacy_cli_verify_v25_integration", semantic_path="cli.execution_algo")
+
 def verify_v25_integration():
     print('=== 验证v25集成 ===\n')
 

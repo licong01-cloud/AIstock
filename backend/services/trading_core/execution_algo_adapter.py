@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.execution_algos import ALGO_REGISTRY, get_algo
 
+from .execution_algo_retirement import require_execution_algo_active
 from .errors import ExecutionAlgoError, UnsupportedFeatureError
 from .models import MinuteBar, Order, StepFill
 
@@ -85,6 +86,11 @@ class ExecutionAlgoAdapter:
         return bool(algo.is_complete(state))
 
     def _get_algo(self, algo_code: str, config: dict[str, Any]):
+        algo_code = require_execution_algo_active(
+            algo_code,
+            operation="paper_v2_execution_adapter_construct",
+            semantic_path="execution_adapter.algo_code",
+        )
         if algo_code not in ALGO_REGISTRY:
             raise UnsupportedFeatureError(
                 "minute execution algorithm is not registered",

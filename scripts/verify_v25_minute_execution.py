@@ -12,6 +12,10 @@ from collections import defaultdict
 
 sys.path.insert(0, '/mnt/f/Dev/AIstock')
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
+
+require_execution_algo_active("V25_TWO_STAGE", operation="legacy_cli_verify_v25_minute_execution", semantic_path="cli.execution_algo")
+
 print('=== v25策略分钟级执行验证 ===\n')
 
 # 1. 初始化qlib

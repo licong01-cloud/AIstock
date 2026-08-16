@@ -45,6 +45,9 @@ from backend.services.strategy_package.execution_policy import (
     normalize_execution_policy_json,
 )
 from backend.services.simulation_runtime.models import LocalSimMarketMarkV1
+from backend.services.trading_core.execution_algo_retirement import (
+    ExecutionAlgoRetiredError,
+)
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
     BrokerMarketSourceMismatchError,
@@ -1335,10 +1338,27 @@ def test_localsim_single_order_keeps_affordable_fill_and_records_capital_residua
     assert order.metadata["local_sim_capital_dependency"]["waiting_quantity"] == 100
 
 
-@pytest.mark.parametrize("algo_code", ["VWAP", "V25_TWO_STAGE", "V25_1_SMALL_CAP"])
-def test_localsim_rejects_non_twap_policy_before_market_data_access(algo_code: str) -> None:
+def test_localsim_rejects_non_twap_policy_before_market_data_access() -> None:
     provider = FakeMarketDataProvider()
     with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        _build_backend(
+            provider=provider,
+            execution_policy={
+                "validated_execution_policy_id": "exec_policy_vwap",
+                "policy_sha256": "recomputed_by_fixture",
+                "policy_json": {"algo_code": "VWAP", "algo_config": {}},
+            },
+        )
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED"
+    assert exc_info.value.context["algo_code"] == "VWAP"
+    assert exc_info.value.context["fallback_used"] is False
+    assert provider.calls == []
+
+
+@pytest.mark.parametrize("algo_code", ["V25_TWO_STAGE", "V25_1_SMALL_CAP"])
+def test_localsim_rejects_retired_v25_policy_with_common_reason(algo_code: str) -> None:
+    provider = FakeMarketDataProvider()
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
         _build_backend(
             provider=provider,
             execution_policy={
@@ -1347,9 +1367,10 @@ def test_localsim_rejects_non_twap_policy_before_market_data_access(algo_code: s
                 "policy_json": {"algo_code": algo_code, "algo_config": {}},
             },
         )
-    assert exc_info.value.context["reason_code"] == "LOCALSIM_TWAP_ONLY_POLICY_REQUIRED"
+    assert exc_info.value.context["reason_code"] == "V25_EXECUTION_ALGO_RETIRED"
     assert exc_info.value.context["algo_code"] == algo_code
     assert exc_info.value.context["fallback_used"] is False
+    assert exc_info.value.context["side_effect_started"] is False
     assert provider.calls == []
 
 

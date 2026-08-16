@@ -28,6 +28,10 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active  # noqa: E402
+
+require_execution_algo_active("V25_1_SMALL_CAP", operation="legacy_cli_v25_1_smoke", semantic_path="cli.execution_algo")
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )

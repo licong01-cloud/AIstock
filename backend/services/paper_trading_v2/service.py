@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
 from datetime import date
 from math import sqrt
-from pathlib import Path
 from statistics import mean, stdev
 from typing import Any
 
@@ -16,7 +14,6 @@ from backend.services.strategy_package.execution_policy import (
     normalize_execution_policy_json,
 )
 from backend.services.strategy_package.models import StrategyPackageLiveApproval
-from backend.services.strategy_package.model_asset_resolver import DEFAULT_MODEL_CACHE_ROOT
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import apply_runtime_variant_config
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus, derive_locked_core_hash
@@ -33,6 +30,11 @@ from backend.services.trading_core.errors import (
     PackageAssetInvalidError,
     RuntimeConfigInvalidError,
     TradingCoreError,
+)
+from backend.services.trading_core.execution_algo_retirement import (
+    execution_algo_retirement_projection,
+    require_execution_algo_active,
+    require_execution_policy_active,
 )
 from backend.services.trading_core.ledger import FeeModel
 from backend.services.selection_center.runtime_profile import (
@@ -254,6 +256,12 @@ class PaperTradingV2PortfolioService:
             manifest=manifest,
             requested_policy=execution_policy,
         )
+        if broker_backend != "local_sim":
+            require_execution_policy_active(
+                validated_policy.policy_json,
+                operation="paper_v2_portfolio_create",
+                context={"package_id": package_id, "broker_backend": broker_backend},
+            )
         portfolio = PaperPortfolio(
             portfolio_name=portfolio_name,
             package_id=package_id,
@@ -912,11 +920,15 @@ class PaperTradingV2PortfolioService:
             payload["is_portfolio_default"] = policy.policy_id == default_policy_id
             payload["matches_portfolio_manifest"] = policy.manifest_sha256 == portfolio.manifest_sha256
             algo_code = str(policy.algo_code or policy.policy_json.get("algo_code") or "").strip().upper()
-            payload["runtime_selectable"] = policy.manifest_sha256 == portfolio.manifest_sha256 and (
+            retirement = execution_algo_retirement_projection(algo_code)
+            payload.update(retirement)
+            payload["runtime_selectable"] = retirement["selectable"] and policy.manifest_sha256 == portfolio.manifest_sha256 and (
                 not local_sim_twap_only or algo_code == "TWAP"
             )
             payload["runtime_diagnostics"] = (
-                ["LocalSIM is in explicit TWAP-only runtime mode; this policy cannot be activated"]
+                [str(retirement["retirement_reason_code"])]
+                if retirement["retired"]
+                else ["LocalSIM is in explicit TWAP-only runtime mode; this policy cannot be activated"]
                 if local_sim_twap_only and algo_code != "TWAP"
                 else ["execution policy is runtime configuration; platform checks happen when the run starts"]
             )
@@ -981,6 +993,12 @@ class PaperTradingV2PortfolioService:
             )
         policy = self._resolve_activation_execution_policy(portfolio=portfolio, policy_id=policy_id)
         algo_code = str(policy.algo_code or policy.policy_json.get("algo_code") or "").strip().upper()
+        require_execution_algo_active(
+            algo_code,
+            operation="paper_v2_execution_policy_activate",
+            semantic_path="paper_execution_policy_activation.policy_json.algo_code",
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "policy_id": policy_id},
+        )
         if str(portfolio.broker_backend) == "local_sim" and algo_code != "TWAP":
             raise RuntimeConfigInvalidError(
                 "LocalSIM execution policy activation only accepts TWAP",
@@ -2027,12 +2045,7 @@ class PaperTradingV2PortfolioService:
 
     @staticmethod
     def _complete_platform_algo_config(algo_code: str, algo_config: dict[str, Any]) -> dict[str, Any]:
-        config = dict(algo_config)
-        if algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}:
-            cache_root = _platform_model_cache_root()
-            config.setdefault("early_model_path", str(cache_root / algo_code / "v25_early_net_joint_fixed.pt"))
-            config.setdefault("late_model_path", str(cache_root / algo_code / "v25_late_net_joint_fixed.pt"))
-        return config
+        return dict(algo_config)
 
     def _select_default_manifest_execution_policy(
         self,
@@ -2095,7 +2108,7 @@ class PaperTradingV2PortfolioService:
 
     @staticmethod
     def _paper_execution_policy_payload(policy: ValidatedExecutionPolicy) -> dict[str, Any]:
-        return {
+        payload = {
             "policy_id": policy.policy_id,
             "validated_execution_policy_id": policy.policy_id,
             "policy_sha256": policy.policy_sha256,
@@ -2106,7 +2119,5 @@ class PaperTradingV2PortfolioService:
             "source_backtest_status": policy.source_backtest_status,
             "validation_status": policy.validation_status.value,
         }
-
-
-def _platform_model_cache_root() -> Path:
-    return Path(os.getenv("AISTOCK_MODEL_CACHE_DIR") or DEFAULT_MODEL_CACHE_ROOT)
+        payload.update(execution_algo_retirement_projection(policy.algo_code))
+        return payload

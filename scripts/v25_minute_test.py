@@ -8,6 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, '/mnt/f/Dev/AIstock')
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
+
+require_execution_algo_active("V25_TWO_STAGE", operation="legacy_cli_v25_minute_test", semantic_path="cli.execution_algo")
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
