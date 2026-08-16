@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 
 from backend.services.multi_alpha.combine_backtest import MultiAlphaCombineBacktestRepository
 from backend.services.qe_archive.multi_alpha_provenance import MultiAlphaProvenanceResolver, SeedProvenance
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError
 
 from .components import StrategyPackageComponentService
@@ -199,6 +200,19 @@ class MultiAlphaPackagePromotionService:
         _validate_scheme_succeeded(scheme_result, run_id=run_id, weighting_scheme=scheme)
         _validate_promotion_gate(scheme_result, promotion_gate or {}, run_id=run_id, weighting_scheme=scheme)
 
+        backtest_config = _as_mapping(run.get("backtest_config_json") or {}, field_name="backtest_config_json")
+        strategy_snapshot = _build_strategy_snapshot(
+            topk=topk_value,
+            secondary_topk=secondary_topk_values,
+            backtest_config=backtest_config,
+        )
+        require_execution_algo_active(
+            strategy_snapshot["execution_algo"],
+            operation="multi_alpha_strategy_package_promotion",
+            semantic_path="combine_backtest_run.backtest_config_json.execution_algo",
+            context={"run_id": run_id, "weighting_scheme": scheme},
+        )
+
         requested_component_ids = _normalize_component_package_ids(component_package_ids)
         if requested_component_ids:
             _fail(
@@ -230,12 +244,6 @@ class MultiAlphaPackagePromotionService:
             for item in roster
         ]
         _assert_unique_parent_leg_model_ids(leg_evidence, run_id=run_id)
-        backtest_config = _as_mapping(run.get("backtest_config_json") or {}, field_name="backtest_config_json")
-        strategy_snapshot = _build_strategy_snapshot(
-            topk=topk_value,
-            secondary_topk=secondary_topk_values,
-            backtest_config=backtest_config,
-        )
         normalized_weight_policy = _validate_weight_policy(weight_policy, run_id=run_id, weighting_scheme=scheme)
         scheme_result_key = str(scheme_result.get("id") or scheme_result_id or scheme)
         package_id = _stable_package_id(
