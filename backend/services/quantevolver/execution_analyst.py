@@ -14,6 +14,11 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from ...db.pg_pool import get_conn
+from ..trading_core.execution_algo_retirement import (
+    execution_algo_retirement_projection,
+    is_retired_execution_algo,
+    require_execution_algo_active,
+)
 
 logger = logging.getLogger("aistock.quantevolver.execution_analyst")
 
@@ -99,6 +104,21 @@ def _extract_json_from_response(content: str) -> Optional[Dict]:
     return None
 
 
+def project_execution_algorithm_catalog_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Project catalog storage truth through the code-owned retirement authority."""
+
+    projected = dict(row)
+    for key in ("created_at", "updated_at", "llm_analysis_at"):
+        if projected.get(key) and isinstance(projected[key], datetime):
+            projected[key] = projected[key].isoformat()
+    catalog_is_enabled = bool(projected.get("is_enabled"))
+    projected.update(execution_algo_retirement_projection(projected.get("algo_code")))
+    projected["catalog_is_enabled"] = catalog_is_enabled
+    if projected["retired"]:
+        projected["is_enabled"] = False
+    return projected
+
+
 class ExecutionAlgoAnalyst:
     """执行算法分析器 — 规则引擎 + LLM 双引擎"""
 
@@ -118,11 +138,7 @@ class ExecutionAlgoAnalyst:
                 """)
                 cols = [desc[0] for desc in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-                for row in rows:
-                    for k in ("created_at", "updated_at", "llm_analysis_at"):
-                        if row.get(k) and isinstance(row[k], datetime):
-                            row[k] = row[k].isoformat()
-                return rows
+                return [project_execution_algorithm_catalog_row(row) for row in rows]
 
     def get_algorithm(self, algo_code: str) -> Optional[Dict[str, Any]]:
         """获取单个执行算法"""
@@ -142,14 +158,15 @@ class ExecutionAlgoAnalyst:
                 if not row:
                     return None
                 cols = [desc[0] for desc in cur.description]
-                data = dict(zip(cols, row))
-                for k in ("created_at", "updated_at", "llm_analysis_at"):
-                    if data.get(k) and isinstance(data[k], datetime):
-                        data[k] = data[k].isoformat()
-                return data
+                return project_execution_algorithm_catalog_row(dict(zip(cols, row)))
 
     def analyze_algorithm(self, algo_code: str, use_llm: bool = True) -> Dict[str, Any]:
         """分析单个执行算法"""
+        algo_code = require_execution_algo_active(
+            algo_code,
+            operation="execution_algorithm_analyze",
+            semantic_path="execution_algorithm_catalog.algo_code",
+        )
         algo = self.get_algorithm(algo_code)
         if not algo:
             return {"ok": False, "error": f"算法 {algo_code} 不存在"}
@@ -221,7 +238,7 @@ class ExecutionAlgoAnalyst:
         """批量分析所有算法（异步生成器，支持 SSE）"""
         import asyncio
 
-        algos = self.get_all_algorithms()
+        algos = [algo for algo in self.get_all_algorithms() if not is_retired_execution_algo(algo.get("algo_code"))]
         total = len(algos)
         analyzed = 0
         errors = []
@@ -255,6 +272,11 @@ class ExecutionAlgoAnalyst:
 
     def update_algorithm(self, algo_code: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         """更新算法配置（启用/禁用/参数调整）"""
+        algo_code = require_execution_algo_active(
+            algo_code,
+            operation="execution_algorithm_catalog_update",
+            semantic_path="execution_algorithm_catalog.algo_code",
+        )
         set_parts = []
         params = []
 
@@ -391,6 +413,11 @@ class ExecutionAlgoAnalyst:
         analysis_profile: Dict,
     ) -> None:
         """写回分析结果到 DB"""
+        require_execution_algo_active(
+            algo_code,
+            operation="execution_algorithm_analysis_write",
+            semantic_path="execution_algorithm_catalog.algo_code",
+        )
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""

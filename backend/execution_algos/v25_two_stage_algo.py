@@ -15,7 +15,6 @@ import numpy as np
 
 from .base_algo import BaseExecutionAlgo, OrderState, StepResult
 from .board_lot import round_to_board_lot
-from .registry import register
 from .v25_core import (
     EARLY_LEN,
     LATE_LEN,
@@ -99,7 +98,6 @@ def _make_model_classes(torch: Any):
     return EarlyPlanNetEnhanced, LatePlanNet
 
 
-@register
 class V25TwoStageAlgo(BaseExecutionAlgo):
     ALGO_CODE = "V25_TWO_STAGE"
     HANDLES_MARKET_STATE = True

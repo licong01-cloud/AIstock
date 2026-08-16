@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Type
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
+
 from .base_algo import BaseExecutionAlgo
 
 ALGO_REGISTRY: Dict[str, Type[BaseExecutionAlgo]] = {}
@@ -19,6 +21,11 @@ def register(cls: Type[BaseExecutionAlgo]) -> Type[BaseExecutionAlgo]:
 
 def get_algo(algo_code: str, config: Dict[str, Any] | None = None) -> BaseExecutionAlgo:
     """根据算法代码获取实例."""
+    algo_code = require_execution_algo_active(
+        algo_code,
+        operation="execution_algo_registry_construct",
+        semantic_path="registry.algo_code",
+    )
     cls = ALGO_REGISTRY.get(algo_code)
     if cls is None:
         raise ValueError(f"未注册的执行算法: {algo_code}，可用: {list(ALGO_REGISTRY.keys())}")

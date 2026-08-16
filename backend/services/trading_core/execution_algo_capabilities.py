@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .execution_algo_retirement import require_execution_algo_active, require_execution_policy_active
 from .errors import DataUnavailableError, StrategyPackageValidationError
 
 
@@ -68,26 +69,6 @@ EXECUTION_ALGO_CAPABILITIES: dict[str, ExecutionAlgoCapability] = {
         live_step_mode="unsupported",
         runtime_asset_keys=("model_path",),
     ),
-    "V25_TWO_STAGE": ExecutionAlgoCapability(
-        algo_code="V25_TWO_STAGE",
-        historical_min_required_bars=240,
-        historical_requires_full_day=True,
-        live_supported=True,
-        live_min_start_bars=1,
-        live_step_mode="persisted_plan",
-        plan_horizon_bars=240,
-        runtime_asset_keys=("early_model_path", "late_model_path"),
-    ),
-    "V25_1_SMALL_CAP": ExecutionAlgoCapability(
-        algo_code="V25_1_SMALL_CAP",
-        historical_min_required_bars=240,
-        historical_requires_full_day=True,
-        live_supported=True,
-        live_min_start_bars=1,
-        live_step_mode="persisted_plan",
-        plan_horizon_bars=240,
-        runtime_asset_keys=("early_model_path", "late_model_path"),
-    ),
     "SNIPER_MINIQMT": ExecutionAlgoCapability(
         algo_code="SNIPER_MINIQMT",
         historical_min_required_bars=1,
@@ -116,7 +97,11 @@ def normalize_execution_algo_code(algo_code: Any) -> str:
     normalized = str(algo_code or "").strip().upper()
     if not normalized:
         raise StrategyPackageValidationError("minute execution algo_code is required")
-    return normalized
+    return require_execution_algo_active(
+        normalized,
+        operation="execution_algo_capability_lookup",
+        semantic_path="execution_policy.algo_code",
+    )
 
 
 def get_execution_algo_capability(algo_code: Any) -> ExecutionAlgoCapability:
@@ -141,6 +126,11 @@ def required_minute_bars_for_policy(policy_json: dict[str, Any], *, package_id: 
             "minute execution policy must be an object",
             context={"package_id": package_id},
         )
+    require_execution_policy_active(
+        policy_json,
+        operation="paper_v2_required_minute_bars",
+        context={"package_id": package_id},
+    )
     config = policy_json.get("algo_config") or {}
     if not isinstance(config, dict):
         raise StrategyPackageValidationError(

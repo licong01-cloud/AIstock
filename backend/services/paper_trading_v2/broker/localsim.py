@@ -43,6 +43,9 @@ from backend.services.strategy_package.execution_policy import (
     validate_frozen_execution_policy_snapshot,
 )
 from backend.services.strategy_package.models import StrategyPackageManifest
+from backend.services.trading_core.execution_algo_retirement import (
+    require_execution_algo_active,
+)
 from backend.services.simulation_runtime.models import (
     LocalSimExecutionRuntimeStatus,
     LocalSimExecutionStateV1,
@@ -1518,7 +1521,7 @@ class LocalSimBackend(BrokerBackend):
             "causal_bar_count": causal_bar_count,
             "live_step_mode": capability.live_step_mode,
             "plan_horizon_bars": capability.plan_horizon_bars,
-            "v25_realtime_streaming": capability.algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"},
+            "v25_realtime_streaming": False,
         }
 
     def _new_execution_state(self, *, intent: OrderIntent, order: Order) -> LocalSimExecutionStateV1:
@@ -2034,7 +2037,11 @@ class LocalSimBackend(BrokerBackend):
             },
         )
         policy_json = dict(snapshot["policy_json"])
-        algo_code = str(policy_json.get("algo_code") or "").strip().upper()
+        algo_code = require_execution_algo_active(
+            policy_json.get("algo_code"),
+            operation="localsim_backend_initialize",
+            semantic_path="execution_policy.policy_json.algo_code",
+        )
         if algo_code != "TWAP":
             raise RuntimeConfigInvalidError(
                 "LocalSimBackend only accepts the explicit TWAP runtime policy",

@@ -11,6 +11,11 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError
+from backend.services.trading_core.execution_algo_retirement import (
+    ExecutionAlgoRetiredError,
+    require_execution_policy_active,
+    require_strategy_manifest_execution_algos_active,
+)
 
 from .candidate import (
     CandidateStrategyPackageService,
@@ -129,6 +134,11 @@ class StrategyPackageService:
             experiment_id,
             resolve_runtime_assets=False,
         )
+        require_strategy_manifest_execution_algos_active(
+            manifest,
+            operation="strategy_package_create_from_qe_experiment",
+            context={"experiment_id": experiment_id},
+        )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
         admitted_manifest = self._attach_runtime_asset_admission(frozen_assets.manifest)
@@ -146,6 +156,11 @@ class StrategyPackageService:
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
             resolve_runtime_assets=False,
+        )
+        require_strategy_manifest_execution_algos_active(
+            manifest,
+            operation="strategy_package_create_from_qe_evolution_loop",
+            context={"qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
         )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
@@ -180,6 +195,11 @@ class StrategyPackageService:
             }
         )
         manifest = freeze_manifest(manifest.model_copy(update={"source": source, "manifest_sha256": None}))
+        require_strategy_manifest_execution_algos_active(
+            manifest,
+            operation="strategy_package_create_from_candidate",
+            context={"candidate_id": candidate_id},
+        )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
         admitted_manifest = self._attach_runtime_asset_admission(frozen_assets.manifest)
@@ -192,6 +212,11 @@ class StrategyPackageService:
         return admitted
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
+        require_strategy_manifest_execution_algos_active(
+            manifest,
+            operation="strategy_package_save_manifest",
+            context={"package_id": manifest.package_id},
+        )
         self.validator.validate_manifest(manifest)
         return self.repository.save_manifest(manifest)
 
@@ -241,6 +266,11 @@ class StrategyPackageService:
     def validate_readiness(self, package_id: str) -> StrategyPackageManifest:
         record = self.repository.get(package_id)
         manifest = record.current_manifest()
+        require_strategy_manifest_execution_algos_active(
+            manifest,
+            operation="strategy_package_validate_readiness",
+            context={"package_id": package_id},
+        )
         self.validator.validate_for_paper_trading(manifest)
         return manifest
 
@@ -440,6 +470,12 @@ class StrategyPackageService:
                 context={"package_id": package_id, "to_status": to_status.value},
             )
         record = self.repository.get(package_id)
+        if to_status in {PackageStatus.PAPER_ENABLED, PackageStatus.PAPER_RUNNING}:
+            require_strategy_manifest_execution_algos_active(
+                record.current_manifest(),
+                operation="strategy_package_paper_promotion",
+                context={"package_id": package_id, "target_status": to_status.value},
+            )
         if record.package_status not in allowed:
             raise InvalidStateTransitionError(
                 "invalid strategy package status transition",
@@ -550,8 +586,13 @@ class StrategyPackageService:
         paper_enabled: bool = False,
     ) -> ValidatedExecutionPolicy:
         _ = paper_enabled  # legacy request field; Paper readiness is decided by asset eligibility and runtime checks.
-        record = self.repository.get(package_id)
         normalized = normalize_execution_policy_json(policy_json)
+        require_execution_policy_active(
+            normalized,
+            operation="strategy_package_create_execution_policy",
+            context={"package_id": package_id, "source_backtest_id": source_backtest_id},
+        )
+        record = self.repository.get(package_id)
         normalized_status = source_backtest_status.strip().upper()
         if normalized_status not in BACKTEST_SUCCESS_STATUSES:
             raise StrategyPackageValidationError(
@@ -582,7 +623,13 @@ class StrategyPackageService:
         return self.repository.get_execution_policy(package_id, policy_id)
 
     def enable_execution_policy_for_paper(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
-        return self.repository.get_execution_policy(package_id, policy_id)
+        policy = self.repository.get_execution_policy(package_id, policy_id)
+        require_execution_policy_active(
+            policy.policy_json,
+            operation="strategy_package_enable_execution_policy_for_paper",
+            context={"package_id": package_id, "policy_id": policy_id},
+        )
+        return policy
 
     def disable_execution_policy_for_paper(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
         self.repository.get(package_id)
@@ -1115,13 +1162,24 @@ class StrategyPackageService:
                 if warning not in warnings:
                     warnings.append(warning)
 
+        blockers = list(asset_eligibility.blockers)
+        try:
+            require_strategy_manifest_execution_algos_active(
+                record.current_manifest(),
+                operation="strategy_package_paper_simulation_admission",
+                context={"package_id": package_id},
+            )
+        except ExecutionAlgoRetiredError as exc:
+            if exc.error_code not in blockers:
+                blockers.append(exc.error_code)
+
         return {
             "package_id": package_id,
             "manifest_sha256": record.manifest_sha256,
             "package_status": record.package_status.value,
             "asset_eligible": asset_eligibility.eligible,
-            "paper_simulation_allowed": asset_eligibility.eligible,
-            "blockers": list(asset_eligibility.blockers),
+            "paper_simulation_allowed": asset_eligibility.eligible and not blockers,
+            "blockers": blockers,
             "warnings": warnings,
             "runtime_preflight_required": True,
             "live_strict_governance": governance,

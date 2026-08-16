@@ -363,7 +363,7 @@ class PaperTradingReadinessService:
                 execution_policy_json,
                 package_id=manifest.package_id,
             )
-            require_day_features = PaperTradingDayRunner._policy_requires_day_features(execution_policy_json)
+            require_day_features = False
             if not checked_symbols:
                 raise DataUnavailableError(
                     "paper readiness produced no symbols to check",

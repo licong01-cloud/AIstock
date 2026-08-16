@@ -12,6 +12,9 @@ from backend.services.strategy_package.qe_source_resolver import (
     dict_record_conn,
 )
 from backend.services.strategy_package.validators import StrategyPackageValidator
+from backend.services.trading_core.execution_algo_retirement import (
+    ExecutionAlgoRetiredError,
+)
 from backend.services.trading_core.errors import UnsupportedFeatureError
 
 
@@ -123,7 +126,7 @@ def test_qe_experiment_rejects_daily_backtest() -> None:
         resolver.build_from_experiment("qe_unit_001")
 
 
-def test_qe_experiment_enriches_runtime_contract_from_loop_config() -> None:
+def test_qe_experiment_rejects_retired_execution_algo_from_loop_config() -> None:
     record = make_record()
     record["custom_params"] = {
         "topk": 50,
@@ -143,11 +146,9 @@ def test_qe_experiment_enriches_runtime_contract_from_loop_config() -> None:
         conn_factory=lambda: experiment_with_loop_conn(record, loop_record)
     )
 
-    manifest = resolver.build_from_experiment("qe_unit_001")
+    with pytest.raises(ExecutionAlgoRetiredError) as exc_info:
+        resolver.build_from_experiment("qe_unit_001")
 
-    assert manifest.execution_policy is None
-    assert manifest.minute_execution_policy is None
-    assert manifest.backtest_context["execution"]["backtest_freq"] == "1min"
-    assert manifest.backtest_context["execution"]["execution_algo"] == "V25_TWO_STAGE"
-    assert manifest.backtest_context["execution"]["execution_algo_params"] == {"early_model_path": "early.pt"}
-    assert manifest.source_evidence["custom_params"]["runtime_contract_source"] == "strategy_package_loop_config"
+    assert exc_info.value.context["reason_code"] == "V25_EXECUTION_ALGO_RETIRED"
+    assert exc_info.value.context["fallback_used"] is False
+    assert exc_info.value.context["side_effect_started"] is False

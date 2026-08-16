@@ -12,6 +12,11 @@ from backend.execution_algos.vnpy_style import VNPY_STYLE_ASSETS, is_vnpy_style_
 from backend.services.mcp_payload_budget import artifact_ref, strip_forbidden_fields, summary_envelope
 from backend.services.strategy_package.execution_policy import normalize_execution_policy_json
 from backend.services.strategy_package.service import StrategyPackageService
+from backend.services.trading_core.execution_algo_retirement import (
+    V25_EXECUTION_ALGO_RETIRED,
+    execution_algo_retirement_projection,
+    require_execution_algo_active,
+)
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError
 
 router = APIRouter(prefix="/execution-policy", tags=["execution-policy"])
@@ -122,6 +127,8 @@ def _algo_catalog() -> dict[str, dict[str, Any]]:
             algos[loaded["algo_code"]] = loaded
     for algo_code, spec in VNPY_STYLE_ASSETS.items():
         algos[algo_code] = spec.catalog_entry()
+    for algo_code, payload in algos.items():
+        payload.update(execution_algo_retirement_projection(algo_code))
     return algos
 
 
@@ -136,6 +143,7 @@ def _policy_summary(policy: Any) -> dict[str, Any]:
     payload = policy.model_dump(mode="json")
     payload.pop("policy_json", None)
     payload["policy_json_summary"] = strip_forbidden_fields(policy.policy_json)
+    payload.update(execution_algo_retirement_projection(policy.policy_json.get("algo_code")))
     return strip_forbidden_fields(payload)
 
 
@@ -176,6 +184,14 @@ def _validate_policy_contract(policy_json: dict[str, Any], algo_code: str | None
     except Exception as exc:
         return [str(exc)]
     selected_algo = str(algo_code or normalized.get("algo_code") or "").upper()
+    try:
+        require_execution_algo_active(
+            selected_algo,
+            operation="execution_policy_validate_for_strategy",
+            semantic_path="execution_policy.algo_code",
+        )
+    except TradingCoreError as exc:
+        return [exc.error_code]
     if selected_algo not in _algo_catalog():
         blockers.append("unknown_algo_code")
     if normalized.get("fallback_algo_code") and not normalized.get("fallback_policy"):
@@ -253,12 +269,13 @@ def get_package_policy(package_id: str, policy_id: str) -> dict[str, Any]:
 @router.post("/validate-for-strategy")
 def validate_for_strategy(req: ExecutionPolicyValidateRequest) -> dict[str, Any]:
     blockers = _validate_policy_contract(req.policy_json, req.algo_code)
-    try:
-        package = StrategyPackageService().get_package(req.package_id)
-    except TradingCoreError as exc:
-        _handle_domain_error(exc)
-    if package.package_status.value == "RETIRED":
-        blockers.append("package_retired")
+    if V25_EXECUTION_ALGO_RETIRED not in blockers:
+        try:
+            package = StrategyPackageService().get_package(req.package_id)
+        except TradingCoreError as exc:
+            _handle_domain_error(exc)
+        if package.package_status.value == "RETIRED":
+            blockers.append("package_retired")
     return {
         "ok": not blockers,
         "domain": "execution_policy.validate_for_strategy",
@@ -288,6 +305,7 @@ def get_market_state_constraints() -> dict[str, Any]:
 @router.post("/binding-plan")
 def binding_plan(req: ExecutionPolicyBindingPlanRequest) -> dict[str, Any]:
     validation = validate_for_strategy(ExecutionPolicyValidateRequest(package_id=req.package_id, algo_code=(req.policy_json or {}).get("algo_code"), policy_json=req.policy_json)) if req.policy_json else {"blockers": []}
+    blockers = validation.get("blockers", [])
     return {
         "ok": True,
         "domain": "execution_policy.binding_plan",
@@ -295,11 +313,11 @@ def binding_plan(req: ExecutionPolicyBindingPlanRequest) -> dict[str, Any]:
         "package_id": req.package_id,
         "policy_id": req.policy_id,
         "policy_name": req.policy_name,
-        "blockers": validation.get("blockers", []),
+        "blockers": blockers,
         "required_confirmation": BIND_EXECUTION_POLICY_CONFIRM,
         "real_trading_triggered": False,
-        "will_create_policy": bool(not req.policy_id and req.policy_json),
-        "will_enable_for_paper": bool(req.policy_id),
+        "will_create_policy": bool(not blockers and not req.policy_id and req.policy_json),
+        "will_enable_for_paper": bool(not blockers and req.policy_id),
     }
 
 

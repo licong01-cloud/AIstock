@@ -54,6 +54,8 @@ from backend.services.strategy_package.factor_reference_guard import (
     FACTOR_DELETE_BLOCKED_REASON_CODE,
     find_strategy_packages_referencing_factor,
 )
+from backend.services.trading_core.errors import TradingCoreError
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
 from ..db.pg_pool import get_conn
 from ..services.quantevolver.callback_urls import build_aistock_callback_url
 from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
@@ -2972,6 +2974,12 @@ def generate_config(req: GenerateConfigRequest):
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
 
+        require_execution_algo_active(
+            (req.custom_params or {}).get("execution_algo"),
+            operation="qe_config_generate_request",
+            semantic_path="request.custom_params.execution_algo",
+        )
+
         # --- 严格参数验证（禁止静默兜底）---
         _validate_qe_catalog_refs(req.strategy_id, req.model_id)
         custom_params = _normalize_single_experiment_custom_params(
@@ -3152,6 +3160,8 @@ def generate_config(req: GenerateConfigRequest):
         return result
     except HTTPException:
         raise
+    except TradingCoreError as e:
+        raise HTTPException(status_code=422, detail=e.to_dict()) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -3244,6 +3254,13 @@ def update_experiment_editable_config(experiment_id: str, req: SingleExperimentC
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
 
+        require_execution_algo_active(
+            (req.custom_params or {}).get("execution_algo"),
+            operation="qe_pending_experiment_update",
+            semantic_path="request.custom_params.execution_algo",
+            context={"experiment_id": experiment_id},
+        )
+
         cc = ConfigComposer()
         exp_record = cc._get_experiment_record(experiment_id)
         if not exp_record:
@@ -3317,6 +3334,8 @@ def update_experiment_editable_config(experiment_id: str, req: SingleExperimentC
         }
     except HTTPException:
         raise
+    except TradingCoreError as e:
+        raise HTTPException(status_code=422, detail=e.to_dict()) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -8460,11 +8479,15 @@ def list_execution_algorithms(
             "TWAP": "tail_twap_strategy.TailTWAPWithLimitStrategy",
             "CLOSE_PRICE": "close_execution_strategy.CloseExecutionStrategy",
             "V24_PLAN": "tail_twap_v24_strategy.TailTWAPWithV24PlanStrategy",
-            "V25_TWO_STAGE": "tail_twap_v25_strategy.TailTWAPWithV25TwoStageStrategy",
-            "V25_1_SMALL_CAP": "tail_twap_v25_1_strategy.TailTWAPWithV25_1SmallCapStrategy",
         }
         for item in items:
             code = str(item.get("algo_code") or "").upper()
+            if item.get("retired"):
+                item["qe_supported"] = False
+                item["qe_effective_algo"] = None
+                item["qe_effective_module"] = None
+                item["qe_support_message"] = str(item.get("retirement_reason_code") or "execution algorithm retired")
+                continue
             try:
                 normalized = ConfigComposer._normalize_execution_algo(code)
                 item["qe_supported"] = normalized in SUPPORTED_QE_EXECUTION_ALGOS
@@ -8538,6 +8561,8 @@ def analyze_execution_algorithm(
         return result
     except HTTPException:
         raise
+    except TradingCoreError as e:
+        raise HTTPException(status_code=422, detail=e.to_dict()) from e
     except Exception as e:
         logger.exception(f"分析执行算法失败: {algo_code}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -8556,6 +8581,8 @@ def update_execution_algorithm(algo_code: str, req: UpdateExecutionAlgoRequest):
         return result
     except HTTPException:
         raise
+    except TradingCoreError as e:
+        raise HTTPException(status_code=422, detail=e.to_dict()) from e
     except Exception as e:
         logger.exception(f"更新执行算法失败: {algo_code}")
         raise HTTPException(status_code=500, detail=str(e))

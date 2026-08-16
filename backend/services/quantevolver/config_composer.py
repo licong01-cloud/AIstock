@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from ...db.pg_pool import get_conn
 from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
+from ..trading_core.execution_algo_retirement import require_execution_algo_active
 from ..strategy_package.workspace_policy import (
     ensure_aistock_artifact_path,
     ensure_not_forbidden_worker_workspace_path,
@@ -495,8 +496,6 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
     "TWAP",
     "CLOSE_PRICE",
     "V24_PLAN",
-    "V25_TWO_STAGE",
-    "V25_1_SMALL_CAP",
 }
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
@@ -522,8 +521,6 @@ QE_STRATEGY_RUNTIME_HELPER_FILES = (
 )
 
 QE_MINUTE_RUNTIME_HELPER_FILES = (
-    "tail_twap_v25_strategy.py",
-    "tail_twap_v25_1_strategy.py",
     "close_execution_strategy.py",
     *QE_STRATEGY_RUNTIME_HELPER_FILES,
 )
@@ -533,12 +530,7 @@ QE_LOCAL_STRATEGY_ROOTS = [
     AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_strategies",
     AISTOCK_PROJECT_ROOT / "scripts",
 ]
-AUTHORITATIVE_QE_HELPER_ASSETS = {
-    # V25 is a strategy/model asset. Keep the authority in the AIstock repo
-    # instead of probing an RDAgent/WSL workspace from Windows.
-    "tail_twap_v25_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_strategy.py",
-    "tail_twap_v25_1_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_1_strategy.py",
-}
+AUTHORITATIVE_QE_HELPER_ASSETS: dict[str, Path] = {}
 
 
 class ConfigComposer:
@@ -785,7 +777,11 @@ class ConfigComposer:
 
     @classmethod
     def _execution_algo_catalog_entry(cls, algo_code: str) -> Dict[str, Any]:
-        algo = str(algo_code).strip().upper()
+        algo = require_execution_algo_active(
+            algo_code,
+            operation="qe_execution_catalog_resolve",
+            semantic_path="qe_config.execution_algo",
+        )
         cached = cls._execution_algo_catalog_cache.get(algo)
         if cached is not None:
             return dict(cached)
@@ -932,6 +928,11 @@ class ConfigComposer:
         raw = (execution_algo or DEFAULT_QE_EXECUTION_ALGO).strip().upper()
         aliases = {"": DEFAULT_QE_EXECUTION_ALGO, "NONE": DEFAULT_QE_EXECUTION_ALGO, "DEFAULT": DEFAULT_QE_EXECUTION_ALGO}
         raw = aliases.get(raw, raw)
+        raw = require_execution_algo_active(
+            raw,
+            operation="qe_config_compose",
+            semantic_path="qe_config.execution_algo",
+        )
         if raw == "VWAP":
             raise ValueError(
                 "execution_algo='VWAP' is not implemented in QE minute execution. "
@@ -1028,28 +1029,6 @@ class ConfigComposer:
                 "module_path": "tail_twap_v24_strategy",
                 "kwargs": params,
             }
-        if algo == "V25_TWO_STAGE":
-            catalog_defaults = cls._execution_algo_catalog_entry(algo)["default_config"]
-            for key, value in catalog_defaults.items():
-                params.setdefault(key, value)
-            return {
-                "requested_algo": execution_algo,
-                "effective_algo": algo,
-                "class": "TailTWAPWithV25TwoStageStrategy",
-                "module_path": "tail_twap_v25_strategy",
-                "kwargs": params,
-            }
-        if algo == "V25_1_SMALL_CAP":
-            catalog_defaults = cls._execution_algo_catalog_entry(algo)["default_config"]
-            for key, value in catalog_defaults.items():
-                params.setdefault(key, value)
-            return {
-                "requested_algo": execution_algo,
-                "effective_algo": algo,
-                "class": "TailTWAPWithV25_1SmallCapStrategy",
-                "module_path": "tail_twap_v25_1_strategy",
-                "kwargs": params,
-            }
         raise AssertionError(f"unreachable execution algo: {algo}")
 
     @classmethod
@@ -1076,10 +1055,8 @@ class ConfigComposer:
 
     @classmethod
     def _is_v25_execution(cls, execution_algo: Optional[str]) -> bool:
-        return cls._normalize_execution_algo(execution_algo) in {
-            "V25_TWO_STAGE",
-            "V25_1_SMALL_CAP",
-        }
+        cls._normalize_execution_algo(execution_algo)
+        return False
 
     @staticmethod
     def _is_suspend_filter_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
@@ -2468,7 +2445,7 @@ class ConfigComposer:
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
         deps_dict: Dict[str, str] = {}
 
         def _resolve_deps(code: str, collected: set) -> str:
@@ -4233,13 +4210,7 @@ class ConfigComposer:
         lines.append("            open_cost: 0.000095")
         lines.append("            close_cost: 0.000595")
         lines.append("            min_cost: 5")
-        if backtest_freq != "day" and algo_cfg["effective_algo"] == "V25_1_SMALL_CAP":
-            lines.append("            # V25.1 legalizes child orders with stock-aware board-lot rules.")
-            lines.append("            # Disable Qlib's global 100-share rounding so STAR 200+1 orders survive.")
-            lines.append("            trade_unit: ~")
-            lines.append("            board_lot_trade_unit: true")
-        else:
-            lines.append("            trade_unit: 100")
+        lines.append("            trade_unit: 100")
         quote_universe_codes = (custom_params or {}).get("quote_universe_codes")
         if quote_universe_codes:
             if isinstance(quote_universe_codes, str):
@@ -6152,7 +6123,7 @@ model_cls = {nn_class_name}
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
             """递归处理相对导入：转换为本地导入并复制依赖文件."""

@@ -699,6 +699,30 @@ rules:
     layer: execution_algo
     risk_level: critical
     ownership_reason: Execution algorithms define order sizing and market-state semantics shared by QE and Paper v2.
+  - rule_id: v25_execution_retirement
+    priority: 95
+    include:
+      - backend/tests/mcp/test_v25_mcp_retirement.py
+      - backend/tests/quantevolver/test_v25_execution_retirement.py
+      - backend/tests/trading_core/test_v25_execution_retirement.py
+      - scripts/add_v25_to_catalog.py
+      - scripts/add_v25_to_db.py
+      - scripts/compare_v25_vs_v25_1_1y.py
+      - scripts/paper_v2_live_validation.py
+      - scripts/v24_v25_real_test.py
+      - scripts/v24_v25_test.py
+      - scripts/v25_1_smoke_backtest.py
+      - scripts/v25_mini_backtest.py
+      - scripts/v25_minute_test.py
+      - scripts/v25_minute_test_final.py
+      - scripts/v25_verify_final.py
+      - scripts/verify_v25_integration.py
+      - scripts/verify_v25_minute_execution.py
+    primary_module: paper_v2
+    impact_modules: [simulation_runtime, miniqmt_execution_runtime, qe.core, strategy_package, platform.api, platform.mcp_gateway]
+    layer: execution_algo
+    risk_level: critical
+    ownership_reason: Repository-wide V25 retirement tests and guarded legacy startup CLIs share one fail-closed execution capability boundary across Paper, Simulation, QE, package, API, and MCP entrypoints.
   - rule_id: qmt_strategy_ledger_execution
     priority: 95
     include:
