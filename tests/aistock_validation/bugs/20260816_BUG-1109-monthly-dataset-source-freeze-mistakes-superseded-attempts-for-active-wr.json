@@ -22,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260816-8a435df3be31",
       "timestamp": "2026-08-16T14:17:59.446613Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Project current writer state from the latest append-only attempt per target while preserving true active-writer and ledger-drift fail-closed checks; targeted, full dataset-release, DEV/production read-only SQL, static, fresh-process, and independent review gates passed.",
+      "timestamp": "2026-08-16T14:39:43.248463Z"
     }
   ],
   "evidence_uris": [
@@ -86,12 +92,12 @@
     ]
   },
   "first_seen_at": "2026-08-16T14:17:59.446627Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-1109-monthly-dataset-source-freeze-mistakes-supersede-20260816",
+  "fix_commit": "8ce951ba228a591bf3a2babfbb2795215faeb045",
+  "fixed_at": "2026-08-16T14:39:43.248463Z",
   "github_issue_number": 3535,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3535",
-  "last_seen_at": "2026-08-16T14:17:59.446627Z",
+  "last_seen_at": "2026-08-16T14:39:43.248463Z",
   "module": "aistock_backend",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -107,9 +113,16 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "final-head=8ce951ba228a591bf3a2babfbb2795215faeb045; fresh Python process imported source_authority and verified latest-attempt plus alias contracts; exit=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -119,7 +132,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -128,6 +141,15 @@
     "fingerprint": "8a435df3be312febb6369bf9",
     "source_event_id": "FE-20260816-8a435df3be31"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_source_authority.py -q -> 36 passed at final source HEAD",
+    "python -m pytest backend/tests/dataset_release -q -> 734 passed and 4 skipped",
+    "python -m nox -s l0 -> passed with zero blocking findings",
+    "python -m nox -s qlib_data_backend -> 15 passed",
+    "python -m ruff check backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_source_authority.py -> passed",
+    "python -m py_compile backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_source_authority.py -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
