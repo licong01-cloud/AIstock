@@ -116,7 +116,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "final-head=8ce951ba228a591bf3a2babfbb2795215faeb045; fresh Python process imported source_authority and verified latest-attempt plus alias contracts; exit=0"
+      "final-head=8ce951ba228a591bf3a2babfbb2795215faeb045; fresh Python process imported source_authority and verified latest-attempt plus alias contracts; exit=0",
+      "final-head=2e5e66e8209f00ab78e6463822fd4f38d326b805; fresh Python process imported source_authority and verified latest-attempt plus alias contracts; exit=0"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
