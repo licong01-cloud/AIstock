@@ -1809,6 +1809,36 @@ def _run_component(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def run_market_component(
+    inputs: Mapping[str, Any],
+    *,
+    calendar: tuple[date, ...],
+    benchmark: Mapping[date, float],
+    attempt_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Run the approved market-only jump component for a composite candidate.
+
+    This is the single public reuse boundary for the P2-3 market authority.  It
+    deliberately exposes no generic estimator abstraction and preserves the
+    exact market feature, fold, restart, lambda, selection, and final-refit
+    contract implemented by ``_run_component``.
+    """
+
+    return _run_component(
+        "market",
+        inputs=inputs,
+        calendar=calendar,
+        benchmark=benchmark,
+        attempt_log=attempt_log,
+    )
+
+
+def market_planned_fit_count() -> int:
+    """Return the exact number of fits performed by ``run_market_component``."""
+
+    return len(LAMBDA_GRID) * len(RESTART_SEEDS) * len(FOLDS) + len(RESTART_SEEDS)
+
+
 def _runtime_versions() -> dict[str, Any]:
     import scipy
     import sklearn  # local import keeps the module's version receipt explicit
@@ -1892,7 +1922,15 @@ def run_p2_3_spike(
     attempt_log: list[dict[str, Any]] = []
     components: list[dict[str, Any]] = []
     try:
-        for name in ("market", "L1_relative", "L2_relative"):
+        components.append(
+            run_market_component(
+                inputs,
+                calendar=calendar,
+                benchmark=benchmark,
+                attempt_log=attempt_log,
+            )
+        )
+        for name in ("L1_relative", "L2_relative"):
             components.append(
                 _run_component(
                     name,
