@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1106",
-  "closed_at": null,
+  "closed_at": "2026-08-16T18:54:27.843864Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,6 +30,12 @@
       "actor": "codex",
       "note": "Bound scheduler reconciliation scans, added four partial indexes, passed targeted, DEV PostgreSQL, autonomy, registry, catalog, lint, compile, diff, and fresh-process gates; production DDL and user-owned backend restart remain pending.",
       "timestamp": "2026-08-16T11:00:52.286020Z"
+    },
+    {
+      "action": "production_ddl_applied_and_verified",
+      "actor": "codex",
+      "note": "Applied merged migration backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql to 127.0.0.1:5432/aistock after post-merge DEV validation; readback confirmed four BUG-1106 indexes, four comments, and four expected EXPLAIN index paths with no business DML.",
+      "timestamp": "2026-08-16T14:09:11.734206Z"
     }
   ],
   "evidence_uris": [
@@ -117,7 +123,7 @@
   },
   "first_seen_at": "2026-08-16T08:57:16.529641Z",
   "fix_branch": "bug/BUG-1106-tdx-30-ingestion-jobs-20260816",
-  "fix_commit": "cd76396308dda6970b8307b4ff46248e28d9301e",
+  "fix_commit": "025b88fb746350ed6021345bbe93a90eaa981c75",
   "fixed_at": "2026-08-16T11:00:52.286020Z",
   "github_issue_number": 3526,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3526",
@@ -126,8 +132,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3530",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending_explicit_authorization",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "compare pg_stat_user_tables for market.ingestion_jobs across 35 seconds while no ingestion jobs are active",
   "required_verification": [
@@ -146,9 +153,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1106\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1106",
+      "catalog_sha256": "b5bd59f2d31c7ef5688f7dc062c7d6214045f8411c5eb25da58b589719f39238",
+      "contract_digest": "d694e790ab4f95051f77b41eb112b35f7a42dfdcd819deb5da8cb107d826ca0a",
+      "expected_identity": "025b88fb746350ed6021345bbe93a90eaa981c75",
+      "generated_at": "2026-08-16T18:52:39.353442Z",
+      "mode": "read_only",
+      "observed_identity": "6538d32db38abec56e260647ab1ebed9b9abe5c4",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "45608062df28949e26d5f4a527e14834411216c81a8f8f8881d47ed35503c838",
+      "receipt_sha256": "0515fd0f3c173a718c888d1e8136634b6b94fc3b2c4090d79bd8b8a9356a3819",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6ec94eff3a0a7626194ad9ccba53eb164e620df02527b25ac192d7ada7cbb155",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -158,7 +181,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -167,6 +190,14 @@
     "fingerprint": "36002cf10906f8b9fe226af9",
     "source_event_id": "FE-20260816-36002cf10906"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py -q -> 56 passed and 1 guarded DEV test skipped",
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -k bug_1106 -q -> 2 passed against existing DEV PostgreSQL with AISTOCK_RUN_BUG1106_DEV_DB=1",
+    "python -m nox -s data_sync_autonomy_backend -> 162 passed and 1 guarded DEV test skipped",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and 14/14 mapped",
+    "python -m nox -s validation_catalog_integrity -> 7 passed and findings=0",
+    "ruff check changed Python files; compileall changed Python files; git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
@@ -213,14 +244,6 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "25-35%"
   },
-  "validation_evidence": [
-    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py -q -> 56 passed and 1 guarded DEV test skipped",
-    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -k bug_1106 -q -> 2 passed against existing DEV PostgreSQL with AISTOCK_RUN_BUG1106_DEV_DB=1",
-    "python -m nox -s data_sync_autonomy_backend -> 162 passed and 1 guarded DEV test skipped",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed and 14/14 mapped",
-    "python -m nox -s validation_catalog_integrity -> 7 passed and findings=0",
-    "ruff check changed Python files; compileall changed Python files; git diff --check -> passed"
-  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
