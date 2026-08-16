@@ -818,6 +818,46 @@ def test_source_freeze_uses_at_most_one_data_partition_per_short_session(
     assert fake.session_count > len(frozen.partitions)
 
 
+def test_source_writer_ledger_uses_latest_data_sync_attempt_per_target() -> None:
+    sql = source_authority_module._SOURCE_WRITER_LEDGER_SQL
+    data_sync_projection = sql.split("UNION ALL", maxsplit=1)[1]
+
+    assert "WITH latest_data_sync_attempt AS" in sql
+    assert "SELECT DISTINCT ON (attempt.target_id)" in sql
+    assert "attempt.attempt_no" in sql
+    assert "ORDER BY attempt.target_id,attempt.attempt_no DESC" in sql
+    assert "FROM latest_data_sync_attempt AS attempt" in sql
+    assert "attempt.status='started'" in sql
+    assert "target." not in data_sync_projection
+    assert "'dataset',attempt.dataset" in data_sync_projection
+    assert "'data_source',attempt.data_source" in data_sync_projection
+
+
+def test_source_freeze_still_blocks_latest_active_writer(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.writer_rows.append(
+        {
+            "ledger_kind": "data_sync_attempts",
+            "ledger_identity": "dsa-active",
+            "status": "started",
+            "created_at": datetime(2026, 7, 31, 1, tzinfo=UTC),
+            "started_at": datetime(2026, 7, 31, 1, tzinfo=UTC),
+            "finished_at": None,
+            "opaque_payload": '{"target_id":"dst-active"}',
+        }
+    )
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
+    with pytest.raises(
+        source_authority_module.SourceSnapshotDriftBlocked,
+        match="active source writer exists",
+    ):
+        authority.freeze(cutoff=date(2026, 7, 31))
+
+
 def test_source_freeze_blocks_writer_ledger_mutation_even_when_audit_is_unchanged(
     dataset_profile,
     tmp_path,
