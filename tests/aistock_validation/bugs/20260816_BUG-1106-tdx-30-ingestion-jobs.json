@@ -38,8 +38,7 @@
   "expected": "空闲调度周期只执行有界索引查询；无任务时不全表扫描 ingestion_jobs，且不产生业务写入。",
   "file_scope_contract": {
     "added_files": [
-      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
-      "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
+      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
     ],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
@@ -49,8 +48,7 @@
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
-        "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
+        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
       ],
       "impacted_modules": [
         "local_data",
@@ -61,8 +59,7 @@
         "qe.archive",
         "selection_center",
         "strategy_package",
-        "validation.center",
-        "tests.backend"
+        "validation.center"
       ],
       "matched_rules": [
         {
@@ -99,24 +96,15 @@
           "primary_module": "platform.db",
           "risk_level": "high",
           "rule_id": "platform_database"
-        },
-        {
-          "file": "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py",
-          "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
         }
       ],
       "risk_levels": [
-        "high",
-        "medium"
+        "high"
       ],
       "suggested_scope": [
         "backend/ingestion/tdx_scheduler.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
-        "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
+        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
       ],
       "unmatched_files": []
     },
@@ -124,8 +112,7 @@
     "scope_files": [
       "backend/ingestion/tdx_scheduler.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
-      "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
+      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
     ]
   },
   "first_seen_at": "2026-08-16T08:57:16.529641Z",
@@ -227,8 +214,8 @@
     "target_cost_percent_of_legacy": "25-35%"
   },
   "validation_evidence": [
-    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_scheduler_cyq.py -q -> 55 passed",
-    "python -m pytest backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py -q -> 2 passed against existing DEV PostgreSQL with AISTOCK_RUN_BUG1106_DEV_DB=1",
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py -q -> 56 passed and 1 guarded DEV test skipped",
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -k bug_1106 -q -> 2 passed against existing DEV PostgreSQL with AISTOCK_RUN_BUG1106_DEV_DB=1",
     "python -m nox -s data_sync_autonomy_backend -> 161 passed",
     "python -m nox -s validation_module_registry_l0 -> 8 passed and 14/14 mapped",
     "python -m nox -s validation_catalog_integrity -> 7 passed and findings=0",
