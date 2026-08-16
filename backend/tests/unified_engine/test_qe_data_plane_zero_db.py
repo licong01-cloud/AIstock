@@ -374,6 +374,11 @@ def _workspace_payload_files() -> list[Path]:
     seeds: list[Path] = []
     for name in composer_module.QE_MINUTE_RUNTIME_HELPER_FILES:
         seeds.append(composer_module.AUTHORITATIVE_QE_HELPER_ASSETS.get(name, SCRIPTS_DIR / name))
+    # ConfigComposer copies both strategies explicitly instead of discovering
+    # them through the helper import graph.  V25 used to pull tail_twap in as
+    # an accidental transitive dependency, which hid these missing roots.
+    for name in ("tail_twap_strategy.py", "tail_twap_v24_strategy.py"):
+        seeds.append(SCRIPTS_DIR / name)
     for name in ("qrun_limit.py", "qrun_limit_minute.py", "qe_prediction_store_client.py", "qe_runtime_resource.py"):
         seeds.append(SCRIPTS_DIR / name)
     seeds.append(PROJECT_ROOT / "backend" / "services" / "quantevolver" / "qe_custom_loaders.py")
@@ -411,6 +416,7 @@ def test_gate5_workspace_payload_has_no_db_driver_credentials_or_market_sql():
     # otherwise the scan would silently pass on an incomplete payload set.
     assert "score_weighted_strategy.py" in names
     assert "tail_twap_strategy.py" in names
+    assert "tail_twap_v24_strategy.py" in names
     assert "qe_build_frozen_risk_policy.py" in names
     assert "qe_build_frozen_suspend_filter.py" in names
 
