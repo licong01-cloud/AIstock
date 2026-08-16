@@ -526,6 +526,7 @@ class TDXScheduler:
                    summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
              WHERE status IN ('queued', 'pending')
                AND started_at IS NULL
+               AND COALESCE(summary->>'triggered_by', '') IN ('schedule', 'data_sync_target_due')
                AND (
                     (COALESCE(summary->>'triggered_by', '') = 'schedule'
                      AND created_at < NOW() - (%s || ' minutes')::interval)

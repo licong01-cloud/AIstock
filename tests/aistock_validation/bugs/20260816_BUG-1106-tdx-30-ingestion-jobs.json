@@ -24,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260816-36002cf10906",
       "timestamp": "2026-08-16T08:57:16.529628Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Bound scheduler reconciliation scans, added four partial indexes, passed targeted, DEV PostgreSQL, autonomy, registry, catalog, lint, compile, diff, and fresh-process gates; production DDL and user-owned backend restart remain pending.",
+      "timestamp": "2026-08-16T11:00:52.286020Z"
     }
   ],
   "evidence_uris": [
@@ -32,8 +38,7 @@
   "expected": "空闲调度周期只执行有界索引查询；无任务时不全表扫描 ingestion_jobs，且不产生业务写入。",
   "file_scope_contract": {
     "added_files": [
-      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
-      "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
+      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
     ],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
@@ -43,8 +48,7 @@
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
-        "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
+        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
       ],
       "impacted_modules": [
         "local_data",
@@ -55,8 +59,7 @@
         "qe.archive",
         "selection_center",
         "strategy_package",
-        "validation.center",
-        "tests.backend"
+        "validation.center"
       ],
       "matched_rules": [
         {
@@ -93,24 +96,15 @@
           "primary_module": "platform.db",
           "risk_level": "high",
           "rule_id": "platform_database"
-        },
-        {
-          "file": "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py",
-          "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
         }
       ],
       "risk_levels": [
-        "high",
-        "medium"
+        "high"
       ],
       "suggested_scope": [
         "backend/ingestion/tdx_scheduler.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
-        "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
+        "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
       ],
       "unmatched_files": []
     },
@@ -118,17 +112,16 @@
     "scope_files": [
       "backend/ingestion/tdx_scheduler.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql",
-      "backend/tests/ingestion/test_ingestion_jobs_scheduler_indexes_postgres.py"
+      "backend/migrations/ingestion_jobs_scheduler_scan_indexes_20260816.sql"
     ]
   },
   "first_seen_at": "2026-08-16T08:57:16.529641Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-1106-tdx-30-ingestion-jobs-20260816",
+  "fix_commit": "cd76396308dda6970b8307b4ff46248e28d9301e",
+  "fixed_at": "2026-08-16T11:00:52.286020Z",
   "github_issue_number": 3526,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3526",
-  "last_seen_at": "2026-08-16T08:57:16.529641Z",
+  "last_seen_at": "2026-08-16T11:00:52.286020Z",
   "module": "local_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -145,9 +138,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "http://127.0.0.1:8001/api/ingestion/jobs?active_only=true",
+    "fresh_process_evidence": [
+      "isolated Python process imported TDXScheduler and asserted the BUG-1106 bounded queued predicate -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -157,7 +158,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -212,6 +213,14 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "25-35%"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py -q -> 56 passed and 1 guarded DEV test skipped",
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -k bug_1106 -q -> 2 passed against existing DEV PostgreSQL with AISTOCK_RUN_BUG1106_DEV_DB=1",
+    "python -m nox -s data_sync_autonomy_backend -> 162 passed and 1 guarded DEV test skipped",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and 14/14 mapped",
+    "python -m nox -s validation_catalog_integrity -> 7 passed and findings=0",
+    "ruff check changed Python files; compileall changed Python files; git diff --check -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
