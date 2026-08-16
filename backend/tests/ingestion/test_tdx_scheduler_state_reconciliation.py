@@ -363,6 +363,7 @@ def test_stale_queued_reconciliation_marks_schedule_created_jobs_failed():
     assert count == 1
     assert "status = 'failed'" in seen["sql"]
     assert "started_at IS NULL" in seen["sql"]
+    assert "triggered_by', '') IN ('schedule', 'data_sync_target_due')" in seen["sql"]
     assert "triggered_by', '') = 'schedule'" in seen["sql"]
     assert "triggered_by', '') = 'data_sync_target_due'" in seen["sql"]
     assert seen["params"][2] == "120"
