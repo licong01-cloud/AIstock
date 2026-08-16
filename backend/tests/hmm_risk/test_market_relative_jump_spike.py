@@ -570,6 +570,29 @@ def test_planned_fit_count_is_exact_and_not_multiplied_by_sector() -> None:
     assert subject.planned_fit_count() == 456
 
 
+def test_public_market_component_reuses_the_exact_private_authority(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_component(name: str, **kwargs: object) -> dict[str, object]:
+        captured["name"] = name
+        captured.update(kwargs)
+        return {"component": name, "receipt_sha256": "a" * 64}
+
+    monkeypatch.setattr(subject, "_run_component", fake_component)
+    attempts: list[dict[str, object]] = []
+    result = subject.run_market_component(
+        {"identity": "input"},
+        calendar=(date(2024, 1, 2),),
+        benchmark={date(2024, 1, 2): 0.0},
+        attempt_log=attempts,
+    )
+
+    assert captured["name"] == "market"
+    assert captured["attempt_log"] is attempts
+    assert result["component"] == "market"
+    assert subject.market_planned_fit_count() == 152
+
+
 def test_development_quintiles_and_three_coverage_states() -> None:
     small_codes = [f"Q{index}" for index in range(5)]
     quintile_rows = [

@@ -3,12 +3,12 @@
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
 - 修订日期：2026-08-16
-- 状态：`P2_3_A_EXECUTED_NOT_AVAILABLE_P2_3_B_EXACT_DESIGN_USER_APPROVED_NOT_IMPLEMENTED_NO_READY`
+- 状态：`P2_3_A_EXECUTED_NOT_AVAILABLE_P2_3_B_SOURCE_IMPLEMENTED_VALIDATED_PENDING_184_FIT_NO_READY`
 - 父级唯一产品目标权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.26
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：既有C-001～C-010、B3 D3-D7、P6/D5/D6、TRAIN-STABILITY与TRANSITION-DWELL-B均保持原始identity和blocked结论；不以新蓝图回写历史artifact。P2-3A jump v2源码与`C-011-P2-3-D3-MARKET-ZERO-EVENT-A`已合入。正式开发区间执行在market component完成选择与full-development fit后，于L1 relative `296/456` fits处因六个lambda均无三fold spread coverage而以`hmm_risk_jump_selection_unavailable`停止；L2未执行。failure report schema=`hmm_risk_market_relative_jump_spike_report_v2`、canonical=`034fdf3c7a2354bad62bdea0a55b675f2552c42a65d1ccacbc454561e75f12ec`，18个L1 selected-fit诊断replay的centers/path/hash全部闭合；三fold Rank IC覆盖均116/116，但正式spread 18/18为负、Rank IC仅3/18为正。未访问holdout、未形成完整selection/candidate、未写model/READY/DB/runtime，P2-3A正式状态为`NOT_AVAILABLE_FOR_PROMOTION`。2026-08-16用户批准P2-3B方向及C-011-P2-3B-D1～D6精确合同：保留market regime，sector层改为直接预测未来相对收益的低维透明横截面Ridge模型；精确设计已具备实施依据，但源码和184-fit spike尚未实施。
+- 当前边界：既有C-001～C-010、B3 D3-D7、P6/D5/D6、TRAIN-STABILITY与TRANSITION-DWELL-B均保持原始identity和blocked结论；不以新蓝图回写历史artifact。P2-3A jump v2源码与`C-011-P2-3-D3-MARKET-ZERO-EVENT-A`已合入。正式开发区间执行在market component完成选择与full-development fit后，于L1 relative `296/456` fits处因六个lambda均无三fold spread coverage而以`hmm_risk_jump_selection_unavailable`停止；L2未执行。failure report schema=`hmm_risk_market_relative_jump_spike_report_v2`、canonical=`034fdf3c7a2354bad62bdea0a55b675f2552c42a65d1ccacbc454561e75f12ec`，18个L1 selected-fit诊断replay的centers/path/hash全部闭合；三fold Rank IC覆盖均116/116，但正式spread 18/18为负、Rank IC仅3/18为正。未访问holdout、未形成完整selection/candidate、未写model/READY/DB/runtime，P2-3A正式状态为`NOT_AVAILABLE_FOR_PROMOTION`。2026-08-16用户批准P2-3B方向及C-011-P2-3B-D1～D6精确合同；最小Ridge candidate源码、薄CLI、既有market authority复用入口与直接测试已实现，43项直接测试和494项所属模块计划通过。184-fit spike、holdout、model/READY、DB/runtime均未执行。
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -3868,12 +3868,12 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-011-P2-3-D4 | Rank IC/spread/risk/Newey-West与holdout产品阈值 | `ACTIVE_PRODUCT_AUTHORITY_P2_3_A_FAILED` | 公式和阈值未被失败否定；它们正确暴露P2-3A负向预测结果。P2-3B不得降低阈值，只能改变经用户批准的新模型语义 |
 | C-011-P2-3-D5 | FULL_READY/COVERAGE_AVAILABLE/NOT_AVAILABLE精确合同 | `ACTIVE_P2_3_A_NOT_AVAILABLE` | P2-3A没有完整candidate，故不能进入P2-4或获得coverage状态；canonical model/READY仍为0 |
 | C-011-P2-3-D6 | 456 pooled-fit与promotion停止边界 | `EXECUTED_FAIL_CLOSED_296_OF_456` | 在L1无candidate后正确停止剩余160个L2 fits；未写model/READY/DB/runtime，未自动启动第二范式 |
-| C-011-P2-3B-D1 | market jump + L1/L2 pooled Ridge、rotation score与forecast-state新identity | `RESOLVED_USER_APPROVED_EXACT_CONTRACT_NOT_IMPLEMENTED` | market必须在新候选重跑，sector label表示未来预测而非hidden state，精确合同见§4.3.4.3 B |
-| C-011-P2-3B-D2 | 五项relative输入与daily-centered 10D future excess target | `RESOLVED_USER_APPROVED_EXACT_CONTRACT_NOT_IMPLEMENTED` | 同一PIT/t-1/preprocess，train segment末10日purge，target denominator L1 28/L2 118；不得读取validation/holdout target参与fit |
-| C-011-P2-3B-D3 | Ridge参数、alpha grid与三folddevelopment selection | `RESOLVED_USER_APPROVED_EXACT_CONTRACT_NOT_IMPLEMENTED` | solver=svd、alpha `[0.01,0.1,1,10,100]`、Rank IC/spread lexicographic选择、tie取较大alpha，并要求selected development median均>0 |
-| C-011-P2-3B-D4 | rotation score到trending/neutral/fading的daily cross-section投影 | `RESOLVED_USER_APPROVED_EXACT_CONTRACT_NOT_IMPLEMENTED` | top/bottom20%、boundary tie不强拆、每侧至少5；state是forecast bucket，非posterior/hidden-state/current-strength |
-| C-011-P2-3B-D5 | compact candidate、P2-4 holdout和三状态闭包 | `RESOLVED_USER_APPROVED_EXACT_CONTRACT_NOT_IMPLEMENTED` | P2-3B不读holdout、不写model/READY；P2-4失败不得reselect，P2-3A/B不得ensemble/fallback |
-| C-011-P2-3B-D6 | 单模块184-fit最小spike与zero-side-effect | `RESOLVED_USER_APPROVED_EXACT_CONTRACT_NOT_IMPLEMENTED` | market152 + L1 16 + L2 16；零新增依赖/表/scheduler/platform，只写repo-external compact candidate/failure receipt |
+| C-011-P2-3B-D1 | market jump + L1/L2 pooled Ridge、rotation score与forecast-state新identity | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_PENDING_EXECUTION` | 新origin、market/L1/L2 component边界与forecast-state语义已实现；184-fit尚未执行 |
+| C-011-P2-3B-D2 | 五项relative输入与daily-centered 10D future excess target | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_PENDING_EXECUTION` | 同一PIT/t-1/preprocess、末10日purge、L1 28/L2 118 denominator与target hashes已实现；未读取holdout |
+| C-011-P2-3B-D3 | Ridge参数、alpha grid与三folddevelopment selection | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_PENDING_EXECUTION` | solver=svd、五alpha、三fold lexicographic selection、tie取较大alpha及双正向停止条件已实现并定向验证 |
+| C-011-P2-3B-D4 | rotation score到trending/neutral/fading的daily cross-section投影 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_PENDING_EXECUTION` | top/bottom20%、boundary tie不强拆、每侧至少5与连续score Rank IC/spread已实现并定向验证 |
+| C-011-P2-3B-D5 | compact candidate、P2-4 holdout和三状态闭包 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_PENDING_EXECUTION` | candidate/failure receipt与holdout禁止已实现；P2-4、model/READY未执行 |
+| C-011-P2-3B-D6 | 单模块184-fit最小spike与zero-side-effect | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_PENDING_EXECUTION` | 152+16+16精确计数、薄CLI、typed failure和零副作用已验证；正式184-fit尚未执行 |
 | C-008-B3-D7-01 | B3 runtime dependency identity | `RESOLVED_USER_APPROVED_D7_01_A` | 未来实现声明 `hmmlearn==0.3.3`；本 docs-only PR 不安装依赖，未来 production dependency gate 独立 pending |
 | C-008-B3-FORMAL-EXEC-01 | 已批准 B3 合同在当前冻结输入上是否形成两-family READY | `VERIFIED_FORMAL_EXECUTION_BLOCKED_NO_READY` | producer `e2c01bae…` 完成 5184/5184 fits；formal canonical `e7992f87…39f`。D5 只选出 `legacy_covfix:L1/seed=43`，该 level 又在 D6 因 `801980.SI` failed；其余三个 family/level 无 eligible candidate。两 family blocked，selection未读validation/future utility，selection后未refit，model/READY/DB/runtime write均为false |
 | C-008-B3-FORMAL-BLOCKER-DIAG-01 | 是否按 formal rejection summaries 对全部 blocker pair 与 deterministic controls 执行两 fresh-process 定向根因诊断 | `VERIFIED_DIAGNOSTIC_COMPLETE_NO_SELECTION_NO_READY` | producer `ac3687c2…`；artifact canonical `10287e84…cffe8`；150 rejected+24 controls、348/348 fits、3-entry D6 no-refit replay闭合，两次payload hash bitwise相同；不选择seed、不改阈值/authority、不写model/READY/DB/runtime |
@@ -3911,7 +3911,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
 
-- F-011 parent：`P2_3_A_EXECUTED_NOT_AVAILABLE_P2_3_B_EXACT_DESIGN_USER_APPROVED_NOT_IMPLEMENTED_NO_CANONICAL_MODEL`；历史C-009、BUG-892 与
+- F-011 parent：`P2_3_A_EXECUTED_NOT_AVAILABLE_P2_3_B_SOURCE_IMPLEMENTED_VALIDATED_PENDING_184_FIT_NO_CANONICAL_MODEL`；历史C-009、BUG-892 与
   C-010-FORMAL-A 已合入并完成 clean-main 601 日 formal preflight。两 fresh-process 共 5184 fits 和 D5/D6 已执行；formal canonical
   `e7992f87…39f` 为 blocked，未生成 model/READY。targeted blocker diagnostic 已按批准合同完成，canonical
   `10287e84…cffe8`；no-fit remediation diagnostic也已完成，canonical `48157a42…bb58`。两项都只完成根因证据闭合且未重跑
@@ -3927,8 +3927,8 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
   v1 显式升级为 `hmm_risk_l1_sector_factor_formula_v2_c010`，不得被描述为“公式不变”。设计、源码、formal preflight 与 formal child input
   identity 已完成历史验证。BUG-944 曾证明 full-market provider audit domain 与 direct-sector opportunity domain 未正式分离；
   C-010-A5源码与新601日只读formal preflight已合入并闭合；F-011-A已完成。D1当前blocker是实验authority重基准，不是数据域或代码合入。
-- F-011-B numeric/sector semantic：`P2_3_A_EXECUTED_NUMERIC_VALID_PRODUCT_SEMANTIC_NOT_AVAILABLE_P2_3_B_EXACT_DESIGN_APPROVED_NOT_IMPLEMENTED`；历史P6/transition evidence不变。P2-3A selected-fit数值/hash闭合但未来预测方向失败；P2-3B forecast-state语义已批准但必须以新origin实现，不能反转旧label或复制旧D4/D6状态。
-- F-011-C product/family/selection：`P2_3_A_EXECUTED_PRODUCT_SELECTION_UNAVAILABLE_P2_3_B_EXACT_CONTRACT_USER_APPROVED_NOT_IMPLEMENTED`；日期×横截面产品指标、walk-forward/holdout继续active。P2-3B Ridge target/alpha/state projection/selection已批准但尚未实施。
+- F-011-B numeric/sector semantic：`P2_3_A_EXECUTED_NUMERIC_VALID_PRODUCT_SEMANTIC_NOT_AVAILABLE_P2_3_B_SOURCE_IMPLEMENTED_PENDING_EXECUTION`；历史P6/transition evidence不变。P2-3A selected-fit数值/hash闭合但未来预测方向失败；P2-3B forecast-state新origin与边界已实现，不能反转旧label或复制旧D4/D6状态。
+- F-011-C product/family/selection：`P2_3_A_EXECUTED_PRODUCT_SELECTION_UNAVAILABLE_P2_3_B_SOURCE_IMPLEMENTED_PENDING_EXECUTION`；日期×横截面产品指标、walk-forward/holdout继续active。P2-3B Ridge target/alpha/state projection/selection已实现但184-fit与真实选择未执行。
 - F-011-D readiness/coverage：`FULL_READY_ZERO_COVERAGE_AVAILABLE_NOT_ESTABLISHED`；历史READY artifact数为0；新coverage合同尚未批准，禁止用120/131或单family推导coverage成功。
 - F-011-E generator/job/revision：`PENDING_IMPLEMENTATION`；不得由未完成的 model-set preparation 推导为 verified。
 - F-012：advisory-only 写入与依赖隔离，不产生 Selection/Paper/QMT/QE/交易副作用。
@@ -3938,16 +3938,16 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 历史B3与P2-3A源码/receipts保持历史输入；P2-3B目标`backend/services/hmm_risk/market_relative_ridge_candidate.py`尚未实施 | `artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_3_v2_20260816/p2_3_jump_spike_report_c1c6c313.failure.json`；`backend/tests/hmm_risk/test_market_relative_jump_spike.py`；父蓝图v2.26；`validation-receipt:hmm-phase2-p2-3b-design-review-20260816` | DESIGN_READY_USER_APPROVED | 用户明确批准P2-3B D1～D6精确合同；源码、184-fit spike、canonical model/READY/coverage仍为0。P2-3A真实产品失败，不能降门禁或子集交付 |
+| F-011 | `backend/services/hmm_risk/{market_relative_ridge_candidate,market_relative_jump_spike}.py`；`scripts/hmm_risk/run_market_relative_ridge_candidate.py` | `backend/tests/hmm_risk/{test_market_relative_ridge_candidate,test_market_relative_jump_spike}.py` 43 passed；`hmm_risk_backend` 494 passed、coverage 76.92%；父蓝图v2.26 | APPROVED_BY_USER_SOURCE_IMPLEMENTED_PENDING_184_FIT | 用户明确批准P2-3B D1～D6并授权源码实施；184-fit spike、canonical model/READY/coverage仍为0。P2-3A真实产品失败，不能降门禁或子集交付 |
 | F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A/C-009/C-010 contracts | `backend/tests/hmm_risk/test_observation_eligibility.py`；`backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`；C-010-A5 preflight与partition canonical `03d78534…ead6` | APPROVED_BY_USER_C010_A5_SOURCE_MERGED_601_DAY_PREFLIGHT_VERIFIED | `P_all=502/P_in=501/P_out=1`，已知002951 key按SW-domain-out保留完整证据；v1历史只读、v2新写、out-only denominator与同symbol in/out均闭合。不得伪造SW、删证券/absence、填值或回退v1输入 |
 | F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,b3_transition_dwell,b3_remediation_diagnostic,b3_d1_inactive_dimension,state_model_set}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_b3_transition_dwell,test_prepare_state_model_set_b3}.py`；historical formal/DIAG receipts；P6 `2096/2096` fits；TRAIN-STABILITY无完整seed；TRANSITION-DWELL-B双fresh-process `2096/2096` fits bitwise一致、完整对象canonical `e5f355fc…d4b54` | APPROVED_BY_USER_TRANSITION_DWELL_EXECUTED_NO_COMPLETE_CANDIDATE_BLOCKED | 原P6曾形成D5候选，但后续两个train-only结构实验均未形成完整候选seed；不得外推到其他level/family，不得自动改tau/self-center/阈值/seed/grid或执行selection、D6、model/READY |
 | F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`；D5 selected seed43；BUG-1029 zero-refit assignment 131/131、evidence 120/131 accepted | APPROVED_BY_USER_D5_SELECTED_D6_120_OF_131_ACCEPTED_11_FAILED | selection train-only且无refit/reselection；11个失败保持typed evidence，D6-NA-A不改变hard authority，B2不采用 |
 | C-008-B3-D6-NA-A calendar/availability amendment | `backend/services/hmm_risk/{stock_fact_observation,state_model_set,b3_acceptance,b3_training,b3_mixed_dimension}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_state_model_set,test_stock_fact_observation,test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`; PR #3258；BUG-1029/PR #3311 zero-refit report | APPROVED_BY_USER_SOURCE_MERGED_ZERO_REFIT_EXECUTED | carrier/manifest v2、T/O/U/E、composite selected schema、shared writer/readback与zero-refit lineage已实现并执行；11个真实D6 failure不被补值、删日或降级，不写model/READY |
 | F-011-D two-family READY | `backend/services/hmm_risk/b3_training.py::write_b3_ready_model_set` | `F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_e2c01bae_bug912/b3_formal_preparation.json` top-level blocked/no-write receipt；`backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_BLOCKED_FORMAL_ACCEPTANCE | READY artifact数为0；四个family/level完整性未成立，禁止partial/single-family write |
 | F-011-E generator/job/revision | `backend/services/hmm_risk/{state_generator,job_service,repository}.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py` | APPROVED_BY_USER_PENDING_IMPLEMENTATION | 用户明确批准 C-008-D1：上游 READY model set 尚未形成，不推导 generator/job 已验证 |
-| C-011 product-aligned modeling and acceptance | 父蓝图v2.26；本设计§4.3.4.2～§4.3.4.3 | `artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_3_v2_20260816/p2_3_jump_spike_report_c1c6c313.failure.json`；`validation-receipt:hmm-phase2-p2-3b-design-review-20260816` | DESIGN_READY_USER_APPROVED | 四层产品指标正确拒绝P2-3A；用户明确批准direct predictor方向及精确Ridge合同，源码与新fit未实施 |
+| C-011 product-aligned modeling and acceptance | 父蓝图v2.26；本设计§4.3.4.2～§4.3.4.3；`market_relative_ridge_candidate.py` | P2-3A failure canonical `034fdf3c…12ec`；`backend/tests/hmm_risk/test_market_relative_ridge_candidate.py`；`backend/tests/hmm_risk/test_market_relative_jump_spike.py`；`hmm_risk_backend` 494 passed | APPROVED_BY_USER_SOURCE_IMPLEMENTED_PENDING_184_FIT | 四层产品指标正确拒绝P2-3A；用户明确批准direct predictor合同与源码实施，184-fit和真实候选结果未执行 |
 | C-011-P2-3A jump spike | §4.3.4.2 D1～D6；`backend/services/hmm_risk/market_relative_jump_spike.py` | `backend/tests/hmm_risk/test_market_relative_jump_spike.py`；`artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_3_v2_20260816/p2_3_jump_spike_report_c1c6c313.failure.json` | VERIFIED_NOT_AVAILABLE_FOR_PROMOTION | 无 |
-| C-011-P2-3B direct predictor exact contract | §4.3.4.3 D1～D6；目标`backend/services/hmm_risk/market_relative_ridge_candidate.py` | `artifact:docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.26；`validation-receipt:hmm-phase2-p2-3b-design-review-20260816` | DESIGN_READY_USER_APPROVED | 用户明确批准target、Ridge参数、alpha selection、forecast-state投影、开发正向停止条件及184-fit计划；源码与spike尚未实施 |
+| C-011-P2-3B direct predictor exact contract | §4.3.4.3 D1～D6；`backend/services/hmm_risk/market_relative_ridge_candidate.py`；薄CLI | `backend/tests/hmm_risk/test_market_relative_ridge_candidate.py`；43 direct passed；494 module passed；`validation-receipt:hmm-phase2-p2-3b-source-review-20260816` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_PENDING_184_FIT | 用户明确批准target、Ridge参数、selection、state投影、停止条件、184-fit计划及源码实施；正式spike尚未执行 |
 | F-012 | `backend/services/hmm_risk/**`; DB role/write-scope guard; `backend/routers/hmm_risk.py` | `backend/tests/hmm_risk/test_isolation.py` | DESIGN_READY_USER_APPROVED | 无 |
 | F-013 | `backend/routers/hmm_risk.py`; `backend/services/hmm_risk/report_service.py`; `frontend/src/app/hmm-risk/**`; `frontend/src/components/hmm-risk/**`; `frontend/src/lib/hmm-risk/api.ts` | `backend/tests/hmm_risk/test_api.py`; `backend/tests/hmm_risk/test_retrospective_report.py`; `playwright test frontend/tests/hmm-risk/hmm-risk.spec.ts` | USER_APPROVED_PENDING_UPSTREAM_MODEL_SET | 用户明确批准 C-008-D1：API/UI 合同未被否定，但真实验收依赖可证明的 READY model set |
 
@@ -4741,6 +4741,36 @@ boundary文字会在无tie时也少分一个extreme，以及实施范围未允�
 正式审核结论：`PASS_P2_3B_EXACT_DESIGN_USER_APPROVED_IMPLEMENTATION_READY_NOT_IMPLEMENTED`。下一步是按§4.3.4.3 D1～D6实施
 最小源码与184-fit spike；本次文档合入不执行源码、fit、holdout、model/READY/DB/runtime。
 
+### 23.23 P2-3B 最小源码正式审核
+
+审核范围严格为`market_relative_ridge_candidate.py`、薄CLI、既有jump模块的market-only公开复用入口、两份直接测试和本设计状态回填；
+未执行184-fit、P2-4 holdout、model/READY、数据库或运行时操作。第一轮审核修复了四项真实性缺口：失败路径补齐已完成component
+receipt；candidate-level selection与partial component selection分开记录；Ridge输入/系数显式固定little-endian float64并对shape异常typed
+fail closed；finalization/runtime-version receipt失败不再丢失主失败证据。修复后复审结论如下：
+
+1. **D1 identity与组件闭合：PASS**。新origin固定`market_relative_ridge_v1`；market只通过单一公开helper复用原K2 jump authority，L1/L2
+   为level-local pooled Ridge；market/L1/L2任一失败均不能形成candidate。
+2. **D2因果target：PASS**。五项relative输入沿用train-only level-global preprocess；10D future excess按level/date median中心化；每个train
+   segment末10日purge；L1 28/L2 118 denominator、benchmark、row/date/sector与tail均进入canonical receipt。缺值只产生typed unavailable，
+   不插补、不借用validation/holdout outcome。
+3. **D3 selection与停止：PASS**。Ridge全参数、五alpha、三fold、80% metric coverage、Rank IC→spread→larger-alpha tie-break与双指标严格
+   正向停止条件逐项实现；所有alpha完成后才选择，不early stop、不per-sector fit、不读取holdout或另一level结果。
+4. **D4产品投影：PASS**。连续rotation score使用横截面Rank IC；top/bottom20%按批准q公式投影；`1e-12` boundary tie group不按sector
+   code强拆，极端组少于5时整日typed unavailable；spread只消费真实forecast state与target。
+5. **D5/D6状态和成本：PASS**。计划严格为market152+L1 16+L2 16=`184`，不乘sector；成功仅形成
+   `P2_3B_CANDIDATE_FROZEN_PENDING_P2_4_HOLDOUT_ACCEPTANCE` compact receipt，失败写collision-safe sibling；model/READY/DB/runtime flags
+   全为false。184-fit尚未执行，因此不能报告candidate成功。
+6. **禁止简化/子集：PASS**。没有market-only、单level、POC、placeholder、mock-only或partial candidate成功路径。
+7. **禁止静默错误：PASS**。input/target/fit/score/metric/selection/development/tie/holdout/collision/readback/unknown异常均保留typed stage、
+   reason和已完成attempt/component evidence；没有默认neutral、反转label、NA填值或异常吞噬。
+8. **禁止业务逻辑迁移：PASS**。源码逐项实现已批准D1～D6，未改变五特征、target、alpha、阈值、状态语义、P2-4边界或P2-3A失败事实。
+9. **禁止未经确认门禁/审批：PASS**。只实现用户批准的确定性离线合同；未新增runtime人工审批、研究方向淘汰、依赖、DDL/DML或进程控制。
+10. **验证：PASS**。直接矩阵`43 passed`；`hmm_risk_backend`=`494 passed`、branch coverage总计`76.92%`；Ridge新模块覆盖率`80%`；
+    ruff、compile、F2、L0、ownership/scope与diff check由本实现PR最终HEAD绑定。
+
+正式结论：`PASS_P2_3B_SOURCE_IMPLEMENTED_VALIDATED_PENDING_184_FIT_NOT_EXECUTED`。源码达到提交/PR技术条件；该结论不授权或伪造
+184-fit结果、P2-4、model/READY、DB/runtime，也不增加严格产品完成度`11/17`。
+
 用户已选择B“显式inactive-dimension identity”，A“保持fail-closed”不采用；P1最小必要模型机制源码已实现并通过正式审核，
 但不提升F-011完成计数。C-010-A5已合入并完成601日preflight；BUG-962又修复current-A5 authority与历史readback的程序矛盾。
 REFIT-01最终仍因current-A5 `train_observation_sha256`与历史frozen train core真实不同而在0 fits处fail closed，状态为
@@ -4775,7 +4805,7 @@ source comparisons、0 refit/selection/D6/model/READY/DB/runtime，canonical=`9c
 
 1. **P2-1 / P0业务blocker（已完成）**：11项均为182/182完整输入且availability event为0；assignment 131/131 accepted，独立structure重算与receipt 0 mismatch，full-train D4-03均accepted。结论是selected seed43在validation的真实hard-state结构能力不足，不登记程序/数据BUG，不改阈值或reselect。
 2. **P2-2 / P0证据聚合（已完成）**：PR #3446 / merge `eabb29e3…` 已以零refit流式聚合两个既有child artifact；receipt=`8aed2bc…4698`、1048/1048 records、共同601日date-set闭合，未执行fit/selection/model/READY。
-3. **P2-3 / P0单一候选（当前）**：P2-3A zero-event v2已正式执行并以`NOT_AVAILABLE_FOR_PROMOTION`结束：296/456 fits、market通过、L1六个lambda均无三foldspread coverage、L2未运行；18-fit exact replay证明主要是neutral集中/trending不足且18/18正式spread为负，不是数据或执行器BUG。用户已批准P2-3B market regime + direct low-dimensional cross-sectional predictor方向及§4.3.4.3 D1～D6精确合同；当前设计已具备实施依据，下一步按合同实施单模块184-fit spike。禁止重跑P2-3A、降80%/5-sector、反转旧label、交付market子集、并行模型或建立通用平台；P2-3B仍不读取holdout。
+3. **P2-3 / P0单一候选（当前）**：P2-3A zero-event v2已正式执行并以`NOT_AVAILABLE_FOR_PROMOTION`结束：296/456 fits、market通过、L1六个lambda均无三foldspread coverage、L2未运行；18-fit exact replay证明主要是neutral集中/trending不足且18/18正式spread为负，不是数据或执行器BUG。用户已批准P2-3B方向及§4.3.4.3 D1～D6精确合同；最小Ridge源码、薄CLI和直接测试已实现并通过所属模块计划，下一步仅执行正式184-fit开发候选。禁止重跑P2-3A、降80%/5-sector、反转旧label、交付market子集、并行模型或建立通用平台；P2-3B仍不读取holdout。
 4. **P2-4 / P0产品验收**：冻结模型后在untouched holdout执行横截面Rank IC/spread、风险precision/recall、稳定性与coverage；只有精确合同满足才写FULL_READY或COVERAGE_AVAILABLE，否则NOT_AVAILABLE。
 5. **P2-5 / P1功能**：用同一canonical输出实现一个完整交易日market regime、L1/L2相对强弱/状态、transition、severity、availability与可读原因的离线纵切。
 6. **P2-6 / P1产品**：运行历史分析并用同一入口完成最小schema/repository/read API和真实`/hmm-risk`热力图/预警/详情/coverage报告。
