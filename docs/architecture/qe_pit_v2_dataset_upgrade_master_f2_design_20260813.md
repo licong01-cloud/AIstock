@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：W0～W2与W3-A源码已合入；W3-B已在独立分支完成实现、审核和最终HEAD回归，尚未创建PR或合入；最新main的V25退役变更留下1个与PIT无关的QE基线测试漂移，需由其owner修复或确认后再进入PR；W3-C、真实数据构建和生产激活均未授权
+- 状态：W0～W2与W3-A源码已合入；W3-B已在独立分支完成实现、审核和最终HEAD回归并满足PR门禁，尚未创建PR或合入；V25退役导致的无关QE基线测试漂移已由BUG-1104/PR #3524修复并进入main；W3-C、真实数据构建和生产激活均未授权
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
@@ -755,7 +755,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 |---|---|
 | W1 Core/Registry源码 | `merged_4e1f667e` |
 | W2 Dataset Release源码 | `merged_589678f3` |
-| W3消费者源码 | `w3a_merged_w3b_review_passed_pr_blocked_by_origin_main_baseline_w3c_not_started` |
+| W3消费者源码 | `w3a_merged_w3b_ready_for_pr_w3c_not_started` |
 | W4～W6消费者/集成源码 | `not_started_or_separately_owned` |
 | 真实小样本 | `not_run_not_authorized` |
 | 真实全量candidate | `not_run_not_authorized` |
@@ -811,4 +811,5 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-6E | 最新main漂移复审 | CI期间main前进至`458199cd`，新增Advisory P0-D源码/测试/设计和ownership登记 | 文件交集为零；无冲突合并；按最终main重跑28+161+15+7、F2、guardrail和ownership | pass_ready_for_merge |
 | Review-7A | W3-B实现首轮 | 仅保存identity projection会使config reload后无法重新证明W3-A sealed-manifest校验；分批cache比较一度扩大v1行为 | 正式请求持久化detached full manifest+CAS digest并每次重验W3-A；formal cache增加严格字段，legacy比较恢复原契约 | resolved |
 | Review-7B | W3-B身份与路径安全复审 | 风险构建若沿用静态v1 hashes或把QE兼容key误作物理candidate key会产生身份漂移；sidecar id若未约束可逃逸provider sibling路径 | runtime pins绑定manifest artifact_root；Qlib/suspend使用canonical frozen key并逐文件hash校验；dataset/sidecar id限制为canonical path-safe identifier | resolved |
-| Review-7C | W3-B最终HEAD合入就绪复审 | 合并`origin/main@d75488bc`后逐项复核full-manifest重验、frozen-only/零DB fallback、legacy默认不漂移、cache/long-trend/risk identity和8文件scope | direct 6 passed；W3-B相邻矩阵141 passed；含最新main受影响QE/V25矩阵280 passed/1 failed/38 skipped，唯一失败为V25退役后旧测试仍要求`tail_twap_strategy.py`；F2 30/30、Ruff、L0、catalog、ownership均PASS | w3b_pass_pr_blocked_by_unrelated_main_baseline |
+| Review-7C | W3-B最终HEAD合入就绪复审 | 合并`origin/main@d75488bc`后逐项复核full-manifest重验、frozen-only/零DB fallback、legacy默认不漂移、cache/long-trend/risk identity和8文件scope | direct 6 passed；W3-B相邻矩阵141 passed；含最新main受影响QE/V25矩阵280 passed/1 failed/38 skipped，唯一失败为V25退役后旧测试仍要求`tail_twap_strategy.py`；F2 30/30、Ruff、L0、catalog、ownership均PASS | resolved_by_bug_1104_pr_3524 |
+| Review-7D | BUG-1104合入后最终PR复审 | 合并`origin/main@b39e263a`并复核原唯一失败、W3-B identity、legacy隔离和scope | QE/W3-B/V25最终矩阵281 passed、0 failed、38 skipped；原失败节点已纳入main；无数据构建、DB或runtime动作 | pass_ready_for_pr |

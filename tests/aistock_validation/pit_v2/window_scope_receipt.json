@@ -1,6 +1,6 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-16T06:44:47.0364279Z",
+  "observed_at": "2026-08-16T08:54:11.0718986Z",
   "source_head": "c344bb63998a0a42b8d8c4ac343600ad2c5c9c42",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
@@ -21,11 +21,11 @@
     "branch": "feature/qe-pit-v2-w3b-integration-20260816",
     "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3b-20260816",
     "base_head": "c344bb63998a0a42b8d8c4ac343600ad2c5c9c42",
-    "status": "implementation_review_passed_pr_blocked_by_origin_main_baseline",
+    "status": "implementation_review_passed_ready_for_pr",
     "implementation_commit": "4382ea36",
-    "merged_origin_main_head": "d75488bcd1a0f63217b89a032b781dfe9d864f0c",
-    "code_review_head": "1e1ca089ee6877ca6d365e1f22bec554698e076a",
-    "baseline_blocker": "backend/tests/unified_engine/test_qe_data_plane_zero_db.py::test_gate5_workspace_payload_has_no_db_driver_credentials_or_market_sql expects tail_twap_strategy.py after origin/main retired the V25 import closure that previously discovered it",
+    "merged_origin_main_head": "b39e263a074eb170a0b9b7324946dcc6f93efac0",
+    "code_review_head": "5ee5732be854365d909e7c9fd5604343186918df",
+    "resolved_baseline_blocker": "BUG-1104 / PR #3524 fixed the stale tail_twap_strategy.py payload-root test and was close-synced by PR #3525",
     "actual_write_files": [
       "backend/services/quantevolver/qe_dataset_contract.py",
       "backend/services/quantevolver/experiment_config.py",
@@ -130,7 +130,7 @@
     "W3": {
       "depends_on": ["W2_merged"],
       "owner": "W3 contract and integration lead with short-lived per-slice writer",
-      "status": "w3a_merged_w3b_review_passed_pr_blocked_by_origin_main_baseline",
+      "status": "w3a_merged_w3b_ready_for_pr",
       "coordination_model": "short_lived_exact_file_lease_v1",
       "sub_sequence": ["W3-A", "W3-B", "W3-C", "W3-D"],
       "lease_contract": {
@@ -160,7 +160,7 @@
         },
         "W3-B": {
           "owner": "W3 QE Integration lease holder",
-          "status": "implementation_review_passed_pr_blocked_by_origin_main_baseline",
+          "status": "implementation_review_passed_ready_for_pr",
           "branch": "feature/qe-pit-v2-w3b-integration-20260816",
           "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3b-20260816",
           "base_head": "c344bb63998a0a42b8d8c4ac343600ad2c5c9c42",
