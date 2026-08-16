@@ -1,6 +1,6 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-16T08:54:11.0718986Z",
+  "observed_at": "2026-08-16T10:50:46.8446306Z",
   "source_head": "c344bb63998a0a42b8d8c4ac343600ad2c5c9c42",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
@@ -24,7 +24,7 @@
     "status": "implementation_review_passed_ready_for_pr",
     "implementation_commit": "4382ea36",
     "merged_origin_main_head": "b39e263a074eb170a0b9b7324946dcc6f93efac0",
-    "code_review_head": "5ee5732be854365d909e7c9fd5604343186918df",
+    "code_review_head": "fc728f2f",
     "resolved_baseline_blocker": "BUG-1104 / PR #3524 fixed the stale tail_twap_strategy.py payload-root test and was close-synced by PR #3525",
     "actual_write_files": [
       "backend/services/quantevolver/qe_dataset_contract.py",
@@ -34,6 +34,7 @@
       "backend/services/quantevolver/long_trend_data_reader.py",
       "backend/tests/quantevolver/test_canonical_pit_dataset_binding.py",
       "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
       "tests/aistock_validation/pit_v2/window_scope_receipt.json"
     ],
     "released_candidate_files": ["scripts/backfill_factor_cache.py"],
@@ -181,6 +182,7 @@
             "backend/services/quantevolver/long_trend_data_reader.py",
             "backend/tests/quantevolver/test_canonical_pit_dataset_binding.py",
             "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+            "tests/aistock_validation/catalog/file_ownership.yaml",
             "tests/aistock_validation/pit_v2/window_scope_receipt.json"
           ],
           "released_candidate_files": ["scripts/backfill_factor_cache.py"],

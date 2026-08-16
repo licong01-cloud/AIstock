@@ -721,7 +721,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-003 | §4 D-002；planned registry migration与resolver | planned `backend/tests/test_canonical_equity_pit_authority_registry.py` | design_ready_for_review | none |
 | F-004 | §4 D-002、§6 P3-A/W3-A；中立frozen binding adapter | `backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py` | implementation_verified | none |
 | F-005 | §6 P0/P3/P4；W0/W3/W4/W5/W6 inventory scope | planned `backend/tests/test_canonical_pit_consumer_inventory.py` | design_ready_for_review | none |
-| F-006 | §5/§5.2；各切片task card、短租约和allowed write scope | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json`；W3-B精确8文件scope | design_ready_w3b_implementation_verified | none |
+| F-006 | §5/§5.2；各切片task card、短租约和allowed write scope | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json`；W3-B精确9文件scope（8个实现/设计文件及新增测试的ownership登记） | design_ready_w3b_implementation_verified | none |
 | F-007 | §5.1、§6；W3串行切片、W0/W6/W7 source freeze contract | artifact: `tests/aistock_validation/pit_v2/source_freeze_receipt.json` | design_ready_for_review | none |
 | F-008 | §6 P2/P5/P7；PIT builder与W1/W7/W8 scope | `backend/tests/test_stock_universe_pit_spans.py` | design_ready_for_review | none |
 | F-009 | §4 D-004、§6 P6；dependency planner/materializer | `backend/tests/dataset_release/test_dependency_graph.py` | design_ready_for_review | none |
@@ -813,3 +813,4 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-7B | W3-B身份与路径安全复审 | 风险构建若沿用静态v1 hashes或把QE兼容key误作物理candidate key会产生身份漂移；sidecar id若未约束可逃逸provider sibling路径 | runtime pins绑定manifest artifact_root；Qlib/suspend使用canonical frozen key并逐文件hash校验；dataset/sidecar id限制为canonical path-safe identifier | resolved |
 | Review-7C | W3-B最终HEAD合入就绪复审 | 合并`origin/main@d75488bc`后逐项复核full-manifest重验、frozen-only/零DB fallback、legacy默认不漂移、cache/long-trend/risk identity和8文件scope | direct 6 passed；W3-B相邻矩阵141 passed；含最新main受影响QE/V25矩阵280 passed/1 failed/38 skipped，唯一失败为V25退役后旧测试仍要求`tail_twap_strategy.py`；F2 30/30、Ruff、L0、catalog、ownership均PASS | resolved_by_bug_1104_pr_3524 |
 | Review-7D | BUG-1104合入后最终PR复审 | 合并`origin/main@b39e263a`并复核原唯一失败、W3-B identity、legacy隔离和scope | QE/W3-B/V25最终矩阵281 passed、0 failed、38 skipped；原失败节点已纳入main；无数据构建、DB或runtime动作 | pass_ready_for_pr |
+| Review-7E | PR #3527多轮代码与CI复审 | CI发现新增测试未映射；语义复审发现formal空结果/`ensure=False`可绕过窗口校验、cache coverage/freshness未参与一致性判定、legacy返回新增`None`字段及严格schema存在隐式规范化 | 精确登记新增测试ownership；统一formal window/override fail-closed；扩大formal cache identity；legacy结果不漂移；拒绝非字符串和非canonical digest；直接6 passed、最终矩阵281 passed、catalog 7 passed、ownership 9/9 | pass_ready_for_pr |
