@@ -1,7 +1,7 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-16T18:04:23.7064162Z",
-  "source_head": "66bab73f83c9cf8067de705b3b3a6c5f2ff53eb8",
+  "observed_at": "2026-08-16T18:29:20.4636922Z",
+  "source_head": "5f4f3a61a38e10ade8fbc697bbac459c12a4c392",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
   "current_revision": {
@@ -21,7 +21,9 @@
     "branch": "feature/qe-pit-v2-w3c-integration-20260816",
     "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3c-20260816",
     "base_head": "66bab73f83c9cf8067de705b3b3a6c5f2ff53eb8",
-    "status": "implementation_review_passed_pending_commit_and_main_sync_authorization",
+    "status": "implementation_review_passed_final_head_ready_for_pr",
+    "implementation_commit": "2ae89f7a6b3d29f24b5531e50697954571c5146b",
+    "integration_head": "5f4f3a61a38e10ade8fbc697bbac459c12a4c392",
     "entry_runtime_identity": "45af026c7b59974e0e5220a8a4cd62a7b4c7fac8",
     "w3b_merge_commit": "7d4120b1f3d583358783ca43eb20df6dcc11fb61",
     "runtime_health": "pass",
@@ -41,7 +43,7 @@
       "scope_readback": "11/11 exact match",
       "client_gate": "feature ready, blocking=0, warnings=0",
       "remote_main": "24e4ae79780e5bacdf34a3affb63d1db46f6d8a4",
-      "main_sync": "pending_after_authorized_commit; current worktree intentionally dirty",
+      "main_sync": "merged_without_conflict",
       "merge_tree": "clean against origin/main@24e4ae79; exact changed-path overlap=0"
     },
     "actual_write_files": [
@@ -155,7 +157,7 @@
     "W3": {
       "depends_on": ["W2_merged"],
       "owner": "W3 contract and integration lead with short-lived per-slice writer",
-      "status": "w3a_w3b_merged_w3c_review_passed_pending_commit_and_main_sync",
+      "status": "w3a_w3b_merged_w3c_final_head_review_passed_ready_for_pr",
       "coordination_model": "short_lived_exact_file_lease_v1",
       "sub_sequence": ["W3-A", "W3-B", "W3-C", "W3-D"],
       "lease_contract": {
@@ -217,7 +219,7 @@
         },
         "W3-C": {
           "owner": "W3 HMM Integration lease holder",
-          "status": "implementation_review_passed_pending_commit_and_main_sync_authorization",
+          "status": "implementation_review_passed_final_head_ready_for_pr",
           "branch": "feature/qe-pit-v2-w3c-integration-20260816",
           "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3c-20260816",
           "base_head": "66bab73f83c9cf8067de705b3b3a6c5f2ff53eb8",

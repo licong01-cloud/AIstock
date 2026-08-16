@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：W0～W2、W3-A与W3-B源码已合入，W3-B merge commit为`7d4120b1`；W3-C已从`origin/main@66bab73f`完成独立实现与三轮本地审核，等待提交授权后同步最新`origin/main@24e4ae79`（只读`merge-tree`无冲突）并创建PR；真实数据构建和生产激活均未授权
+- 状态：W0～W2、W3-A与W3-B源码已合入，W3-B merge commit为`7d4120b1`；W3-C功能提交为`2ae89f7a`，已无冲突同步`origin/main@24e4ae79`并在集成HEAD `5f4f3a61`完成本地审核，等待创建PR；真实数据构建和生产激活均未授权
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
@@ -764,7 +764,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 |---|---|
 | W1 Core/Registry源码 | `merged_4e1f667e` |
 | W2 Dataset Release源码 | `merged_589678f3` |
-| W3消费者源码 | `w3a_w3b_merged_w3c_review_passed_pending_commit_and_main_sync` |
+| W3消费者源码 | `w3a_w3b_merged_w3c_final_head_review_passed_ready_for_pr` |
 | W4～W6消费者/集成源码 | `not_started_or_separately_owned` |
 | 真实小样本 | `not_run_not_authorized` |
 | 真实全量candidate | `not_run_not_authorized` |
@@ -825,4 +825,4 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-7E | PR #3527多轮代码与CI复审 | CI发现新增测试未映射；语义复审发现formal空结果/`ensure=False`可绕过窗口校验、cache coverage/freshness未参与一致性判定、legacy返回新增`None`字段及严格schema存在隐式规范化 | 精确登记新增测试ownership；统一formal window/override fail-closed；扩大formal cache identity；legacy结果不漂移；拒绝非字符串和非canonical digest；直接6 passed、最终矩阵281 passed、catalog 7 passed、ownership 9/9 | pass_ready_for_pr |
 | Review-8A | W3-C实现首轮 | 旧HMM parser把QE兼容key与物理frozen key强制相等且仍要求v1 ready/scope；formal config未通过W3-A重验；repair preflight隐式继承旧universe/window；PR #2770精确重叠 | 分离并交叉校验双key/release/rule/cutoff；sealed request经neutral adapter重验且legacy不兜底；repair参数显式化；保护重叠文件并新增generation-bound online adapter；首轮直接矩阵58 passed | resolved |
 | Review-8B | W3-C身份完整性复审 | 首轮只绑定release/rule/key，未把runtime artifact fingerprint绑定sealed request instruments pin；测试fixture一度使用错误runtime-pins schema | 增加artifact_root/`qlib_instruments_sha256`严格绑定与非canonical fingerprint拒绝；切换为真实`qe_formal_frozen_runtime_pins_v1`；直接矩阵63 passed，HMM evolution 218、data source 78、HMM-risk 484、Qlib 15全部PASS | pass_pending_commit |
-| Review-8C | W3-C正式请求与流式租约最终复审 | HMM局部parser只校验runtime pins子集，可能接受QE所属契约会拒绝的不完整正式请求；同一请求的W3-A/W2投影再次读取调用方可变mapping；重复请求不可序列化时会泄漏原生异常；在线流读取中途generation漂移缺直接证据 | 先调用QE owning request contract完整校验10字段pins并生成detached canonical snapshot，再从同一快照经W3-A与W2独立投影；规范化失败统一为`InvalidSpecError`；补不完整pins和流中漂移拒绝测试。直接矩阵65 passed；最终required nox矩阵218+78（1 skipped）+485+15全部PASS；F2 30/30、catalog 7、registry 8/14-of-14、L0 blocking=0、classifier 11/11且unmapped=0；`origin/main@24e4ae79`只读merge-tree无冲突 | pass_pending_commit_and_main_sync |
+| Review-8C | W3-C正式请求与流式租约最终复审 | HMM局部parser只校验runtime pins子集，可能接受QE所属契约会拒绝的不完整正式请求；同一请求的W3-A/W2投影再次读取调用方可变mapping；重复请求不可序列化时会泄漏原生异常；在线流读取中途generation漂移缺直接证据 | 先调用QE owning request contract完整校验10字段pins并生成detached canonical snapshot，再从同一快照经W3-A与W2独立投影；规范化失败统一为`InvalidSpecError`；补不完整pins和流中漂移拒绝测试。直接矩阵65 passed；最终required nox矩阵218+78（1 skipped）+485+15全部PASS；F2 30/30、catalog 7、registry 8/14-of-14、L0 blocking=0、classifier 11/11且unmapped=0；功能提交`2ae89f7a`已无冲突同步`origin/main@24e4ae79`，集成HEAD `5f4f3a61`进入最终门禁 | pass_ready_for_pr_final_head |
