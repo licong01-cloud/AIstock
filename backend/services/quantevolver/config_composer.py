@@ -45,13 +45,21 @@ from .qe_dataset_contract import (
     QE_FROZEN_SUSPEND_PARQUET_SHA256,
     QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
     QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256,
+    QE_FORMAL_DATASET_REQUEST_PARAM,
     QE_ST_PIT_UNIVERSE_KEY,
+    QEFormalDatasetBinding,
+    QEFormalDatasetRequest,
     require_qe_dataset_window,
+    require_qe_formal_dataset_binding_projection,
+    require_qe_formal_dataset_request,
+    require_qe_formal_dataset_window,
 )
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
+
+QE_FORMAL_DATASET_BINDING_FILE = "qe_canonical_pit_dataset_binding.json"
 
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -98,6 +106,22 @@ def _bool_param(value: Any) -> bool:
         if normalized in {"0", "false", "no", "off"}:
             return False
     return bool(value)
+
+
+def _formal_dataset_binding(
+    custom_params: Optional[Dict[str, Any]],
+) -> QEFormalDatasetBinding | None:
+    request = _formal_dataset_request(custom_params)
+    return request.binding() if request is not None else None
+
+
+def _formal_dataset_request(
+    custom_params: Optional[Dict[str, Any]],
+) -> QEFormalDatasetRequest | None:
+    raw = (custom_params or {}).get(QE_FORMAL_DATASET_REQUEST_PARAM)
+    if raw is None:
+        return None
+    return require_qe_formal_dataset_request(raw)
 
 
 def _requires_qe_custom_loaders(
@@ -1323,7 +1347,16 @@ class ConfigComposer:
         backtest_end = self._parse_date(data_split["backtest_end"])
         if backtest_end < backtest_start:
             raise ValueError("backtest_end is earlier than test_start; cannot build QE risk policy")
-        require_qe_dataset_window(start_date=backtest_start, end_date=backtest_end)
+        formal_request = _formal_dataset_request(custom_params)
+        formal_binding = formal_request.binding() if formal_request is not None else None
+        if formal_binding is not None:
+            require_qe_formal_dataset_window(
+                formal_binding,
+                start_date=backtest_start,
+                end_date=backtest_end,
+            )
+        else:
+            require_qe_dataset_window(start_date=backtest_start, end_date=backtest_end)
 
         provider_uri_day = str(qlib_data_path or QLIB_DATA_PATH_WSL).strip()
         if not provider_uri_day:
@@ -1332,6 +1365,63 @@ class ConfigComposer:
                 "qlib_data_path/QLIB_DATA_PATH_WSL is empty; "
                 "cannot pin the frozen risk policy source"
             )
+
+        dataset_identity = {
+            "contract_id": QE_DATASET_CONTRACT_ID,
+            "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
+            "rule_version": "frozen_qlib_bin_universe_v1",
+        }
+        qlib_pins = {
+            "snapshot_id": QE_FROZEN_BIN_SNAPSHOT_ID,
+            "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
+            "instruments_sha256": QE_FROZEN_INSTRUMENTS_SHA256,
+            "calendar_sha256": QE_FROZEN_CALENDAR_SHA256,
+            "meta_export_sha256": QE_FROZEN_META_EXPORT_SHA256,
+        }
+        suspend_identity = {
+            "dataset_id": QE_FROZEN_SUSPEND_DATASET_ID,
+            "provider_uri": posixpath.join(
+                posixpath.dirname(provider_uri_day.rstrip("/")),
+                QE_FROZEN_SUSPEND_DATASET_ID,
+            ),
+            "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
+            "parquet_sha256": QE_FROZEN_SUSPEND_PARQUET_SHA256,
+            "manifest_sha256": QE_FROZEN_SUSPEND_MANIFEST_SHA256,
+            "source_contract": QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
+        }
+        if formal_request is not None and formal_binding is not None:
+            pins = formal_request.runtime_pins.validated()
+            dataset_identity = {
+                "contract_id": formal_binding.release_id,
+                "st_universe_key": formal_binding.qe_runtime_universe_key,
+                "canonical_frozen_universe_key": formal_binding.frozen_universe_key,
+                "authority_id": formal_binding.authority_id,
+                "rule_version": formal_binding.rule_version,
+                "rule_parameters_digest": formal_binding.rule_parameters_digest,
+                "release_manifest_digest": formal_binding.manifest_digest,
+                "frozen_snapshot_digest": formal_binding.frozen_snapshot_digest,
+            }
+            qlib_pins = {
+                "snapshot_id": pins.qlib_bin_snapshot_id,
+                # The physical candidate sidecars carry the immutable W2
+                # frozen key.  The QE-prefixed key is only a compatibility
+                # namespace for the existing Selection risk-profile type.
+                "universe_key": formal_binding.frozen_universe_key,
+                "instruments_sha256": pins.qlib_instruments_sha256,
+                "calendar_sha256": pins.qlib_calendar_sha256,
+                "meta_export_sha256": pins.qlib_meta_export_sha256,
+            }
+            suspend_identity = {
+                "dataset_id": pins.suspend_dataset_id,
+                "provider_uri": posixpath.join(
+                    posixpath.dirname(provider_uri_day.rstrip("/")),
+                    pins.suspend_dataset_id,
+                ),
+                "universe_key": formal_binding.frozen_universe_key,
+                "parquet_sha256": pins.suspend_parquet_sha256,
+                "manifest_sha256": pins.suspend_manifest_sha256,
+                "source_contract": pins.suspend_source_contract,
+            }
 
         payload = {
             "schema_version": "qe_frozen_build_spec_v1",
@@ -1346,35 +1436,15 @@ class ConfigComposer:
                 "visible_time_mode": profile.visible_time_mode,
                 "strict_data_ready": profile.strict_data_ready,
             },
-            "dataset": {
-                "contract_id": QE_DATASET_CONTRACT_ID,
-                "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
-                "rule_version": "frozen_qlib_bin_universe_v1",
-            },
-            "pins": {
-                "snapshot_id": QE_FROZEN_BIN_SNAPSHOT_ID,
-                "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
-                "instruments_sha256": QE_FROZEN_INSTRUMENTS_SHA256,
-                "calendar_sha256": QE_FROZEN_CALENDAR_SHA256,
-                "meta_export_sha256": QE_FROZEN_META_EXPORT_SHA256,
-            },
+            "dataset": dataset_identity,
+            "pins": qlib_pins,
             # Frozen suspend_d candidate dataset pins (BUG-989 continuation):
             # the suspend sidecar is a versioned sibling of the frozen bin
             # directory on every compute node.  qe_build_frozen_suspend_filter.py
             # rebuilds qe_suspend_filter.json from these pins before qrun;
             # any pin/identity/coverage mismatch fails closed on the compute
             # node and there is no database fallback.
-            "suspend": {
-                "dataset_id": QE_FROZEN_SUSPEND_DATASET_ID,
-                "provider_uri": posixpath.join(
-                    posixpath.dirname(provider_uri_day.rstrip("/")),
-                    QE_FROZEN_SUSPEND_DATASET_ID,
-                ),
-                "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
-                "parquet_sha256": QE_FROZEN_SUSPEND_PARQUET_SHA256,
-                "manifest_sha256": QE_FROZEN_SUSPEND_MANIFEST_SHA256,
-                "source_contract": QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
-            },
+            "suspend": suspend_identity,
         }
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
 
@@ -1389,7 +1459,12 @@ class ConfigComposer:
             custom_params,
             source="ConfigComposer._prepare_risk_policy_runtime",
         )
-        custom_params["risk_policy"]["st_universe_key"] = QE_ST_PIT_UNIVERSE_KEY
+        formal_binding = _formal_dataset_binding(custom_params)
+        custom_params["risk_policy"]["st_universe_key"] = (
+            formal_binding.qe_runtime_universe_key
+            if formal_binding is not None
+            else QE_ST_PIT_UNIVERSE_KEY
+        )
         if not self._is_qe_risk_policy_enabled(custom_params):
             return custom_params, None
         frozen_build_spec_json = self._build_qe_frozen_risk_policy_spec(
@@ -1921,6 +1996,13 @@ class ConfigComposer:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
+        formal_dataset_binding = _formal_dataset_binding(custom_params)
+        if formal_dataset_binding is not None:
+            require_qe_formal_dataset_window(
+                formal_dataset_binding,
+                start_date=self._parse_date(data_split["train_start"]),
+                end_date=self._parse_date(data_split["backtest_end"]),
+            )
         self._validate_historical_stock_pool_window(custom_params, data_split)
         rdagent_cfg = self._fetch_workspace_config()
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
@@ -2002,6 +2084,14 @@ class ConfigComposer:
 
         # ── 生成各文件内容到 dict ──
         experiment_files: Dict[str, str] = {}
+        if formal_dataset_binding is not None:
+            experiment_files[QE_FORMAL_DATASET_BINDING_FILE] = json.dumps(
+                formal_dataset_binding.as_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
 
         # 0) HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         # 与 compose_experiment() 一致，从 custom_params 检查 enable_sector_hmm
@@ -2290,7 +2380,7 @@ class ConfigComposer:
                 llm_hypothesis=llm_hypothesis,
             )
 
-        return {
+        result = {
             "experiment_files": experiment_files,
             "wsl_command": wsl_command,
             "wsl_command_core": " && ".join(auto_core_parts),
@@ -2301,6 +2391,9 @@ class ConfigComposer:
             "has_custom_factors": has_custom_factors,
             "long_trend_evaluation_descriptor": normalized_long_trend_descriptor,
         }
+        if formal_dataset_binding is not None:
+            result["canonical_pit_dataset_binding"] = formal_dataset_binding.as_dict()
+        return result
 
     # ── 内存生成辅助方法 ──
 
@@ -3534,6 +3627,7 @@ class ConfigComposer:
             "sector_risk_overlay_manifest_source",
             "sector_risk_overlay_data_source",
             "_seed_ensemble_config",
+            QE_FORMAL_DATASET_REQUEST_PARAM,
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -4275,6 +4369,7 @@ class ConfigComposer:
         *,
         start_date: str,
         end_date: str,
+        formal_dataset_binding: QEFormalDatasetBinding | None = None,
     ) -> Dict[str, Any]:
         """Return frozen ST PIT metadata that generated factor caches must match.
 
@@ -4296,6 +4391,24 @@ class ConfigComposer:
         )
 
         _ = (start_date, end_date)  # window is validated against the dataset contract upstream
+        if formal_dataset_binding is not None:
+            formal = require_qe_formal_dataset_binding_projection(
+                formal_dataset_binding
+            )
+            return {
+                "data_freshness_profile": QE_BACKTEST_FRESHNESS_PROFILE,
+                "universe_key": formal.frozen_universe_key,
+                "universe_rule_version": formal.rule_version,
+                "universe_fingerprint_sha256": formal.frozen_snapshot_digest,
+                "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
+                "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+                "authority_id": formal.authority_id,
+                "rule_parameters_digest": formal.rule_parameters_digest,
+                "release_id": formal.release_id,
+                "release_cutoff": formal.cutoff.isoformat(),
+                "release_manifest_digest": formal.manifest_digest,
+                "formal_usage_mode": formal.usage_mode,
+            }
         return {
             "data_freshness_profile": QE_BACKTEST_FRESHNESS_PROFILE,
             "universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY,
@@ -4419,9 +4532,15 @@ class ConfigComposer:
             custom_params,
             factor_names,
         )
+        formal_dataset_binding = _formal_dataset_binding(custom_params)
+        metadata_kwargs: Dict[str, Any] = {
+            "start_date": train_start,
+            "end_date": test_end,
+        }
+        if formal_dataset_binding is not None:
+            metadata_kwargs["formal_dataset_binding"] = formal_dataset_binding
         factor_cache_universe_metadata = self._resolve_factor_cache_universe_metadata(
-            start_date=train_start,
-            end_date=test_end,
+            **metadata_kwargs
         )
 
         lines: list[str] = []
@@ -4447,16 +4566,19 @@ class ConfigComposer:
         lines.append("logger = logging.getLogger('prepare_factors')")
         lines.append("")
         lines.append(f"FACTOR_DATA_DIR = os.environ.get('RDAGENT_FACTOR_DATA_DIR', {repr(factor_data_dir or RDAGENT_FACTOR_DATA_WSL)})")
-        lines.append(
-            "QE_DATASET_EXPECTED_META = "
-            + repr(
-                {
-                    "snapshot_id": QE_DATASET_CONTRACT_ID,
-                    "start": QE_DATASET_START_DATE.isoformat(),
-                    "end": QE_DATASET_SIGNAL_END_DATE.isoformat(),
-                }
-            )
-        )
+        expected_dataset_meta: Dict[str, Any] = {
+            "snapshot_id": QE_DATASET_CONTRACT_ID,
+            "start": QE_DATASET_START_DATE.isoformat(),
+            "end": QE_DATASET_SIGNAL_END_DATE.isoformat(),
+        }
+        if formal_dataset_binding is not None:
+            expected_dataset_meta = {
+                "snapshot_id": formal_dataset_binding.release_id,
+                "start": QE_DATASET_START_DATE.isoformat(),
+                "end": formal_dataset_binding.cutoff.isoformat(),
+                "canonical_pit_dataset_binding": formal_dataset_binding.as_dict(),
+            }
+        lines.append("QE_DATASET_EXPECTED_META = " + repr(expected_dataset_meta))
         lines.append(
             "QE_OBSERVATION_PANEL_CONTRACT = " + repr(observation_panel_contract)
         )
@@ -4471,7 +4593,7 @@ class ConfigComposer:
         lines.append("    mismatches = {")
         lines.append("        key: {'expected': expected, 'actual': actual.get(key)}")
         lines.append("        for key, expected in QE_DATASET_EXPECTED_META.items()")
-        lines.append("        if str(actual.get(key) or '') != str(expected)")
+        lines.append("        if actual.get(key) != expected")
         lines.append("    }")
         lines.append("    if mismatches:")
         lines.append("        raise RuntimeError('QE factor_data dataset contract mismatch: ' + _json.dumps(mismatches, ensure_ascii=False, sort_keys=True))")
@@ -4514,6 +4636,12 @@ class ConfigComposer:
                         "universe_fingerprint_sha256",
                         "index_policy",
                         "coverage_semantics",
+                        "authority_id",
+                        "rule_parameters_digest",
+                        "release_id",
+                        "release_cutoff",
+                        "release_manifest_digest",
+                        "formal_usage_mode",
                     )
                 }
             )
@@ -4630,13 +4758,12 @@ class ConfigComposer:
         lines.append("")
         lines.append("")
         lines.append("def _cache_universe_mismatch(entry, expected):")
-        lines.append("    required_keys = ('universe_key', 'index_policy')")
+        lines.append("    required_keys = ('universe_key', 'index_policy', 'universe_fingerprint_sha256')")
+        lines.append("    if expected.get('release_id'):")
+        lines.append("        required_keys += ('data_freshness_profile', 'coverage_semantics', 'authority_id', 'universe_rule_version', 'rule_parameters_digest', 'release_id', 'release_cutoff', 'release_manifest_digest', 'formal_usage_mode')")
         lines.append("    for key in required_keys:")
         lines.append("        if expected.get(key) and entry.get(key) != expected.get(key):")
         lines.append("            return key")
-        lines.append("    expected_fp = expected.get('universe_fingerprint_sha256')")
-        lines.append("    if expected_fp and entry.get('universe_fingerprint_sha256') != expected_fp:")
-        lines.append("        return 'universe_fingerprint_sha256'")
         lines.append("    return ''")
         lines.append("")
         lines.append("")

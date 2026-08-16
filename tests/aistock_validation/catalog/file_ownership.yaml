@@ -487,6 +487,7 @@ rules:
       - backend/services/quantevolver/**
       - backend/routers/quantevolver*.py
       - backend/tests/quantevolver/test_factor_emit_hook.py
+      - backend/tests/quantevolver/test_canonical_pit_dataset_binding.py
       - backend/tests/test_factor_metrics_h20_contract.py
       - backend/tests/test_qe_evolution_scheduler.py
       - backend/tests/test_qe_experiment_status_scanner.py

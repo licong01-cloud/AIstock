@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：W0～W2源码已合入；W3短周期分片方案经Review-4A/4B/4C审核通过；W3-A已获授权进入独立实施，其源码/合入状态以Acceptance Matrix和window scope receipt为准；W3-B/C、真实数据构建和生产激活均未授权
+- 状态：W0～W2与W3-A源码已合入；W3-B已在独立分支完成实现、审核和最终HEAD回归并满足PR门禁，尚未创建PR或合入；V25退役导致的无关QE基线测试漂移已由BUG-1104/PR #3524修复并进入main；W3-C、真实数据构建和生产激活均未授权
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
@@ -346,6 +346,9 @@ W2任务：
   旧环境变量和硬编码dataset常量仅可在显式reproduction reader中解析，不能作为正式任务默认值。
 - frozen factor universe/mask只消费candidate artifact，不调用在线`StockUniversePitService`或生产DB补齐；composer只
   传递已验证manifest ref/digest，不通过任意path/key覆盖生成另一套身份。
+- 正式请求持久化sealed full manifest、CAS digest及与同一`artifact_root`绑定的candidate file-graph runtime pins；
+  composer只向执行面投影最小canonical identity和文件hash pins。Qlib/suspend sidecar必须声明同一release-specific
+  frozen universe key，QE兼容namespace只用于既有risk-profile类型约束，不能替代物理candidate identity。
 - 直接测试以`backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`为主，并覆盖config serialization、
   factor-cache identity、long-trend manifest parity和v1 reproduction隔离。
 
@@ -718,14 +721,14 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-003 | §4 D-002；planned registry migration与resolver | planned `backend/tests/test_canonical_equity_pit_authority_registry.py` | design_ready_for_review | none |
 | F-004 | §4 D-002、§6 P3-A/W3-A；中立frozen binding adapter | `backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py` | implementation_verified | none |
 | F-005 | §6 P0/P3/P4；W0/W3/W4/W5/W6 inventory scope | planned `backend/tests/test_canonical_pit_consumer_inventory.py` | design_ready_for_review | none |
-| F-006 | §5/§5.2；各切片task card、短租约和allowed write scope | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json` | design_ready_for_review | none |
+| F-006 | §5/§5.2；各切片task card、短租约和allowed write scope | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json`；W3-B精确9文件scope（8个实现/设计文件及新增测试的ownership登记） | design_ready_w3b_implementation_verified | none |
 | F-007 | §5.1、§6；W3串行切片、W0/W6/W7 source freeze contract | artifact: `tests/aistock_validation/pit_v2/source_freeze_receipt.json` | design_ready_for_review | none |
 | F-008 | §6 P2/P5/P7；PIT builder与W1/W7/W8 scope | `backend/tests/test_stock_universe_pit_spans.py` | design_ready_for_review | none |
 | F-009 | §4 D-004、§6 P6；dependency planner/materializer | `backend/tests/dataset_release/test_dependency_graph.py` | design_ready_for_review | none |
 | F-010 | §6 P4/P6、§7.1；candidate manifest/validator | `backend/tests/dataset_release/test_candidate_validator.py` | design_ready_for_review | none |
 | F-011 | §6 P5、§7.1；minute source/overlay | `backend/tests/dataset_release/test_minute_overlay.py` | design_ready_for_review | none |
 | F-012 | §7.1；component validators | `backend/tests/dataset_release/test_candidate_validator.py`；`backend/tests/dataset_release/test_index_context.py` | design_ready_for_review | none |
-| F-013 | §6 P3-A/P8；W3-B/C QE/HMM/训练planned scope | planned `backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`；`backend/tests/hmm_data_source/test_isolation_constraints.py` | design_ready_for_review | none |
+| F-013 | §6 P3-A/P8；W3-B/C QE/HMM/训练scope | `backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`；planned `backend/tests/hmm_data_source/test_isolation_constraints.py` | design_ready_w3b_implementation_verified | none |
 | F-014 | §6 P3-B；Selection/Paper/Simulation planned scope | planned `backend/tests/selection_center/test_canonical_pit_runtime.py`；`backend/tests/paper_trading_v2/test_runtime_profile.py` | design_ready_for_review | none |
 | F-015 | §6 P3-C/P8；StrategyPackage/Advisory planned scope | planned `backend/tests/strategy_package/test_canonical_pit_compatibility.py` | design_ready_for_review | none |
 | F-016 | §6 P5；W6/W7 source identity contract | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
@@ -741,7 +744,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-026 | §6 P4；component manifest v2/canonical lineage v3 planned scope | `backend/tests/dataset_release/test_component_artifact_manifest.py`；`backend/tests/dataset_release/test_canonical_lineage.py` | design_ready_for_review | none |
 | F-027 | §6 P2/P5/P6；initial migration plan、control service、resolution reader和CLI planned scope | `backend/tests/dataset_release/test_control_service.py`；`backend/tests/dataset_release/test_resolution_processor.py`；`backend/tests/scripts/test_update_backtest_dataset_monthly.py`；artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
 | F-028 | §5/§6 P3-A W3-A；neutral formal adapter与W1/W2 API边界 | `backend/services/canonical_pit_dataset_consumer.py`；`backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py` | implementation_verified | none |
-| F-029 | §5.2；短租约、BUG抢占、dirty handoff和实验identity边界 | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json` | design_ready_for_review | none |
+| F-029 | §5.2；短租约、BUG抢占、dirty handoff和实验identity边界 | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json`；W3-B从`c344bb63`独立开始，`backfill_factor_cache.py`调用图排除后释放 | implementation_verified_w3b | none |
 | F-030 | §6 P3-A W3-D；最终main统一身份和隔离矩阵 | planned `backend/tests/test_qe_hmm_canonical_pit_integration.py`；command: `python -m pytest backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py backend/tests/hmm_data_source/test_isolation_constraints.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q` | design_ready_for_review | none |
 
 设计通过只表示可以请求用户确认进入实施；不得把`designed`状态表述为源码、真实数据或生产完成。
@@ -752,7 +755,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 |---|---|
 | W1 Core/Registry源码 | `merged_4e1f667e` |
 | W2 Dataset Release源码 | `merged_589678f3` |
-| W3消费者源码 | `not_started_pending_user_revised_design_confirmation` |
+| W3消费者源码 | `w3a_merged_w3b_ready_for_pr_w3c_not_started` |
 | W4～W6消费者/集成源码 | `not_started_or_separately_owned` |
 | 真实小样本 | `not_run_not_authorized` |
 | 真实全量candidate | `not_run_not_authorized` |
@@ -806,3 +809,8 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-6C | W3-A最终HEAD合入复审 | 合并最新main后逐项复核实现、测试、scope、PR设计链接和DESIGN-COMPLIANCE-001四项 | direct/adjacent 28 passed；data-sync 161 passed；Qlib 15 passed；catalog 7 passed；F2 30/30；guardrail 0 finding；ownership 4/4；无P0/P1/P2 | pass_ready_for_merge |
 | Review-6D | PR机器可审计性复审 | 人类可读的`Exact write scope`/验收编号未匹配PR Quality固定元数据语法 | PR正文使用`Design Acceptance Matrix`和`Allowed write scope`，并列出四个精确文件及三项production gate | resolved_pending_ci_readback |
 | Review-6E | 最新main漂移复审 | CI期间main前进至`458199cd`，新增Advisory P0-D源码/测试/设计和ownership登记 | 文件交集为零；无冲突合并；按最终main重跑28+161+15+7、F2、guardrail和ownership | pass_ready_for_merge |
+| Review-7A | W3-B实现首轮 | 仅保存identity projection会使config reload后无法重新证明W3-A sealed-manifest校验；分批cache比较一度扩大v1行为 | 正式请求持久化detached full manifest+CAS digest并每次重验W3-A；formal cache增加严格字段，legacy比较恢复原契约 | resolved |
+| Review-7B | W3-B身份与路径安全复审 | 风险构建若沿用静态v1 hashes或把QE兼容key误作物理candidate key会产生身份漂移；sidecar id若未约束可逃逸provider sibling路径 | runtime pins绑定manifest artifact_root；Qlib/suspend使用canonical frozen key并逐文件hash校验；dataset/sidecar id限制为canonical path-safe identifier | resolved |
+| Review-7C | W3-B最终HEAD合入就绪复审 | 合并`origin/main@d75488bc`后逐项复核full-manifest重验、frozen-only/零DB fallback、legacy默认不漂移、cache/long-trend/risk identity和8文件scope | direct 6 passed；W3-B相邻矩阵141 passed；含最新main受影响QE/V25矩阵280 passed/1 failed/38 skipped，唯一失败为V25退役后旧测试仍要求`tail_twap_strategy.py`；F2 30/30、Ruff、L0、catalog、ownership均PASS | resolved_by_bug_1104_pr_3524 |
+| Review-7D | BUG-1104合入后最终PR复审 | 合并`origin/main@b39e263a`并复核原唯一失败、W3-B identity、legacy隔离和scope | QE/W3-B/V25最终矩阵281 passed、0 failed、38 skipped；原失败节点已纳入main；无数据构建、DB或runtime动作 | pass_ready_for_pr |
+| Review-7E | PR #3527多轮代码与CI复审 | CI发现新增测试未映射；语义复审发现formal空结果/`ensure=False`可绕过窗口校验、cache coverage/freshness未参与一致性判定、legacy返回新增`None`字段及严格schema存在隐式规范化 | 精确登记新增测试ownership；统一formal window/override fail-closed；扩大formal cache identity；legacy结果不漂移；拒绝非字符串和非canonical digest；直接6 passed、最终矩阵281 passed、catalog 7 passed、ownership 9/9 | pass_ready_for_pr |
