@@ -1,7 +1,7 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-13T16:34:17.2740064Z",
-  "source_head": "458199cd902323e006ac23d3767c908637068fa8",
+  "observed_at": "2026-08-16T10:50:46.8446306Z",
+  "source_head": "c344bb63998a0a42b8d8c4ac343600ad2c5c9c42",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
   "current_revision": {
@@ -17,18 +17,28 @@
     "forbidden": ["business_code", "data_build", "data_export", "dataset_mutation", "ddl_dml", "activation", "distribution", "restart", "cleanup", "process_control"]
   },
   "active_slice": {
-    "id": "W3-A",
-    "branch": "feature/qe-pit-v2-w3a-consumer-20260813",
-    "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3a-consumer-20260813",
-    "base_head": "bb93f2fdcbb6e6f6baef85a1e667873fd9eeb8a2",
-    "status": "review_6c_pass_ready_for_merge",
+    "id": "W3-B",
+    "branch": "feature/qe-pit-v2-w3b-integration-20260816",
+    "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3b-20260816",
+    "base_head": "c344bb63998a0a42b8d8c4ac343600ad2c5c9c42",
+    "status": "implementation_review_passed_ready_for_pr",
+    "implementation_commit": "4382ea36",
+    "merged_origin_main_head": "b39e263a074eb170a0b9b7324946dcc6f93efac0",
+    "code_review_head": "fc728f2f",
+    "resolved_baseline_blocker": "BUG-1104 / PR #3524 fixed the stale tail_twap_strategy.py payload-root test and was close-synced by PR #3525",
     "actual_write_files": [
-      "backend/services/canonical_pit_dataset_consumer.py",
-      "backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/services/quantevolver/experiment_config.py",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/factor_universe_mask_service.py",
+      "backend/services/quantevolver/long_trend_data_reader.py",
+      "backend/tests/quantevolver/test_canonical_pit_dataset_binding.py",
       "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
       "tests/aistock_validation/pit_v2/window_scope_receipt.json"
     ],
-    "forbidden": ["w1_w2_core", "qe_business_files", "hmm_business_files", "data_export", "dataset_mutation", "ddl_dml", "runtime_activation", "process_control"]
+    "released_candidate_files": ["scripts/backfill_factor_cache.py"],
+    "forbidden": ["w1_w2_core", "hmm_business_files", "selection_paper_simulation", "strategy_package_advisory", "data_export", "dataset_mutation", "ddl_dml", "runtime_activation", "process_control"]
   },
   "windows": {
     "W0": {
@@ -121,7 +131,7 @@
     "W3": {
       "depends_on": ["W2_merged"],
       "owner": "W3 contract and integration lead with short-lived per-slice writer",
-      "status": "w3a_review_6c_pass_ready_for_merge",
+      "status": "w3a_merged_w3b_ready_for_pr",
       "coordination_model": "short_lived_exact_file_lease_v1",
       "sub_sequence": ["W3-A", "W3-B", "W3-C", "W3-D"],
       "lease_contract": {
@@ -140,6 +150,7 @@
       "slices": {
         "W3-A": {
           "owner": "W3 Shared Dataset Consumer Contract",
+          "status": "source_merged_0a1487c9",
           "planned_exact_write_files": [
             "backend/services/canonical_pit_dataset_consumer.py",
             "backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py"
@@ -150,6 +161,10 @@
         },
         "W3-B": {
           "owner": "W3 QE Integration lease holder",
+          "status": "implementation_review_passed_ready_for_pr",
+          "branch": "feature/qe-pit-v2-w3b-integration-20260816",
+          "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3b-20260816",
+          "base_head": "c344bb63998a0a42b8d8c4ac343600ad2c5c9c42",
           "candidate_existing_files": [
             "backend/services/quantevolver/qe_dataset_contract.py",
             "backend/services/quantevolver/experiment_config.py",
@@ -159,6 +174,18 @@
             "scripts/backfill_factor_cache.py"
           ],
           "planned_direct_test": "backend/tests/quantevolver/test_canonical_pit_dataset_binding.py",
+          "actual_write_files": [
+            "backend/services/quantevolver/qe_dataset_contract.py",
+            "backend/services/quantevolver/experiment_config.py",
+            "backend/services/quantevolver/config_composer.py",
+            "backend/services/quantevolver/factor_universe_mask_service.py",
+            "backend/services/quantevolver/long_trend_data_reader.py",
+            "backend/tests/quantevolver/test_canonical_pit_dataset_binding.py",
+            "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+            "tests/aistock_validation/catalog/file_ownership.yaml",
+            "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+          ],
+          "released_candidate_files": ["scripts/backfill_factor_cache.py"],
           "depends_on": ["W3-A_merged"],
           "exit_gate": ["formal_qe_release_identity_persisted", "frozen_qe_has_zero_online_pit_db_fallback", "legacy_only_explicit_reproduction"],
           "forbidden": ["hmm_files", "selection_paper_simulation", "strategy_package_advisory"]
