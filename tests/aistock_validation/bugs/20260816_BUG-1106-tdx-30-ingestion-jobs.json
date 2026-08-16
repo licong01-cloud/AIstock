@@ -216,7 +216,7 @@
   "validation_evidence": [
     "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py -q -> 56 passed and 1 guarded DEV test skipped",
     "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -k bug_1106 -q -> 2 passed against existing DEV PostgreSQL with AISTOCK_RUN_BUG1106_DEV_DB=1",
-    "python -m nox -s data_sync_autonomy_backend -> 161 passed",
+    "python -m nox -s data_sync_autonomy_backend -> 162 passed and 1 guarded DEV test skipped",
     "python -m nox -s validation_module_registry_l0 -> 8 passed and 14/14 mapped",
     "python -m nox -s validation_catalog_integrity -> 7 passed and findings=0",
     "ruff check changed Python files; compileall changed Python files; git diff --check -> passed"
