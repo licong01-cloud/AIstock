@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1104",
-  "closed_at": null,
+  "closed_at": "2026-08-16T08:36:48Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -72,8 +72,8 @@
   },
   "first_seen_at": "2026-08-16T08:15:05.250076Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e1b936261c8b61c9e77e368edb578e97b48f4337",
+  "fixed_at": "2026-08-16T08:36:48Z",
   "github_issue_number": 3523,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3523",
   "last_seen_at": "2026-08-16T08:15:05.250076Z",
@@ -81,6 +81,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3524",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -95,6 +96,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -102,7 +105,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -111,6 +114,11 @@
     "fingerprint": "336abfa62c5d53091c7a47e6",
     "source_event_id": "FE-20260816-336abfa62c5d"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qe_data_plane_zero_db.py::test_gate5_workspace_payload_has_no_db_driver_credentials_or_market_sql -q -> 1 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s qe_read_backend -> 34 passed"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
