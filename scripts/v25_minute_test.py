@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# ruff: noqa: E402, F401, F541
 """v25分钟级执行验证 - 基于v24 mini backtest修改"""
 import sys
 import logging
@@ -164,3 +163,4 @@ else:
     logger.error('\n⚠️  无有效结果')
 
 logger.info('\n=== 验证完成 ===')
+# ruff: noqa: E402, F401, F541

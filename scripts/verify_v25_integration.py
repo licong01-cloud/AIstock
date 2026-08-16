@@ -1,4 +1,3 @@
-# ruff: noqa: F401, F541
 """验证v25集成到QE实验框架"""
 import sys
 from pathlib import Path
@@ -126,3 +125,4 @@ def verify_v25_integration():
 if __name__ == '__main__':
     success = verify_v25_integration()
     sys.exit(0 if success else 1)
+# ruff: noqa: F401, F541

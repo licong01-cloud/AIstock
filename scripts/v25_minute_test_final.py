@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# ruff: noqa: E402, F541
 """v25分钟级执行验证 - 独立测试"""
 import sys
 import logging
@@ -119,3 +118,4 @@ else:
     logger.error('无有效结果')
 
 logger.info('\n=== 完成 ===')
+# ruff: noqa: E402, F541

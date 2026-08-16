@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# ruff: noqa: E402, F401, F541
 """v25策略分钟级执行验证 - 独立测试脚本
 
 不依赖QE框架，直接使用qlib + v25 executor验证分钟级交易分布
@@ -208,3 +207,4 @@ else:
     print('⚠️  无有效数据，请检查股票代码和日期')
 
 print('\n=== 验证完成 ===')
+# ruff: noqa: E402, F401, F541

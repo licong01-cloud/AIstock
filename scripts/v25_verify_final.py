@@ -1,4 +1,3 @@
-# ruff: noqa: E402, F541
 """v25 Two-Stage策略最小化回测验证
 
 验证v25集成到QE框架后可以正常运行
@@ -197,3 +196,4 @@ logger.info('\nNext steps:')
 logger.info('  1. Run full backtest with real market data')
 logger.info('  2. Compare PA with v24 baseline')
 logger.info('  3. Deploy to production experiments')
+# ruff: noqa: E402, F541

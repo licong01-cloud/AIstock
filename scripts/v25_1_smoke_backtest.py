@@ -1,4 +1,3 @@
-# ruff: noqa: F401, F841
 """V25.1 small-cap minute execution smoke backtest.
 
 Multi-stock multi-day synthetic minute-bar simulation that exercises:
@@ -313,3 +312,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# ruff: noqa: F401, F841

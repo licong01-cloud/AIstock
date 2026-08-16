@@ -1,4 +1,3 @@
-# ruff: noqa: E402
 """Qlib comparison backtest: V25 vs V25.1 on identical alpha.
 
 Same alpha (5-day momentum reversal), same TopkDropoutStrategy outer, same
@@ -504,3 +503,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+# ruff: noqa: E402

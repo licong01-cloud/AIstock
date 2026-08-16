@@ -1,4 +1,3 @@
-# ruff: noqa: E402
 import sys
 sys.path.insert(0, '/mnt/f/Dev/AIstock')
 from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
@@ -29,3 +28,4 @@ with get_conn() as conn:
         cur.execute('SELECT algo_code, algo_name FROM execution_algorithm_catalog ORDER BY sort_order')
         for row in cur.fetchall():
             print(f'  {row[0]}: {row[1]}')
+# ruff: noqa: E402

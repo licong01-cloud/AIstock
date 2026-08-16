@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# ruff: noqa: E402, F541
 import sys
 import os
 import logging
@@ -63,3 +62,4 @@ else:
     logger.error('✗ 计划生成失败')
 
 logger.info('测试完成')
+# ruff: noqa: E402, F541
