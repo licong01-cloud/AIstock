@@ -52,6 +52,7 @@ R5_PARTITION_POLICY_ID = "ADVISORY_PHASE1R_RETROSPECTIVE_RANGE_PARTITION_V1"
 
 _OUTCOME_SOURCE_FILES = (
     "backend/services/advisory_historical_range/outcome_evaluator.py",
+    "backend/services/advisory_historical_range/outcome_planner.py",
     "backend/services/advisory_historical_range/outcome_policy_catalog.py",
     "backend/services/advisory_historical_range/outcome_policy_provider.py",
     "backend/services/advisory_historical_range/outcome_projection.py",

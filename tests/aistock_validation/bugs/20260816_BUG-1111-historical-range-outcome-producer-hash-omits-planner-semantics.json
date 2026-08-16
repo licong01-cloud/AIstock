@@ -100,9 +100,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process imported the R5 runtime identity source set and verified outcome_planner.py is included; runtime_factories_sha256=0ae7246bd5ffe894fce2baacf1c2fd9fc3e5e00842cd6547b3d6ba428164a19f; exit=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
