@@ -25,7 +25,10 @@ from backend.services.quantevolver.qe_dataset_contract import (
     QE_DATASET_CONTRACT_ID,
     QE_DATASET_SIGNAL_END_DATE,
     QE_DATASET_START_DATE,
+    QEFormalDatasetBinding,
     require_qe_dataset_window,
+    require_qe_formal_dataset_binding_projection,
+    require_qe_formal_dataset_window,
 )
 
 
@@ -71,15 +74,26 @@ class QELongTrendDatasetReader:
         qe_workspace_root: str | os.PathLike[str],
         qe_dataset_contract_id: str,
         snapshot_identity: QEDatasetSnapshotIdentity,
+        formal_dataset_binding: QEFormalDatasetBinding | None = None,
         hdf_reader: Callable[..., pd.DataFrame] | None = None,
     ) -> None:
-        if not qe_dataset_contract_id or qe_dataset_contract_id != QE_DATASET_CONTRACT_ID:
+        formal_binding = (
+            require_qe_formal_dataset_binding_projection(formal_dataset_binding)
+            if formal_dataset_binding is not None
+            else None
+        )
+        expected_contract_id = (
+            formal_binding.release_id
+            if formal_binding is not None
+            else QE_DATASET_CONTRACT_ID
+        )
+        if not qe_dataset_contract_id or qe_dataset_contract_id != expected_contract_id:
             raise QELongTrendError(
                 QELongTrendReason.NON_QE_SOURCE_REJECTED,
                 "long-trend reader requires the deployed QE dataset contract identity",
                 context={
                     "requested_dataset_contract_id": qe_dataset_contract_id or None,
-                    "expected_dataset_contract_id": QE_DATASET_CONTRACT_ID,
+                    "expected_dataset_contract_id": expected_contract_id,
                 },
             )
         workspace = Path(qe_workspace_root).expanduser().resolve()
@@ -94,7 +108,10 @@ class QELongTrendDatasetReader:
                 QELongTrendReason.FEATURE_DATASET_IDENTITY_MISSING,
                 f"QE factor_data snapshot does not exist: {root}",
             )
-        actual_identity = inspect_qe_snapshot_identity(root)
+        actual_identity = inspect_qe_snapshot_identity(
+            root,
+            formal_dataset_binding=formal_binding,
+        )
         requested_identity = (
             snapshot_identity.snapshot_id,
             snapshot_identity.manifest_sha256,
@@ -124,6 +141,7 @@ class QELongTrendDatasetReader:
         self.qe_workspace_root = workspace
         self.qe_dataset_contract_id = qe_dataset_contract_id
         self.snapshot_identity = actual_identity
+        self.formal_dataset_binding = formal_binding
         self._hdf_reader = hdf_reader or pd.read_hdf
 
     def load(
@@ -137,7 +155,14 @@ class QELongTrendDatasetReader:
         start_ts = pd.Timestamp(start_date).normalize()
         end_ts = pd.Timestamp(end_date).normalize()
         try:
-            require_qe_dataset_window(start_date=start_ts.date(), end_date=end_ts.date())
+            if self.formal_dataset_binding is not None:
+                require_qe_formal_dataset_window(
+                    self.formal_dataset_binding,
+                    start_date=start_ts.date(),
+                    end_date=end_ts.date(),
+                )
+            else:
+                require_qe_dataset_window(start_date=start_ts.date(), end_date=end_ts.date())
         except ValueError as exc:
             raise QELongTrendError(
                 QELongTrendReason.DATASET_ROOT_IDENTITY_MISMATCH,
@@ -470,6 +495,8 @@ def verify_outcome_snapshot_extension(
 
 def inspect_qe_snapshot_identity(
     factor_data_dir: str | os.PathLike[str],
+    *,
+    formal_dataset_binding: QEFormalDatasetBinding | None = None,
 ) -> QEDatasetSnapshotIdentity:
     """Build the immutable QE snapshot identity from meta plus file content hashes."""
 
@@ -487,6 +514,11 @@ def inspect_qe_snapshot_identity(
             QELongTrendReason.FEATURE_DATASET_IDENTITY_MISSING,
             f"failed to read QE snapshot meta.json: {exc}",
         ) from exc
+    formal_binding = (
+        require_qe_formal_dataset_binding_projection(formal_dataset_binding)
+        if formal_dataset_binding is not None
+        else None
+    )
     snapshot_id = str(meta.get("snapshot_id") or "").strip().lower()
     start_date = str(meta.get("start") or "")
     end_date = str(meta.get("end") or "")
@@ -497,16 +529,26 @@ def inspect_qe_snapshot_identity(
             "meta.json lineage_parent_ids must be an array when present",
         )
     lineage_parent_ids = tuple(str(value).strip() for value in lineage_raw)
-    if snapshot_id != QE_DATASET_CONTRACT_ID:
+    expected_snapshot_id = (
+        formal_binding.release_id.lower()
+        if formal_binding is not None
+        else QE_DATASET_CONTRACT_ID
+    )
+    if snapshot_id != expected_snapshot_id:
         raise QELongTrendError(
             QELongTrendReason.DATASET_ROOT_IDENTITY_MISMATCH,
             "meta.json snapshot_id differs from the deployed QE dataset contract",
             context={
                 "meta_snapshot_id": snapshot_id,
-                "qe_dataset_contract_id": QE_DATASET_CONTRACT_ID,
+                "qe_dataset_contract_id": expected_snapshot_id,
             },
         )
-    if start_date != QE_DATASET_START_DATE.isoformat() or end_date != QE_DATASET_SIGNAL_END_DATE.isoformat():
+    expected_end_date = (
+        formal_binding.cutoff.isoformat()
+        if formal_binding is not None
+        else QE_DATASET_SIGNAL_END_DATE.isoformat()
+    )
+    if start_date != QE_DATASET_START_DATE.isoformat() or end_date != expected_end_date:
         raise QELongTrendError(
             QELongTrendReason.DATASET_ROOT_IDENTITY_MISMATCH,
             "meta.json date window differs from the deployed QE dataset contract",
@@ -514,10 +556,30 @@ def inspect_qe_snapshot_identity(
                 "meta_window": [start_date, end_date],
                 "contract_window": [
                     QE_DATASET_START_DATE.isoformat(),
-                    QE_DATASET_SIGNAL_END_DATE.isoformat(),
+                    expected_end_date,
                 ],
             },
         )
+    if formal_binding is not None:
+        raw_binding = meta.get("canonical_pit_dataset_binding")
+        try:
+            actual_binding = require_qe_formal_dataset_binding_projection(raw_binding)
+        except (TypeError, ValueError) as exc:
+            raise QELongTrendError(
+                QELongTrendReason.DATASET_ROOT_IDENTITY_MISMATCH,
+                "meta.json canonical PIT dataset binding is missing or invalid",
+            ) from exc
+        if actual_binding.as_dict() != formal_binding.as_dict():
+            raise QELongTrendError(
+                QELongTrendReason.DATASET_ROOT_IDENTITY_MISMATCH,
+                "meta.json canonical PIT dataset binding differs from the requested release",
+                context={
+                    "requested_release_id": formal_binding.release_id,
+                    "actual_release_id": actual_binding.release_id,
+                    "requested_manifest_digest": formal_binding.manifest_digest,
+                    "actual_manifest_digest": actual_binding.manifest_digest,
+                },
+            )
     file_manifest: dict[str, dict[str, int | str]] = {}
     for name in _IDENTITY_FILES:
         path = (root / name).resolve()
