@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1115",
-  "closed_at": null,
+  "closed_at": "2026-08-17T12:37:09.792498Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -71,9 +71,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/validation/BUG-1115/post_restart_receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1115",
+      "catalog_sha256": "7b1fafc3311c7eec2f7eb08ca681bfe19ded9fadd2b672a5acf1904ba203bb3b",
+      "contract_digest": "885284dba41b7054676bc9d50841f0bc01718c99fde02ddddd45dea3b40a4605",
+      "expected_identity": "c1b8030ab071ee2b9bbad0df9eb97fa1e2b18011",
+      "generated_at": "2026-08-17T12:31:59.697143Z",
+      "mode": "read_only",
+      "observed_identity": "9a7a2718026f6d62f218fbe09d8b82f3d697b6c3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "549fa2a65bcead72916c195ebe7febfc51d6a51bb119b34ae7d6edf6ee26d08b",
+      "receipt_sha256": "d2924d82ac9e2c5c23616a9f564f246ef63ab4ebc9c05c1f289375a21af6bc83",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a86370597b421777b655f42724b60c11d4665561e6a986ecc5a5671b54be0a46",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -83,7 +99,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -93,7 +109,8 @@
     "source_event_id": "FE-20260817-59e09ae61a81"
   },
   "validation_evidence": [
-    "local: 361 passed, 5 skipped; CI: advisory_historical_range_backend SUCCESS; PR Quality SUCCESS; CodeQL SUCCESS; Semgrep SUCCESS"
+    "local: 361 passed, 5 skipped; CI: advisory_historical_range_backend SUCCESS; PR Quality SUCCESS; CodeQL SUCCESS; Semgrep SUCCESS",
+    "post-restart-verify backend-main expected=c1b8030ab071ee2b9bbad0df9eb97fa1e2b18011 observed=9a7a2718026f6d62f218fbe09d8b82f3d697b6c3 ancestor=true; health 200; OpenAPI 200"
   ],
   "verification_budget": {
     "budget": "standard",
