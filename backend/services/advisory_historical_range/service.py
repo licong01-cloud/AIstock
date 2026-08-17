@@ -702,8 +702,6 @@ class ResponseBoundHistoricalRangeDispatcher:
                 operation_id,
                 batch_id,
             )
-        finally:
-            claimed = parent_heartbeat.stop()
         statuses = {receipt.status for receipt in receipts}
         if orchestration_error is not None or "FAILED" in statuses:
             receipt_status = "FAILED"
@@ -735,41 +733,51 @@ class ResponseBoundHistoricalRangeDispatcher:
                     }
                 )
             )
-        aggregate = HistoricalRangeOutcomeRefreshReceiptV1(
-            operation_id=operation_id,
-            request_hash=plan.request_hash,
-            status=receipt_status,
-            processed_count=len(outcome_refs),
-            outcome_refs=tuple(
-                sorted(
-                    outcome_refs.values(),
-                    key=lambda ref: (
-                        ref.artifact_kind.value,
-                        ref.semantic_content_hash,
-                        ref.relative_path,
-                    ),
-                )
-            ),
-            summary_refs=tuple(
-                sorted(
-                    summary_refs.values(),
-                    key=lambda ref: (
-                        ref.artifact_kind.value,
-                        ref.semantic_content_hash,
-                        ref.relative_path,
-                    ),
-                )
-            ),
-            reason_codes=reasons or (() if receipt_status == "COMPLETED" else ("ADVISORY_HR_SUB_OPERATION_INCOMPLETE",)),
-        )
-        stored = runtime.artifact_store.publish_payload(
-            artifact_kind=HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT,
-            producer_contract_version="advisory_phase1r_r5_outcome_command_v1",
-            payload_schema_version=OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
-            resolved_request_hash=runtime.query.resolved_request_hash(batch_id),
-            payload=aggregate.model_dump(mode="json"),
-            upstream_refs=tuple((*aggregate.outcome_refs, *aggregate.summary_refs)),
-        )
+        try:
+            aggregate = HistoricalRangeOutcomeRefreshReceiptV1(
+                operation_id=operation_id,
+                request_hash=plan.request_hash,
+                status=receipt_status,
+                processed_count=len(outcome_refs),
+                outcome_refs=tuple(
+                    sorted(
+                        outcome_refs.values(),
+                        key=lambda ref: (
+                            ref.artifact_kind.value,
+                            ref.semantic_content_hash,
+                            ref.relative_path,
+                        ),
+                    )
+                ),
+                summary_refs=tuple(
+                    sorted(
+                        summary_refs.values(),
+                        key=lambda ref: (
+                            ref.artifact_kind.value,
+                            ref.semantic_content_hash,
+                            ref.relative_path,
+                        ),
+                    )
+                ),
+                reason_codes=reasons
+                or (
+                    ()
+                    if receipt_status == "COMPLETED"
+                    else ("ADVISORY_HR_SUB_OPERATION_INCOMPLETE",)
+                ),
+            )
+            stored = runtime.artifact_store.publish_payload(
+                artifact_kind=HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT,
+                producer_contract_version="advisory_phase1r_r5_outcome_command_v1",
+                payload_schema_version=OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
+                resolved_request_hash=runtime.query.resolved_request_hash(batch_id),
+                payload=aggregate.model_dump(mode="json"),
+                upstream_refs=tuple(
+                    (*aggregate.outcome_refs, *aggregate.summary_refs)
+                ),
+            )
+        finally:
+            claimed = parent_heartbeat.stop()
         finished_at = datetime.now(UTC)
         error_json = (
             {
