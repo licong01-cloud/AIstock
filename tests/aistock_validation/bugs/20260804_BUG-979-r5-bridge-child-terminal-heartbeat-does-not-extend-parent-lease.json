@@ -112,7 +112,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "passed",
-    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\validation\\BUG-979\\post_restart_receipt_20260818.json",
+    "post_restart_receipt_ref": "tmp/validation/BUG-979/post_restart_receipt_20260818.json",
     "post_restart_receipt_summary": {
       "bug_id": "BUG-979",
       "catalog_sha256": "7b1fafc3311c7eec2f7eb08ca681bfe19ded9fadd2b672a5acf1904ba203bb3b",
