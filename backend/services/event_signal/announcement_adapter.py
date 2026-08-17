@@ -754,7 +754,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    load_dotenv(ROOT / ".env", override=True)
+    # Respect an explicit DEV/production target selected by the caller.
+    load_dotenv(ROOT / ".env", override=False)
     load_dotenv(override=False)
     summary = sync_announcement_event_signals(
         source_rule_version=args.source_rule_version,
