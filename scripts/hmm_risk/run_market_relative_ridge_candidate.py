@@ -1,4 +1,4 @@
-"""Run the approved P2-3B market-relative Ridge candidate on read-only inputs."""
+"""Run an approved P2-3B or P2-3C Ridge candidate on read-only inputs."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (  # noqa:
     DEVELOPMENT_START,
     HOLDOUT_END,
     HOLDOUT_START,
+    P2_3C_CONTRACT_VERSION,
+    P2_3C_REQUEST_SCHEMA_VERSION,
     REQUEST_SCHEMA_VERSION,
     REASON_HOLDOUT,
     REASON_INPUT_IDENTITY,
@@ -29,6 +31,8 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (  # noqa:
     preflight_output_path,
     report_for_write,
     run_p2_3b_candidate,
+    run_p2_3c_candidate,
+    validate_p2_3c_static_request,
     write_report,
 )
 from backend.services.hmm_risk.state_model_set import StateModelSetError  # noqa: E402
@@ -80,9 +84,18 @@ def _producer_commit() -> str:
     ).stdout.strip()
 
 
-def _loader_request(request: dict[str, Any]) -> dict[str, Any]:
-    if request.get("schema_version") != REQUEST_SCHEMA_VERSION or request.get("contract_version") != CONTRACT_VERSION:
+def _loader_request(request: dict[str, Any], candidate_mode: str) -> dict[str, Any]:
+    expected = {
+        "p2-3b": (REQUEST_SCHEMA_VERSION, CONTRACT_VERSION),
+        "p2-3c": (P2_3C_REQUEST_SCHEMA_VERSION, P2_3C_CONTRACT_VERSION),
+    }
+    if candidate_mode not in expected:
+        raise RidgeCandidateError(REASON_INPUT_IDENTITY, "candidate mode is invalid", stage="input")
+    expected_schema, expected_contract = expected[candidate_mode]
+    if request.get("schema_version") != expected_schema or request.get("contract_version") != expected_contract:
         raise RidgeCandidateError(REASON_INPUT_IDENTITY, "request identity is invalid", stage="input")
+    if candidate_mode == "p2-3c":
+        validate_p2_3c_static_request(request)
     if (
         request.get("holdout_start") != HOLDOUT_START.isoformat()
         or request.get("holdout_end") != HOLDOUT_END.isoformat()
@@ -94,7 +107,7 @@ def _loader_request(request: dict[str, Any]) -> dict[str, Any]:
     if str(source.get("source_end") or "") != DEVELOPMENT_END.isoformat():
         raise RidgeCandidateError(
             REASON_HOLDOUT,
-            "P2-3B source_end must stop at the development boundary",
+            f"{candidate_mode} source_end must stop at the development boundary",
             stage="input",
         )
     try:
@@ -117,6 +130,7 @@ def _failure_path(output: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--candidate-mode", choices=("p2-3b", "p2-3c"), required=True)
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--db-env-prefix", required=True)
@@ -128,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         output = preflight_output_path(args.output, repository_root=ROOT)
         request = _load_request(args.request.resolve())
-        loader_request = _loader_request(request)
+        loader_request = _loader_request(request, str(args.candidate_mode))
         producer_commit = _producer_commit()
         try:
             inputs = _load_l1_source_inputs(loader_request, db_prefix=str(args.db_env_prefix), c010_formal=True)
@@ -139,10 +153,8 @@ def main(argv: list[str] | None = None) -> int:
                 stage="source_preflight",
                 evidence={"exception_type": type(exc).__name__},
             ) from exc
-        report = report_for_write(
-            run_p2_3b_candidate(inputs, request, producer_commit=producer_commit),
-            failure=False,
-        )
+        runner = run_p2_3b_candidate if args.candidate_mode == "p2-3b" else run_p2_3c_candidate
+        report = report_for_write(runner(inputs, request, producer_commit=producer_commit), failure=False)
         path = write_report(output, report, repository_root=ROOT)
         sys.stdout.buffer.write(canonical_json_bytes({"status": report["status"], "output": str(path)}))
         sys.stdout.buffer.write(b"\n")
@@ -157,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
                 producer_commit=producer_commit,
                 error=exc,
                 completed_fit_count=completed,
+                candidate_mode=str(args.candidate_mode),
             ),
             failure=True,
         )
@@ -165,11 +178,11 @@ def main(argv: list[str] | None = None) -> int:
             path = write_report(failure_path, report, repository_root=ROOT)
         except Exception as write_exc:
             sys.stderr.write(
-                "P2-3B candidate failed and failure receipt could not be written: "
+                f"{args.candidate_mode} candidate failed and failure receipt could not be written: "
                 f"{type(write_exc).__name__}: {write_exc}\n"
             )
             return 2
-        sys.stderr.write(f"P2-3B candidate failed: {report['failure_reason_code']}; receipt={path}\n")
+        sys.stderr.write(f"{args.candidate_mode} candidate failed: {report['failure_reason_code']}; receipt={path}\n")
         return 1
 
 

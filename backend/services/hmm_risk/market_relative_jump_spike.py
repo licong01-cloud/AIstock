@@ -1308,6 +1308,12 @@ def _fit_summary(fit: JumpFit, component: PreparedComponent | None = None) -> di
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def jump_fit_receipt(fit: JumpFit, component: PreparedComponent) -> dict[str, Any]:
+    """Expose the exact jump-fit receipt authority for approved composite candidates."""
+
+    return _fit_summary(fit, component)
+
+
 def _failed_attempt(seed: int, jump_penalty: float, error: BaseException) -> dict[str, Any]:
     if isinstance(error, JumpSpikeError):
         reason = error.reason_code
@@ -1326,6 +1332,12 @@ def _failed_attempt(seed: int, jump_penalty: float, error: BaseException) -> dic
         "evidence": evidence,
     }
     return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def jump_failure_receipt(seed: int, jump_penalty: float, error: BaseException) -> dict[str, Any]:
+    """Expose the exact typed jump failure receipt without adding a second fit path."""
+
+    return _failed_attempt(seed, jump_penalty, error)
 
 
 def _run_restarts(
@@ -1508,6 +1520,12 @@ def _market_lambda_score(fold_receipts: Sequence[Mapping[str, Any]]) -> dict[str
         "max_zero_event_false_positive_rate": max_zero_event_fpr,
     }
     return body
+
+
+def market_development_score(fold_receipts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Apply the existing market development acceptance to a fixed-lambda candidate."""
+
+    return _market_lambda_score(fold_receipts)
 
 
 def _select_lambda(receipts: Sequence[Mapping[str, Any]], *, component: str) -> float:
