@@ -1,6 +1,8 @@
 {
   "actual": "REFRESH_OUTCOMES parent heartbeat supervisor stops immediately after child sub-operations return, before aggregate receipt and upstream artifact readback. Real operation ahrop_64bf4bd275043b979869e7c910b847fb remained RUNNING after lease expiry during final aggregation, allowing an exact retry to reclaim durable ownership and fence the still-live worker.",
   "allowed_write_scope": [
+    "backend/services/advisory_historical_range/service.py",
+    "backend/tests/advisory_historical_range/test_r5_background_lifecycle.py",
     "tests/aistock_validation/bugs/20260817_BUG-1115-historical-range-outcome-parent-loses-heartbeat-during-final-receipt-agg.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The outcome parent heartbeat must remain active through aggregate receipt publication and stop only immediately before the final fenced transition.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,20 +54,30 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r5_background_lifecycle.py::test_outcome_dispatcher_keeps_heartbeat_through_final_receipt_publication -q",
   "required_verification": [
     "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process imported ResponseBoundHistoricalRangeDispatcher from git-tracked source and verified final receipt publication precedes heartbeat stop; source_sha256=0f506e224e86aa482f24e796a80214e0f337f11c71593f11d811aea2e0ba4407; exit=0",
+      "fresh Python process imported ResponseBoundHistoricalRangeDispatcher and verified final receipt publication precedes heartbeat stop; source_sha256=0f506e224e86aa482f24e796a80214e0f337f11c71593f11d811aea2e0ba4407; exit=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

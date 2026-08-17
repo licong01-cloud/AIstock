@@ -189,7 +189,11 @@ def test_outcome_parent_heartbeat_surfaces_lost_durable_ownership() -> None:
         heartbeat.stop()
 
 
-def test_outcome_dispatcher_finishes_with_heartbeat_row_version(monkeypatch) -> None:
+@pytest.mark.parametrize("publish_fails", [False, True])
+def test_outcome_dispatcher_keeps_heartbeat_through_final_receipt_publication(
+    monkeypatch,
+    publish_fails: bool,
+) -> None:
     transitions = []
     events = []
     operation = {
@@ -242,6 +246,13 @@ def test_outcome_dispatcher_finishes_with_heartbeat_row_version(monkeypatch) -> 
     child = SimpleNamespace(
         refresh_until_stable_boundary=lambda **_kwargs: (receipt, receipt_ref)
     )
+
+    def publish_payload(**_kwargs):
+        events.append("publish")
+        if publish_fails:
+            raise RuntimeError("receipt publication failed")
+        return SimpleNamespace(ref=receipt_ref)
+
     runtime = SimpleNamespace(
         query=SimpleNamespace(
             get_operation_internal=lambda _operation_id: dict(operation),
@@ -250,9 +261,7 @@ def test_outcome_dispatcher_finishes_with_heartbeat_row_version(monkeypatch) -> 
         repository=SimpleNamespace(transition_operation=transition_operation),
         outcome=child,
         outcome_service_factory=None,
-        artifact_store=SimpleNamespace(
-            publish_payload=lambda **_kwargs: SimpleNamespace(ref=receipt_ref)
-        ),
+        artifact_store=SimpleNamespace(publish_payload=publish_payload),
     )
     plan = SimpleNamespace(
         request_hash="a" * 64,
@@ -265,15 +274,28 @@ def test_outcome_dispatcher_finishes_with_heartbeat_row_version(monkeypatch) -> 
     )
     dispatcher = ResponseBoundHistoricalRangeDispatcher(runtime_factory=lambda: runtime)
 
-    dispatcher._run_outcome_plan(
-        runtime=runtime,
-        plan=plan,
-        operation_id="ahrop_outcome_parent",
-        batch_id="ahrb_1",
-        worker_id="worker-1",
-    )
+    if publish_fails:
+        with pytest.raises(RuntimeError, match="receipt publication failed"):
+            dispatcher._run_outcome_plan(
+                runtime=runtime,
+                plan=plan,
+                operation_id="ahrop_outcome_parent",
+                batch_id="ahrb_1",
+                worker_id="worker-1",
+            )
+    else:
+        dispatcher._run_outcome_plan(
+            runtime=runtime,
+            plan=plan,
+            operation_id="ahrop_outcome_parent",
+            batch_id="ahrb_1",
+            worker_id="worker-1",
+        )
 
-    assert events == ["start", "stop"]
+    assert events == ["start", "publish", "stop"]
+    if publish_fails:
+        assert len(transitions) == 1
+        return
     assert transitions[-1]["expected_row_version"] == 3
     assert transitions[-1]["target_status"] is HistoricalRangeOperationStatus.COMPLETED
 
