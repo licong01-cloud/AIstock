@@ -9,6 +9,7 @@ from backend.services.event_signal.announcement_adapter import (
     build_fact_tuple,
     build_signal_key,
     build_signal_tuple,
+    upsert_signals,
     unified_rule_config,
 )
 from backend.services.announcements.title_classifier import RULE_VERSION as ANNOUNCEMENT_RULE_VERSION
@@ -41,6 +42,7 @@ def _sample_row(risk_level: str = "P0_BLOCK") -> dict:
         "ann_signal_status": "ACTIVE",
         "ann_signal_reason": "P0 sample",
         "ann_signal_evidence": {"matched_rule": "delisting_or_risk_warning"},
+        "issuer_candidate_ts_codes": ["000001.SZ"],
     }
 
 
@@ -106,3 +108,59 @@ def test_signal_evidence_records_adapter_without_consumption_path():
     assert ENGINE_NAME in repr(evidence_json.adapted)
     assert evidence_json.adapted["unified_rule_version"] == UNIFIED_RULE_VERSION
     assert evidence_json.adapted["source_ann_rule_version"] == ANNOUNCEMENT_RULE_VERSION
+
+
+def test_fact_and_signal_can_persist_suppressed_binding_evidence():
+    row = _sample_row()
+    row["issuer_fact_status"] = "SUPERSEDED"
+    row["ann_signal_status"] = "SUPPRESSED"
+    row["ann_signal_evidence"]["issuer_binding"] = {"reason_code": "provider_alias"}
+
+    fact = build_fact_tuple(row, run_id="run-1")
+    signal = build_signal_tuple(row, event_id=456, run_id="run-1")
+
+    assert fact[4] == "SUPERSEDED"
+    assert signal[17] == "SUPPRESSED"
+    assert signal[22].adapted["issuer_binding"]["reason_code"] == "provider_alias"
+
+
+class _Cursor:
+    def __init__(self):
+        self.statements = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, sql, params):
+        self.statements.append((sql, params))
+
+
+class _Connection:
+    def __init__(self):
+        self.cursor_instance = _Cursor()
+
+    def cursor(self):
+        return self.cursor_instance
+
+
+def test_non_actionable_repair_suppresses_instead_of_deleting():
+    connection = _Connection()
+    row = _sample_row(risk_level="P4_NEUTRAL")
+
+    written = upsert_signals(
+        connection,
+        [row],
+        event_ids_by_key={build_event_key(123, time_mode="paper"): 456},
+        run_id="run-1",
+        rule_version=UNIFIED_RULE_VERSION,
+        time_mode="paper",
+    )
+
+    assert written == 0
+    sql = connection.cursor_instance.statements[0][0]
+    assert "UPDATE market.event_signal" in sql
+    assert "signal_status = 'SUPPRESSED'" in sql
+    assert "DELETE FROM market.event_signal" not in sql
