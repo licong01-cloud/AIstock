@@ -2,6 +2,7 @@ import datetime as dt
 from decimal import Decimal
 
 from backend.services.announcements.title_classifier import RULE_VERSION as ANNOUNCEMENT_RULE_VERSION
+from backend.services.canonical_equity_pit import CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
 from backend.services.event_signal.st_announcement_adapter import (
     ENGINE_NAME,
     ST_FIRST_EVENT_TYPES,
@@ -46,6 +47,7 @@ def test_st_first_rule_config_is_isolated_from_trading_consumers():
     config = st_first_rule_config()
 
     assert config["version"] == ST_UNIFIED_RULE_VERSION
+    assert config["phase"] == "st_first_announcement_rules_v2"
     assert config["engine_name"] == ENGINE_NAME
     assert config["llm_enabled"] is False
     assert config["pdf_enabled"] is False
@@ -53,6 +55,8 @@ def test_st_first_rule_config_is_isolated_from_trading_consumers():
     assert config["adapters"]["announcement_st_first"]["source_rule_version"] == ANNOUNCEMENT_RULE_VERSION
     assert config["adapters"]["announcement_st_first"]["event_types"] == list(ST_FIRST_EVENT_TYPES)
     assert config["adapters"]["announcement_st_first"]["signal_event_types"] == list(ST_SIGNAL_EVENT_TYPES)
+    assert "stock_delisting_predecision" in ST_FIRST_EVENT_TYPES
+    assert "stock_delisting_predecision" in ST_SIGNAL_EVENT_TYPES
 
 
 def test_select_best_st_event_matches_nearest_pub_or_effective_date():
@@ -169,6 +173,57 @@ def test_attach_st_cross_checks_adds_evidence_without_mutating_source_row():
     assert enriched["ann_signal_reason"].startswith("P0_BLOCK stock_st_imposed")
 
 
+def test_cross_check_preserves_classifier_binding_without_pre_authorizing_terminal_contract():
+    row = _sample_row()
+    row.update(
+        {
+            "event_type": "stock_delisting_confirmed",
+            "classification_detail": {
+                "issuer_binding": {
+                    "status": "verified",
+                    "terminal_subject": "self",
+                    "ts_code": "000001.SZ",
+                }
+            },
+        }
+    )
+
+    rows, _ = attach_st_cross_checks([row], {})
+
+    evidence = rows[0]["ann_signal_evidence"]
+    assert evidence["classifier_issuer_binding"]["status"] == "verified"
+    assert "terminal_evidence_contract" not in evidence
+
+
+def test_predecision_is_high_risk_signal_but_never_terminal_evidence():
+    row = _sample_row()
+    row.update(
+        {
+            "event_type": "stock_delisting_predecision",
+            "matched_rule": "stock_delisting_predecision",
+            "classification_detail": {
+                "issuer_binding": {
+                    "status": "verified",
+                    "terminal_subject": "not_required",
+                }
+            },
+        }
+    )
+
+    rows, _ = attach_st_cross_checks([row], {})
+    bound, counts = attach_announcement_issuer_bindings(
+        rows,
+        require_terminal_cross_check=True,
+    )
+
+    evidence = bound[0]["ann_signal_evidence"]
+    assert bound[0]["risk_level"] == "P0_BLOCK"
+    assert bound[0]["action"] == "block_buy"
+    assert bound[0]["ann_signal_status"] == "ACTIVE"
+    assert "terminal_evidence_contract" not in evidence
+    assert counts == {"EXACT": 1}
+
+
 def test_terminal_signal_is_suppressed_when_st_cross_check_is_missing():
     row = _sample_row()
     row["event_type"] = "stock_delisting_confirmed"
@@ -181,3 +236,30 @@ def test_terminal_signal_is_suppressed_when_st_cross_check_is_missing():
         "announcement_terminal_evidence_cross_check_missing"
     )
     assert counts == {"TERMINAL_EVIDENCE_UNCONFIRMED": 1}
+
+
+def test_exact_terminal_pipeline_emits_v2_contract_after_binding() -> None:
+    row = _sample_row()
+    row["event_type"] = "stock_delisting_confirmed"
+    st_event = {
+        "ts_code": "000001.SZ",
+        "pub_date": dt.date(2026, 4, 30),
+        "imp_date": dt.date(2026, 5, 6),
+        "st_type": "终止上市并摘牌",
+        "st_reason": "交易所决定",
+    }
+
+    rows, matched = attach_st_cross_checks([row], {"000001.SZ": [st_event]})
+    bound, counts = attach_announcement_issuer_bindings(
+        rows,
+        require_terminal_cross_check=True,
+    )
+
+    evidence = bound[0]["ann_signal_evidence"]
+    assert matched == 1
+    assert bound[0]["ann_signal_status"] == "ACTIVE"
+    assert evidence["issuer_binding"]["status"] == "EXACT"
+    assert evidence["terminal_evidence_contract"] == (
+        CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
+    )
+    assert counts == {"EXACT": 1}

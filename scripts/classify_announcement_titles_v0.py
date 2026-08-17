@@ -14,7 +14,7 @@ import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 import psycopg2.extras
 from dotenv import load_dotenv
@@ -241,7 +241,9 @@ def fetch_batch(
     params.append(limit)
     sql = f"""
         SELECT a.id, a.ann_date, a.ts_code, a.name, a.title, a.rec_time, a.first_seen_at
+             , b.name AS security_name, b.fullname AS security_fullname, b.list_status
           FROM market.anns a
+          LEFT JOIN market.stock_basic b ON b.ts_code = a.ts_code
          WHERE a.ann_date >= %s
            AND a.ann_date <= %s
            AND a.id > %s
@@ -288,6 +290,7 @@ def signal_tuple(
     row: dict[str, Any],
     result: ClassificationResult,
     effective: EffectiveDateResult,
+    detail: dict[str, Any],
     time_mode: str,
 ) -> tuple[Any, ...]:
     evidence = {
@@ -299,6 +302,7 @@ def signal_tuple(
         "effective_rule": effective.effective_rule,
         "available_at": effective.available_at,
         "time_mode": time_mode,
+        "issuer_binding": detail.get("issuer_binding"),
     }
     reason = f"{result.risk_level} {result.event_type}: {result.description}"
     return (
@@ -526,7 +530,14 @@ def main() -> int:
             for row in rows:
                 last_id = int(row["id"])
                 processed_ids.append(last_id)
-                result = classifier.classify(row["title"])
+                result, issuer_binding = classifier.classify_with_issuer(
+                    row["title"],
+                    ts_code=str(row.get("ts_code") or ""),
+                    announcement_name=str(row.get("name") or ""),
+                    security_name=str(row.get("security_name") or ""),
+                    security_fullname=str(row.get("security_fullname") or ""),
+                    security_list_status=str(row.get("list_status") or ""),
+                )
                 effective = classifier.infer_effective_date(
                     row["ann_date"],
                     row.get("rec_time"),
@@ -543,11 +554,12 @@ def main() -> int:
                     "rec_time": row.get("rec_time"),
                     "first_seen_at": row.get("first_seen_at"),
                     "available_at": effective.available_at,
+                    "issuer_binding": issuer_binding.as_dict(),
                 }
 
                 classification_rows.append(classification_tuple(row, result, effective, detail, args.time_mode))
                 if result.risk_level in SIGNAL_RISK_LEVELS:
-                    signal_write_rows.append(signal_tuple(row, result, effective, args.time_mode))
+                    signal_write_rows.append(signal_tuple(row, result, effective, detail, args.time_mode))
 
                 counts_by_level[result.risk_level] += 1
                 counts_by_type[result.event_type] += 1

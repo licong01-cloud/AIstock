@@ -42,11 +42,12 @@ from backend.services.event_signal.announcement_issuer_binding import (
 
 
 ROOT = Path(__file__).resolve().parents[3]
-ST_UNIFIED_RULE_VERSION = "unified_event_signal_rules_st_first_v1_20260506"
+ST_UNIFIED_RULE_VERSION = "unified_event_signal_rules_st_first_v2_20260817"
 ENGINE_NAME = "STFirstAnnouncementEventSignalAdapter"
 
 ST_FIRST_EVENT_TYPES: tuple[str, ...] = (
     "stock_delisting_confirmed",
+    "stock_delisting_predecision",
     "stock_delisting_risk_warning",
     "stock_st_imposed",
     "stock_st_added_or_continued",
@@ -58,6 +59,7 @@ ST_FIRST_EVENT_TYPES: tuple[str, ...] = (
 
 ST_SIGNAL_EVENT_TYPES: tuple[str, ...] = (
     "stock_delisting_confirmed",
+    "stock_delisting_predecision",
     "stock_delisting_risk_warning",
     "stock_st_imposed",
     "stock_st_added_or_continued",
@@ -123,7 +125,7 @@ def st_first_rule_config(
                 "signal_event_types": list(ST_SIGNAL_EVENT_TYPES),
             }
         },
-        "phase": "st_first_announcement_rules_v1",
+        "phase": "st_first_announcement_rules_v2",
         "llm_enabled": False,
         "pdf_enabled": False,
         "trading_consumption_enabled": False,
@@ -393,6 +395,14 @@ def attach_st_cross_checks(
         cross_check = select_best_st_event(copied, stock_st_events_by_code.get(str(copied.get("ts_code")), []))
         if cross_check.get("matched"):
             matched_rows += 1
+        detail = copied.get("classification_detail") or {}
+        if not isinstance(detail, dict):
+            detail = {"source_classification_detail": detail}
+        detail = dict(detail)
+        classifier_issuer_binding = detail.get("issuer_binding")
+        if classifier_issuer_binding is not None:
+            detail["classifier_issuer_binding"] = classifier_issuer_binding
+
         evidence = copied.get("ann_signal_evidence") or {}
         if not isinstance(evidence, dict):
             evidence = {"source_signal_evidence": evidence}
@@ -403,12 +413,9 @@ def attach_st_cross_checks(
                 "source_ann_rule_version": copied.get("source_rule_version"),
                 "title": copied.get("title"),
                 "st_cross_check": cross_check,
+                "classifier_issuer_binding": classifier_issuer_binding,
             }
         )
-        detail = copied.get("classification_detail") or {}
-        if not isinstance(detail, dict):
-            detail = {"source_classification_detail": detail}
-        detail = dict(detail)
         detail["st_cross_check"] = cross_check
         copied["ann_signal_evidence"] = evidence
         copied["classification_detail"] = detail

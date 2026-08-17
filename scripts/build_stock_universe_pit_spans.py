@@ -37,6 +37,7 @@ from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_IPO_TRADING_SESSIONS,
     CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_SCOPE,
+    CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     CANONICAL_PIT_UNIVERSE_KEY,
     canonical_rule_parameters_digest,
 )
@@ -746,11 +747,18 @@ def _load_confirmed_delisting_events(conn: Any, calendar: TradingCalendar, end_d
              WHERE event_type = 'stock_delisting_confirmed'
                AND time_mode = 'backtest'
                AND signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')
+               AND evidence->>'terminal_evidence_contract' = %s
+               AND evidence#>>'{{issuer_binding,schema_version}}' = 'announcement_issuer_binding_v1'
+               AND evidence#>>'{{issuer_binding,status}}' = 'EXACT'
+               AND evidence#>>'{{issuer_binding,actionable}}' = 'true'
+               AND evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code
+               AND evidence#>>'{{st_cross_check,matched}}' = 'true'
+               AND evidence#>>'{{st_cross_check,terminal}}' = 'true'
                AND COALESCE((available_at AT TIME ZONE 'Asia/Shanghai')::date, source_event_date::date) <= %s
                {a_share_ts_code_filter("ts_code")}
              ORDER BY ts_code, effective_trade_date, available_at, signal_id
             """,
-            (end_date,),
+            (CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT, end_date),
         )
         output: list[EventRow] = []
         for row in cur.fetchall():
@@ -837,9 +845,10 @@ def audit_canonical_terminal_evidence(
     stocks: Iterable[StockRow],
     *,
     announcement_events: Iterable[EventRow],
+    start_date: dt.date | None = None,
     end_date: dt.date | None = None,
 ) -> dict[str, Any]:
-    """Require announcement/event evidence for every historical D/P security."""
+    """Require terminal evidence only for securities exposed in the dataset window."""
 
     terminal_codes = {
         event.ts_code
@@ -848,18 +857,29 @@ def audit_canonical_terminal_evidence(
         and event.source != "market.stock_basic"
         and (end_date is None or event.action_date <= end_date)
     }
+    pre_window = sorted(
+        stock.ts_code
+        for stock in stocks
+        if str(stock.list_status or "").upper() == "D"
+        and start_date is not None
+        and stock.delist_date is not None
+        and stock.delist_date < start_date
+    )
     required = sorted(
         stock.ts_code
         for stock in stocks
         if str(stock.list_status or "").upper() == "P"
         or (
             str(stock.list_status or "").upper() == "D"
+            and (start_date is None or (stock.delist_date is not None and stock.delist_date >= start_date))
             and (end_date is None or (stock.delist_date is not None and stock.delist_date <= end_date))
         )
     )
     missing = sorted(set(required).difference(terminal_codes))
     receipt = {
         "required_terminal_security_count": len(required),
+        "pre_window_terminal_security_count": len(pre_window),
+        "pre_window_terminal_security_codes": pre_window,
         "announcement_terminal_evidence_count": len(set(required).intersection(terminal_codes)),
         "missing_terminal_evidence_count": len(missing),
         "missing_terminal_evidence_codes": missing,
@@ -1429,6 +1449,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             audit_canonical_terminal_evidence(
                 stocks,
                 announcement_events=st_events + confirmed_delisting_events,
+                start_date=start_date,
                 end_date=end_date,
             )
             if canonical_scope

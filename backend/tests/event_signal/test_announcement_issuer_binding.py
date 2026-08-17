@@ -1,5 +1,7 @@
 import datetime as dt
 
+from backend.services.canonical_equity_pit import CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
+
 from backend.services.event_signal.announcement_issuer_binding import (
     ISSUER_BINDING_LATERAL_SQL,
     IssuerBindingStatus,
@@ -103,3 +105,44 @@ def test_attach_records_evidence_without_mutating_raw_row() -> None:
     assert enriched[0]["issuer_fact_status"] == "SUPERSEDED"
     assert enriched[0]["ann_signal_evidence"]["issuer_binding"]["resolved_ts_code"] == "002070.SZ"
     assert counts == {"DUPLICATE_PROVIDER_ALIAS": 1}
+
+
+def test_exact_terminal_binding_emits_v2_contract() -> None:
+    enriched, counts = attach_announcement_issuer_bindings(
+        [_row()],
+        require_terminal_cross_check=True,
+    )
+
+    evidence = enriched[0]["ann_signal_evidence"]
+    assert evidence["terminal_evidence_contract"] == CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
+    assert evidence["issuer_binding"]["status"] == "EXACT"
+    assert evidence["issuer_binding"]["actionable"] is True
+    assert counts == {"EXACT": 1}
+
+
+def test_suppressed_binding_removes_stale_terminal_contract() -> None:
+    source = _row(
+        ts_code="000001.SZ",
+        ann_signal_evidence={
+            "terminal_evidence_contract": "issuer_bound_stock_delisting_v1",
+            "st_cross_check": {"matched": True, "terminal": True},
+        },
+    )
+
+    enriched, _ = attach_announcement_issuer_bindings(
+        [source],
+        require_terminal_cross_check=True,
+    )
+
+    assert enriched[0]["ann_signal_status"] == "SUPPRESSED"
+    assert "terminal_evidence_contract" not in enriched[0]["ann_signal_evidence"]
+
+
+def test_pre_suppressed_exact_binding_does_not_emit_terminal_contract() -> None:
+    enriched, _ = attach_announcement_issuer_bindings(
+        [_row(ann_signal_status="SUPPRESSED")],
+        require_terminal_cross_check=True,
+    )
+
+    assert enriched[0]["ann_signal_status"] == "SUPPRESSED"
+    assert "terminal_evidence_contract" not in enriched[0]["ann_signal_evidence"]

@@ -1716,6 +1716,67 @@ def test_bug_1107_offline_hmm_ridge_runtime_contract_is_none_and_exact() -> None
     assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
+def test_bug_1113_offline_subset_is_exact_and_global_service_is_backend() -> None:
+    changed_files = [
+        "backend/services/announcements/title_classifier.py",
+        "backend/services/event_signal/st_announcement_adapter.py",
+        "backend/tests/announcements/test_title_classifier.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py",
+        "backend/tests/test_stock_universe_pit_spans.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "scripts/classify_announcement_titles_v0.py",
+        "scripts/sync_eastmoney_anns_metadata.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_backend = workflow._classify_runtime_impact(
+        ["backend/services/event_signal/unregistered_runtime_candidate.py"]
+    )
+    nearby_script = workflow._classify_runtime_impact(
+        ["scripts/unregistered_announcement_operator.py"]
+    )
+    actual_runtime = workflow._classify_runtime_impact(
+        [
+            *changed_files,
+            "backend/services/canonical_equity_pit.py",
+            "backend/services/stock_universe_pit_service.py",
+        ]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_backend["runtime_impact"] == "backend"
+    assert nearby_backend["target_ids"] == ["backend-main"]
+    assert nearby_script["runtime_impact"] == "unknown"
+    assert actual_runtime["runtime_impact"] == "backend"
+    assert actual_runtime["runtime_files"] == [
+        "backend/services/canonical_equity_pit.py",
+        "backend/services/stock_universe_pit_service.py",
+    ]
+    assert actual_runtime["target_ids"] == ["backend-main"]
+
+
 def test_bug_1114_repair_script_is_exact_non_runtime_but_adapter_change_is_backend() -> None:
     repair = workflow._classify_runtime_impact(
         ["scripts/repair_announcement_event_signal_issuer_binding.py"]

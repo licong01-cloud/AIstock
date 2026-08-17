@@ -18,6 +18,8 @@ from enum import Enum
 from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
+from backend.services.canonical_equity_pit import CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
+
 
 ISSUER_BINDING_SCHEMA_VERSION = "announcement_issuer_binding_v1"
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -218,6 +220,19 @@ def attach_announcement_issuer_bindings(
             evidence = {"source_signal_evidence": evidence}
         evidence = dict(evidence)
         evidence["issuer_binding"] = decision.evidence()
+        if (
+            require_terminal_cross_check
+            and copied.get("event_type") == "stock_delisting_confirmed"
+            and decision.status is IssuerBindingStatus.EXACT
+            and decision.actionable
+            and decision.resolved_ts_code == str(copied.get("ts_code") or "").strip()
+            and decision.signal_status in {"ACTIVE", "RESOLVED", "EXPIRED"}
+        ):
+            evidence["terminal_evidence_contract"] = (
+                CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
+            )
+        else:
+            evidence.pop("terminal_evidence_contract", None)
         detail = copied.get("classification_detail") or {}
         if not isinstance(detail, dict):
             detail = {"source_classification_detail": detail}

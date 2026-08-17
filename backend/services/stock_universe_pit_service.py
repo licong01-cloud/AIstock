@@ -16,6 +16,7 @@ from .canonical_equity_pit import (
     CANONICAL_PIT_IPO_TRADING_SESSIONS,
     CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_SCOPE,
+    CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     CANONICAL_PIT_UNIVERSE_KEY,
     CanonicalPitAuthorityResolver,
     PitConsumerBinding,
@@ -286,15 +287,25 @@ class StockUniversePitService:
                          WHERE event_type = 'stock_delisting_confirmed'
                            AND time_mode = 'backtest'
                            AND signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')
+                           AND evidence->>'terminal_evidence_contract' = %s
+                           AND evidence#>>'{{issuer_binding,schema_version}}' = 'announcement_issuer_binding_v1'
+                           AND evidence#>>'{{issuer_binding,status}}' = 'EXACT'
+                           AND evidence#>>'{{issuer_binding,actionable}}' = 'true'
+                           AND evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code
+                           AND evidence#>>'{{st_cross_check,matched}}' = 'true'
+                           AND evidence#>>'{{st_cross_check,terminal}}' = 'true'
                            AND COALESCE(
                                (available_at AT TIME ZONE 'Asia/Shanghai')::date,
                                source_event_date::date
                            ) <= %s
                            {a_share_ts_code_filter("ts_code")}
                         """,
-                        (fingerprint_end,),
+                        (CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT, fingerprint_end),
                     )
                     confirmed_delisting = dict(cur.fetchone() or {})
+                    confirmed_delisting["terminal_evidence_contract"] = (
+                        CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
+                    )
         fingerprint = {
             "fingerprint_end_date": fingerprint_end.isoformat(),
             "stock_basic": stock_basic,

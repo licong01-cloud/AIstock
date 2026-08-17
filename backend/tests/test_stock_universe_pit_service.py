@@ -21,10 +21,25 @@ from backend.services.stock_universe_pit_service import (
 )
 from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     PitAuthorityStatus,
     PitConsumerBinding,
     canonical_rule_parameters_digest,
 )
+
+
+def test_canonical_source_fingerprint_uses_builder_terminal_evidence_contract() -> None:
+    source = inspect.getsource(StockUniversePitService.compute_source_fingerprint)
+
+    assert "CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT" in source
+    assert "evidence->>'terminal_evidence_contract' = %s" in source
+    assert "evidence#>>'{{issuer_binding,schema_version}}' = 'announcement_issuer_binding_v1'" in source
+    assert "evidence#>>'{{issuer_binding,status}}' = 'EXACT'" in source
+    assert "evidence#>>'{{issuer_binding,actionable}}' = 'true'" in source
+    assert "evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code" in source
+    assert "evidence#>>'{{st_cross_check,matched}}' = 'true'" in source
+    assert "evidence#>>'{{st_cross_check,terminal}}' = 'true'" in source
+    assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v2"
 
 
 QE_SNAPSHOT_KEY = "shsz_st_pit_qe_dataset_test_20180801_20260630_v1"
