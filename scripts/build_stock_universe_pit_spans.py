@@ -37,6 +37,7 @@ from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_IPO_TRADING_SESSIONS,
     CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_SCOPE,
+    CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     CANONICAL_PIT_UNIVERSE_KEY,
     canonical_rule_parameters_digest,
 )
@@ -746,14 +747,14 @@ def _load_confirmed_delisting_events(conn: Any, calendar: TradingCalendar, end_d
              WHERE event_type = 'stock_delisting_confirmed'
                AND time_mode = 'backtest'
                AND signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')
-               AND evidence->>'terminal_evidence_contract' = 'issuer_bound_stock_delisting_v1'
+               AND evidence->>'terminal_evidence_contract' = %s
                AND evidence#>>'{{issuer_binding,status}}' = 'verified'
                AND evidence#>>'{{issuer_binding,terminal_subject}}' = 'self'
                AND COALESCE((available_at AT TIME ZONE 'Asia/Shanghai')::date, source_event_date::date) <= %s
                {a_share_ts_code_filter("ts_code")}
              ORDER BY ts_code, effective_trade_date, available_at, signal_id
             """,
-            (end_date,),
+            (CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT, end_date),
         )
         output: list[EventRow] = []
         for row in cur.fetchall():

@@ -126,6 +126,45 @@ def test_cross_security_risk_warning_is_downgraded_from_trading_signal():
     assert result.action == "warn_review"
 
 
+def test_title_fullname_cannot_override_mismatched_announcement_name():
+    classifier = AnnouncementTitleClassifier()
+
+    result, binding = classifier.classify_with_issuer(
+        "关于平安银行股份有限公司股票终止上市的公告",
+        ts_code="000001.SZ",
+        announcement_name="中弘退",
+        security_name="平安银行",
+        security_fullname="平安银行股份有限公司",
+        security_list_status="L",
+    )
+
+    assert binding.fullname_match is True
+    assert binding.name_match is False
+    assert binding.status == "unverified"
+    assert binding.reason == "announcement_name_does_not_match_security"
+    assert result.event_type == "stock_delisting_reference_unverified"
+
+
+def test_title_fullname_is_allowed_only_when_source_name_is_missing():
+    classifier = AnnouncementTitleClassifier()
+
+    result, binding = classifier.classify_with_issuer(
+        "关于中弘控股股份有限公司股票终止上市的公告",
+        ts_code="000979.SZ",
+        announcement_name="",
+        security_name="中弘退(退)",
+        security_fullname="中弘控股股份有限公司",
+        security_list_status="D",
+    )
+
+    assert binding.name_match is False
+    assert binding.fullname_match is True
+    assert binding.status == "verified"
+    assert binding.reason == "title_name_or_fullname_match"
+    assert binding.terminal_subject == "self"
+    assert result.event_type == "stock_delisting_confirmed"
+
+
 def test_confirmed_delisting_accepts_matching_fullname_and_delisted_name_suffix():
     classifier = AnnouncementTitleClassifier()
 

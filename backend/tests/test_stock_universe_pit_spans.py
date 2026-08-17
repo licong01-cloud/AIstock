@@ -4,6 +4,8 @@ import datetime as dt
 
 import pytest
 
+from backend.services.canonical_equity_pit import CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
+
 from scripts.build_stock_universe_pit_spans import (
     EventRow,
     SpanRow,
@@ -436,7 +438,8 @@ def test_universe_source_queries_exclude_b_shares() -> None:
             assert exclude in sql, sql
     delisting_sql = executed[-1]
     assert "time_mode = 'backtest'" in delisting_sql
-    assert "terminal_evidence_contract' = 'issuer_bound_stock_delisting_v1'" in delisting_sql
+    assert "terminal_evidence_contract' = %s" in delisting_sql
+    assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v1"
     assert "'{issuer_binding,status}' = 'verified'" in delisting_sql
     assert "'{issuer_binding,terminal_subject}' = 'self'" in delisting_sql
     assert "signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')" in delisting_sql

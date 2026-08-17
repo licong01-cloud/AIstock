@@ -675,10 +675,14 @@ def verify_announcement_issuer(
 
     if not ts_code or not security_name:
         status, reason = "unverified", "security_master_missing"
-    elif not (name_match or fullname_match or short_name_match):
+    elif ann_name and not name_match:
         status, reason = "unverified", "announcement_name_does_not_match_security"
+    elif name_match:
+        status, reason = "verified", "announcement_name_matches_security"
+    elif not (fullname_match or short_name_match):
+        status, reason = "unverified", "security_name_not_proven"
     else:
-        status, reason = "verified", "security_name_or_fullname_match"
+        status, reason = "verified", "title_name_or_fullname_match"
 
     terminal_subject = "not_required"
     if require_terminal_subject:

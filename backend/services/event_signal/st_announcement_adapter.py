@@ -42,6 +42,7 @@ ENGINE_NAME = "STFirstAnnouncementEventSignalAdapter"
 
 ST_FIRST_EVENT_TYPES: tuple[str, ...] = (
     "stock_delisting_confirmed",
+    "stock_delisting_predecision",
     "stock_delisting_risk_warning",
     "stock_st_imposed",
     "stock_st_added_or_continued",
@@ -53,6 +54,7 @@ ST_FIRST_EVENT_TYPES: tuple[str, ...] = (
 
 ST_SIGNAL_EVENT_TYPES: tuple[str, ...] = (
     "stock_delisting_confirmed",
+    "stock_delisting_predecision",
     "stock_delisting_risk_warning",
     "stock_st_imposed",
     "stock_st_added_or_continued",
@@ -111,7 +113,7 @@ def st_first_rule_config(
                 "signal_event_types": list(ST_SIGNAL_EVENT_TYPES),
             }
         },
-        "phase": "st_first_announcement_rules_v1",
+        "phase": "st_first_announcement_rules_v2",
         "llm_enabled": False,
         "pdf_enabled": False,
         "trading_consumption_enabled": False,

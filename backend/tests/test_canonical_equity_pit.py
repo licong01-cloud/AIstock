@@ -13,6 +13,7 @@ from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_AUTHORITY_ID,
     CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_SNAPSHOT_PREFIX,
+    CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     CANONICAL_PIT_UNIVERSE_KEY,
     CanonicalPitContractError,
     PitAuthorityStatus,
@@ -20,6 +21,10 @@ from backend.services.canonical_equity_pit import (
     canonical_rule_parameters_digest,
     require_canonical_consumer_binding,
 )
+
+
+def test_canonical_terminal_evidence_contract_is_explicit_and_versioned() -> None:
+    assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v1"
 
 
 def test_pit_authority_status_preserves_string_enum_contract() -> None:

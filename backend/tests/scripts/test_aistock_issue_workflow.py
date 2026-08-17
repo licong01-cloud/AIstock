@@ -1716,7 +1716,7 @@ def test_bug_1107_offline_hmm_ridge_runtime_contract_is_none_and_exact() -> None
     assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
-def test_bug_1113_issuer_pit_offline_runtime_contract_is_none_and_exact() -> None:
+def test_bug_1113_offline_subset_is_exact_and_global_service_is_backend() -> None:
     changed_files = [
         "backend/services/announcements/title_classifier.py",
         "backend/services/event_signal/st_announcement_adapter.py",
@@ -1747,6 +1747,13 @@ def test_bug_1113_issuer_pit_offline_runtime_contract_is_none_and_exact() -> Non
     nearby_script = workflow._classify_runtime_impact(
         ["scripts/unregistered_announcement_operator.py"]
     )
+    actual_runtime = workflow._classify_runtime_impact(
+        [
+            *changed_files,
+            "backend/services/canonical_equity_pit.py",
+            "backend/services/stock_universe_pit_service.py",
+        ]
+    )
 
     assert inference == {
         "runtime_impact": "none",
@@ -1762,6 +1769,12 @@ def test_bug_1113_issuer_pit_offline_runtime_contract_is_none_and_exact() -> Non
     assert nearby_backend["runtime_impact"] == "backend"
     assert nearby_backend["target_ids"] == ["backend-main"]
     assert nearby_script["runtime_impact"] == "unknown"
+    assert actual_runtime["runtime_impact"] == "backend"
+    assert actual_runtime["runtime_files"] == [
+        "backend/services/canonical_equity_pit.py",
+        "backend/services/stock_universe_pit_service.py",
+    ]
+    assert actual_runtime["target_ids"] == ["backend-main"]
 
 
 def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(

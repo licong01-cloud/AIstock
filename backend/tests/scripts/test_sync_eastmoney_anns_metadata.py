@@ -74,6 +74,26 @@ def test_rows_from_item_fails_closed_when_multiple_security_identities_match() -
     assert audit["issuer_rejected_count"] == 2
 
 
+def test_rows_from_item_rejects_title_match_when_source_name_disagrees() -> None:
+    audit: Counter[str] = Counter()
+    identities = {
+        "000001.SZ": ("平安银行", "平安银行股份有限公司"),
+    }
+    item = _item([{"stock_code": "000001", "short_name": "中弘退"}])
+    item["title_ch"] = "关于平安银行股份有限公司股票终止上市的公告"
+
+    rows = MODULE.rows_from_item(
+        item,
+        dt.date(2018, 11, 8),
+        identities,
+        audit,
+    )
+
+    assert rows == []
+    assert audit["issuer_verified_count"] == 0
+    assert audit["issuer_rejected_count"] == 1
+
+
 def test_sync_one_date_reports_primary_and_rollback_failures(monkeypatch) -> None:
     class BrokenConnection:
         def rollback(self) -> None:

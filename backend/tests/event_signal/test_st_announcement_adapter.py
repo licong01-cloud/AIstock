@@ -45,6 +45,7 @@ def test_st_first_rule_config_is_isolated_from_trading_consumers():
     config = st_first_rule_config()
 
     assert config["version"] == ST_UNIFIED_RULE_VERSION
+    assert config["phase"] == "st_first_announcement_rules_v2"
     assert config["engine_name"] == ENGINE_NAME
     assert config["llm_enabled"] is False
     assert config["pdf_enabled"] is False
@@ -52,6 +53,8 @@ def test_st_first_rule_config_is_isolated_from_trading_consumers():
     assert config["adapters"]["announcement_st_first"]["source_rule_version"] == ANNOUNCEMENT_RULE_VERSION
     assert config["adapters"]["announcement_st_first"]["event_types"] == list(ST_FIRST_EVENT_TYPES)
     assert config["adapters"]["announcement_st_first"]["signal_event_types"] == list(ST_SIGNAL_EVENT_TYPES)
+    assert "stock_delisting_predecision" in ST_FIRST_EVENT_TYPES
+    assert "stock_delisting_predecision" in ST_SIGNAL_EVENT_TYPES
 
 
 def test_select_best_st_event_matches_nearest_pub_or_effective_date():
@@ -168,3 +171,26 @@ def test_unverified_delisting_never_emits_terminal_contract():
     rows, _ = attach_st_cross_checks([row], {})
 
     assert "terminal_evidence_contract" not in rows[0]["ann_signal_evidence"]
+
+
+def test_predecision_is_high_risk_signal_but_never_terminal_evidence():
+    row = _sample_row()
+    row.update(
+        {
+            "event_type": "stock_delisting_predecision",
+            "matched_rule": "stock_delisting_predecision",
+            "classification_detail": {
+                "issuer_binding": {
+                    "status": "verified",
+                    "terminal_subject": "not_required",
+                }
+            },
+        }
+    )
+
+    rows, _ = attach_st_cross_checks([row], {})
+
+    evidence = rows[0]["ann_signal_evidence"]
+    assert rows[0]["risk_level"] == "P0_BLOCK"
+    assert rows[0]["action"] == "block_buy"
+    assert "terminal_evidence_contract" not in evidence
