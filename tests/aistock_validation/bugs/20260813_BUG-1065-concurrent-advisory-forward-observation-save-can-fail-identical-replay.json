@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1065",
-  "closed_at": null,
+  "closed_at": "2026-08-17T17:08:17.488486Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -106,7 +106,7 @@
   },
   "first_seen_at": "2026-08-13T05:08:30.270716Z",
   "fix_branch": "feature/advisory-forward-p0ab-design-20260813",
-  "fix_commit": "51f803ff",
+  "fix_commit": "51f803ff2091b758b5d29202584336a184d5ae97",
   "fixed_at": "2026-08-13T05:10:00Z",
   "github_issue_number": 3394,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3394",
@@ -115,8 +115,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3366",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending_explicit_authorization",
+  "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Review AdvisoryForwardPGRepository.save_observation parent lock and concurrent missing-row insert path",
   "required_verification": [
@@ -130,12 +131,31 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
     "database_readback_ref": "not_required",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "2026-08-18 fresh Python process loaded the merged Advisory forward source and ran python -m pytest backend/tests/advisory_model_first/test_forward_scheduler.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_postgres.py -q -p no:cacheprovider -> 30 passed"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/validation/BUG-1065/post_restart_receipt_20260818.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1065",
+      "catalog_sha256": "7b1fafc3311c7eec2f7eb08ca681bfe19ded9fadd2b672a5acf1904ba203bb3b",
+      "contract_digest": "8b0ef7ec7cb95d444a965236c1b91c43dd7b68dc6bba09a6f67e27bfacbcfe03",
+      "expected_identity": "51f803ff2091b758b5d29202584336a184d5ae97",
+      "generated_at": "2026-08-17T17:03:59.474711Z",
+      "mode": "read_only",
+      "observed_identity": "9a7a2718026f6d62f218fbe09d8b82f3d697b6c3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2aaa7ddbea601a940879800de16928bc86d7f436e9c4010b7c458045508e0a38",
+      "receipt_sha256": "948b119a62632048272c1545b47261a60d078539566006e99cf0f0ced274dc55",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "dbc31eaead9ab75628f4cdcf6ce0220f7fb491b6e0d652db0ce9cf67bf135dbe",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -145,7 +165,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -154,6 +174,12 @@
     "fingerprint": "41059b8147f2b6eeb8bc1972",
     "source_event_id": "FE-20260813-41059b8147f2"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_forward_postgres.py backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_scheduler.py -q -p no:cacheprovider -> 26 passed",
+    "python -m ruff check backend/services/advisory_forward/repository.py backend/tests/advisory_model_first/test_forward_postgres.py -> passed",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md --tier F2 -> PASS, 21/21, 0 warnings",
+    "fresh-process Advisory forward matrix -> 30 passed; post-restart-verify 2026-08-18 -> workflow_gate=verified; runtime 9a7a2718 includes source fix 51f803ff"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -259,11 +285,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3366",
-  "validation_evidence": [
-    "python -m pytest backend/tests/advisory_model_first/test_forward_postgres.py backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_scheduler.py -q -p no:cacheprovider -> 26 passed",
-    "python -m ruff check backend/services/advisory_forward/repository.py backend/tests/advisory_model_first/test_forward_postgres.py -> passed",
-    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md --tier F2 -> PASS, 21/21, 0 warnings"
-  ]
+  }
 }
