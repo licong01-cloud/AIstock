@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-979",
-  "closed_at": null,
+  "closed_at": "2026-08-17T16:51:39.573478Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -111,9 +111,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\validation\\BUG-979\\post_restart_receipt_20260818.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-979",
+      "catalog_sha256": "7b1fafc3311c7eec2f7eb08ca681bfe19ded9fadd2b672a5acf1904ba203bb3b",
+      "contract_digest": "e0882135399d775f9eced981923807b0c8d0609903119002a5f605a24be9ff39",
+      "expected_identity": "2aaf602d752e1e9052b4d800d08502de7b8d33f5",
+      "generated_at": "2026-08-17T16:29:23.924403Z",
+      "mode": "read_only",
+      "observed_identity": "9a7a2718026f6d62f218fbe09d8b82f3d697b6c3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "73f86768280b56c7b84764125b1c94be7308abdd780bdd6fa0e1a7343d2c5de5",
+      "receipt_sha256": "ebaedd46b09537303fcc8062ac41154e439af154c0a7cc407678c659ba449aa4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "097543668e10e87de9541f613107b905b577c31336fee8e53404ea8fec18df61",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -123,7 +139,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -133,15 +149,8 @@
     "source_event_id": "FE-20260804-1a7df086625f"
   },
   "validation_evidence": [
-    {
-      "command": "python -m nox -s advisory_historical_range_backend",
-      "commit": "2aaf602d752e1e9052b4d800d08502de7b8d33f5",
-      "evidence_kind": "nox",
-      "receipt_id": "2aaf602d752e1e90",
-      "result": "325 passed, 5 skipped; source PR CI verdict passed",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    }
+    "{'command': 'python -m nox -s advisory_historical_range_backend', 'commit': '2aaf602d752e1e9052b4d800d08502de7b8d33f5', 'evidence_kind': 'nox', 'receipt_id': '2aaf602d752e1e90', 'result': '325 passed, 5 skipped; source PR CI verdict passed', 'schema_version': 'aistock_validation_receipt_v1', 'status': 'passed'}",
+    "post-restart-verify 2026-08-18 -> workflow_gate=verified; runtime 9a7a2718 includes source fix 2aaf602d"
   ],
   "verification_budget": {
     "budget": "standard",
