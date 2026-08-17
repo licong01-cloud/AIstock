@@ -158,7 +158,7 @@ def _runtime_bug(root: Path, **overrides: Any) -> dict[str, Any]:
             "operator_runbook_ref": "docs/operations/example_backend_restart.md",
             "health_ref": "http://127.0.0.1:8001/api/v1/health",
             "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-            "business_smoke_ref": "http://127.0.0.1:8001/api/v1/example/smoke",
+            "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
             "database_readback_ref": "not_required",
         },
     )
@@ -172,17 +172,28 @@ def _passed_runtime_receipt(root: Path, record: dict[str, Any], *, expected_iden
         changed_files=record["allowed_write_scope"],
         root=root,
     )
-    probes = [
-        {
+    probes = []
+    for name in ("health_ref", "identity_ref", "business_smoke_ref"):
+        probe: dict[str, Any] = {
             "name": name,
             "url": contract["target"]["probes"][name],
             "status": "passed",
             "status_code": 200,
+            "transport": {"status_code": 200, "ok": True, "error": None},
+            "payload_schema": {"json": True, "kind": "object"},
             "response_sha256": f"sha-{name}",
             "response_bytes": 20,
         }
-        for name in ("health_ref", "identity_ref", "business_smoke_ref")
-    ]
+        if name == "business_smoke_ref":
+            probe["semantic"] = {
+                "schema_version": workflow.BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": "health_ok",
+                "verdict": "passed",
+                "reason": None,
+                "facts": {"status": "ok"},
+                "response_sha256": "sha-business_smoke_ref",
+            }
+        probes.append(probe)
     identity_proof = {
         "schema_version": "aistock_runtime_identity_proof_v1",
         "mode": "exact",
@@ -209,6 +220,7 @@ def _passed_runtime_receipt(root: Path, record: dict[str, Any], *, expected_iden
         "runtime_identity_match": True,
         "process_control_performed": False,
         "blocking": [],
+        "business_smoke_semantic": next(probe["semantic"] for probe in probes if probe["name"] == "business_smoke_ref"),
         "probes": probes,
         "probe_evidence_digest": workflow._probe_evidence_digest(probes),
     }
@@ -2181,6 +2193,374 @@ def test_post_restart_verify_rejects_unproven_deployed_commit(
     assert payload["runtime_identity_match"] is False
     assert payload["observed_identity"] == observed
     assert any(expected_error in item for item in payload["blocking"])
+
+
+_BUSINESS_SMOKE_RUN_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055"
+_BUSINESS_SMOKE_SCHEDULER_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
+_BUG992_RECORD_REF = (
+    "tests/aistock_validation/bugs/"
+    "20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json"
+)
+_BUG992_EXPECTED_IDENTITY = "ad24e15857fef09d70bf3125fbacc280ac1f44d6"
+
+
+class _StubProbeResponse:
+    status = 200
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self) -> "_StubProbeResponse":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def read(self, _limit: int) -> bytes:
+        return self.body
+
+
+def _install_stub_probes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    smoke_body: bytes,
+    identity_body: bytes = b'{"commit":"merge-abc123"}',
+    health_body: bytes = b'{"status":"ok"}',
+) -> None:
+    def fake_open(request: Any, *, timeout_seconds: float) -> _StubProbeResponse:
+        url = str(request.full_url)
+        if "runtime-identity" in url:
+            return _StubProbeResponse(identity_body)
+        if url.endswith("/api/v1/health"):
+            return _StubProbeResponse(health_body)
+        return _StubProbeResponse(smoke_body)
+
+    monkeypatch.setattr(workflow, "_open_read_only_url", fake_open)
+
+
+def _semantic_runtime_issue(root: Path, *, smoke_url: str) -> Path:
+    _write_runtime_catalog(root)
+    record = _runtime_bug(root)
+    record["runtime_contract"]["business_smoke_ref"] = smoke_url
+    return _write_json(root / "runtime-bug.json", record)
+
+
+def _smoke_probe(payload: dict[str, Any]) -> dict[str, Any]:
+    return next(probe for probe in payload["probes"] if probe["name"] == "business_smoke_ref")
+
+
+def test_post_restart_verify_blocks_failed_retryable_run_payload_on_http_200(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "FAILED_RETRYABLE"}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["post_restart_effective_gate"] == "failed"
+    assert payload["runtime_identity_match"] is True
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["transport"] == {"status_code": 200, "ok": True, "error": None}
+    assert smoke["payload_schema"] == {"json": True, "kind": "object"}
+    assert smoke["semantic"]["contract_id"] == "run_terminal_success"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED_RETRYABLE" in smoke["semantic"]["reason"]
+    assert any("business_smoke_ref" in item for item in payload["blocking"])
+
+
+def test_post_restart_verify_blocks_intraday_running_run_payload_on_http_200(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "INTRADAY_RUNNING"}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "closure" in smoke["semantic"]["reason"]
+    assert "INTRADAY_RUNNING" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_verifies_run_payload_reaching_terminal_success(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "SUCCEEDED"}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["blocking"] == []
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "run_terminal_success"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["reason"] is None
+    receipt = json.loads((isolated_workflow_root / payload["receipt_path"]).read_text(encoding="utf-8"))
+    assert receipt["business_smoke_semantic"]["verdict"] == "passed"
+    assert receipt["business_smoke_semantic"]["contract_id"] == "run_terminal_success"
+    assert receipt["business_smoke_semantic"]["response_sha256"] == smoke["response_sha256"]
+
+
+def test_post_restart_verify_blocks_scheduler_payload_with_active_blocker_on_http_200(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "last_result_errors": ["LOCALSIM_DURABLE_ORDER_PLAN_MISMATCH"],
+                    "last_blocking_result": {"reason": "LOCALSIM_DURABLE_ORDER_PLAN_MISMATCH"},
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["runtime_identity_match"] is True
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["transport"]["ok"] is True
+    assert smoke["semantic"]["contract_id"] == "scheduler_status"
+    assert smoke["semantic"]["verdict"] == "failed"
+
+
+def test_post_restart_verify_blocks_malformed_business_smoke_payload(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(monkeypatch, smoke_body=b"this is not json")
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["payload_schema"] == {"json": False, "kind": "none"}
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "parseable JSON" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_blocks_unknown_business_smoke_endpoint(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/api/v1/example/smoke",
+    )
+    _install_stub_probes(monkeypatch, smoke_body=b'{"status":"ok"}')
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["semantic"]["contract_id"] is None
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "no target-owned business-smoke semantic contract" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_blocks_business_success_when_identity_mismatches(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(
+        monkeypatch,
+        identity_body=b'{"commit":"unexpected-identity"}',
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "SUCCEEDED"}}
+        ).encode(),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *args, **kwargs: {"ok": False, "returncode": 1, "stdout": "", "stderr": "no git"},
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["runtime_identity_match"] is False
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["verdict"] == "passed"
+
+
+def _write_bug992_runtime_catalog(root: Path) -> Path:
+    path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "aistock_runtime_target_catalog_v1",
+                "targets": {
+                    "backend-main": {
+                        "runtime_kind": "backend",
+                        "source_globs": ["backend/**/*.py"],
+                        "production_port": 8001,
+                        "isolated_validation_ports": [8011, 8012],
+                        "probe_origins": ["http://127.0.0.1:8001"],
+                        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+                        "expected_identity_ref": "merged_commit",
+                        "probes": {
+                            "health_ref": "http://127.0.0.1:8001/api/v1/health",
+                            "identity_ref": "bug_record.runtime_contract.identity_ref",
+                            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+                            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+                        },
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _prepare_bug992_original_scenario(root: Path, monkeypatch: pytest.MonkeyPatch, *, smoke_body: bytes) -> Path:
+    _write_bug992_runtime_catalog(root)
+    repo_root = Path(workflow.__file__).resolve().parent.parent
+    record = json.loads((repo_root / _BUG992_RECORD_REF).read_text(encoding="utf-8"))
+    runbook = root / "docs" / "operations" / "backend_main_runtime_restart_runbook.md"
+    runbook.parent.mkdir(parents=True, exist_ok=True)
+    runbook.write_text("# User-owned backend restart runbook\n", encoding="utf-8")
+    _install_stub_probes(
+        monkeypatch,
+        identity_body=json.dumps({"commit": _BUG992_EXPECTED_IDENTITY}).encode(),
+        smoke_body=smoke_body,
+    )
+    return _write_json(root / "bug-992.json", record)
+
+
+def test_post_restart_verify_reproduces_bug992_failed_retryable_scenario_as_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _prepare_bug992_original_scenario(
+        isolated_workflow_root,
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "FAILED_RETRYABLE"}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=_BUG992_EXPECTED_IDENTITY,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["runtime_identity_match"] is True
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["post_restart_effective_gate"] == "failed"
+    smoke = _smoke_probe(payload)
+    assert smoke["url"] == _BUSINESS_SMOKE_RUN_URL
+    assert smoke["status"] == "failed"
+    assert smoke["transport"]["status_code"] == 200
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED_RETRYABLE" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_bug992_contract_verifies_after_run_reaches_success(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _prepare_bug992_original_scenario(
+        isolated_workflow_root,
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "SUCCEEDED"}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=_BUG992_EXPECTED_IDENTITY,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["runtime_identity_match"] is True
+    assert _smoke_probe(payload)["semantic"]["verdict"] == "passed"
 
 
 _BUG_993_BUG989_CHANGED_FILES = [
