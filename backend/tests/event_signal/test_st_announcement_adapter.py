@@ -11,6 +11,7 @@ from backend.services.event_signal.st_announcement_adapter import (
     select_best_st_event,
     st_first_rule_config,
 )
+from backend.services.event_signal.announcement_issuer_binding import attach_announcement_issuer_bindings
 
 
 def _sample_row() -> dict:
@@ -37,6 +38,7 @@ def _sample_row() -> dict:
         "time_mode": "backtest",
         "title": "关于公司股票被实施退市风险警示暨停牌的公告",
         "ann_signal_evidence": {},
+        "issuer_candidate_ts_codes": ["000001.SZ"],
     }
 
 
@@ -104,6 +106,46 @@ def test_select_best_st_event_reports_unmatched_outside_window():
     assert result["match_reason"] == "nearest_stock_st_event_outside_5_day_window"
 
 
+def test_select_best_st_event_rejects_future_cross_check_for_pit_signal() -> None:
+    row = _sample_row()
+    result = select_best_st_event(
+        row,
+        [
+            {
+                "ts_code": "000001.SZ",
+                "pub_date": dt.date(2026, 5, 2),
+                "imp_date": dt.date(2026, 5, 6),
+                "st_type": "终止上市",
+            }
+        ],
+    )
+
+    assert result["matched"] is False
+    assert result["match_reason"] == (
+        "no_stock_st_events_available_by_announcement_known_date"
+    )
+    assert result["announcement_known_date"] == dt.date(2026, 5, 1)
+
+
+def test_select_best_st_event_marks_only_terminal_evidence():
+    row = _sample_row()
+    result = select_best_st_event(
+        row,
+        [
+            {
+                "ts_code": "000001.SZ",
+                "pub_date": dt.date(2026, 4, 30),
+                "imp_date": dt.date(2026, 5, 6),
+                "st_type": "终止上市并摘牌",
+                "st_reason": "交易所决定",
+            }
+        ],
+    )
+
+    assert result["matched"] is True
+    assert result["terminal"] is True
+
+
 def test_attach_st_cross_checks_adds_evidence_without_mutating_source_row():
     row = _sample_row()
     st_event = {
@@ -125,3 +167,17 @@ def test_attach_st_cross_checks_adds_evidence_without_mutating_source_row():
     assert enriched["ann_signal_evidence"]["st_cross_check"]["st_type"] == "*ST"
     assert enriched["ann_signal_evidence"]["adapter"] == ENGINE_NAME
     assert enriched["ann_signal_reason"].startswith("P0_BLOCK stock_st_imposed")
+
+
+def test_terminal_signal_is_suppressed_when_st_cross_check_is_missing():
+    row = _sample_row()
+    row["event_type"] = "stock_delisting_confirmed"
+    rows, _matched = attach_st_cross_checks([row], {})
+    bound, counts = attach_announcement_issuer_bindings(rows, require_terminal_cross_check=True)
+
+    assert bound[0]["ann_signal_status"] == "SUPPRESSED"
+    assert bound[0]["issuer_fact_status"] == "UNKNOWN"
+    assert bound[0]["ann_signal_evidence"]["issuer_binding"]["reason_code"] == (
+        "announcement_terminal_evidence_cross_check_missing"
+    )
+    assert counts == {"TERMINAL_EVIDENCE_UNCONFIRMED": 1}

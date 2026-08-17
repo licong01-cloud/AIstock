@@ -1,0 +1,363 @@
+{
+  "actual": "Adapters trust polluted raw ts_code directly, cross-issuer signals become ACTIVE/RESOLVED/EXPIRED, production contains current-listed false delisting signals and PIT ordering violations, and DEV v2 terminal evidence cannot close.",
+  "allowed_write_scope": [
+    "backend/services/event_signal/announcement_adapter.py",
+    "backend/services/event_signal/st_announcement_adapter.py",
+    "backend/tests/event_signal/test_announcement_adapter.py",
+    "backend/tests/event_signal/test_st_announcement_adapter.py",
+    "backend/services/event_signal/announcement_issuer_binding.py",
+    "backend/tests/event_signal/test_announcement_issuer_binding.py",
+    "scripts/repair_announcement_event_signal_issuer_binding.py",
+    "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/bugs/20260817_BUG-1114-announcement-issuer-fan-out-creates-cross-security-delisting-signals-and.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1114",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-17T02:56:34.394390Z",
+  "description": "Adapters trust polluted raw ts_code directly, cross-issuer signals become ACTIVE/RESOLVED/EXPIRED, production contains current-listed false delisting signals and PIT ordering violations, and DEV v2 terminal evidence cannot close.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260817-c97ef5d8c17e",
+      "timestamp": "2026-08-17T02:56:34.394375Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Issuer binding is fail-closed, confirmed delisting requires independent terminal evidence, obsolete signals are suppressed without deletion, and the repair write set excludes EXACT rows.",
+      "timestamp": "2026-08-17T03:19:11.424470Z"
+    },
+    {
+      "action": "formal_reaudit_hardening",
+      "actor": "codex",
+      "note": "Bound repair authorization to a non-secret physical target fingerprint and all write-driving business inputs, rejected invalid authorization before DB connect, constrained issuer candidates to security lifetimes, and rejected future terminal cross-check evidence.",
+      "timestamp": "2026-08-17T05:33:24.354404Z"
+    }
+  ],
+  "evidence_uris": [
+    "DEV audit: required=321 evidenced=131 missing=190; production read-only audit: issuer_name_mismatch_rows=1542 current_listed_rows=474 PIT_ordering_violations=62"
+  ],
+  "expected": "Only a uniquely evidenced issuer may receive an actionable announcement event signal; ambiguous or unresolved bindings remain auditable and SUPPRESSED, PIT time ordering is valid, and no raw announcement or historical signal evidence is deleted.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/event_signal/announcement_issuer_binding.py",
+      "backend/tests/event_signal/test_announcement_issuer_binding.py",
+      "scripts/repair_announcement_event_signal_issuer_binding.py",
+      "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py"
+    ],
+    "changed_files": [
+      "backend/services/event_signal/announcement_adapter.py",
+      "backend/services/event_signal/st_announcement_adapter.py",
+      "backend/tests/event_signal/test_announcement_adapter.py",
+      "backend/tests/event_signal/test_st_announcement_adapter.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/event_signal/announcement_adapter.py",
+        "backend/services/event_signal/st_announcement_adapter.py",
+        "backend/tests/event_signal/test_announcement_adapter.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/services/event_signal/announcement_issuer_binding.py",
+        "backend/tests/event_signal/test_announcement_issuer_binding.py",
+        "scripts/repair_announcement_event_signal_issuer_binding.py",
+        "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "tests.backend",
+        "scripts"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/event_signal/announcement_adapter.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/event_signal/st_announcement_adapter.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/event_signal/test_announcement_adapter.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/event_signal/test_st_announcement_adapter.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/services/event_signal/announcement_issuer_binding.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/event_signal/test_announcement_issuer_binding.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "scripts/repair_announcement_event_signal_issuer_binding.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/event_signal/announcement_adapter.py",
+        "backend/services/event_signal/st_announcement_adapter.py",
+        "backend/tests/event_signal/test_announcement_adapter.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/services/event_signal/announcement_issuer_binding.py",
+        "backend/tests/event_signal/test_announcement_issuer_binding.py",
+        "scripts/repair_announcement_event_signal_issuer_binding.py",
+        "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/event_signal/announcement_adapter.py",
+      "backend/services/event_signal/st_announcement_adapter.py",
+      "backend/tests/event_signal/test_announcement_adapter.py",
+      "backend/tests/event_signal/test_st_announcement_adapter.py",
+      "backend/services/event_signal/announcement_issuer_binding.py",
+      "backend/tests/event_signal/test_announcement_issuer_binding.py",
+      "scripts/repair_announcement_event_signal_issuer_binding.py",
+      "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ]
+  },
+  "first_seen_at": "2026-08-17T02:56:34.394390Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3547,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3547",
+  "last_seen_at": "2026-08-17T02:56:34.394390Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "pending_explicit_authorization",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/build_stock_universe_pit_spans.py --universe-key aistock_equity_pit_canonical_v2 --rule-version shsz_a_252td_st_delist_asof_v2 --scope canonical_all_listed --start-date 2018-08-01 --end-date 2026-07-31 --ipo-filter-days 252 --ipo-filter-unit trading_sessions --write-mode replace --dry-run",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process imported both announcement adapters, the issuer-binding resolver, and the guarded repair planner/write-set selector, then printed BUG1114_FRESH_IMPORT_OK."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Announcement issuer fan-out creates cross-security delisting signals and blocks canonical PIT v2",
+  "trigger_condition": {
+    "fingerprint": "c97ef5d8c17ed4853d3a85fa",
+    "source_event_id": "FE-20260817-c97ef5d8c17e"
+  },
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/event_signal backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 156 passed after final formal reaudit hardening",
+    "python -m pytest -q backend/tests/event_signal/test_st_announcement_adapter.py backend/tests/event_signal/test_announcement_issuer_binding.py backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 24 passed",
+    "python -m pytest -q backend/tests/event_signal backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 148 passed",
+    "python -m pytest -q backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 8 passed after final CLI target, confirmation, plan-drift, and rollback hardening",
+    "python -m pytest -q backend/tests/scripts/test_aistock_issue_workflow.py::test_bug_1114_repair_script_is_exact_non_runtime_but_adapter_change_is_backend -> 1 passed",
+    "python -m pytest -q backend/tests/scripts/test_ci_change_classifier.py::test_announcement_issuer_binding_change_has_no_unmapped_code -> 1 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 tests; ownership 14/14 mapped)",
+    "python -m nox -s guardrail_changed_files -> passed (11 staged files mapped; 2 reviewed P2 complexity warnings; blocking=0)",
+    "python -m nox -s platform_api_backend -> passed (13 tests)",
+    "python -m nox -s data_sync_autonomy_backend -> passed (162 passed, 1 skipped)",
+    "python -m nox -s validation_catalog_integrity -> passed (7 tests; findings=0)",
+    "python scripts/ci_change_classifier.py over all 14 PR files -> workflow_gate=passed, unmapped_code_files=[]",
+    "ruff changed files, py_compile, fresh-process import, and git diff --check -> passed",
+    "Read-only production repair plan classified 39661 rows without writes or deletes; production repair apply remains separately gated and unexecuted"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "platform_api"
+      ],
+      "plans": [
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "platform_api"
+        ],
+        "plans": [
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
