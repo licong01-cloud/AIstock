@@ -585,6 +585,8 @@ def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
             "backend/tests/event_signal/test_st_announcement_adapter.py",
             "scripts/repair_announcement_event_signal_issuer_binding.py",
             "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+            "scripts/sync_stock_namechange.py",
+            "backend/tests/scripts/test_sync_stock_namechange.py",
         ]
     )
 

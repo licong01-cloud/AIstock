@@ -11,6 +11,7 @@ non_runtime_source_paths:
   - scripts/ingest_tushare_daily_basic.py
   - scripts/repair_announcement_event_signal_issuer_binding.py
   - scripts/simulation_history_cleanup_core.py
+  - scripts/sync_stock_namechange.py
 targets:
   backend-main:
     runtime_kind: backend

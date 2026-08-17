@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATHS = [
     ROOT / "backend" / "migrations" / "announcement_event_signal_schema_20260505.sql",
     ROOT / "backend" / "migrations" / "announcement_observation_time_fields_20260505.sql",
+    ROOT / "backend" / "migrations" / "stock_namechange_schema_20260817.sql",
 ]
 
 
