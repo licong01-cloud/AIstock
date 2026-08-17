@@ -1,7 +1,7 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.0
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.1
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-13
+> 修订日期：2026-08-16
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
 > 当前状态：`P0A_P0D_SOURCE_COMPLETE_REAL_META_LABEL_TRAINED_PENDING_MERGES_AND_FORWARD_ACTIVATION`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；但只完成固定历史日期的按需影子推理，尚未形成任何每日 `PUBLISHED` 推荐、前向模型 observation 或持仓 episode。因此不再用 `4/5 = 80%` 表示总体可用进度
@@ -9,7 +9,8 @@
 > 当前生产前向状态：两个 Program 自 2026-07-17 为 `ENABLED` 且配置 `daily_after_close`，但截至 2026-08-12 均为 `last_review_trade_date=null`、`entered_episode_count=0`、`active_count=0`、`metric_status=NO_EPISODES`、无 `PUBLISHED` list version；现有 `2026-07-16` 记录均为 `REPLAY`
 > 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`，仅为未激活 experimental challenger
 > 演进方向：先建立无资金、无下单的每日前向发布与 champion/challenger 跟踪，再把纯 Top20 重排主线调整为 policy-aligned meta-label `take/skip/confidence`；CPCV/PBO、自适应 conformal 和跨包共享均为结果驱动的研究方法，不是新增审批或运行门禁
-> 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
+> 历史验证执行方向：用户已明确批准 H0，将历史回放从“逐日独立进程/工作区”改为批量执行形态；实盘仍每日单日运行，两者共享同一逐日业务语义、PIT 截止和结果合同。H0 不成为模型训练、前向发布或当前 A/B/C 结果闭合的前置条件
+> 当前双轨目标：模型主线继续使用已有 QE H5/Parquet/Qlib Bin 与预测 PKL 完成真实模型及前向证据；历史验证线在当前 v6 golden baseline 冻结后，实施单日实盘/历史批量同核执行优化
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
 ## 0. 权威边界与本次纠偏
@@ -18,28 +19,45 @@
 
 本次修订纠正过去近三周的严重优先级偏移：此前开发把 Phase 1R 历史范围任务、Source Catalog、逐窗口哈希、capture/build/SEALED、CAS、lease/fencing、source revision、历史固化和完整证据链放在模型训练之前，导致真实模型和用户可见荐股能力均未实现。该顺序自本修订起废止。
 
-M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。自 v3.0 起，后续工作只按以下权威顺序：
+M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。自 v3.1 起，后续工作分为互不阻断的模型/前向主线和历史验证执行线：
 
 1. P0-A 建立每天自然向前运行的 baseline publish、challenger observation 和 episode 跟踪，不回填旧日期。
 2. P0-B 同期解除单一目标常量，用 Program active binding 动态解析 exact bundle。
 3. P0-C 直接读取现有 QE H5/Parquet/Qlib Bin 和目标策略包预测 PKL，构造 Top5 shadow policy episode 标签与 purged rolling/CPCV 评价。
 4. P0-D 在 WSL Conda 训练真实 meta-label 模型并进入 challenger 前向发布；正式预测只读取数据库 decision-cutoff 输入。
 5. 前向 residual 自然成熟后执行 P1-A，自有两个以上兼容包的独立 bundle 后执行 P1-B；长期趋势包就绪后执行 P2。
-6. 上述真实功能不自动解禁历史证据、历史固化、归档、ModelOps 或通用平台；这些任务必须由用户针对具体目标重新确认。
+6. H0 在当前已授权 44 日 A/B/C 回放结果完整冻结后，以该结果作为 golden baseline，实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复 raw 计算，不改变逐日业务逻辑。
+7. 上述真实功能和 H0 均不自动解禁历史补账、历史归档、ModelOps、旧任务清理或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
 
-以下内容不再是模型训练、模型推理、页面展示或模型启用的前置条件：
+以下内容不再是模型训练、模型推理、页面展示或模型启用的前置条件；H0 也不得借此恢复无界历史平台建设：
 
 - Historical Range/Phase 1R 全链路 DML。
-- Source Catalog 和逐日、逐来源、逐窗口内容哈希。
+- 为模型训练新建 Source Catalog，或对所有来源无差别执行逐日、逐窗口全量内容哈希。H0 可以复用既有冻结 catalog，并把校验优化为批次 full seal、chunk revision token、逐日实际读取 receipt 和异常时 full rehash。
 - retrospective observation/capture/label bridge。
 - 新建 SEALED base snapshot、CAS publish、blob reference、invalidation 或 GC。
-- checkpoint、lease、fencing、recovery successor 或 exact retry 证据闭合。
+- 把 checkpoint、lease、fencing、recovery successor 或 exact retry 证据闭合作为首次模型训练前置；H0 仅保留长回放自身必需的逐日 checkpoint、heartbeat 和 exact resume。
 - 旧 batch、旧 artifact root、orphan build 和历史 operation 的处理。
 - 2/3/5 年全部窗口、全部消融、全部种子和统计检验完成后才允许首次训练。
 
-已有 Phase 0A、Phase 1、Phase 1R、Phase 0B 源码和历史事实保持只读，不删除、不修复、不迁移、不归档，也不再消耗主线研发资源。
+已有 Phase 0A、Phase 1、Phase 1R、Phase 0B 源码和历史事实保持可审计，不删除、不迁移、不归档。H0 只允许在证明直接消除当前历史回放重复计算时复用或定向重构其执行边界，不恢复已废止的训练前置路径。
 
-### 0.1 从属设计处置
+### 0.1 H0 授权边界
+
+H0 的权威详细设计为
+`docs/architecture/advisory_live_daily_historical_batch_shared_kernel_f2_detailed_design_20260816.md`。
+
+该授权只包含：
+
+- 实盘 `LiveDailyExecutor` 保持每日单日运行；历史 `HistoricalBatchExecutor` 接受冻结日期区间并在持久 worker 中分块处理。
+- 两种执行器共同调用唯一的 StrategyPackage 日信号、Selection/HMM/risk/tradability 和 Advisory list transition 语义；禁止复制第二套回测选股算法。
+- 静态模型/因子工作区按内容寻址复用；日期动态数据、PIT 视图、结果和 receipt 仍逐日隔离。
+- A/B 仅在 raw-affecting identity 完全相同时共享不可变 raw Alpha artifact，之后分别执行各自增强逻辑。
+- source validation 从“每日两次全量扫描”改为批次 seal、chunk token、逐日读 receipt 和异常 full rehash；日期 cutoff、availability、source revision 和未来毒化测试不得削弱。
+
+该授权不包含当前 v6 运行中热改代码、不包含把历史批量结果写入实盘 binding、不包含多进程并发提速承诺，
+也不包含通用缓存平台、通用回测引擎或生产调度平台。当前 v6 必须先按原 code-release 完成并冻结 golden evidence。
+
+### 0.2 从属设计处置
 
 `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` 中以下内容已被本蓝图替代，不能继续作为开发或运行依据：
 
@@ -116,11 +134,11 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 - 训练只读取 QE H5/Parquet/Qlib Bin 和既有预测产物，正式推理才读取数据库当前行情；M5C 不读取数据库历史训练数据。
 - M1、M3、M4、M5A、M5B、M5C 均执行真实 WSL 运行，没有用规则、随机、mock 或缩样本冒充完成。
 - Selection、StrategyPackage、Paper、模拟盘和 QE 资产业务逻辑未被 M5C 修改；模型失败或未激活不阻断现有荐股基线。
-- 没有新增角色、审批、二次策略包准入、ModelOps、历史证据、旧 batch/root 处理或通用缓存平台。
+- 没有新增角色、审批、二次策略包准入、ModelOps、历史补账、旧 batch/root 处理或通用缓存平台；H0 是用户明确批准的现有历史验证执行优化，不改变该边界。
 - 真实负面实验结果均保留，没有把 artifact 发布、源码合入或 API 可返回误写为模型效果成功。
 - 当前模型推理是独立 GET 侧路，并由静态 target binding 限定单一 Program；Program review 不消费模型 Top5，`daily_after_close` 也没有执行器。这两项是待实现功能，不再描述为已完成的“策略条件化运行时”。
 
-下一阶段的最小必要架构工作只有两项：每日前向发布/episode 跟踪，以及按 Program active binding 动态解析 bundle。它们直接产生模型未来质量证据，不属于被禁止的历史证据平台。模型方向同时从纯重排转向 policy-aligned meta-label；M5A/M5B/M5C 暴露的 selection-prior、分布漂移和近乎单类标签问题作为对照事实保留。
+模型/前向主线的最小必要架构工作仍是每日前向发布/episode 跟踪，以及按 Program active binding 动态解析 bundle。它们直接产生模型未来质量证据。与其并列的 H0 只优化已授权历史验证的执行形态，不能阻塞或替代前向主线。模型方向同时从纯重排转向 policy-aligned meta-label；M5A/M5B/M5C 暴露的 selection-prior、分布漂移和近乎单类标签问题作为对照事实保留。
 
 ## 2. Scope / 当前实施范围
 
@@ -138,18 +156,20 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 - train/validation 内使用 purged rolling/CPCV 或样本规模允许的等价时序重采样，报告 trial 选择偏差；已经读取的冻结 80 日 test 不再用于方向、参数或阈值选择。
 - 在荐股页面展示 Top5、收益范围、持股周期和价格区间。
 - 模型不可用、字段缺失和版本不兼容时错误可见，但不得阻断现有规则荐股基线。
+- 历史验证使用批量执行器连续处理冻结日期区间，复用静态工作区、区间读取和 raw Alpha artifact；每个交易日仍保持独立 decision cutoff、业务语义 hash、结果、receipt 和 checkpoint。
+- 实盘单日执行器与历史批量执行器共享同一逐日业务内核；允许运行信封不同，不允许候选、排序、增强、名单生命周期或 outcome 口径分叉。
 
 ## 3. Non-goals / 明确禁止
 
-以下任务持续禁止进入当前主线。每日前向发布、模型 challenger observation 和 episode 跟踪是当前核心产品功能，不属于历史证据平台、归档或 ModelOps，明确不在禁止范围内：
+以下任务持续禁止进入当前主线。每日前向发布、模型 challenger observation、episode 跟踪和边界明确的 H0 历史批量执行优化均不属于无界历史证据平台、归档或 ModelOps，明确不在禁止范围内：
 
-- 历史数据证据链建设、历史数据固化、历史归档和旧任务修复。
-- Source Catalog、逐窗口 hash、全历史 lineage、source revision union 或历史 correction E2E。
+- 与当前已授权回放无关的历史数据证据链建设、历史补账、历史归档和旧任务修复。
+- 新建通用 Source Catalog、全历史 lineage、source revision union 或历史 correction E2E；H0 仅复用当前冻结 catalog，并定向减少重复全量扫描。
 - 新建通用 observation/capture/label/snapshot 数据平台。
-- 为训练重新执行多年 Historical Range/Phase 1R 业务任务。
+- 为训练重新执行多年 Historical Range/Phase 1R 业务任务；H0 只服务独立历史验证，不向模型训练回灌业务结果。
 - 为训练向 Advisory 历史业务表写入候选、列表、Outcome、Summary 或 bridge DML。
 - 处理旧 PARTIAL/RUNNING batch、旧 root、orphan artifact 或遗留状态。
-- 自动重训、通用 ModelOps、自动模型激活、canary 发布平台、通用漂移治理和灾备。仅允许当前 P0 所需的 Advisory 收盘后执行器和基线/challenger 前向对照。
+- 自动重训、通用 ModelOps、自动模型激活、canary 发布平台、通用漂移治理、通用缓存平台和灾备。仅允许当前 P0 所需的 Advisory 收盘后执行器、基线/challenger 前向对照，以及 H0 所需的任务内内容寻址工作区和 PIT 区间读取。
 - 新增角色、审批、授权流、人工放行、策略包二次准入或运行时 package preflight。
 - 改动 Selection、Paper、模拟盘、QMT 或策略包既有业务逻辑。
 - 使用 QE 回测组合净值、Paper/模拟盘结果作为训练输入。由 QE 文件行情按冻结 Advisory review policy 确定性模拟的 episode 结果是正式监督标签，不是回测结果跨模块耦合。
@@ -300,6 +320,29 @@ existing admitted StrategyPackage
 - 禁止把规则结果填入 model 字段。
 - 禁止因模型缺失阻断单 Alpha或原生多 Alpha现有荐股。
 
+### 5.4 实盘单日与历史批量双执行形态
+
+H0 将“业务语义”和“执行拓扑”分离：
+
+```text
+LiveDailyExecutor ───────────────┐
+                                ├─> authoritative day business composition
+HistoricalBatchExecutor ────────┘     -> StrategyPackage day signal
+                                      -> HMM/risk/tradability
+                                      -> Selection projection
+                                      -> AdvisoryListTransitionEngine
+                                      -> day semantic result + receipt
+```
+
+- 实盘每天只传入一个交易日和当前正式 Program/binding，保持现有 after-close、target-open 和发布语义。
+- 历史执行器传入冻结 date plan、source catalog 和 research identity，以默认5日 chunk 在同一 worker 内顺序处理；chunk 可调，但不改变日期计划。
+- 共享业务层只接受日级 `AsOfDataView`，无权访问批量源的未裁剪数据。历史批量读取可以减少数据库往返，但每个视图必须同时执行 `business_date <= decision_date`、`available_at <= decision_timestamp` 和冻结 revision 约束。
+- 静态模型、因子代码和配置在 package/manifest/model/factor/runtime identity 不变时整批复用；日期动态数据、HMM coefficient、风险事实、候选、名单状态和 receipt 不跨日复用。
+- 批量模式不意味着把多个交易日合并为一个决策。每个交易日仍产生独立业务语义 hash、typed failure、artifact 和 checkpoint。
+- 整个 artifact 的 batch/worker/timing 字段可以不同；逐日候选顺序、分数、stage trace、source refs、HMM/risk结果和名单动作必须与相同输入的单日执行语义一致。
+
+详细组件、缓存键、失败恢复和等价性合同见 H0 详细设计。任何实现若需要另写 Selection、HMM、risk 或 list transition 算法，视为设计违例。
+
 ## 6. 模型功能
 
 ### 6.1 SHORT_REBOUND selection + policy-aligned meta-label
@@ -417,8 +460,12 @@ calibration_state = UNCALIBRATED or PARTIAL
 | `AdvisoryForwardObservationV1` | Program/binding/package/model、decision/target双日期、baseline/challenger、Top5、预测、状态和成熟截止日 |
 | `AdvisoryPolicyEpisodeLabelV1` | baseline或Top5 shadow policy/hash、entry/exit basis、成本、退出原因、持有期、净收益/超额收益、label maturity和censoring |
 | `AdvisoryModelBindingResolutionV1` | active Program binding 到 exact package/style/schema/model bundle 的确定性解析；无 bundle 为 typed unavailable |
+| `AdvisoryDaySemanticResultV1` | 与执行拓扑无关的逐日候选、stage trace、名单动作、source refs 和业务语义 hash；实盘单日与历史批量共同生成 |
+| `AdvisoryPITAsOfViewV1` | 只暴露一个 decision date 可见的数据视图，绑定 cutoff、availability policy、source catalog/revision 和视图 hash |
+| `AdvisoryHistoricalBatchExecutionV1` | 冻结 date plan、chunk policy、workspace identity、逐日 checkpoint 和 typed failure；不含新的选股算法 |
+| `AdvisorySemanticParityReceiptV1` | 单日与批量在相同业务输入下的逐字段/逐 hash 等价结果，排除 batch/worker/timing 等运行信封 |
 
-若现有 Program/list/episode/API 能承载字段，优先复用；challenger 与基线身份无法无歧义共存时才允许增加最小 Advisory 专用存储。禁止为未来通用性预建模型注册中心、训练调度表、血缘仓库、审批表、历史状态机或新 artifact 平台。
+若现有 Program/list/episode/API 能承载字段，优先复用；challenger 与基线身份无法无歧义共存时才允许增加最小 Advisory 专用存储。H0 优先复用现有 Historical Range batch/run/day/artifact 合同，性能与校验 telemetry 先写任务 artifact。禁止为未来通用性预建模型注册中心、训练调度表、血缘仓库、审批表、第二套历史状态机或新 artifact 平台。
 
 ## 9. Implementation Plan / 唯一后续顺序
 
@@ -563,6 +610,27 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 完成判定：真实 WSL bundle、可重复 validation、PBO/选择偏差说明、每日 challenger observation 和 typed runtime 状态齐全；效果不佳也如实完成实验，不回到平台工程。
 
+### H0：实盘单日与历史批量同核执行
+
+优先级：`H0_AFTER_CURRENT_V6_GOLDEN_FREEZE_PARALLEL_WITH_FORWARD_MATURITY`。
+
+状态：`USER_APPROVED_F2_DETAILED_DESIGN_READY_IMPLEMENTATION_NOT_STARTED`。
+
+详细设计：
+`docs/architecture/advisory_live_daily_historical_batch_shared_kernel_f2_detailed_design_20260816.md`。
+
+任务列表：
+
+1. 以当前44日 A/B/C 回放的冻结输入、逐日业务产物和性能收据作为 golden baseline；当前 v6 未完成前不得热改其 code-release。
+2. 将实盘单日和历史批量执行器收敛到唯一的日信号、Selection/HMM/risk/tradability 与 list transition 业务组合，禁止复制回测专用选股算法。
+3. 历史执行采用持久 worker 和默认5日 chunk；静态工作区按内容 identity 复用，日期动态目录、PIT 视图、结果和 checkpoint 逐日隔离。
+4. 批量读取必须通过 `AdvisoryPITAsOfViewV1` 向日内核授权；增加未来行/未来修订毒化测试，证明较早日期语义 hash 不变。
+5. 当 A/B 的 raw-affecting identity 完全相同时只计算一次 raw Alpha，并发布不可变共享 artifact；B 的 HMM/risk/tradability 从 raw 后分叉，任何 raw identity 差异都拒绝共享。
+6. source validation 改为批次 full seal、chunk 前后 revision token、逐日实际读取 receipt；无可靠 token 或发现漂移时执行 full rehash，禁止仅以日期 cutoff 取代 revision/PIT 校验。
+7. 在单 worker、零额外并发条件下先完成语义等价和资源基准；只有内存、I/O 和失败注入验收后才评估并发，不能以并发掩盖重复工作。
+
+完成判定：代表日与完整 golden 窗口的逐日业务语义全部等价；未来毒化、缺 revision、chunk 中断、exact resume、缓存污染和 A/B raw 共享反例测试通过；性能收据分阶段报告 workspace、source validation、raw inference、overlay、publish 的耗时/I/O/RSS。性能目标是验证指标而非业务成功门禁，未达到目标时如实保留结果，不改变语义换取速度。
+
 ### P1-A：outcome/price rolling adaptive calibration
 
 优先级：`P1_AFTER_FORWARD_LABELS_MATURE`。
@@ -592,11 +660,11 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 ### 用户未来单独确认后才可恢复的可选任务
 
-以下任务不属于当前路线；P0-A 的前向运行只保存今后自然产生的业务事实，不解禁任何历史补账：
+以下任务不属于当前路线；P0-A 的前向运行只保存今后自然产生的业务事实，H0 也只优化已授权回放执行，不解禁任何历史补账：
 
 - 历史证据、历史数据固化和归档。
 - Phase 1R完整历史链E2E。
-- Source Catalog、SEALED、CAS、invalidation和GC增强。
+- 新建通用 Source Catalog、SEALED、CAS、invalidation和GC平台；H0 仅复用现有 catalog/CAS 并定向优化重复校验和 raw artifact 共享。
 - 自动训练、ModelOps、漂移监控、灾备和治理后台。
 - 旧batch/root/orphan清理或修复。
 
@@ -644,6 +712,16 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-138 | rank-exit标签必须从既有预测文件重建后续至少Top40并处理held-symbol缺席；只有Top20时不得伪造完整review-policy标签 |
 | F-139 | 候选级take/skip标签与Top5 shadow portfolio评价分离；后者真实执行target count、replacement budget、持仓继承和现金状态 |
 | F-140 | D收盘发布绑定decision=D/target=下一交易日且不读取target行情；episode只在target日权威next-open到达后进入，缺价保持WAITING_DATA且不回退signal close |
+| F-141 | 实盘单日与历史批量仅执行拓扑不同，共享唯一逐日业务语义；禁止第二套回测选股、HMM、risk或名单算法 |
+| F-142 | 历史批量日内核只能读取绑定decision cutoff、availability和source revision的PIT AsOfDataView；未来数据毒化不得改变较早日期结果 |
+| F-143 | 静态工作区按package/manifest/model/factor/runtime内容identity复用，日期动态数据和结果逐日隔离；缓存错误不得静默重建为成功 |
+| F-144 | A/B只在raw-affecting identity完全相同时共享不可变raw Alpha artifact；HMM/risk/tradability在raw之后分叉，identity差异必须拒绝共享 |
+| F-145 | source validation使用批次full seal、chunk revision token、逐日读取receipt和异常full rehash；不得用单纯日期过滤替代revision校验 |
+| F-146 | 每个历史交易日独立artifact、typed failure和checkpoint；raw可预计算，顺序相关的list/episode transition在首个未完成日停止并exact resume |
+| F-147 | 当前v6冻结为golden baseline；代表日和完整窗口以业务语义hash验证batch与single-day等价，运行信封字段单独比较 |
+| F-148 | 首版使用单持久worker和默认5日chunk，先验证内存/I/O/恢复再评估并发；并发不是业务完成或性能验收的替代 |
+| F-149 | H0不修改实盘binding、Program发布语义、策略包状态、Selection/Paper/QMT，也不在当前v6运行中热改code-release |
+| F-150 | 性能receipt分解workspace/source/raw/overlay/publish耗时、I/O、RSS和cache hit；目标未达不得删减PIT、typed failure或业务逻辑 |
 
 ## 11. Design Acceptance Matrix
 
@@ -675,20 +753,30 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-124 | M5A ensemble and selection-prior policy；现行 M1 binding 保留的运行状态见 §9 | `backend/tests/advisory_model_first/test_quality_scoring.py`; `test_quality_runtime_bundle.py`; artifact: bundle `1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb` | implemented_bundle_verified | none |
 | F-125 | M5B validation-only probability calibration；8 个正斜率 head 发布 calibrated，2 个排序反转 head 明确 uncalibrated；逐 head solver/版本/迭代/收敛证据 fail-closed | `backend/services/advisory_model_first/outcome_calibration.py`; artifact: `outcome_calibration_runs/advoutcal_ec16422ad1a97040583e5273/outcome_calibration_receipt.json`; `backend/tests/advisory_model_first/test_outcome_calibration.py` | real_calibration_verified | none |
 | F-126 | M5B outcome quantile calibration和 M5C entry-gap coverage calibration均只使用 validation 拟合；M5C test 零缺失、`delta=0` 且质量未改善 | `outcome_calibration.py`; `price_range_calibration.py`; artifact: M5C bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead`; `test_price_range_calibration.py` | m5b_m5c_real_calibration_negative_quality_verified_not_activated | none |
-| F-127 | P0-A Advisory after-close runner + existing review service | `backend/services/advisory_forward/**`；PR #3366；两条 2026-08-14 forward run | SOURCE_MERGED_RUNTIME_PUBLICATION_VERIFIED | target-open settlement currently WAITING_DATA |
-| F-128 | baseline/challenger/replay identity contract | PR #3366；多 Alpha EXPERIMENTAL_SHADOW；单 Alpha typed UNAVAILABLE | RUNTIME_FORWARD_IDENTITY_VERIFIED | mature forward outcome pending natural dates |
-| F-129 | `AdvisoryForwardObservationV1` | persisted forward/model observations；status/detail API readback | RUNTIME_OBSERVATION_VERIFIED | maturity date not reached |
-| F-130 | `AdvisoryModelBindingResolutionV1` | exact descriptor for multi Alpha；typed unavailable for package without bundle | DYNAMIC_BINDING_RUNTIME_READBACK_VERIFIED | meta-label descriptor not written or activated |
-| F-131 | policy-aligned meta-label take/skip/confidence | `meta_label_training.py`; final-source bundle `e555903e...` | REAL_WSL_REATTESTED_EXPERIMENTAL_NOT_ACTIVATED | PR #3368 pending merge；no descriptor activation |
-| F-132 | `AdvisoryPolicyEpisodeLabelV1` + existing review transition semantics | P0-C bundle `81e2c9ba...`; PR #3367 merge `49973d6e` | REAL_FILE_DATASET_SOURCE_MERGED | none |
-| F-133 | purged rolling/CPCV + PBO/equivalent report | P0-C 28 paths；P0-D 168 trial-path rows/70 PBO partitions | REAL_CPCV_AND_PBO_COMPLETE | PBO 0.40 must remain visible |
-| F-134 | daily forward observations and matured policy episodes | live 2026-08-14 forward observations；maturity date 2026-09-11 | FORWARD_OBSERVATIONS_LIVE_LABELS_IMMATURE | wait for natural episode/outcome maturity；do not backfill |
+| F-127 | P0-A Advisory after-close runner + existing review service | `backend/tests/advisory_model_first/test_forward_publication.py`; `backend/tests/advisory_model_first/test_forward_scheduler.py`; artifact: two persisted 2026-08-14 forward runs | implemented_runtime_publication_verified | none |
+| F-128 | baseline/challenger/replay identity contract | `backend/tests/advisory_model_first/test_forward_publication.py`; `backend/tests/advisory_model_first/test_forward_api.py`; artifact: multi Alpha EXPERIMENTAL_SHADOW and single Alpha typed UNAVAILABLE readback | implemented_runtime_identity_verified | none |
+| F-129 | `AdvisoryForwardObservationV1` | `backend/tests/advisory_model_first/test_forward_postgres.py`; `backend/tests/advisory_model_first/test_forward_api.py`; artifact: persisted forward/model observation readback | implemented_runtime_observation_verified | none |
+| F-130 | `AdvisoryModelBindingResolutionV1` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`; artifact: exact multi Alpha descriptor and package-without-bundle typed unavailable | implemented_dynamic_binding_verified | none |
+| F-131 | policy-aligned meta-label take/skip/confidence | `backend/tests/advisory_model_first/test_meta_label_training.py`; `backend/tests/advisory_model_first/test_meta_label_bundle.py`; artifact: final-source bundle `e555903e...` | implemented_real_wsl_verified_experimental_not_activated | none |
+| F-132 | `AdvisoryPolicyEpisodeLabelV1` + existing review transition semantics | `backend/tests/advisory_model_first/test_policy_episode_labels.py`; `backend/tests/advisory_model_first/test_policy_dataset_bundle.py`; artifact: P0-C bundle `81e2c9ba...` | implemented_real_file_dataset_verified | none |
+| F-133 | purged rolling/CPCV + PBO/equivalent report | `backend/tests/advisory_model_first/test_policy_cpcv.py`; `backend/tests/advisory_model_first/test_policy_pbo.py`; artifact: P0-C 28 paths and P0-D 168 trial-path rows/70 PBO partitions | implemented_real_cpcv_pbo_verified | none |
+| F-134 | daily forward observations and matured policy episodes | `backend/tests/advisory_model_first/test_forward_publication.py`; `backend/tests/advisory_model_first/test_forward_postgres.py`; artifact: 2026-08-14 forward observations with maturity date 2026-09-11 | APPROVED_BY_USER_FORWARD_EVIDENCE_IMMATURE | approved_by_user: wait for natural episode/outcome maturity and do not backfill |
 | F-135 | rolling/adaptive calibration matched study | `backend/tests/advisory_model_first/test_adaptive_calibration.py` (target path) | APPROVED_BY_USER_P1A_DESIGN_READY_WAITING_NATURAL_FORWARD_LABELS | none |
 | F-136 | compatible-set pooled/multi-task experiment | `backend/tests/advisory_model_first/test_strategy_conditioned_pooling.py` (target path) | APPROVED_BY_USER_P1B_DIRECTION_READY_WAITING_COMPATIBLE_PACKAGE_DATA | none |
-| F-137 | Advisory-only forward boundaries | P0-A/B boundary tests；PR #3366；live forward status | SOURCE_MERGED_RUNTIME_BOUNDARY_READBACK_VERIFIED | Paper/QMT/Selection cross-write acceptance remains separate |
-| F-138 | P0-C Top40/held-symbol rank reconstruction | `policy_rank_source.py`; P0-C bundle `candidate_rankings.parquet` | REAL_FILE_RECONSTRUCTION_SOURCE_MERGED | none |
-| F-139 | candidate meta-label evaluator + shadow portfolio policy simulator | `policy_episode_labels.py`; `shadow_portfolio_policy.py`; P0-D matched baselines | REAL_POLICY_SIMULATION_COMPLETE | P0-D source PR #3368 pending merge；bundle not activated |
-| F-140 | after-close publication and target-open episode clock | decision 2026-08-13 / target 2026-08-14 persisted forward runs | LIVE_DATE_CLOCK_VERIFIED_TARGET_OPEN_WAITING_DATA | target-open prices not yet available；no episode fallback |
+| F-137 | Advisory-only forward boundaries | `backend/tests/advisory_model_first/test_forward_boundaries.py`; `backend/tests/advisory_model_first/test_meta_label_boundaries.py`; artifact: Advisory forward boundary readback | implemented_runtime_boundary_verified | none |
+| F-138 | P0-C Top40/held-symbol rank reconstruction | `backend/tests/advisory_model_first/test_policy_rank_source.py`; artifact: P0-C `candidate_rankings.parquet` | implemented_real_file_reconstruction_verified | none |
+| F-139 | candidate meta-label evaluator + shadow portfolio policy simulator | `backend/tests/advisory_model_first/test_policy_episode_labels.py`; `backend/tests/advisory_model_first/test_shadow_portfolio_policy.py`; artifact: P0-D matched baseline report | implemented_real_policy_simulation_verified_not_activated | none |
+| F-140 | after-close publication and target-open episode clock | `backend/tests/advisory_model_first/test_forward_date_clock.py`; `backend/tests/advisory_model_first/test_forward_recovery.py`; artifact: decision 2026-08-13 / target 2026-08-14 persisted forward runs | APPROVED_BY_USER_LIVE_DATE_CLOCK_VERIFIED_TARGET_OPEN_WAITING_DATA | approved_by_user: no target-open fallback; runtime settlement is a separate natural-data state |
+| F-141 | H0 shared day business composition + two executors | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
+| F-142 | `AdvisoryPITAsOfViewV1` + historical batch source | `backend/tests/advisory_execution/test_pit_asof_view.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
+| F-143 | content-addressed runtime workspace session | `backend/tests/strategy_package/test_runtime_workspace_session.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
+| F-144 | immutable raw Alpha day artifact reuse | `backend/tests/advisory_historical_range/test_raw_alpha_reuse.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
+| F-145 | batch/chunk/day source validation policy | `backend/tests/advisory_historical_range/test_batch_source_validation.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
+| F-146 | day checkpoint + ordered list transition recovery | `backend/tests/advisory_historical_range/test_batch_recovery.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
+| F-147 | semantic hash oracle + current v6 golden receipt | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path); artifact: current v6 frozen comparison receipt | APPROVED_BY_USER_DESIGN_READY | none |
+| F-148 | single-worker chunk policy + resource receipt | `backend/tests/advisory_historical_range/test_batch_resource_policy.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
+| F-149 | execution boundary and no-live-activation assertions | `backend/tests/advisory_execution/test_execution_boundaries.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
+| F-150 | stage telemetry and performance report | `backend/tests/advisory_historical_range/test_batch_telemetry.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 
 ## 12. Verification Plan
 
@@ -726,14 +814,25 @@ calibration_state = UNCALIBRATED or PARTIAL
 - baseline 与 challenger、REPLAY 与 PUBLISHED、latest success 与 latest failure 分层展示，零 episode 不显示伪造胜率。
 - 桌面和移动viewport无重叠、无静默网络错误。
 
-### 12.4 DESIGN-COMPLIANCE-001
+### 12.4 H0 单日/批量等价与性能验证
+
+- 先冻结当前 v6 的 package/manifest/code-release/source catalog/date plan、逐日 raw/candidate/list/outcome 语义和阶段耗时，作为不可变 golden evidence。
+- 单交易日分别经现有 single-day 路径与新 batch size=1 路径执行；候选、分数、rank、stage trace、source refs、名单动作和业务语义 hash 必须一致。
+- 代表日覆盖5月/6月/7月、ST、停牌、行业映射缺失、HMM排除、无候选和模型特征缺失；再对完整44日窗口比较逐日语义。
+- 在 D+1 及以后数据中注入价格、行业、ST、HMM或修订变化，D 日结果必须不变；绕过 `AsOfDataView` 的直接 batch frame 访问测试必须失败。
+- 对 workspace cache key、source catalog、runtime semantics 或 raw-affecting config 任一字段做单变量变更，错误复用必须被拒绝。
+- 在 chunk 内第3日注入可重试和不可重试失败，验证前两日已提交、顺序 list transition 不跨越失败日、修复后从同一 identity exact resume。
+- A/B raw identity相同时只产生一个 raw artifact；改变任一 raw-affecting字段后产生不同identity且不得共享。overlay 输出保持两臂独立。
+- 记录单日、batch size=1、batch size=5 的 workspace/source/raw/overlay/publish耗时、实际读写字节、峰值RSS、GPU利用和cache hit；不以增加并发作为首轮优化。
+
+### 12.5 DESIGN-COMPLIANCE-001
 
 每次合入前逐项证明：
 
 1. 没有用简化、mock、规则或静态结果冒充真实模型。
 2. 没有静默错误或无日志fallback。
 3. 没有改变Selection、Paper、模拟盘、策略包或荐股基线语义。
-4. 没有新增未经用户确认的门禁、审批、角色或历史工程。
+4. 没有新增未经用户确认的门禁、审批、角色或无界历史工程；H0 保持在用户明确批准的执行优化范围内。
 
 ## 13. Rollout / Rollback
 
@@ -746,7 +845,9 @@ calibration_state = UNCALIBRATED or PARTIAL
 3. 用户单独重启后，对两个 ENABLED Program 执行一个交易日的真实发布 readback，随后由日调度自然积累。
 4. 并行完成 P0-C file-based policy episode 标签和 purged rolling/CPCV 评价。
 5. 在 WSL 训练 P0-D meta-label bundle，先进入 challenger 前向发布，不自动替换 baseline。
-6. 前向标签成熟后再运行 P1-A；兼容策略包具备独立 bundle 后再运行 P1-B。
+6. 完成当前 v6 A/B/C、outcome和报告，冻结逐日业务/性能 golden evidence；H0 不回写或重算该批次。
+7. 在独立后续 revision 实施 H0，先通过 batch size=1 与代表日等价，再运行完整窗口和性能基准；任何语义修订创建新 identity。
+8. 前向标签成熟后再运行 P1-A；兼容策略包具备独立 bundle 后再运行 P1-B。H0 可在等待自然标签期间推进，但不得阻断模型主线。
 
 源码合入、WSL训练、模型文件生成、后端重启、模型加载和页面可见是独立状态，不得合并声明完成。
 
@@ -755,6 +856,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 - 关闭目标 Program 的 challenger 配置后保留现有 `selection_effective_rank`、baseline publish 和 `rule_default`。
 - 模型加载或推理失败时只关闭模型通道，不停止现有荐股。
 - 执行器失败不删除已发布事实；修复后按同一 Program/date 幂等重试，不回填未授权历史日期。
+- H0 回滚只切回既有逐日 historical executor；已完成的 batch day artifact 和 checkpoint 保持审计可读，不删除、不覆盖，也不影响 LiveDailyExecutor。
 - 不修改或回滚Selection、Paper、模拟盘、StrategyPackage或QE资产。
 - 不删除训练文件、模型文件或已产生的预测；只停止继续使用有问题的模型版本。
 - P0-A 会产生正常 Advisory 业务写入；这不是一次性修复 DML。若详细设计证明需要最小 DDL，则迁移与回滚另行设计并按 DEV-first 执行。
@@ -779,6 +881,7 @@ production_dml_gate = noop for training; daily Advisory publication is normal ru
 production_backend_dependency_gate = noop unless WSL dependency is proven missing
 production_frontend_dependency_gate = noop unless UI implementation introduces a real dependency
 runtime_activation_and_backend_restart = separate user-confirmed actions
+historical_batch_activation = separate user-confirmed action after source merge; no activation during current v6
 ```
 
 训练过程不启动、停止或重启用户服务。模型源代码合入、WSL训练完成、模型文件生成、后端加载、页面可见和模型启用必须分别报告，不能合并成一个完成状态。
@@ -805,19 +908,27 @@ runtime_activation_and_backend_restart = separate user-confirmed actions
 | CPCV被误当新OOS | 仅用于train/validation路径和选择偏差；真正OOS只来自未来forward observation |
 | adaptive calibration过早 | 没有成熟residual时保持uncalibrated，不用规则或旧test补造 |
 | 跨包共享造成负迁移 | 先完成独立bundle，再做compatible-set matched/LOO实验，不默认共享 |
-| 再次转向历史闭合 | 以本蓝图F-114和P0-A至P0-D功能清单立即停止该任务 |
+| H0再次扩张为历史闭合平台 | 只接受直接减少当前回放重复工作且受 F-141 至 F-150 约束的变更；历史补账、归档、通用缓存/调度/ModelOps仍停止 |
+| 批量读取把未来行暴露给业务内核 | 日内核只接受 `AdvisoryPITAsOfViewV1`，禁止传入原始batch frame；未来毒化与访问边界测试必须通过 |
+| 静态工作区复用造成跨日污染 | cache key绑定完整内容identity，工作区只读；日期数据和输出位于独立sandbox，identity冲突或写入静态区立即失败 |
+| A/B raw共享混淆唯一变量 | raw key显式包含所有raw-affecting字段；overlay配置不进入raw key但在分叉后独立hash，反例测试验证拒绝错误共享 |
+| 减少双重全量校验削弱数据漂移检测 | 保留批次full seal、chunk前后token和逐日read receipt；无token或token变化时强制full rehash |
+| chunk失败跨越名单顺序依赖 | raw预计算与有状态list transition分层；后者在首个未完成日停止，只从最后成功checkpoint exact resume |
+| 追求并发重现资源争用 | 首版单worker、默认5日chunk；先消除重复I/O和工作区重建，性能/内存收据通过后才评估并发 |
 
 ## 16. 当前下一步
 
 M0-M5C 的代码、真实 WSL 实验和固定日期推理已形成当前基线；M5A/M5B/M5C 均不激活。P0-A/P0-B 已合入并在两个 ENABLED Program 上产生首日真实 PUBLISHED forward run；2026-08-14 00:17 target-open 行情尚未到达，因此 settlement 正确保持 `WAITING_DATA` 且尚无 episode。P0-C 已通过 PR #3367 合入；P0-D 已用最终源码重训为 experimental bundle，PR #3368 等待最终CI/合入且未写 descriptor、未激活。
 
-下一主线严格按以下顺序执行：
+下一工作严格按以下顺序执行；模型/前向与 H0 历史执行是互不阻断的两条线：
 
 1. **合入 P0-D 源码**：刷新 PR #3368 的 F2/CI 证据并合入；bundle 保持 experimental、uncalibrated、not activated。
 2. **完成首日 target-open 验收**：权威 open/suspend 数据到达后读取两条 settlement；至少一个 episode 创建，或所有未进入均有明确 typed reason；不回退 signal close。
 3. **前向 challenger 接入**：仅在独立 descriptor 授权后绑定 P0-D exact bundle，baseline 不变；自然积累 future OOS，不补历史。
-4. **P1-A adaptive calibration**：只有 forward residual 成熟后执行；M4近单类binary先重审，不再重复静态校准。
-5. **P1-B 跨包条件化共享**：至少两个兼容策略包拥有独立真实 bundle 后再做 matched 实验。
-6. **P2 LONG_TREND**：策略包就绪后复用前向与动态分发基础，训练独立长期标签和模型。
+4. **冻结当前历史对照 golden**：完成当前 v6 A/B/C、outcome与报告，保存逐日语义和性能收据；不在运行中修改code-release。
+5. **实施 H0**：在独立后续 revision 以 batch size=1 等价、代表日、完整窗口、未来毒化和恢复测试逐级替换历史执行拓扑；实盘继续单日运行。
+6. **P1-A adaptive calibration**：只有 forward residual 成熟后执行；M4近单类binary先重审，不再重复静态校准。
+7. **P1-B 跨包条件化共享**：至少两个兼容策略包拥有独立真实 bundle 后再做 matched 实验。
+8. **P2 LONG_TREND**：策略包就绪后复用前向与动态分发基础，训练独立长期标签和模型。
 
-继续禁止 Historical Range、历史证据、旧 batch/root 清理、通用缓存、ModelOps、角色审批和额外门禁。任何后续任务若不能直接关闭 P0-A至P0-D、P1或P2 的一个明确用户/模型能力，不进入当前主线。
+继续禁止未授权历史补账/归档、旧 batch/root 清理、通用缓存/调度平台、ModelOps、角色审批和额外门禁。Historical Range 仅按 H0 详细设计执行当前已授权验证优化；任何变更若既不能关闭 P0-A至P0-D/P1/P2 的明确模型能力，也不能满足 F-141 至 F-150 的直接性能与等价目标，不进入当前路线。

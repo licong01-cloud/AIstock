@@ -193,8 +193,11 @@ rules:
       - backend/tests/test_advisory_program_transition_parity.py
       - backend/inference_engine.py
       - scripts/strategy_package_live_inference.py
+      - scripts/advisory_historical_fullstack_comparison.py
+      - scripts/wsl/advisory_historical_model_predict.py
       - backend/tests/test_inference_engine_historical_readonly.py
       - backend/tests/test_inference_strict_scoring_alignment.py
+      - backend/tests/scripts/test_advisory_historical_fullstack_comparison.py
       - backend/tests/scripts/test_strategy_package_live_inference.py
     primary_module: advisory.historical_range
     impact_modules: [tests.backend]
@@ -643,6 +646,8 @@ rules:
       - backend/services/selection_center/**
       - backend/routers/selection_center.py
       - backend/tests/selection_center/**
+      - scripts/precompute_hmm_coefficients.py
+      - backend/tests/scripts/test_precompute_hmm_coefficients.py
     primary_module: selection_center
     impact_modules: [paper_v2, strategy_package, hmm]
     layer: backend_service

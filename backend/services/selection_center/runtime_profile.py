@@ -80,6 +80,7 @@ class RuntimeHMMProfile(BaseModel):
     coefficients_path: str | None = None
     auto_compute: bool = True
     manual_snapshot_required: bool = False
+    missing_sector_policy: Literal["fail", "exclude_candidate"] = "fail"
 
     @field_validator("model_config_id", "model_snapshot_id", "signal_preset", "coefficients_path")
     @classmethod

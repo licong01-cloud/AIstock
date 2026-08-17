@@ -7,6 +7,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .models import (
+    HistoricalRangeArtifactRefV1,
+    HistoricalRangeOutcomeRevisionReason,
+)
+
 
 class R5StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -62,6 +67,9 @@ class HistoricalRangeRefreshOutcomesRequest(HistoricalRangeCommandRequest):
     label_as_of_trade_date: date
     range_run_ids: list[str] = Field(default_factory=list)
     horizons: list[int] = Field(min_length=1)
+    requested_outcome_logical_ids: list[str] = Field(default_factory=list)
+    correction_reason: HistoricalRangeOutcomeRevisionReason | None = None
+    correction_evidence_ref: HistoricalRangeArtifactRefV1 | None = None
 
     @model_validator(mode="after")
     def validate_scope(self) -> "HistoricalRangeRefreshOutcomesRequest":
@@ -69,6 +77,20 @@ class HistoricalRangeRefreshOutcomesRequest(HistoricalRangeCommandRequest):
             raise ValueError("range_run_ids must be sorted and unique")
         if self.horizons != sorted(set(self.horizons)) or any(item < 1 for item in self.horizons):
             raise ValueError("horizons must be sorted, unique, and positive")
+        if self.requested_outcome_logical_ids != sorted(set(self.requested_outcome_logical_ids)):
+            raise ValueError("requested_outcome_logical_ids must be sorted and unique")
+        if any(
+            not item.strip() or item != item.strip() or len(item) > 160
+            for item in self.requested_outcome_logical_ids
+        ):
+            raise ValueError("requested_outcome_logical_ids contain an invalid identity")
+        if (self.correction_reason is None) != (self.correction_evidence_ref is None):
+            raise ValueError("outcome correction reason/evidence must be supplied together")
+        if self.correction_reason is not None and self.correction_reason not in {
+            HistoricalRangeOutcomeRevisionReason.SOURCE_CORRECTION,
+            HistoricalRangeOutcomeRevisionReason.CALCULATION_CORRECTION,
+        }:
+            raise ValueError("outcome correction reason must be SOURCE or CALCULATION correction")
         return self
 
 

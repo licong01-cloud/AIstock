@@ -135,6 +135,70 @@ def rank_signal_by_date(raw_by_sector: dict[str, float]) -> dict[str, float]:
     return {k: float(ranks.get(k, 0.0)) for k in raw_by_sector}
 
 
+def build_stock_sector_maps_by_date(
+    membership_rows: list[dict[str, Any]],
+    trade_dates: list[date],
+) -> dict[str, dict[str, str]]:
+    """Build exact point-in-time stock-sector maps; conflicting memberships fail closed."""
+
+    output: dict[str, dict[str, str]] = {}
+    for trade_date in sorted(set(trade_dates)):
+        day_map: dict[str, str] = {}
+        for row in membership_rows:
+            symbol = str(row.get("ts_code") or "").strip().upper()
+            sector = str(row.get("l2_code") or "").strip()
+            in_date = row.get("in_date")
+            out_date = row.get("out_date")
+            if (
+                not symbol
+                or not sector
+                or not isinstance(in_date, date)
+                or in_date > trade_date
+                or (isinstance(out_date, date) and out_date < trade_date)
+            ):
+                continue
+            existing = day_map.get(symbol)
+            if existing is not None and existing != sector:
+                raise ValueError(
+                    "conflicting stock-sector memberships for "
+                    f"trade_date={trade_date.isoformat()} symbol={symbol}: {existing} != {sector}"
+                )
+            day_map[symbol] = sector
+        if not day_map:
+            raise ValueError(f"empty point-in-time stock-sector map for {trade_date.isoformat()}")
+        output[trade_date.isoformat()] = day_map
+    return output
+
+
+def build_input_data_max_dates_by_date(
+    *,
+    trade_dates: list[date],
+    sector_dates: list[date],
+    index_dates: list[date],
+    market_volume_dates: list[date],
+) -> dict[str, dict[str, str]]:
+    """Close the causal source watermark used by every daily coefficient."""
+
+    sources = {
+        "sector_data": sorted(set(sector_dates)),
+        "index_daily": sorted(set(index_dates)),
+        "sw_daily": sorted(set(market_volume_dates)),
+    }
+    output: dict[str, dict[str, str]] = {}
+    for trade_date in sorted(set(trade_dates)):
+        day: dict[str, str] = {}
+        for source, available_dates in sources.items():
+            eligible = [value for value in available_dates if value <= trade_date]
+            if not eligible:
+                raise ValueError(
+                    f"{source} has no input watermark on or before {trade_date.isoformat()}"
+                )
+            day[source] = eligible[-1].isoformat()
+        day["sw_index_member_effective_as_of"] = trade_date.isoformat()
+        output[trade_date.isoformat()] = day
+    return output
+
+
 def restore_hmm(info: dict[str, Any]) -> Any:
     """Rebuild GaussianHMM from both legacy and horizon-v2 JSON payloads."""
     from hmmlearn.hmm import GaussianHMM
@@ -430,26 +494,22 @@ def main() -> None:
 
     cur.execute(
         """
-        SELECT ts_code, l2_code FROM market.sw_index_member
+        SELECT ts_code, l2_code, in_date, out_date FROM market.sw_index_member
         WHERE in_date <= %s AND (out_date IS NULL OR out_date >= %s)
         """,
         (end_d, start_d),
     )
-    stock_sector_map = {
-        r["ts_code"]: r["l2_code"]
-        for r in cur.fetchall()
-        if r["ts_code"] and r["l2_code"]
-    }
+    membership_rows = [dict(row) for row in cur.fetchall()]
     cur.close()
     conn.close()
 
     print(
         f"  loaded sectors={len(sector_data)}, CSI300={len(csi300)}, "
-        f"market_vol={len(market_vol)}, stock_map={len(stock_sector_map)}",
+        f"market_vol={len(market_vol)}, membership_rows={len(membership_rows)}",
         file=sys.stderr,
     )
-    if not stock_sector_map:
-        print("ERROR: empty stock-sector map", file=sys.stderr)
+    if not membership_rows:
+        print("ERROR: empty stock-sector membership rows", file=sys.stderr)
         sys.exit(1)
 
     print("  decoding sector states...", file=sys.stderr)
@@ -593,6 +653,21 @@ def main() -> None:
             sys.exit(1)
         daily_coefficients = {str(output_trade_date): source_coefficients}
 
+    try:
+        stock_sector_map_by_date = build_stock_sector_maps_by_date(
+            membership_rows,
+            [date.fromisoformat(value) for value in daily_coefficients],
+        )
+        input_data_max_dates_by_date = build_input_data_max_dates_by_date(
+            trade_dates=[date.fromisoformat(value) for value in daily_coefficients],
+            sector_dates=[row["trade_date"] for row in all_sector_rows],
+            index_dates=list(csi300),
+            market_volume_dates=list(market_vol),
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     result: dict[str, Any] = {
         "model_path": model_path,
         "preset_key": preset_key,
@@ -606,9 +681,11 @@ def main() -> None:
         ),
         "dynamic_coefficients": uses_dynamic_coefficients,
         "daily_coefficients": daily_coefficients,
-        "stock_sector_map": stock_sector_map,
+        "stock_sector_map_by_date": stock_sector_map_by_date,
+        "input_data_max_dates_by_date": input_data_max_dates_by_date,
     }
     if output_trade_date:
+        result["stock_sector_map"] = stock_sector_map_by_date[str(output_trade_date)]
         result.update(
             {
                 "generation_mode": params.get("generation_mode") or "daily_asof_prediction_v1",
