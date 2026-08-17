@@ -156,7 +156,9 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
     "database_readback_ref": "not_required",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "2026-08-18 fresh Python process loaded the merged Advisory forward source and ran python -m pytest backend/tests/advisory_model_first/test_forward_scheduler.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_postgres.py -q -p no:cacheprovider -> 30 passed"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
