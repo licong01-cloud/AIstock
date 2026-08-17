@@ -475,7 +475,9 @@ def main() -> int:
     if args.limit is not None and args.limit <= 0:
         raise SystemExit("--limit must be positive when provided")
 
-    load_dotenv(ROOT / ".env", override=True)
+    # Process-level TDX_DB_* values are the operator-approved target.  The
+    # checked-in entrypoint only loads variables that are not already set.
+    load_dotenv(ROOT / ".env", override=False)
     classifier = AnnouncementTitleClassifier(rule_version=args.rule_version)
     json_path, md_path = default_report_paths()
     if args.json_out:

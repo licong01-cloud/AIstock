@@ -313,6 +313,7 @@ def test_issuer_bound_pit_files_select_local_data_plan(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
             "backend/tests/announcements/test_title_classifier.py",
+            "backend/tests/test_announcement_event_schema.py",
             "backend/tests/event_signal/test_st_announcement_adapter.py",
             "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py",
             "scripts/classify_announcement_titles_v0.py",
