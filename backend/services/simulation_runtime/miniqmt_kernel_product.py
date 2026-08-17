@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -371,27 +372,64 @@ class SimulationK6DPlanAuthorityReader:
             )
         decision_ids = tuple(item.decision_id for item in plan.trading_rule_decisions)
         decisions = {item.decision_id: item for item in plan.trading_rule_decisions}
-        referenced_decisions = {item.trading_rule_decision_id for item in plan.intents}
-        if len(decision_ids) != len(set(decision_ids)) or referenced_decisions != set(decisions):
+        parent_decision_ids = tuple(item.trading_rule_decision_id for item in plan.intents)
+        parent_count_by_decision = Counter(parent_decision_ids)
+        referenced_decisions = set(parent_decision_ids)
+        missing_decisions = sorted(referenced_decisions - set(decisions))
+        invalid_decisions: list[str] = []
+        for decision in plan.trading_rule_decisions:
+            parent_count = parent_count_by_decision[decision.decision_id]
+            requested_quantity = int(decision.requested_quantity)
+            legal_quantity = int(decision.legal_quantity)
+            if legal_quantity > requested_quantity:
+                invalid_decisions.append(decision.decision_id)
+                continue
+            if decision.decision == "REJECT":
+                if legal_quantity != 0 or parent_count != 0:
+                    invalid_decisions.append(decision.decision_id)
+                continue
+            if decision.decision not in {"EMIT", "ADJUST"} or legal_quantity <= 0 or parent_count != 1:
+                invalid_decisions.append(decision.decision_id)
+        if (
+            len(decision_ids) != len(set(decision_ids))
+            or len(parent_decision_ids) != len(referenced_decisions)
+            or missing_decisions
+            or invalid_decisions
+        ):
             raise MiniQMTKernelProductCompositionError(
                 "MINIQMT_K6_PRODUCT_TRADING_RULE_AUTHORITY_INVALID",
-                "product plan parent and trading-rule decision sets do not close exactly",
+                "product plan decisions do not form an exact emitted-parent and rejected-subject partition",
                 context={
                     "runtime_id": runtime_id,
                     "execution_plan_id": execution_plan_id,
                     "referenced_decision_ids": sorted(referenced_decisions),
                     "available_decision_ids": sorted(decisions),
+                    "missing_decision_ids": missing_decisions,
+                    "invalid_decision_ids": sorted(set(invalid_decisions)),
                 },
             )
         session = project_exchange_session_v1(self._session, self._logical_time)
         requests: list[KernelAlgoCreationRequestV1] = []
         for intent in plan.intents:
             decision = decisions.get(intent.trading_rule_decision_id)
-            if decision is None or decision.symbol != intent.symbol or decision.side != intent.side:
+            if (
+                decision is None
+                or decision.symbol != intent.symbol
+                or decision.side != intent.side
+                or decision.decision not in {"EMIT", "ADJUST"}
+                or int(decision.legal_quantity) != int(intent.order_quantity)
+            ):
                 raise MiniQMTKernelProductCompositionError(
                     "MINIQMT_K6_PRODUCT_TRADING_RULE_AUTHORITY_INVALID",
                     "parent intent has no exact frozen trading-rule decision",
-                    context={"intent_id": intent.intent_id, "decision_id": intent.trading_rule_decision_id},
+                    context={
+                        "intent_id": intent.intent_id,
+                        "decision_id": intent.trading_rule_decision_id,
+                        "parent_order_quantity": int(intent.order_quantity),
+                        "decision_legal_quantity": (
+                            int(decision.legal_quantity) if decision is not None else None
+                        ),
+                    },
                 )
             price = intent.price_policy.get("limit_price")
             if price is None:
