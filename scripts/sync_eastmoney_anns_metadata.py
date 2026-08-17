@@ -452,16 +452,23 @@ def sync_one_date(
         audit.update({"status": "success", "upsert_touched": touched, "db_count_after": db_count_after})
         return audit
     except Exception as exc:  # noqa: BLE001
+        rollback_error: Optional[Dict[str, str]] = None
         try:
             conn.rollback()
-        except Exception:
-            pass
-        return {
+        except Exception as rollback_exc:  # noqa: BLE001
+            rollback_error = {
+                "error_type": type(rollback_exc).__name__,
+                "error": str(rollback_exc),
+            }
+        failure = {
             "ann_date": query_date.isoformat(),
             "status": "failed",
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
+        if rollback_error is not None:
+            failure["rollback_error"] = rollback_error
+        return failure
 
 
 def missing_dates(start: dt.date, end: dt.date) -> List[dt.date]:

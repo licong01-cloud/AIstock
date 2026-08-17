@@ -72,3 +72,33 @@ def test_rows_from_item_fails_closed_when_multiple_security_identities_match() -
     assert rows == []
     assert audit["issuer_ambiguous_document_count"] == 1
     assert audit["issuer_rejected_count"] == 2
+
+
+def test_sync_one_date_reports_primary_and_rollback_failures(monkeypatch) -> None:
+    class BrokenConnection:
+        def rollback(self) -> None:
+            raise RuntimeError("rollback failed")
+
+    def fail_identity_load(_conn) -> None:
+        raise ValueError("identity load failed")
+
+    monkeypatch.setattr(MODULE, "get_conn", lambda **_: BrokenConnection())
+    monkeypatch.setattr(MODULE, "load_security_identities", fail_identity_load)
+
+    result = MODULE.sync_one_date(
+        dt.date(2026, 7, 31),
+        request_sleep=0.0,
+        max_retries=1,
+        bulk_session_tune=False,
+    )
+
+    assert result == {
+        "ann_date": "2026-07-31",
+        "status": "failed",
+        "error_type": "ValueError",
+        "error": "identity load failed",
+        "rollback_error": {
+            "error_type": "RuntimeError",
+            "error": "rollback failed",
+        },
+    }
