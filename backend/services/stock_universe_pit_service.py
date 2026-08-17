@@ -273,7 +273,28 @@ class StockUniversePitService:
                 )
                 trading_calendar = dict(cur.fetchone() or {})
                 confirmed_delisting = None
+                stock_namechange = None
                 if include_canonical_terminal_events:
+                    cur.execute(
+                        f"""
+                        SELECT COUNT(*) AS row_count,
+                               MAX(start_date)::date AS max_start_date,
+                               MAX(COALESCE(end_date, start_date))::date AS max_end_date,
+                               MAX(updated_at) AS max_updated_at
+                          FROM market.stock_namechange historical_name
+                          JOIN market.stock_basic stock
+                            ON stock.ts_code = historical_name.ts_code
+                           AND stock.exchange IN ('SSE', 'SZSE')
+                         WHERE historical_name.start_date <= %s
+                           AND (
+                               historical_name.ts_code LIKE '%%.SH'
+                               OR historical_name.ts_code LIKE '%%.SZ'
+                           )
+                           {a_share_ts_code_filter("historical_name.ts_code")}
+                        """,
+                        (fingerprint_end,),
+                    )
+                    stock_namechange = dict(cur.fetchone() or {})
                     cur.execute(
                         f"""
                         SELECT COUNT(*) AS row_count,
@@ -292,8 +313,14 @@ class StockUniversePitService:
                            AND evidence#>>'{{issuer_binding,status}}' = 'EXACT'
                            AND evidence#>>'{{issuer_binding,actionable}}' = 'true'
                            AND evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code
-                           AND evidence#>>'{{st_cross_check,matched}}' = 'true'
-                           AND evidence#>>'{{st_cross_check,terminal}}' = 'true'
+                         AND COALESCE(
+                                 evidence#>>'{{terminal_cross_check,matched}}',
+                                 evidence#>>'{{st_cross_check,matched}}'
+                             ) = 'true'
+                         AND COALESCE(
+                                 evidence#>>'{{terminal_cross_check,terminal}}',
+                                 evidence#>>'{{st_cross_check,terminal}}'
+                             ) = 'true'
                            AND COALESCE(
                                (available_at AT TIME ZONE 'Asia/Shanghai')::date,
                                source_event_date::date
@@ -314,6 +341,7 @@ class StockUniversePitService:
             "trading_calendar": trading_calendar,
         }
         if include_canonical_terminal_events:
+            fingerprint["stock_namechange"] = stock_namechange
             fingerprint["confirmed_delisting_events"] = confirmed_delisting
         return fingerprint
 

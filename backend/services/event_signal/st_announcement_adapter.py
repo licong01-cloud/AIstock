@@ -292,6 +292,36 @@ def fetch_stock_st_events_for_rows(conn: Any, rows: list[dict[str, Any]]) -> dic
         return grouped
 
 
+def fetch_stock_basic_terminal_for_rows(
+    conn: Any,
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Load independent Tushare lifecycle evidence for terminal announcements."""
+
+    ts_codes = sorted(
+        {
+            str(row["ts_code"])
+            for row in rows
+            if row.get("ts_code") and row.get("event_type") == "stock_delisting_confirmed"
+        }
+    )
+    if not ts_codes:
+        return {}
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT ts_code, name, list_status, list_date::date, delist_date::date
+              FROM market.stock_basic
+             WHERE ts_code = ANY(%s)
+               AND list_status = 'D'
+               AND delist_date IS NOT NULL
+             ORDER BY ts_code
+            """,
+            (ts_codes,),
+        )
+        return {str(row["ts_code"]): dict(row) for row in cur.fetchall()}
+
+
 def _day_distance(left: Optional[dt.date], right: Optional[dt.date]) -> int:
     if left is None or right is None:
         return 999_999
@@ -382,17 +412,90 @@ def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) 
     }
 
 
+def select_terminal_cross_check(
+    row: dict[str, Any],
+    *,
+    st_cross_check: dict[str, Any],
+    stock_basic: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """Select independent terminal evidence without changing announcement as-of time."""
+
+    if row.get("event_type") != "stock_delisting_confirmed":
+        return {
+            "checked": False,
+            "matched": False,
+            "terminal": False,
+            "match_reason": "terminal_cross_check_not_required",
+        }
+    if st_cross_check.get("matched") and st_cross_check.get("terminal"):
+        return {
+            **st_cross_check,
+            "source_table": "market.stock_st_events",
+            "authority_source": "tushare.stock_st_terminal_event_v1",
+        }
+    known_date = _announcement_known_date(row)
+    if not stock_basic:
+        return {
+            "checked": True,
+            "matched": False,
+            "terminal": False,
+            "match_reason": "no_authoritative_terminal_lifecycle_evidence",
+            "announcement_known_date": known_date,
+        }
+    list_date = _date_or_none(stock_basic.get("list_date"))
+    delist_date = _date_or_none(stock_basic.get("delist_date"))
+    ts_code = str(row.get("ts_code") or "")
+    if (
+        str(stock_basic.get("ts_code") or "") != ts_code
+        or stock_basic.get("list_status") != "D"
+        or known_date is None
+        or delist_date is None
+        or delist_date < known_date
+        or (list_date is not None and list_date > known_date)
+    ):
+        return {
+            "checked": True,
+            "matched": False,
+            "terminal": False,
+            "match_reason": "stock_basic_terminal_lifecycle_is_pit_inconsistent",
+            "announcement_known_date": known_date,
+            "list_date": list_date,
+            "delist_date": delist_date,
+        }
+    return {
+        "checked": True,
+        "matched": True,
+        "terminal": True,
+        "match_reason": "tushare_stock_basic_delist_date_confirms_terminal_outcome",
+        "source_table": "market.stock_basic",
+        "source_api": "tushare.stock_basic",
+        "authority_source": "tushare.stock_basic_delist_lifecycle_v1",
+        "ts_code": ts_code,
+        "list_status": "D",
+        "list_date": list_date,
+        "delist_date": delist_date,
+        "announcement_known_date": known_date,
+    }
+
+
 def attach_st_cross_checks(
     rows: list[dict[str, Any]],
     stock_st_events_by_code: dict[str, list[dict[str, Any]]],
+    stock_basic_terminal_by_code: Optional[dict[str, dict[str, Any]]] = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Attach ST cross-check evidence without changing raw/classification tables."""
 
     matched_rows = 0
     enriched: list[dict[str, Any]] = []
+    terminal_by_code = stock_basic_terminal_by_code or {}
     for row in rows:
         copied = dict(row)
         cross_check = select_best_st_event(copied, stock_st_events_by_code.get(str(copied.get("ts_code")), []))
+        terminal_cross_check = select_terminal_cross_check(
+            copied,
+            st_cross_check=cross_check,
+            stock_basic=terminal_by_code.get(str(copied.get("ts_code"))),
+        )
         if cross_check.get("matched"):
             matched_rows += 1
         detail = copied.get("classification_detail") or {}
@@ -413,10 +516,12 @@ def attach_st_cross_checks(
                 "source_ann_rule_version": copied.get("source_rule_version"),
                 "title": copied.get("title"),
                 "st_cross_check": cross_check,
+                "terminal_cross_check": terminal_cross_check,
                 "classifier_issuer_binding": classifier_issuer_binding,
             }
         )
         detail["st_cross_check"] = cross_check
+        detail["terminal_cross_check"] = terminal_cross_check
         copied["ann_signal_evidence"] = evidence
         copied["classification_detail"] = detail
         copied["ann_signal_reason"] = f"{copied.get('risk_level')} {copied.get('event_type')}: {copied.get('title') or ''}"[:1000]
@@ -487,7 +592,12 @@ def sync_st_first_announcement_event_signals(
                     break
                 last_classification_id = int(rows[-1]["classification_id"])
                 stock_st_events = fetch_stock_st_events_for_rows(conn, rows)
-                rows, matched_rows = attach_st_cross_checks(rows, stock_st_events)
+                stock_basic_terminal = fetch_stock_basic_terminal_for_rows(conn, rows)
+                rows, matched_rows = attach_st_cross_checks(
+                    rows,
+                    stock_st_events,
+                    stock_basic_terminal,
+                )
                 rows, batch_binding_counts = attach_announcement_issuer_bindings(
                     rows,
                     require_terminal_cross_check=True,

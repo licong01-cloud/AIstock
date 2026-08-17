@@ -1,4 +1,5 @@
 import datetime as dt
+import inspect
 from copy import deepcopy
 from pathlib import Path
 
@@ -58,6 +59,15 @@ def test_plan_digest_and_counts_are_deterministic() -> None:
     }
     assert first.raw_rows_deleted == 0
     assert first.signal_rows_deleted == 0
+    assert first.schema_version == "announcement_issuer_binding_repair_receipt_v2"
+
+
+def test_repair_batches_load_general_terminal_cross_check_authority() -> None:
+    source = inspect.getsource(repair._iter_enriched_batches)
+
+    assert "fetch_stock_basic_terminal_for_rows" in source
+    assert "stock_basic_terminal" in source
+    assert "attach_st_cross_checks" in source
 
 
 def test_plan_digest_binds_target_and_every_repair_write_input() -> None:

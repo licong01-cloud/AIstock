@@ -1,0 +1,400 @@
+{
+  "actual": "DEV canonical builder reports missing_terminal_evidence_count=92 after issuer repair; Tushare analysis shows 83 close by namechange intervals and 9 by stock_basic names differing only by the (退) terminal display suffix.",
+  "allowed_write_scope": [
+    "backend/db/init_announcement_event_schema.py",
+    "backend/services/event_signal/announcement_issuer_binding.py",
+    "backend/tests/test_announcement_event_schema.py",
+    "backend/tests/event_signal/test_announcement_issuer_binding.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/migrations/stock_namechange_schema_20260817.sql",
+    "scripts/sync_stock_namechange.py",
+    "backend/tests/scripts/test_sync_stock_namechange.py",
+    "backend/services/event_signal/st_announcement_adapter.py",
+    "scripts/build_stock_universe_pit_spans.py",
+    "backend/services/stock_universe_pit_service.py",
+    "backend/tests/event_signal/test_st_announcement_adapter.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
+    "backend/tests/test_stock_universe_pit_service.py",
+    "scripts/repair_announcement_event_signal_issuer_binding.py",
+    "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+    "tests/aistock_validation/bugs/20260817_BUG-1120-canonical-pit-v2-cannot-resolve-delisted-issuers-without-authoritative-h.json",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1120",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-17T09:30:50.754047Z",
+  "description": "DEV canonical builder reports missing_terminal_evidence_count=92 after issuer repair; Tushare analysis shows 83 close by namechange intervals and 9 by stock_basic names differing only by the (退) terminal display suffix.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260817-0ca1da5d7ebb",
+      "timestamp": "2026-08-17T09:30:50.754026Z"
+    }
+  ],
+  "evidence_uris": [
+    "DEV aistock_dev builder missing_count=92; bounded Tushare audit namechange interval exact=83, stock_basic terminal suffix exact=9, API errors=0"
+  ],
+  "expected": "Issuer binding resolves exactly one security from an auditable Tushare namechange interval or a controlled delisted stock_basic terminal-name authority, preserves ambiguity fail-closed, and lets the DEV PIT v2 builder close terminal evidence without heuristic matching.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/migrations/stock_namechange_schema_20260817.sql",
+      "scripts/sync_stock_namechange.py",
+      "backend/tests/scripts/test_sync_stock_namechange.py"
+    ],
+    "changed_files": [
+      "backend/db/init_announcement_event_schema.py",
+      "backend/services/event_signal/announcement_issuer_binding.py",
+      "backend/tests/test_announcement_event_schema.py",
+      "backend/tests/event_signal/test_announcement_issuer_binding.py",
+      "backend/services/event_signal/st_announcement_adapter.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/event_signal/test_st_announcement_adapter.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "scripts/repair_announcement_event_signal_issuer_binding.py",
+      "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+      "backend/migrations/stock_namechange_schema_20260817.sql",
+      "backend/tests/scripts/test_sync_stock_namechange.py",
+      "scripts/sync_stock_namechange.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20260817_BUG-1120-canonical-pit-v2-cannot-resolve-delisted-issuers-without-authoritative-h.json"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/db/init_announcement_event_schema.py",
+        "backend/services/event_signal/announcement_issuer_binding.py",
+        "backend/tests/test_announcement_event_schema.py",
+        "backend/tests/event_signal/test_announcement_issuer_binding.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/migrations/stock_namechange_schema_20260817.sql",
+        "scripts/sync_stock_namechange.py",
+        "backend/tests/scripts/test_sync_stock_namechange.py",
+        "backend/services/event_signal/st_announcement_adapter.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/services/stock_universe_pit_service.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/tests/test_stock_universe_pit_spans.py",
+        "backend/tests/test_stock_universe_pit_service.py",
+        "scripts/repair_announcement_event_signal_issuer_binding.py",
+        "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py"
+      ],
+      "impacted_modules": [
+        "platform.db",
+        "qe.archive",
+        "paper_v2",
+        "selection_center",
+        "strategy_package",
+        "validation.center",
+        "local_data",
+        "platform.api",
+        "qe.core",
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/db/init_announcement_event_schema.py",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/services/event_signal/announcement_issuer_binding.py",
+          "impact_modules": [
+            "platform.api",
+            "platform.db"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "event_signal_announcement_ingress"
+        },
+        {
+          "file": "backend/tests/test_announcement_event_schema.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "backend/tests/event_signal/test_announcement_issuer_binding.py",
+          "impact_modules": [
+            "platform.api",
+            "platform.db"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "event_signal_announcement_ingress"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "backend/migrations/stock_namechange_schema_20260817.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "scripts/sync_stock_namechange.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_sync_stock_namechange.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/db/init_announcement_event_schema.py",
+        "backend/services/event_signal/announcement_issuer_binding.py",
+        "backend/tests/test_announcement_event_schema.py",
+        "backend/tests/event_signal/test_announcement_issuer_binding.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/migrations/stock_namechange_schema_20260817.sql",
+        "scripts/sync_stock_namechange.py",
+        "backend/tests/scripts/test_sync_stock_namechange.py",
+        "backend/services/event_signal/st_announcement_adapter.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/services/stock_universe_pit_service.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/tests/test_stock_universe_pit_spans.py",
+        "backend/tests/test_stock_universe_pit_service.py",
+        "scripts/repair_announcement_event_signal_issuer_binding.py",
+        "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/db/init_announcement_event_schema.py",
+      "backend/services/event_signal/announcement_issuer_binding.py",
+      "backend/tests/test_announcement_event_schema.py",
+      "backend/tests/event_signal/test_announcement_issuer_binding.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/migrations/stock_namechange_schema_20260817.sql",
+      "scripts/sync_stock_namechange.py",
+      "backend/tests/scripts/test_sync_stock_namechange.py",
+      "backend/services/event_signal/st_announcement_adapter.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/event_signal/test_st_announcement_adapter.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "scripts/repair_announcement_event_signal_issuer_binding.py",
+      "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py"
+    ]
+  },
+  "first_seen_at": "2026-08-17T09:30:50.754047Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3561,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3561",
+  "last_seen_at": "2026-08-17T09:30:50.754047Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "required",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run canonical build_stock_universe_pit_spans.py dry-run against TDX_DB_DEV_* for 2018-08-01..2026-07-31 after v2 announcement replay.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "validation_catalog_integrity",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/stock-universe/st-pit/status",
+    "fresh_process_evidence": [
+      "Fresh Python process imported the issuer resolver, terminal cross-check, and canonical PIT service; BUG1120_FRESH_IMPORT_OK source_sha256=377b09dc7e2538805b2f64c8d7e6dd76ec3a3160a5d6b9850ff31f7e8b50c211.",
+      "BUG1120_FRESH_IMPORT_OK source_sha256=377b09dc7e2538805b2f64c8d7e6dd76ec3a3160a5d6b9850ff31f7e8b50c211"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Canonical PIT v2 cannot resolve delisted issuers without authoritative historical names",
+  "trigger_condition": {
+    "fingerprint": "0ca1da5d7ebb3e92a5366c5b",
+    "source_event_id": "FE-20260817-0ca1da5d7ebb"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

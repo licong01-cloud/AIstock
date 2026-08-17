@@ -127,3 +127,20 @@ def test_base_schema_unique_constraints_do_not_recreate_legacy_keys_after_time_m
     assert "ann_event_classification_ann_rule_mode_uniq" in migration
     assert "ann_risk_signal_ann_rule_mode_uniq" in migration
     assert "column_name = 'time_mode'" in migration
+
+
+def test_stock_namechange_schema_is_auditable_and_interval_safe() -> None:
+    migration = (ROOT / "backend/migrations/stock_namechange_schema_20260817.sql").read_text(
+        encoding="utf-8"
+    )
+    initializer = (ROOT / "backend/db/init_announcement_event_schema.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CREATE TABLE IF NOT EXISTS market.stock_namechange" in migration
+    assert "PRIMARY KEY (ts_code, name, start_date)" in migration
+    assert "end_date IS NULL OR end_date >= start_date" in migration
+    assert "source_record_sha256" in migration
+    assert "source_payload JSONB NOT NULL" in migration
+    assert "COMMENT ON TABLE market.stock_namechange" in migration
+    assert "stock_namechange_schema_20260817.sql" in initializer

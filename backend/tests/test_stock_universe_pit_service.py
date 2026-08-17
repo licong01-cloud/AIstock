@@ -37,8 +37,13 @@ def test_canonical_source_fingerprint_uses_builder_terminal_evidence_contract() 
     assert "evidence#>>'{{issuer_binding,status}}' = 'EXACT'" in source
     assert "evidence#>>'{{issuer_binding,actionable}}' = 'true'" in source
     assert "evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code" in source
-    assert "evidence#>>'{{st_cross_check,matched}}' = 'true'" in source
-    assert "evidence#>>'{{st_cross_check,terminal}}' = 'true'" in source
+    assert "evidence#>>'{{terminal_cross_check,matched}}'" in source
+    assert "evidence#>>'{{terminal_cross_check,terminal}}'" in source
+    assert "evidence#>>'{{st_cross_check,matched}}'" in source
+    assert "evidence#>>'{{st_cross_check,terminal}}'" in source
+    assert "COALESCE" in source
+    assert "FROM market.stock_namechange" in source
+    assert 'fingerprint["stock_namechange"]' in source
     assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v2"
 
 
