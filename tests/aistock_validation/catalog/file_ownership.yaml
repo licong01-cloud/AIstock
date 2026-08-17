@@ -910,6 +910,11 @@ rules:
       - backend/routers/stock_universe.py
       - backend/tests/test_stock_universe_pit_spans.py
       - backend/tests/test_stock_universe_pit_service.py
+      - backend/tests/announcements/test_title_classifier.py
+      - backend/tests/event_signal/test_st_announcement_adapter.py
+      - backend/tests/scripts/test_sync_eastmoney_anns_metadata.py
+      - scripts/classify_announcement_titles_v0.py
+      - scripts/sync_eastmoney_anns_metadata.py
     primary_module: local_data
     impact_modules: [selection_center, qe.core, paper_v2]
     layer: data_pipeline

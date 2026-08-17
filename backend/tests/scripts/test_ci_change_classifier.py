@@ -309,6 +309,26 @@ def test_daily_basic_operator_files_select_local_data_plan(tmp_path: Path) -> No
     assert payload["unmapped_code_files"] == []
 
 
+def test_issuer_bound_pit_files_select_local_data_plan(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/tests/announcements/test_title_classifier.py",
+            "backend/tests/event_signal/test_st_announcement_adapter.py",
+            "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py",
+            "scripts/classify_announcement_titles_v0.py",
+            "scripts/sync_eastmoney_anns_metadata.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_plan_keys"] == ["l0", "data_sync_autonomy_backend"]
+    assert payload["backend_sessions"] == ["data_sync_autonomy_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_advisory_snapshot_blob_ref_migrations_select_historical_range_plan(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
