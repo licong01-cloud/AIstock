@@ -911,6 +911,7 @@ rules:
       - backend/tests/test_stock_universe_pit_spans.py
       - backend/tests/test_stock_universe_pit_service.py
       - backend/tests/announcements/test_title_classifier.py
+      - backend/tests/test_announcement_event_schema.py
       - backend/tests/event_signal/test_st_announcement_adapter.py
       - backend/tests/scripts/test_sync_eastmoney_anns_metadata.py
       - scripts/classify_announcement_titles_v0.py

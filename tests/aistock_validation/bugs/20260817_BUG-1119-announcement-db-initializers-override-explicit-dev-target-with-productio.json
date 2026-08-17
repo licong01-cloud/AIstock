@@ -7,6 +7,8 @@
     "backend/services/event_signal/announcement_adapter.py",
     "backend/tests/test_announcement_event_schema.py",
     "backend/tests/test_unified_event_signal_schema.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260817_BUG-1119-announcement-db-initializers-override-explicit-dev-target-with-productio.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -40,7 +42,9 @@
       "scripts/classify_announcement_titles_v0.py",
       "backend/services/event_signal/announcement_adapter.py",
       "backend/tests/test_announcement_event_schema.py",
-      "backend/tests/test_unified_event_signal_schema.py"
+      "backend/tests/test_unified_event_signal_schema.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "ownership": {
       "changed_files": [
@@ -49,7 +53,9 @@
         "scripts/classify_announcement_titles_v0.py",
         "backend/services/event_signal/announcement_adapter.py",
         "backend/tests/test_announcement_event_schema.py",
-        "backend/tests/test_unified_event_signal_schema.py"
+        "backend/tests/test_unified_event_signal_schema.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "impacted_modules": [
         "platform.db",
@@ -136,7 +142,9 @@
         "scripts/classify_announcement_titles_v0.py",
         "backend/services/event_signal/announcement_adapter.py",
         "backend/tests/test_announcement_event_schema.py",
-        "backend/tests/test_unified_event_signal_schema.py"
+        "backend/tests/test_unified_event_signal_schema.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "unmatched_files": []
     },
@@ -147,7 +155,9 @@
       "scripts/classify_announcement_titles_v0.py",
       "backend/services/event_signal/announcement_adapter.py",
       "backend/tests/test_announcement_event_schema.py",
-      "backend/tests/test_unified_event_signal_schema.py"
+      "backend/tests/test_unified_event_signal_schema.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-08-17T07:17:43.132680Z",
