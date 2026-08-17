@@ -1,12 +1,18 @@
 # 荐股全栈历史三臂对比结果
 
-- 结果哈希：`e9cda130ef76d584e04a27a5fdcdfe085b5618bde27b49702581ac500ff67390`
+- 结果哈希：`500d96e08ca8504e892578d933098d4bf44cc0614b8431f128475b0c6fbae7d9`
 - 冻结合同：`652eef9654efe9f0b67832de11dcca4a28ec013375571f1a3fb92a7e8650aa85`
 - A run：`ahrr_e46883bcdf217a14d8e7a0abf01aeb18`
 - B run：`ahrr_da1dde808156a1b6d21ecf00fa9013d7`
 - C parent run：`ahrr_e46883bcdf217a14d8e7a0abf01aeb18`
 - M5A bundle：`1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb`
-- C 组实现指纹：`d6e61885a60d72beccc19a58ed359bfd6b7f8813ec666d570e4686c9d6773f31`；逐日 artifact `44` 个
+- C 组实现指纹：`1970d03df47df8d292c3e2107af28198cce83b8e0e23d5dd26d1895545ffd104`；逐日 artifact `44` 个
+
+## 配置修复复核
+
+- 本轮将 CLI 默认 `.env` 从本机绝对路径改为 `AISTOCK_ENV_FILE` 或仓库根目录，不涉及模型输入、排序或收益计算。
+- 新证据目录：`F:/Dev/AIstock_model_artifacts/advisory_fullstack_comparison_configfix_20260817`。
+- 修复前指纹 `d6e61885a60d72beccc19a58ed359bfd6b7f8813ec666d570e4686c9d6773f31`，修复后指纹 `1970d03df47df8d292c3e2107af28198cce83b8e0e23d5dd26d1895545ffd104`；独立重跑 C 组 `44/44` 日，新旧逐日 artifact hash `44/44` 完全一致。
 
 ## 排名与覆盖变化
 

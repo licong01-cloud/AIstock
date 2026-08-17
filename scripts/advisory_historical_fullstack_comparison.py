@@ -106,7 +106,10 @@ def main() -> None:
             "analyze",
         ),
     )
-    parser.add_argument("--env-file", default=r"F:\Dev\AIstock\.env")
+    parser.add_argument(
+        "--env-file",
+        default=os.environ.get("AISTOCK_ENV_FILE", str(REPOSITORY_ROOT / ".env")),
+    )
     parser.add_argument("--state-root", default=str(DEFAULT_STATE_ROOT))
     parser.add_argument("--coefficients-path", default=str(DEFAULT_COEFFICIENT_PATH))
     args = parser.parse_args()
