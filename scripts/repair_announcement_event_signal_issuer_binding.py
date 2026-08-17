@@ -47,12 +47,13 @@ from backend.services.event_signal.st_announcement_adapter import (  # noqa: E40
     attach_st_cross_checks,
     build_run_id,
     fetch_st_classification_batch,
+    fetch_stock_basic_terminal_for_rows,
     fetch_stock_st_events_for_rows,
     seed_st_first_rule_set,
 )
 
 
-REPAIR_SCHEMA_VERSION = "announcement_issuer_binding_repair_receipt_v1"
+REPAIR_SCHEMA_VERSION = "announcement_issuer_binding_repair_receipt_v2"
 CONFIRMATIONS = {
     "dev": "APPLY_BUG_1114_ISSUER_SUPPRESSION_DEV",
     "production": "APPLY_BUG_1114_ISSUER_SUPPRESSION_PRODUCTION",
@@ -148,7 +149,12 @@ def _iter_enriched_batches(
             return
         last_classification_id = int(rows[-1]["classification_id"])
         stock_st_events = fetch_stock_st_events_for_rows(conn, rows)
-        rows, _matched = attach_st_cross_checks(rows, stock_st_events)
+        stock_basic_terminal = fetch_stock_basic_terminal_for_rows(conn, rows)
+        rows, _matched = attach_st_cross_checks(
+            rows,
+            stock_st_events,
+            stock_basic_terminal,
+        )
         rows, _counts = attach_announcement_issuer_bindings(
             rows,
             require_terminal_cross_check=True,

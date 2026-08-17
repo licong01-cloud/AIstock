@@ -10,6 +10,7 @@ from backend.services.event_signal.st_announcement_adapter import (
     ST_UNIFIED_RULE_VERSION,
     attach_st_cross_checks,
     select_best_st_event,
+    select_terminal_cross_check,
     st_first_rule_config,
 )
 from backend.services.event_signal.announcement_issuer_binding import attach_announcement_issuer_bindings
@@ -40,6 +41,12 @@ def _sample_row() -> dict:
         "title": "关于公司股票被实施退市风险警示暨停牌的公告",
         "ann_signal_evidence": {},
         "issuer_candidate_ts_codes": ["000001.SZ"],
+        "issuer_candidate_authorities": [
+            {
+                "ts_code": "000001.SZ",
+                "authority_source": "tushare.stock_basic_current_name_v1",
+            }
+        ],
     }
 
 
@@ -148,6 +155,47 @@ def test_select_best_st_event_marks_only_terminal_evidence():
 
     assert result["matched"] is True
     assert result["terminal"] is True
+
+
+def test_terminal_cross_check_accepts_tushare_delist_lifecycle_without_shifting_asof() -> None:
+    row = _sample_row()
+    row["event_type"] = "stock_delisting_confirmed"
+
+    result = select_terminal_cross_check(
+        row,
+        st_cross_check={"checked": True, "matched": False},
+        stock_basic={
+            "ts_code": "000001.SZ",
+            "list_status": "D",
+            "list_date": dt.date(1991, 4, 3),
+            "delist_date": dt.date(2026, 5, 8),
+        },
+    )
+
+    assert result["matched"] is True
+    assert result["terminal"] is True
+    assert result["authority_source"] == "tushare.stock_basic_delist_lifecycle_v1"
+    assert result["announcement_known_date"] == dt.date(2026, 5, 1)
+    assert result["delist_date"] == dt.date(2026, 5, 8)
+
+
+def test_terminal_cross_check_rejects_delist_state_known_before_announcement() -> None:
+    row = _sample_row()
+    row["event_type"] = "stock_delisting_confirmed"
+
+    result = select_terminal_cross_check(
+        row,
+        st_cross_check={"checked": True, "matched": False},
+        stock_basic={
+            "ts_code": "000001.SZ",
+            "list_status": "D",
+            "list_date": dt.date(1991, 4, 3),
+            "delist_date": dt.date(2026, 4, 29),
+        },
+    )
+
+    assert result["matched"] is False
+    assert result["match_reason"] == "stock_basic_terminal_lifecycle_is_pit_inconsistent"
 
 
 def test_attach_st_cross_checks_adds_evidence_without_mutating_source_row():
@@ -259,6 +307,40 @@ def test_exact_terminal_pipeline_emits_v2_contract_after_binding() -> None:
     assert matched == 1
     assert bound[0]["ann_signal_status"] == "ACTIVE"
     assert evidence["issuer_binding"]["status"] == "EXACT"
+    assert evidence["terminal_evidence_contract"] == (
+        CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
+    )
+    assert counts == {"EXACT": 1}
+
+
+def test_stock_basic_terminal_pipeline_emits_v2_contract_after_binding() -> None:
+    row = _sample_row()
+    row["event_type"] = "stock_delisting_confirmed"
+
+    rows, matched = attach_st_cross_checks(
+        [row],
+        {},
+        {
+            "000001.SZ": {
+                "ts_code": "000001.SZ",
+                "list_status": "D",
+                "list_date": dt.date(1991, 4, 3),
+                "delist_date": dt.date(2026, 5, 8),
+            }
+        },
+    )
+    bound, counts = attach_announcement_issuer_bindings(
+        rows,
+        require_terminal_cross_check=True,
+    )
+
+    evidence = bound[0]["ann_signal_evidence"]
+    assert matched == 0
+    assert evidence["st_cross_check"]["matched"] is False
+    assert evidence["terminal_cross_check"]["matched"] is True
+    assert evidence["terminal_cross_check"]["authority_source"] == (
+        "tushare.stock_basic_delist_lifecycle_v1"
+    )
     assert evidence["terminal_evidence_contract"] == (
         CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
     )

@@ -1806,6 +1806,29 @@ def test_bug_1114_repair_script_is_exact_non_runtime_but_adapter_change_is_backe
     assert nearby["target_ids"] == []
 
 
+def test_bug_1120_namechange_sync_is_exact_non_runtime_but_service_change_is_backend() -> None:
+    sync = workflow._classify_runtime_impact(["scripts/sync_stock_namechange.py"])
+    mixed = workflow._classify_runtime_impact(
+        [
+            "backend/services/stock_universe_pit_service.py",
+            "scripts/sync_stock_namechange.py",
+        ]
+    )
+    nearby = workflow._classify_runtime_impact(["scripts/sync_other_stock_authority.py"])
+
+    assert sync == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["runtime_files"] == ["backend/services/stock_universe_pit_service.py"]
+    assert mixed["target_ids"] == ["backend-main"]
+    assert nearby["runtime_impact"] == "unknown"
+    assert nearby["target_ids"] == []
+
+
 def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
     isolated_workflow_root: Path,
 ) -> None:
