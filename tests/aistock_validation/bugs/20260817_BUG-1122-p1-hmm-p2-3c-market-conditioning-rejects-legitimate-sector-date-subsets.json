@@ -1,6 +1,8 @@
 {
   "actual": "Formal P2-3C run at producer 9a7a2718026f6d62f218fbe09d8b82f3d697b6c3 completed all three approved market folds, then failed before L1 fits because _condition_component requires exact equality between the market-state date set and the sector-feature date union. Fold-1 train has 403 causal market dates and 346 valid L1 sector dates under the approved provider-absence and cross-section coverage rules. The approved contract requires a market state for every actual sector feature date, not that every market date survive L1 eligibility. Fix must accept an exact sector-date subset only when every sector date resolves to one valid same-day market state; it must still reject missing sector dates, unknown/extra sector dates, invalid states and non-finite interaction values, persist explicit unused-market-date diagnostics, and preserve fixed parameters, target, alpha selection, holdout boundary and zero side effects.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+    "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py",
     "tests/aistock_validation/bugs/20260817_BUG-1122-p1-hmm-p2-3c-market-conditioning-rejects-legitimate-sector-date-subsets.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,23 +22,62 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260817-2d057f1feda2",
       "timestamp": "2026-08-17T13:03:01.198031Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Added the exact offline P2-3C source and direct test files after changed-file ownership mapped both to hmm.risk with no unmatched or ambiguous paths.",
+      "timestamp": "2026-08-17T13:22:51.5439070Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_3c_20260817/p2_3c_market_conditioned_ridge_candidate_9a7a2718.failure.json#canonical=76acc05cf1638e7c53b6a83f947f7c4519ee4f74a6976a5c61047be9ad4f72bb"
+  ],
+  "expected": "Condition only actual eligible sector rows using the same-day causal market state, while retaining explicit sector/market date-set identities and unused-market-date diagnostics.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py"
+    ]
   },
   "first_seen_at": "2026-08-17T13:03:01.198045Z",
   "fix_branch": null,
@@ -52,7 +93,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/hmm_risk/run_market_relative_ridge_candidate.py --candidate-mode p2-3c --request <frozen-request> --output <repo-external-output> --db-env-prefix TDX_DB_",
   "required_verification": [
     "l0",
     "hmm_risk_backend"
@@ -183,5 +224,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_ready"
 }
