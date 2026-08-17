@@ -257,7 +257,9 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "database_readback_ref": "not_required",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "bug1113_fresh_process_v2 contract=issuer_bound_stock_delisting_v2 exact=emitted stale_v1=removed source_sha256=af959b11f86764a7f2324c6ef8946145796591c3e37ce012e704683e27a60c9e"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
