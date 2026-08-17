@@ -1380,6 +1380,22 @@ rules:
     layer: backend_test
     risk_level: medium
     ownership_reason: Backend tests are owned by the test system and secondarily attributed by path-specific rules.
+  - rule_id: event_signal_announcement_ingress
+    priority: 95
+    include:
+      - backend/services/event_signal/announcement_adapter.py
+      - backend/services/event_signal/announcement_issuer_binding.py
+      - backend/services/event_signal/st_announcement_adapter.py
+      - backend/tests/event_signal/test_announcement_adapter.py
+      - backend/tests/event_signal/test_announcement_issuer_binding.py
+      - backend/tests/event_signal/test_st_announcement_adapter.py
+      - scripts/repair_announcement_event_signal_issuer_binding.py
+      - backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py
+    primary_module: local_data
+    impact_modules: [platform.api, platform.db]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Announcement issuer binding and repair are local-data contracts that affect shared API and database consumers.
   - rule_id: platform_api_tests
     priority: 90
     include:

@@ -11,6 +11,8 @@
     "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
     "docs/standards/aistock_runtime_targets_v1.yaml",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260817_BUG-1114-announcement-issuer-fan-out-creates-cross-security-delisting-signals-and.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -55,7 +57,9 @@
       "backend/tests/event_signal/test_announcement_adapter.py",
       "backend/tests/event_signal/test_st_announcement_adapter.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ],
     "ownership": {
       "changed_files": [
@@ -68,7 +72,9 @@
         "scripts/repair_announcement_event_signal_issuer_binding.py",
         "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
         "docs/standards/aistock_runtime_targets_v1.yaml",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
       ],
       "impacted_modules": [
         "platform.api",
@@ -154,7 +160,9 @@
         "scripts/repair_announcement_event_signal_issuer_binding.py",
         "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
         "docs/standards/aistock_runtime_targets_v1.yaml",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
       ],
       "unmatched_files": []
     },
@@ -169,7 +177,9 @@
       "scripts/repair_announcement_event_signal_issuer_binding.py",
       "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ]
   },
   "first_seen_at": "2026-08-17T02:56:34.394390Z",
@@ -189,7 +199,8 @@
   "reproduce_command": "python scripts/build_stock_universe_pit_spans.py --universe-key aistock_equity_pit_canonical_v2 --rule-version shsz_a_252td_st_delist_asof_v2 --scope canonical_all_listed --start-date 2018-08-01 --end-date 2026-07-31 --ipo-filter-days 252 --ipo-filter-unit trading_sessions --write-mode replace --dry-run",
   "required_verification": [
     "l0",
-    "platform_api_backend"
+    "data_sync_autonomy_backend",
+    "validation_catalog_integrity"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -227,9 +238,13 @@
     "python -m pytest -q backend/tests/event_signal backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 148 passed",
     "python -m pytest -q backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 8 passed after final CLI target, confirmation, plan-drift, and rollback hardening",
     "python -m pytest -q backend/tests/scripts/test_aistock_issue_workflow.py::test_bug_1114_repair_script_is_exact_non_runtime_but_adapter_change_is_backend -> 1 passed",
+    "python -m pytest -q backend/tests/scripts/test_ci_change_classifier.py::test_announcement_issuer_binding_change_has_no_unmapped_code -> 1 passed",
     "python -m nox -s validation_module_registry_l0 -> passed (8 tests; ownership 14/14 mapped)",
     "python -m nox -s guardrail_changed_files -> passed (11 staged files mapped; 2 reviewed P2 complexity warnings; blocking=0)",
     "python -m nox -s platform_api_backend -> passed (13 tests)",
+    "python -m nox -s data_sync_autonomy_backend -> passed (162 passed, 1 skipped)",
+    "python -m nox -s validation_catalog_integrity -> passed (7 tests; findings=0)",
+    "python scripts/ci_change_classifier.py over all 14 PR files -> workflow_gate=passed, unmapped_code_files=[]",
     "ruff changed files, py_compile, fresh-process import, and git diff --check -> passed",
     "Read-only production repair plan classified 39661 rows without writes or deletes; production repair apply remains separately gated and unexecuted"
   ],
