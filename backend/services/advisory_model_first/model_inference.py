@@ -678,6 +678,16 @@ def _validate_bundle_runtime(
         )
 
 
+def validate_frozen_bundle_runtime(
+    bundle: LoadedAdvisoryModelBundle,
+    *,
+    resolution: AdvisoryModelBindingResolutionV1,
+) -> None:
+    """Validate the same frozen runtime contract for explicit research inference."""
+
+    _validate_bundle_runtime(bundle, resolution=resolution)
+
+
 def _valid_m5_runtime_policy(bundle: LoadedAdvisoryModelBundle) -> bool:
     manifest = bundle.manifest
     try:
@@ -863,7 +873,37 @@ def _candidate_frame(
     return pd.DataFrame(payloads)
 
 
-def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[dict[str, Any]]:
+def build_frozen_candidate_frame(
+    rows: list[Any],
+    *,
+    program_id: str,
+    binding_version_id: str,
+    decision_date: date,
+    target_trade_date: date,
+    target_count: int,
+    bundle: LoadedAdvisoryModelBundle,
+    resolution: AdvisoryModelBindingResolutionV1,
+) -> pd.DataFrame:
+    """Build the production-identical model input frame for a frozen research parent."""
+
+    return _candidate_frame(
+        rows,
+        program_id=program_id,
+        binding_version_id=binding_version_id,
+        decision_date=decision_date,
+        target_trade_date=target_trade_date,
+        target_count=target_count,
+        bundle=bundle,
+        resolution=resolution,
+    )
+
+
+def prepare_frozen_feature_matrix(
+    bundle: LoadedAdvisoryModelBundle,
+    features: pd.DataFrame,
+) -> pd.DataFrame:
+    """Prepare the canonical LightGBM matrix without requiring LightGBM in this process."""
+
     matrix = _coerce_numeric_feature_dtypes(features.loc[:, MODEL_FEATURE_COLUMNS])
     vocabulary = bundle.feature_schema.get("categorical_vocabulary") or {}
     for column in CATEGORICAL_FEATURE_COLUMNS:
@@ -881,13 +921,14 @@ def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[di
             matrix.loc[unseen, missing_indicator] = 1
             numeric = numeric.mask(unseen)
         matrix[column] = pd.Categorical(numeric, categories=categories)
+    return matrix
+
+
+def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[dict[str, Any]]:
+    matrix = prepare_frozen_feature_matrix(bundle, features)
     schema_version = bundle.manifest.get("schema_version", "advisory_model_bundle_v1")
     boosters = (bundle.booster,) if schema_version == "advisory_model_bundle_v1" else bundle.boosters
-    if not boosters or any(tuple(booster.feature_name()) != tuple(MODEL_FEATURE_COLUMNS) for booster in boosters):
-        raise AdvisoryModelFirstError(
-            "LightGBM feature order differs from the frozen feature schema",
-            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
-        )
+    booster_feature_names = [tuple(booster.feature_name()) for booster in boosters] if boosters else []
     try:
         raw_scores = [np.asarray(booster.predict(matrix), dtype=float) for booster in boosters]
         raw_contributions = [
@@ -904,26 +945,63 @@ def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[di
             reason_code="ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
             context={"error_type": type(exc).__name__},
         ) from exc
-    if any(score.shape != (len(features),) for score in raw_scores) or any(
-        contribution.shape != (len(features), len(MODEL_FEATURE_COLUMNS) + 1) for contribution in raw_contributions
+    return score_frozen_feature_matrix_from_booster_outputs(
+        bundle,
+        features,
+        raw_scores=raw_scores,
+        raw_contributions=raw_contributions,
+        booster_feature_names=booster_feature_names,
+    )
+
+
+def score_frozen_feature_matrix_from_booster_outputs(
+    bundle: LoadedAdvisoryModelBundle,
+    features: pd.DataFrame,
+    *,
+    raw_scores: list[Any],
+    raw_contributions: list[Any],
+    booster_feature_names: list[tuple[str, ...]],
+) -> list[dict[str, Any]]:
+    """Apply the production M5A ensemble/rank semantics to verified booster outputs."""
+
+    schema_version = bundle.manifest.get("schema_version", "advisory_model_bundle_v1")
+    expected_member_count = 1 if schema_version == "advisory_model_bundle_v1" else len(bundle.boosters)
+    scores_by_member = [np.asarray(score, dtype=float) for score in raw_scores]
+    contributions_by_member = [np.asarray(value, dtype=float) for value in raw_contributions]
+    if (
+        expected_member_count < 1
+        or len(scores_by_member) != expected_member_count
+        or len(contributions_by_member) != expected_member_count
+        or len(booster_feature_names) != expected_member_count
+        or any(tuple(names) != tuple(MODEL_FEATURE_COLUMNS) for names in booster_feature_names)
+    ):
+        raise AdvisoryModelFirstError(
+            "LightGBM feature order differs from the frozen feature schema",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+    if any(score.shape != (len(features),) for score in scores_by_member) or any(
+        contribution.shape != (len(features), len(MODEL_FEATURE_COLUMNS) + 1)
+        for contribution in contributions_by_member
     ):
         raise AdvisoryModelFirstError(
             "LightGBM shadow output dimensions are invalid",
             reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
         )
-    if any(not np.isfinite(score).all() for score in raw_scores) or any(
-        not np.isfinite(contribution).all() for contribution in raw_contributions
+    if any(not np.isfinite(score).all() for score in scores_by_member) or any(
+        not np.isfinite(contribution).all() for contribution in contributions_by_member
     ):
         raise AdvisoryModelFirstError(
             "LightGBM shadow output contains a non-finite value",
             reason_code="ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
         )
     if schema_version == "advisory_model_bundle_v1":
-        scores = raw_scores[0]
-        contributions = raw_contributions[0]
+        scores = scores_by_member[0]
+        contributions = contributions_by_member[0]
         score_components: list[dict[str, float] | None] = [None] * len(features)
     else:
-        percentile_scores = np.column_stack([_runtime_percentile(raw, features) for raw in raw_scores])
+        percentile_scores = np.column_stack(
+            [_runtime_percentile(raw, features) for raw in scores_by_member]
+        )
         ensemble_scores = percentile_scores.mean(axis=1)
         declared_group_sizes = pd.to_numeric(features["candidate_group_size"], errors="raise").to_numpy(dtype=float)
         if (
@@ -944,7 +1022,7 @@ def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[di
         selection_prior = (declared_group_sizes - selection_ranks) / np.maximum(declared_group_sizes - 1.0, 1.0)
         model_weight = float(bundle.manifest["model_weight"])
         scores = model_weight * ensemble_scores + (1.0 - model_weight) * selection_prior
-        contributions = np.mean(np.stack(raw_contributions, axis=0), axis=0) * model_weight
+        contributions = np.mean(np.stack(contributions_by_member, axis=0), axis=0) * model_weight
         score_components = [
             {
                 "ensemble_score": float(ensemble_scores[index]),
@@ -978,6 +1056,15 @@ def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[di
             item["explanation_policy"] = bundle.manifest["explanation_policy"]
         output.append(item)
     return sorted(output, key=lambda item: (item["advisory_model_rank"], item["symbol"]))
+
+
+def score_frozen_feature_matrix(
+    bundle: LoadedAdvisoryModelBundle,
+    features: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    """Score one complete frozen feature matrix with production runtime semantics."""
+
+    return _score(bundle, features)
 
 
 def _runtime_percentile(raw_scores: np.ndarray, features: pd.DataFrame) -> np.ndarray:

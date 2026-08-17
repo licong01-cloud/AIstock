@@ -195,6 +195,90 @@ def load_exact_shadow_bundle(
     )
 
 
+def load_frozen_research_bundle(
+    *,
+    model_root: str | Path,
+    bundle_id: str,
+    expected_package_id: str,
+    expected_manifest_sha256: str,
+    expected_selection_runtime_semantics_hash: str,
+    booster_factory: Callable[[Path], Any] | None = None,
+) -> LoadedAdvisoryModelBundle:
+    """Load one explicit research bundle without reading or changing runtime bindings."""
+
+    if not _is_sha256(bundle_id):
+        raise AdvisoryModelFirstError(
+            "research model bundle identity is invalid",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"bundle_id": bundle_id},
+        )
+    expected_identity = {
+        "package_id": expected_package_id,
+        "manifest_sha256": expected_manifest_sha256,
+        "selection_runtime_semantics_hash": expected_selection_runtime_semantics_hash,
+    }
+    if not all(str(value).strip() for value in expected_identity.values()) or not all(
+        _is_sha256(str(expected_identity[field]))
+        for field in ("manifest_sha256", "selection_runtime_semantics_hash")
+    ):
+        raise AdvisoryModelFirstError(
+            "research model target identity is incomplete",
+            reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+        )
+    root = Path(model_root).resolve()
+    bundle_path = root / "bundles" / bundle_id
+    manifest_path = bundle_path / "manifest.json"
+    manifest_file_sha256 = _sha256_file(manifest_path) if manifest_path.is_file() else None
+    manifest, feature_schema, hmm_models, baselines = _read_and_validate_bundle(
+        bundle_path,
+        expected_bundle_id=bundle_id,
+        expected_manifest_file_sha256=manifest_file_sha256,
+    )
+    actual_identity = {key: manifest.get(key) for key in expected_identity}
+    if actual_identity != expected_identity:
+        raise AdvisoryModelFirstError(
+            "research model bundle identity differs from the frozen comparison contract",
+            reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            context={"actual_identity": actual_identity},
+        )
+    if manifest.get("status") != "EXPERIMENTAL_SHADOW":
+        raise AdvisoryModelFirstError(
+            "research model bundle is not an experimental shadow artifact",
+            reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
+            context={"status": manifest.get("status")},
+        )
+    factory = booster_factory or _load_lightgbm_booster
+    try:
+        if manifest["schema_version"] == "advisory_model_bundle_v1":
+            booster = factory(bundle_path / "model.txt")
+            boosters: tuple[Any, ...] = ()
+        else:
+            boosters = tuple(
+                factory(_bundle_member_path(bundle_path, member["filename"]))
+                for member in manifest["ensemble_members"]
+            )
+            booster = None
+    except AdvisoryModelFirstError:
+        raise
+    except Exception as exc:
+        raise AdvisoryModelFirstError(
+            "LightGBM model cannot be loaded from the frozen research bundle",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"bundle_id": bundle_id, "error_type": type(exc).__name__},
+        ) from exc
+    return LoadedAdvisoryModelBundle(
+        bundle_id=bundle_id,
+        bundle_path=bundle_path,
+        manifest=manifest,
+        feature_schema=feature_schema,
+        hmm_models=hmm_models,
+        baselines=baselines,
+        booster=booster,
+        boosters=boosters,
+        manifest_file_sha256=manifest_file_sha256,
+    )
+
+
 def publish_shadow_binding(
     *,
     model_root: str | Path,
