@@ -1,6 +1,7 @@
 {
   "actual": "公告分类直接继承 market.anns.ts_code 并传播到 event_signal，已出现其他公司退市公告绑定到 000001.SZ 等错误，导致 canonical v2 DEV dry-run 阻断。",
   "allowed_write_scope": [
+    "backend/services/announcements/title_classifier.py",
     "scripts/classify_announcement_titles_v0.py",
     "backend/services/event_signal/announcement_adapter.py",
     "backend/services/event_signal/st_announcement_adapter.py",
@@ -10,7 +11,12 @@
     "scripts/build_stock_universe_pit_spans.py",
     "backend/tests/event_signal/test_announcement_adapter.py",
     "backend/tests/event_signal/test_st_announcement_adapter.py",
+    "backend/tests/announcements/test_title_classifier.py",
+    "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
     "backend/tests/test_canonical_equity_pit.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "scripts/aistock_issue_workflow.py",
     "tests/aistock_validation/bugs/20260817_BUG-1113-issuer-pit.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -37,8 +43,11 @@
   ],
   "expected": "公告只能绑定到由权威标识确定且与 issuer 一致的证券；歧义、跨证券和 PIT 时间倒序记录必须 fail closed；历史退市证券具备可追溯 terminal evidence，当前上市证券不得获得错误退市确认。",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py"
+    ],
     "changed_files": [
+      "backend/services/announcements/title_classifier.py",
       "scripts/classify_announcement_titles_v0.py",
       "backend/services/event_signal/announcement_adapter.py",
       "backend/services/event_signal/st_announcement_adapter.py",
@@ -48,7 +57,11 @@
       "scripts/build_stock_universe_pit_spans.py",
       "backend/tests/event_signal/test_announcement_adapter.py",
       "backend/tests/event_signal/test_st_announcement_adapter.py",
-      "backend/tests/test_canonical_equity_pit.py"
+      "backend/tests/announcements/test_title_classifier.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_issue_workflow.py"
     ],
     "ownership": {
       "changed_files": [
@@ -179,6 +192,7 @@
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/announcements/title_classifier.py",
       "scripts/classify_announcement_titles_v0.py",
       "backend/services/event_signal/announcement_adapter.py",
       "backend/services/event_signal/st_announcement_adapter.py",
@@ -188,7 +202,12 @@
       "scripts/build_stock_universe_pit_spans.py",
       "backend/tests/event_signal/test_announcement_adapter.py",
       "backend/tests/event_signal/test_st_announcement_adapter.py",
-      "backend/tests/test_canonical_equity_pit.py"
+      "backend/tests/announcements/test_title_classifier.py",
+      "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_issue_workflow.py"
     ]
   },
   "first_seen_at": "2026-08-17T02:54:36.698170Z",
@@ -218,12 +237,10 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
-    "runtime_impact": "unknown",
+    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ]
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

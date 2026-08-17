@@ -28,7 +28,6 @@ from backend.services.announcements.title_classifier import (
 )
 from backend.services.event_signal.announcement_adapter import (
     SOURCE_TYPE,
-    build_event_key,
     finish_run,
     start_run,
     upsert_facts,
@@ -37,7 +36,8 @@ from backend.services.event_signal.announcement_adapter import (
 
 
 ROOT = Path(__file__).resolve().parents[3]
-ST_UNIFIED_RULE_VERSION = "unified_event_signal_rules_st_first_v1_20260506"
+ST_UNIFIED_RULE_VERSION = "unified_event_signal_rules_st_first_v2_20260817"
+TERMINAL_EVIDENCE_CONTRACT = "issuer_bound_stock_delisting_v1"
 ENGINE_NAME = "STFirstAnnouncementEventSignalAdapter"
 
 ST_FIRST_EVENT_TYPES: tuple[str, ...] = (
@@ -339,6 +339,12 @@ def attach_st_cross_checks(
         cross_check = select_best_st_event(copied, stock_st_events_by_code.get(str(copied.get("ts_code")), []))
         if cross_check.get("matched"):
             matched_rows += 1
+        detail = copied.get("classification_detail") or {}
+        if not isinstance(detail, dict):
+            detail = {"source_classification_detail": detail}
+        detail = dict(detail)
+        issuer_binding = detail.get("issuer_binding")
+
         evidence = copied.get("ann_signal_evidence") or {}
         if not isinstance(evidence, dict):
             evidence = {"source_signal_evidence": evidence}
@@ -349,12 +355,16 @@ def attach_st_cross_checks(
                 "source_ann_rule_version": copied.get("source_rule_version"),
                 "title": copied.get("title"),
                 "st_cross_check": cross_check,
+                "issuer_binding": issuer_binding,
             }
         )
-        detail = copied.get("classification_detail") or {}
-        if not isinstance(detail, dict):
-            detail = {"source_classification_detail": detail}
-        detail = dict(detail)
+        if (
+            copied.get("event_type") == "stock_delisting_confirmed"
+            and isinstance(issuer_binding, dict)
+            and issuer_binding.get("status") == "verified"
+            and issuer_binding.get("terminal_subject") == "self"
+        ):
+            evidence["terminal_evidence_contract"] = TERMINAL_EVIDENCE_CONTRACT
         detail["st_cross_check"] = cross_check
         copied["ann_signal_evidence"] = evidence
         copied["classification_detail"] = detail

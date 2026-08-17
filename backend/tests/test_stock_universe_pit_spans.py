@@ -328,6 +328,38 @@ def test_terminal_evidence_does_not_require_stock_delisted_after_cutoff() -> Non
     assert receipt["status"] == "ready"
 
 
+def test_terminal_evidence_reports_but_does_not_require_pre_window_delisting() -> None:
+    stock = StockRow("600000.SH", "historical", "SSE", "D", dt.date(2000, 1, 1), dt.date(2017, 12, 29))
+
+    receipt = audit_canonical_terminal_evidence(
+        [stock],
+        announcement_events=[],
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 7, 31),
+    )
+
+    assert receipt["required_terminal_security_count"] == 0
+    assert receipt["pre_window_terminal_security_count"] == 1
+    assert receipt["pre_window_terminal_security_codes"] == ["600000.SH"]
+    assert receipt["status"] == "ready"
+
+
+def test_terminal_evidence_still_requires_in_window_delisting() -> None:
+    stock = StockRow("600000.SH", "in-window", "SSE", "D", dt.date(2000, 1, 1), dt.date(2025, 1, 1))
+
+    try:
+        audit_canonical_terminal_evidence(
+            [stock],
+            announcement_events=[],
+            start_date=dt.date(2018, 8, 1),
+            end_date=dt.date(2026, 7, 31),
+        )
+    except RuntimeError as exc:
+        assert "600000.SH" in str(exc)
+    else:
+        raise AssertionError("in-window delisting without announcement evidence must fail closed")
+
+
 class _FakeCursor:
     def __init__(self) -> None:
         self.queries: list[str] = []
@@ -404,4 +436,7 @@ def test_universe_source_queries_exclude_b_shares() -> None:
             assert exclude in sql, sql
     delisting_sql = executed[-1]
     assert "time_mode = 'backtest'" in delisting_sql
+    assert "terminal_evidence_contract' = 'issuer_bound_stock_delisting_v1'" in delisting_sql
+    assert "'{issuer_binding,status}' = 'verified'" in delisting_sql
+    assert "'{issuer_binding,terminal_subject}' = 'self'" in delisting_sql
     assert "signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')" in delisting_sql

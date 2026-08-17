@@ -7,6 +7,7 @@ from backend.services.event_signal.st_announcement_adapter import (
     ST_FIRST_EVENT_TYPES,
     ST_SIGNAL_EVENT_TYPES,
     ST_UNIFIED_RULE_VERSION,
+    TERMINAL_EVIDENCE_CONTRACT,
     attach_st_cross_checks,
     select_best_st_event,
     st_first_rule_config,
@@ -125,3 +126,45 @@ def test_attach_st_cross_checks_adds_evidence_without_mutating_source_row():
     assert enriched["ann_signal_evidence"]["st_cross_check"]["st_type"] == "*ST"
     assert enriched["ann_signal_evidence"]["adapter"] == ENGINE_NAME
     assert enriched["ann_signal_reason"].startswith("P0_BLOCK stock_st_imposed")
+
+
+def test_confirmed_delisting_emits_terminal_contract_only_for_verified_self_issuer():
+    row = _sample_row()
+    row.update(
+        {
+            "event_type": "stock_delisting_confirmed",
+            "matched_rule": "stock_delisting_confirmed",
+            "classification_detail": {
+                "issuer_binding": {
+                    "status": "verified",
+                    "terminal_subject": "self",
+                    "ts_code": "000001.SZ",
+                }
+            },
+        }
+    )
+
+    rows, _ = attach_st_cross_checks([row], {})
+
+    evidence = rows[0]["ann_signal_evidence"]
+    assert evidence["terminal_evidence_contract"] == TERMINAL_EVIDENCE_CONTRACT
+    assert evidence["issuer_binding"]["status"] == "verified"
+
+
+def test_unverified_delisting_never_emits_terminal_contract():
+    row = _sample_row()
+    row.update(
+        {
+            "event_type": "stock_delisting_confirmed",
+            "classification_detail": {
+                "issuer_binding": {
+                    "status": "unverified",
+                    "terminal_subject": "unknown",
+                }
+            },
+        }
+    )
+
+    rows, _ = attach_st_cross_checks([row], {})
+
+    assert "terminal_evidence_contract" not in rows[0]["ann_signal_evidence"]
