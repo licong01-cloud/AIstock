@@ -31,6 +31,14 @@ ISSUER_BOUND_EVENT_TYPES = frozenset(
         "bankruptcy_restructuring",
     }
 )
+ISSUER_UNVERIFIED_EVENT_TYPES = {
+    "stock_delisting_reference_unverified": (
+        "Delisting reference lacks issuer-bound terminal proof and must remain review-only."
+    ),
+    "stock_event_issuer_unverified": (
+        "Issuer-bound stock event could not be verified and must remain review-only."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -742,6 +750,17 @@ def taxonomy_rows(rules: Iterable[TitleRule] = RULES) -> list[dict[str, str]]:
                 "default_action": rule.action,
                 "needs_llm": rule.needs_llm,
                 "description": rule.description,
+            },
+        )
+    for event_type, description in ISSUER_UNVERIFIED_EVENT_TYPES.items():
+        rows.setdefault(
+            event_type,
+            {
+                "event_type": event_type,
+                "risk_level": "P2_REVIEW",
+                "default_action": "warn_review",
+                "needs_llm": "YES",
+                "description": description,
             },
         )
     return sorted(rows.values(), key=lambda row: row["event_type"])

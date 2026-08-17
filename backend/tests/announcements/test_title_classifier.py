@@ -1,6 +1,21 @@
 import datetime as dt
 
-from backend.services.announcements.title_classifier import AnnouncementTitleClassifier, normalize_security_name
+from backend.services.announcements.title_classifier import (
+    ISSUER_UNVERIFIED_EVENT_TYPES,
+    AnnouncementTitleClassifier,
+    normalize_security_name,
+    taxonomy_rows,
+)
+
+
+def test_taxonomy_registers_every_fail_closed_issuer_event_type() -> None:
+    rows = {row["event_type"]: row for row in taxonomy_rows()}
+
+    assert set(ISSUER_UNVERIFIED_EVENT_TYPES) <= rows.keys()
+    for event_type in ISSUER_UNVERIFIED_EVENT_TYPES:
+        assert rows[event_type]["risk_level"] == "P2_REVIEW"
+        assert rows[event_type]["default_action"] == "warn_review"
+        assert rows[event_type]["needs_llm"] == "YES"
 
 
 def test_delisted_display_markers_do_not_change_security_identity():
