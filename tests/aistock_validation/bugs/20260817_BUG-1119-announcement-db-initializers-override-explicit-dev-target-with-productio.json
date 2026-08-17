@@ -175,7 +175,9 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "database_readback_ref": "not_required",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "bug1119_fresh_process_v1 explicit_env_precedence=verified dev_database=aistock_dev source_sha256=192b5bfcce15038121d7fbc478c621bda9f2def6ab995f305f62938ebfd434ca"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
