@@ -38,6 +38,12 @@
       "actor": "codex",
       "note": "Issuer binding is fail-closed, confirmed delisting requires independent terminal evidence, obsolete signals are suppressed without deletion, and the repair write set excludes EXACT rows.",
       "timestamp": "2026-08-17T03:19:11.424470Z"
+    },
+    {
+      "action": "formal_reaudit_hardening",
+      "actor": "codex",
+      "note": "Bound repair authorization to a non-secret physical target fingerprint and all write-driving business inputs, rejected invalid authorization before DB connect, constrained issuer candidates to security lifetimes, and rejected future terminal cross-check evidence.",
+      "timestamp": "2026-08-17T05:33:24.354404Z"
     }
   ],
   "evidence_uris": [
@@ -235,6 +241,8 @@
     "source_event_id": "FE-20260817-c97ef5d8c17e"
   },
   "validation_evidence": [
+    "python -m pytest -q backend/tests/event_signal backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 156 passed after final formal reaudit hardening",
+    "python -m pytest -q backend/tests/event_signal/test_st_announcement_adapter.py backend/tests/event_signal/test_announcement_issuer_binding.py backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 24 passed",
     "python -m pytest -q backend/tests/event_signal backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 148 passed",
     "python -m pytest -q backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py -> 8 passed after final CLI target, confirmation, plan-drift, and rollback hardening",
     "python -m pytest -q backend/tests/scripts/test_aistock_issue_workflow.py::test_bug_1114_repair_script_is_exact_non_runtime_but_adapter_change_is_backend -> 1 passed",

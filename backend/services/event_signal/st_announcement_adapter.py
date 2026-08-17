@@ -36,6 +36,7 @@ from backend.services.event_signal.announcement_adapter import (
 from backend.services.event_signal.announcement_issuer_binding import (
     ISSUER_BINDING_LATERAL_SQL,
     ISSUER_BINDING_PROJECTION_SQL,
+    SHANGHAI,
     attach_announcement_issuer_bindings,
 )
 
@@ -295,6 +296,20 @@ def _day_distance(left: Optional[dt.date], right: Optional[dt.date]) -> int:
     return abs((left - right).days)
 
 
+def _announcement_known_date(row: dict[str, Any]) -> Optional[dt.date]:
+    value = row.get("available_at")
+    if isinstance(value, dt.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=SHANGHAI)
+        return value.astimezone(SHANGHAI).date()
+    if value is not None:
+        parsed = dt.datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=SHANGHAI)
+        return parsed.astimezone(SHANGHAI).date()
+    return _date_or_none(row.get("ann_date"))
+
+
 def _is_terminal_st_event(candidate: dict[str, Any]) -> bool:
     text = " ".join(
         str(candidate.get(field) or "")
@@ -308,11 +323,27 @@ def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) 
 
     ann_date = _date_or_none(row.get("ann_date"))
     effective_date = _date_or_none(row.get("effective_trade_date"))
+    known_date = _announcement_known_date(row)
     if not candidates:
         return {
             "checked": True,
             "matched": False,
             "match_reason": "no_stock_st_events_for_symbol_in_window",
+        }
+
+    pit_candidates = [
+        candidate
+        for candidate in candidates
+        if known_date is not None
+        and (pub_date := _date_or_none(candidate.get("pub_date"))) is not None
+        and pub_date <= known_date
+    ]
+    if not pit_candidates:
+        return {
+            "checked": True,
+            "matched": False,
+            "match_reason": "no_stock_st_events_available_by_announcement_known_date",
+            "announcement_known_date": known_date,
         }
 
     def score(candidate: dict[str, Any]) -> tuple[int, int, int]:
@@ -322,7 +353,7 @@ def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) 
         imp_distance = _day_distance(effective_date, imp_date)
         return (min(pub_distance, imp_distance), pub_distance, imp_distance)
 
-    best = min(candidates, key=score)
+    best = min(pit_candidates, key=score)
     best_score = score(best)
     if best_score[0] > 5:
         return {
@@ -344,6 +375,7 @@ def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) 
         "st_explain": best.get("st_explain"),
         "source_api": best.get("source_api"),
         "distance_days": best_score[0],
+        "announcement_known_date": known_date,
         "terminal": _is_terminal_st_event(best),
     }
 

@@ -42,6 +42,8 @@ ISSUER_BINDING_LATERAL_SQL = """
                   JOIN market.stock_basic stock
                     ON stock.ts_code = peer.ts_code
                    AND stock.name = peer.name
+                   AND (stock.list_date IS NULL OR stock.list_date <= peer.ann_date)
+                   AND (stock.delist_date IS NULL OR stock.delist_date >= peer.ann_date)
                  WHERE peer.ann_date = a.ann_date
                    AND peer.name = a.name
                    AND peer.title = a.title

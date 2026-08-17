@@ -1,10 +1,13 @@
 import datetime as dt
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
 import scripts.repair_announcement_event_signal_issuer_binding as repair
 from scripts.repair_announcement_event_signal_issuer_binding import (
     _target_config,
+    _target_identity_sha256,
     build_plan_from_batches,
     select_repair_rows,
 )
@@ -15,7 +18,11 @@ def _row(classification_id: int, status: str, digest: str) -> dict:
         "classification_id": classification_id,
         "ann_id": classification_id + 100,
         "ts_code": "000001.SZ",
+        "source_rule_version": "announcement_rules_v1",
+        "time_mode": "backtest",
         "event_type": "stock_delisting_confirmed",
+        "risk_level": "P0_BLOCK",
+        "effective_trade_date": dt.date(2020, 1, 2),
         "issuer_binding_decision": {
             "binding_digest": digest,
             "status": status,
@@ -31,12 +38,14 @@ def test_plan_digest_and_counts_are_deterministic() -> None:
     first = build_plan_from_batches(
         batches,
         target="dev",
+        target_identity_sha256="1" * 64,
         start_date=dt.date(2018, 8, 1),
         end_date=dt.date(2026, 7, 31),
     )
     second = build_plan_from_batches(
         batches,
         target="dev",
+        target_identity_sha256="1" * 64,
         start_date=dt.date(2018, 8, 1),
         end_date=dt.date(2026, 7, 31),
     )
@@ -49,6 +58,37 @@ def test_plan_digest_and_counts_are_deterministic() -> None:
     }
     assert first.raw_rows_deleted == 0
     assert first.signal_rows_deleted == 0
+
+
+def test_plan_digest_binds_target_and_every_repair_write_input() -> None:
+    source = _row(2, "UNRESOLVED", "b" * 64)
+    changed = deepcopy(source)
+    changed["risk_level"] = "P1_WARN"
+
+    base = build_plan_from_batches(
+        [[source]],
+        target="dev",
+        target_identity_sha256="1" * 64,
+        start_date=None,
+        end_date=dt.date(2026, 7, 31),
+    )
+    changed_business_input = build_plan_from_batches(
+        [[changed]],
+        target="dev",
+        target_identity_sha256="1" * 64,
+        start_date=None,
+        end_date=dt.date(2026, 7, 31),
+    )
+    changed_target = build_plan_from_batches(
+        [[source]],
+        target="production",
+        target_identity_sha256="2" * 64,
+        start_date=None,
+        end_date=dt.date(2026, 7, 31),
+    )
+
+    assert base.plan_digest != changed_business_input.plan_digest
+    assert base.plan_digest != changed_target.plan_digest
 
 
 def test_dev_target_refuses_non_dev_identity(tmp_path) -> None:
@@ -162,21 +202,27 @@ def _empty_plan() -> repair.RepairPlan:
     return build_plan_from_batches(
         [],
         target="dev",
+        target_identity_sha256="1" * 64,
         start_date=None,
         end_date=dt.date(2026, 7, 31),
     )
 
 
 def test_apply_rejects_confirmation_before_planning_or_writing(tmp_path, monkeypatch) -> None:
-    connection = _FakeConnection()
     plan_called = False
+    connect_called = False
 
     def unexpected_plan(*_args, **_kwargs):
         nonlocal plan_called
         plan_called = True
         return _empty_plan()
 
-    monkeypatch.setattr(repair.psycopg2, "connect", lambda **_kwargs: connection)
+    def unexpected_connect(**_kwargs):
+        nonlocal connect_called
+        connect_called = True
+        raise AssertionError("invalid confirmation must be rejected before DB connect")
+
+    monkeypatch.setattr(repair.psycopg2, "connect", unexpected_connect)
     monkeypatch.setattr(repair, "_build_plan", unexpected_plan)
 
     with pytest.raises(RuntimeError, match="BUG1114_APPLY_CONFIRMATION_INVALID"):
@@ -195,14 +241,14 @@ def test_apply_rejects_confirmation_before_planning_or_writing(tmp_path, monkeyp
         )
 
     assert plan_called is False
-    assert connection.commit_calls == 0
-    assert connection.rollback_calls == 1
-    assert connection.closed is True
+    assert connect_called is False
 
 
 def test_apply_rejects_plan_drift_before_write(tmp_path, monkeypatch) -> None:
     connection = _FakeConnection()
     apply_called = False
+    env_file = _dev_env(tmp_path)
+    identity = _target_identity_sha256(_target_config(Path(env_file), "dev"))
 
     def unexpected_apply(*_args, **_kwargs):
         nonlocal apply_called
@@ -220,11 +266,13 @@ def test_apply_rejects_plan_drift_before_write(tmp_path, monkeypatch) -> None:
                 "--target",
                 "dev",
                 "--env-file",
-                _dev_env(tmp_path),
+                env_file,
                 "--confirm",
                 repair.CONFIRMATIONS["dev"],
                 "--expected-plan-digest",
                 "f" * 64,
+                "--expected-target-identity-sha256",
+                identity,
             ]
         )
 
@@ -232,6 +280,36 @@ def test_apply_rejects_plan_drift_before_write(tmp_path, monkeypatch) -> None:
     assert connection.commit_calls == 0
     assert connection.rollback_calls == 1
     assert connection.closed is True
+
+
+def test_apply_rejects_target_identity_drift_before_connect(tmp_path, monkeypatch) -> None:
+    connect_called = False
+
+    def unexpected_connect(**_kwargs):
+        nonlocal connect_called
+        connect_called = True
+        raise AssertionError("target drift must be rejected before DB connect")
+
+    monkeypatch.setattr(repair.psycopg2, "connect", unexpected_connect)
+
+    with pytest.raises(RuntimeError, match="BUG1114_TARGET_IDENTITY_DRIFT"):
+        repair.main(
+            [
+                "apply",
+                "--target",
+                "dev",
+                "--env-file",
+                _dev_env(tmp_path),
+                "--confirm",
+                repair.CONFIRMATIONS["dev"],
+                "--expected-plan-digest",
+                "f" * 64,
+                "--expected-target-identity-sha256",
+                "0" * 64,
+            ]
+        )
+
+    assert connect_called is False
 
 
 def test_plan_is_read_only_repeatable_read_and_never_commits(tmp_path, monkeypatch, capsys) -> None:

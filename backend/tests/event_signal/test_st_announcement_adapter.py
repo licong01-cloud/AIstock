@@ -106,6 +106,27 @@ def test_select_best_st_event_reports_unmatched_outside_window():
     assert result["match_reason"] == "nearest_stock_st_event_outside_5_day_window"
 
 
+def test_select_best_st_event_rejects_future_cross_check_for_pit_signal() -> None:
+    row = _sample_row()
+    result = select_best_st_event(
+        row,
+        [
+            {
+                "ts_code": "000001.SZ",
+                "pub_date": dt.date(2026, 5, 2),
+                "imp_date": dt.date(2026, 5, 6),
+                "st_type": "终止上市",
+            }
+        ],
+    )
+
+    assert result["matched"] is False
+    assert result["match_reason"] == (
+        "no_stock_st_events_available_by_announcement_known_date"
+    )
+    assert result["announcement_known_date"] == dt.date(2026, 5, 1)
+
+
 def test_select_best_st_event_marks_only_terminal_evidence():
     row = _sample_row()
     result = select_best_st_event(

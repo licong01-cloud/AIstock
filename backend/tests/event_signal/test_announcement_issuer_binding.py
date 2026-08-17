@@ -1,6 +1,7 @@
 import datetime as dt
 
 from backend.services.event_signal.announcement_issuer_binding import (
+    ISSUER_BINDING_LATERAL_SQL,
     IssuerBindingStatus,
     attach_announcement_issuer_bindings,
     resolve_announcement_issuer_binding,
@@ -32,6 +33,11 @@ def test_exact_binding_is_actionable_and_digest_is_deterministic() -> None:
     assert first.fact_status == "ACTIVE"
     assert first.signal_status == "ACTIVE"
     assert first.digest == second.digest
+
+
+def test_candidate_sql_rejects_security_lifetime_mismatch() -> None:
+    assert "stock.list_date <= peer.ann_date" in ISSUER_BINDING_LATERAL_SQL
+    assert "stock.delist_date >= peer.ann_date" in ISSUER_BINDING_LATERAL_SQL
 
 
 def test_provider_alias_is_preserved_but_suppressed() -> None:

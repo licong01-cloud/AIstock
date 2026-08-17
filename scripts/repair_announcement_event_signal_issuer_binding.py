@@ -4,6 +4,11 @@ The repair never deletes or rewrites raw announcements/classifications.  It
 replays the checked-in adapters so non-exact bindings become auditable
 ``SUPPRESSED`` signals and ``UNKNOWN``/``SUPERSEDED`` facts.  Production apply
 is deliberately a separate, exact-target DML gate.
+
+The read-only ``plan`` output supplies both ``plan_digest`` and the non-secret
+``target_identity_sha256``.  ``apply`` requires both values so authorization
+cannot be replayed after either business inputs or the physical DB target
+changes.
 """
 
 from __future__ import annotations
@@ -58,6 +63,7 @@ CONFIRMATIONS = {
 class RepairPlan:
     schema_version: str
     target: str
+    target_identity_sha256: str
     source_rule_version: str
     rule_version: str
     time_mode: str
@@ -101,6 +107,23 @@ def _target_config(env_file: Path, target: str) -> dict[str, Any]:
     return config
 
 
+def _target_identity_sha256(config: Mapping[str, Any]) -> str:
+    """Return a non-secret digest that binds authorization to one DB target."""
+
+    identity = {
+        "host": str(config["host"]).strip().lower(),
+        "port": int(config["port"]),
+        "dbname": str(config["dbname"]).strip(),
+        "user": str(config["user"]).strip(),
+    }
+    return hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
+
+
+def _is_sha256(value: str | None) -> bool:
+    text = str(value or "")
+    return len(text) == 64 and all(character in "0123456789abcdef" for character in text)
+
+
 def _iter_enriched_batches(
     conn: Any,
     *,
@@ -137,10 +160,22 @@ def build_plan_from_batches(
     batches: Iterable[Iterable[Mapping[str, Any]]],
     *,
     target: str,
+    target_identity_sha256: str,
     start_date: dt.date | None,
     end_date: dt.date | None,
 ) -> RepairPlan:
     digest = hashlib.sha256()
+    plan_header = {
+        "schema_version": REPAIR_SCHEMA_VERSION,
+        "target": target,
+        "target_identity_sha256": target_identity_sha256,
+        "source_rule_version": ANNOUNCEMENT_RULE_VERSION,
+        "rule_version": ST_UNIFIED_RULE_VERSION,
+        "time_mode": "backtest",
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    digest.update((_canonical_json(plan_header) + "\n").encode("utf-8"))
     counts: Counter[str] = Counter()
     event_type_counts: dict[str, Counter[str]] = {}
     row_count = 0
@@ -152,11 +187,37 @@ def build_plan_from_batches(
                 "classification_id": int(row["classification_id"]),
                 "ann_id": int(row["ann_id"]),
                 "source_ts_code": str(row["ts_code"]),
-                "binding_digest": decision["binding_digest"],
-                "status": decision["status"],
-                "fact_status": decision["fact_status"],
-                "signal_status": decision["signal_status"],
+                "source_rule_version": row.get("source_rule_version"),
+                "time_mode": row.get("time_mode"),
+                "event_type": row.get("event_type"),
+                "issuer_binding_decision": decision,
             }
+            if str(decision["status"]) != "EXACT":
+                item["repair_write_input"] = {
+                    key: row.get(key)
+                    for key in (
+                        "ann_date",
+                        "title",
+                        "title_hash",
+                        "risk_level",
+                        "action",
+                        "needs_llm",
+                        "matched_rule",
+                        "matched_text",
+                        "source_time_quality",
+                        "effective_trade_date",
+                        "effective_rule",
+                        "available_at",
+                        "confidence",
+                        "severity_score",
+                        "classification_detail",
+                        "ann_signal_id",
+                        "ann_signal_status",
+                        "ann_signal_reason",
+                        "ann_signal_evidence",
+                        "issuer_fact_status",
+                    )
+                }
             digest.update((_canonical_json(item) + "\n").encode("utf-8"))
             counts[str(decision["status"])] += 1
             event_type = str(row.get("event_type") or "UNKNOWN")
@@ -167,6 +228,7 @@ def build_plan_from_batches(
     return RepairPlan(
         schema_version=REPAIR_SCHEMA_VERSION,
         target=target,
+        target_identity_sha256=target_identity_sha256,
         source_rule_version=ANNOUNCEMENT_RULE_VERSION,
         rule_version=ST_UNIFIED_RULE_VERSION,
         time_mode="backtest",
@@ -187,6 +249,7 @@ def _build_plan(
     conn: Any,
     *,
     target: str,
+    target_identity_sha256: str,
     start_date: dt.date | None,
     end_date: dt.date | None,
     batch_size: int,
@@ -199,6 +262,7 @@ def _build_plan(
             batch_size=batch_size,
         ),
         target=target,
+        target_identity_sha256=target_identity_sha256,
         start_date=start_date,
         end_date=end_date,
     )
@@ -335,6 +399,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-date", default="2026-07-31")
     parser.add_argument("--batch-size", type=int, default=1000)
     parser.add_argument("--expected-plan-digest")
+    parser.add_argument("--expected-target-identity-sha256")
     parser.add_argument("--confirm")
     parser.add_argument("--output", type=Path)
     return parser
@@ -346,7 +411,24 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("BUG1114_BATCH_SIZE_OUT_OF_RANGE")
     start_date = _date(args.start_date)
     end_date = _date(args.end_date)
+    if args.command == "apply":
+        if args.confirm != CONFIRMATIONS[args.target]:
+            raise RuntimeError("BUG1114_APPLY_CONFIRMATION_INVALID")
+        if not args.expected_plan_digest:
+            raise RuntimeError("BUG1114_EXPECTED_PLAN_DIGEST_REQUIRED")
+        if not _is_sha256(args.expected_plan_digest):
+            raise RuntimeError("BUG1114_EXPECTED_PLAN_DIGEST_INVALID")
+        if not args.expected_target_identity_sha256:
+            raise RuntimeError("BUG1114_EXPECTED_TARGET_IDENTITY_REQUIRED")
+        if not _is_sha256(args.expected_target_identity_sha256):
+            raise RuntimeError("BUG1114_EXPECTED_TARGET_IDENTITY_INVALID")
     config = _target_config(args.env_file.resolve(), args.target)
+    target_identity_sha256 = _target_identity_sha256(config)
+    if (
+        args.command == "apply"
+        and args.expected_target_identity_sha256 != target_identity_sha256
+    ):
+        raise RuntimeError("BUG1114_TARGET_IDENTITY_DRIFT")
     conn = psycopg2.connect(**config)
     try:
         if args.command == "plan":
@@ -354,6 +436,7 @@ def main(argv: list[str] | None = None) -> int:
             plan = _build_plan(
                 conn,
                 target=args.target,
+                target_identity_sha256=target_identity_sha256,
                 start_date=start_date,
                 end_date=end_date,
                 batch_size=args.batch_size,
@@ -361,14 +444,11 @@ def main(argv: list[str] | None = None) -> int:
             conn.rollback()
             result: dict[str, Any] = {**asdict(plan), "apply_status": "not_requested"}
         else:
-            if args.confirm != CONFIRMATIONS[args.target]:
-                raise RuntimeError("BUG1114_APPLY_CONFIRMATION_INVALID")
-            if not args.expected_plan_digest:
-                raise RuntimeError("BUG1114_EXPECTED_PLAN_DIGEST_REQUIRED")
             conn.set_session(isolation_level="REPEATABLE READ")
             plan = _build_plan(
                 conn,
                 target=args.target,
+                target_identity_sha256=target_identity_sha256,
                 start_date=start_date,
                 end_date=end_date,
                 batch_size=args.batch_size,
