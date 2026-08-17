@@ -3,9 +3,9 @@
 > 日期：2026-08-16
 > Feature tier：F2
 > 任务级别：T3
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.1
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.2
 > 关联 golden 设计：`docs/architecture/advisory_historical_fullstack_comparison_f2_design_20260815.md`
-> 状态：`USER_APPROVED_DESIGN_READY_IMPLEMENTATION_DEFERRED_UNTIL_CURRENT_V6_GOLDEN_FREEZE`
+> 状态：`USER_APPROVED_GOLDEN_FROZEN_IMPLEMENTATION_READY`
 > 适用范围：荐股实盘单日运行、Historical Range 历史研究回放和 StrategyPackage/Selection 执行资源复用
 > 业务边界：无资金、无下单、不写 Paper/QMT/模拟盘；历史执行不修改正式 Program/binding
 
@@ -29,6 +29,21 @@
 
 问题不应通过另写一套“回测荐股算法”解决。目标是分离执行拓扑与业务语义：实盘单日和历史批量使用不同 executor，但共同调用唯一的逐日业务组合。
 
+### 1.1 2026-08-18 frozen golden 基线
+
+当前v6已完成，不再是实施阻塞项：
+
+- 冻结窗口：44个decision dates，`2026-05-15..2026-07-16`；A/B/C三臂。
+- 结果报告：`docs/analysis/advisory_historical_fullstack_comparison_result_20260817.md`。
+- 结果artifact：`F:/Dev/AIstock_model_artifacts/advisory_fullstack_comparison_configfix_20260817/comparison_result_v6.json`。
+- result hash：`500d96e08ca8504e892578d933098d4bf44cc0614b8431f128475b0c6fbae7d9`。
+- frozen contract：`652eef9654efe9f0b67832de11dcca4a28ec013375571f1a3fb92a7e8650aa85`。
+- artifact file SHA256：`9c59219d2d3754aa26fd08beca55c8193e69caa2f25927ee362eb0d68844780e`。
+- C实现指纹：`1970d03df47df8d292c3e2107af28198cce83b8e0e23d5dd26d1895545ffd104`；配置路径修复后独立重跑44/44日，新旧逐日artifact hash 44/44一致。
+- 来源PR：#3558，merge commit `1d1fc9321dfc6149c78b1749038250c8ea929138`。
+
+该artifact冻结现有逐日业务结果、名单生命周期、收益和市场切片；H0-0仍需实现规范化semantic schema与运行信封排除字段，不能把“golden文件存在”误写为H0-0全部实现。
+
 ## 2. Scope / 范围
 
 本设计覆盖：
@@ -48,7 +63,7 @@
 
 - 不修改荐股候选、HMM、风险、可交易性、Selection、名单生命周期、止盈止损、成本或 outcome 算法。
 - 不把多个交易日聚合成一次共同决策；批量只表示资源与调度批量化。
-- 不在当前 v6 回放运行中修改代码、工作区、identity 或已封存 request。
+- 不修改、覆盖或回写已完成v6的代码身份、工作区、request、逐日artifact或结果；H0只创建新的code-release/run identity。
 - 不把历史结果写入实盘 Program、active binding、正式 forward observation、Paper、模拟盘或QMT。
 - 不新建通用回测引擎、通用调度平台、通用缓存服务、ModelOps、GC或历史归档平台。
 - 不默认增加多进程/多GPU并发；并发必须在单worker优化与资源验收后另行评估。
@@ -420,7 +435,7 @@ B不得把overlay结果写回raw artifact；C也只读A的规定父候选，不�
 
 ### 11.2 历史批量
 
-1. 读取sealed request/date plan/source catalog，确认当前v6 golden已冻结且本次为新code-release identity。
+1. 读取sealed request/date plan/source catalog，校验§1.1冻结的v6 golden identity，并确认本次为新code-release identity。
 2. 计算Program/arm raw-sharing groups。
 3. 打开单个持久worker与所需静态workspace sessions。
 4. 以默认5日chunk批量读取PIT source并完成chunk开始校验。
@@ -522,15 +537,16 @@ H0无新增UI，L3/L4为`noop`。已有历史状态页面/API只需继续显示�
 ### 14.4 Runtime
 
 - 源码合入不自动激活HistoricalBatchExecutor。
-- 当前v6继续使用原code-release到结果冻结。
+- 已完成v6保持冻结且只读；H0不以新code-release重算、覆盖或续跑该旧run。
 - 后续启用batch path、用户后端重启和runtime identity readback分别由用户确认/执行。
 
 ## 15. Implementation Plan / 实施方案
 
 ### H0-0：冻结golden与测量合同
 
-- 完成当前v6 A/B/C、outcome和报告。
-- 冻结代表日及完整44日业务字段、source refs、artifact hashes、阶段耗时/I/O/RSS。
+- 状态：`GOLDEN_RESULT_FROZEN_SEMANTIC_NORMALIZATION_PENDING`。
+- 当前v6 A/B/C、outcome和报告已完成，结果/合同/artifact身份见§1.1。
+- 基于现有44日artifact冻结代表日及完整窗口业务字段、source refs、artifact hashes和可用阶段耗时；缺失的I/O/RSS字段必须明确记录gap，不能补估算。
 - 产出semantic normalization schema，明确运行信封排除项。
 
 ### H0-1：抽取共享语义合同
@@ -655,9 +671,9 @@ H0无新增UI，L3/L4为`noop`。已有历史状态页面/API只需继续显示�
 | F-144 | A/B只在raw-affecting identity完全相同时共享不可变raw Alpha artifact；HMM/risk/tradability在raw之后分叉，identity差异必须拒绝共享 |
 | F-145 | source validation使用批次full seal、chunk revision token、逐日读取receipt和异常full rehash；不得用单纯日期过滤替代revision校验 |
 | F-146 | 每个历史交易日独立artifact、typed failure和checkpoint；raw可预计算，顺序相关的list/episode transition在首个未完成日停止并exact resume |
-| F-147 | 当前v6冻结为golden baseline；代表日和完整窗口以业务语义hash验证batch与single-day等价，运行信封字段单独比较 |
+| F-147 | 已冻结v6作为golden baseline；代表日和完整窗口以业务语义hash验证batch与single-day等价，运行信封字段单独比较 |
 | F-148 | 首版使用单持久worker和默认5日chunk，先验证内存/I/O/恢复再评估并发；并发不是业务完成或性能验收的替代 |
-| F-149 | H0不修改实盘binding、Program发布语义、策略包状态、Selection/Paper/QMT，也不在当前v6运行中热改code-release |
+| F-149 | H0不修改实盘binding、Program发布语义、策略包状态、Selection/Paper/QMT，也不修改、覆盖或回写已冻结v6的code-release与结果 |
 | F-150 | 性能receipt分解workspace/source/raw/overlay/publish耗时、I/O、RSS和cache hit；目标未达不得删减PIT、typed failure或业务逻辑 |
 
 ## 18. Design Acceptance Matrix
@@ -670,7 +686,7 @@ H0无新增UI，L3/L4为`noop`。已有历史状态页面/API只需继续显示�
 | F-144 | `raw_alpha_artifact.py`; `candidate_producer.py` | `backend/tests/advisory_historical_range/test_raw_alpha_reuse.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-145 | `batch_source.py`; `catalog_postgres.py` | `backend/tests/advisory_historical_range/test_batch_source_validation.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-146 | `batch_executor.py`; existing day/list repositories | `backend/tests/advisory_historical_range/test_batch_recovery.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
-| F-147 | `semantic_hash.py`; parity service | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path); artifact: current v6 frozen comparison receipt | APPROVED_BY_USER_DESIGN_READY | none |
+| F-147 | `semantic_hash.py`; parity service | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path); report `docs/analysis/advisory_historical_fullstack_comparison_result_20260817.md`; artifact result `500d96e0...`, contract `652eef96...`, file SHA `9c59219d...` | APPROVED_BY_USER_GOLDEN_FROZEN_IMPLEMENTATION_ORACLE_READY | approved_by_user: semantic normalization/parity code remains pending |
 | F-148 | `batch_executor.py` resource policy | `backend/tests/advisory_historical_range/test_batch_resource_policy.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-149 | live/historical boundary adapters | `backend/tests/advisory_execution/test_execution_boundaries.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-150 | execution telemetry artifact | `backend/tests/advisory_historical_range/test_batch_telemetry.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
@@ -685,15 +701,15 @@ H0无新增UI，L3/L4为`noop`。已有历史状态页面/API只需继续显示�
 | backend dependency | `noop` | 复用现有Python/Pandas/Arrow/HDF/LightGBM/psycopg2能力；缺依赖需另行证明与授权 |
 | frontend dependency | `noop` | 无UI范围 |
 | runtime activation | `pending_user_action_after_merge` | 合入不自动切换历史executor |
-| backend restart | `pending_user_action_after_merge` | 由用户确认并执行；本设计和当前v6不控制进程 |
-| current v6 | `frozen_untouched` | 继续按原code-release完成并冻结golden |
+| backend restart | `pending_user_action_after_merge` | 由用户确认并执行；本设计不控制进程，已冻结v6不受新runtime切换影响 |
+| current v6 | `completed_frozen_untouched` | 已完成并冻结；H0不得覆盖、回写或跨code-release resume |
 | cleanup | `noop` | 不删除旧batch、artifact、workspace或分支 |
 
 ## 20. Rollout / Rollback / 发布与回滚
 
 ### 20.1 Rollout
 
-1. 先完成并冻结当前v6 A/B/C、outcome、统计和性能golden。
+1. `COMPLETED`：当前v6 A/B/C、outcome、统计和可用性能证据已冻结，identity见§1.1。
 2. H0在独立后续worktree/branch实施；不得复用正在变化的当前物理工作树作为第二写者。
 3. 先让现有single-day路径经共享合同运行，证明零语义变化。
 4. 启用batch size=1，完成代表日和失败注入。
@@ -722,7 +738,7 @@ H0无新增UI，L3/L4为`noop`。已有历史状态页面/API只需继续显示�
 | 长事务影响DEV数据库 | chunk短只读事务读取后立即关闭；日级业务写独立事务 |
 | 并发重新触发4.7GB进程资源争用 | 首版单worker；先降I/O/重复计算，资源验收后另议并发 |
 | 性能优化未达到目标 | 如实标记性能未完成；不删安全逻辑、不虚报估算、不扩大为通用平台 |
-| 当前v6证据被新代码混合 | v6先冻结，H0使用新code-release/run identity，禁止跨版本resume或覆盖 |
+| 已冻结v6证据被新代码混合 | H0使用新code-release/run identity，禁止跨版本resume、覆盖、回写或把新telemetry补入旧artifact |
 | 合入被误解为运行时切换 | merge、activation、restart和post-restart readback分别报告并由用户控制 |
 
 ## 22. DESIGN-COMPLIANCE-001
