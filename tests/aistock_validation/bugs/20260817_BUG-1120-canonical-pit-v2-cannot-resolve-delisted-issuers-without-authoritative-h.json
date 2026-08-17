@@ -237,8 +237,8 @@
   },
   "first_seen_at": "2026-08-17T09:30:50.754047Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9668fbbd57a4de3f0350f8b5eb5ccbccce915bbe",
+  "fixed_at": "2026-08-17T10:57:21Z",
   "github_issue_number": 3561,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3561",
   "last_seen_at": "2026-08-17T09:30:50.754047Z",
@@ -246,8 +246,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3563",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "required",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Run canonical build_stock_universe_pit_spans.py dry-run against TDX_DB_DEV_* for 2018-08-01..2026-07-31 after v2 announcement replay.",
   "required_verification": [
@@ -270,6 +271,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -280,7 +282,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -289,6 +291,9 @@
     "fingerprint": "0ca1da5d7ebb3e92a5366c5b",
     "source_event_id": "FE-20260817-0ca1da5d7ebb"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_announcement_event_schema.py backend/tests/event_signal/test_announcement_issuer_binding.py backend/tests/event_signal/test_st_announcement_adapter.py backend/tests/scripts/test_sync_stock_namechange.py backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py backend/tests/test_stock_universe_pit_spans.py backend/tests/test_stock_universe_pit_service.py backend/tests/scripts/test_aistock_issue_workflow.py::test_bug_1120_namechange_sync_is_exact_non_runtime_but_service_change_is_backend backend/tests/scripts/test_ci_change_classifier.py::test_announcement_issuer_binding_change_has_no_unmapped_code -q -> passed 105 tests on 79bf5836"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
