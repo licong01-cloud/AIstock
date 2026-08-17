@@ -26,7 +26,7 @@ CANONICAL_PIT_RULE_VERSION = "shsz_a_252td_st_delist_asof_v2"
 CANONICAL_PIT_SCOPE = "canonical_all_listed"
 CANONICAL_PIT_IPO_TRADING_SESSIONS = 252
 CANONICAL_PIT_SNAPSHOT_PREFIX = "aistock_equity_pit_snapshot_"
-CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT = "issuer_bound_stock_delisting_v1"
+CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT = "issuer_bound_stock_delisting_v2"
 
 LEGACY_NONCANONICAL_UNIVERSE_KEYS = frozenset({"shsz_st_pit_active_v1"})
 LEGACY_NONCANONICAL_SNAPSHOT_PREFIXES = ("shsz_st_pit_qe_dataset_",)

@@ -748,8 +748,12 @@ def _load_confirmed_delisting_events(conn: Any, calendar: TradingCalendar, end_d
                AND time_mode = 'backtest'
                AND signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')
                AND evidence->>'terminal_evidence_contract' = %s
-               AND evidence#>>'{{issuer_binding,status}}' = 'verified'
-               AND evidence#>>'{{issuer_binding,terminal_subject}}' = 'self'
+               AND evidence#>>'{{issuer_binding,schema_version}}' = 'announcement_issuer_binding_v1'
+               AND evidence#>>'{{issuer_binding,status}}' = 'EXACT'
+               AND evidence#>>'{{issuer_binding,actionable}}' = 'true'
+               AND evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code
+               AND evidence#>>'{{st_cross_check,matched}}' = 'true'
+               AND evidence#>>'{{st_cross_check,terminal}}' = 'true'
                AND COALESCE((available_at AT TIME ZONE 'Asia/Shanghai')::date, source_event_date::date) <= %s
                {a_share_ts_code_filter("ts_code")}
              ORDER BY ts_code, effective_trade_date, available_at, signal_id

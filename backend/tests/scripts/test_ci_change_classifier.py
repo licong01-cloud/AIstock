@@ -573,6 +573,26 @@ def test_pg_pool_source_and_regression_select_shared_platform_backend_session(tm
     assert payload["unmapped_code_files"] == []
 
 
+def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/services/event_signal/announcement_adapter.py",
+            "backend/services/event_signal/announcement_issuer_binding.py",
+            "backend/services/event_signal/st_announcement_adapter.py",
+            "backend/tests/event_signal/test_announcement_adapter.py",
+            "backend/tests/event_signal/test_announcement_issuer_binding.py",
+            "backend/tests/event_signal/test_st_announcement_adapter.py",
+            "scripts/repair_announcement_event_signal_issuer_binding.py",
+            "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+        ]
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["unmapped_code_files"] == []
+    assert "data_sync_autonomy_backend" in payload["backend_sessions"]
+
+
 def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_path: Path) -> None:
     source = Path("scripts/ci_change_classifier.py").read_text(encoding="utf-8")
     payload = classifier.classify_changed_files(

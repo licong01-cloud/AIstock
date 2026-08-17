@@ -439,7 +439,11 @@ def test_universe_source_queries_exclude_b_shares() -> None:
     delisting_sql = executed[-1]
     assert "time_mode = 'backtest'" in delisting_sql
     assert "terminal_evidence_contract' = %s" in delisting_sql
-    assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v1"
-    assert "'{issuer_binding,status}' = 'verified'" in delisting_sql
-    assert "'{issuer_binding,terminal_subject}' = 'self'" in delisting_sql
+    assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v2"
+    assert "'{issuer_binding,schema_version}' = 'announcement_issuer_binding_v1'" in delisting_sql
+    assert "'{issuer_binding,status}' = 'EXACT'" in delisting_sql
+    assert "'{issuer_binding,actionable}' = 'true'" in delisting_sql
+    assert "'{issuer_binding,resolved_ts_code}' = ts_code" in delisting_sql
+    assert "'{st_cross_check,matched}' = 'true'" in delisting_sql
+    assert "'{st_cross_check,terminal}' = 'true'" in delisting_sql
     assert "signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')" in delisting_sql

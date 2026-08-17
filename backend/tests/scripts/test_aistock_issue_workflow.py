@@ -1777,6 +1777,35 @@ def test_bug_1113_offline_subset_is_exact_and_global_service_is_backend() -> Non
     assert actual_runtime["target_ids"] == ["backend-main"]
 
 
+def test_bug_1114_repair_script_is_exact_non_runtime_but_adapter_change_is_backend() -> None:
+    repair = workflow._classify_runtime_impact(
+        ["scripts/repair_announcement_event_signal_issuer_binding.py"]
+    )
+    mixed = workflow._classify_runtime_impact(
+        [
+            "backend/services/event_signal/announcement_adapter.py",
+            "scripts/repair_announcement_event_signal_issuer_binding.py",
+        ]
+    )
+    nearby = workflow._classify_runtime_impact(
+        ["scripts/repair_other_event_signal_binding.py"]
+    )
+
+    assert repair == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["runtime_files"] == [
+        "backend/services/event_signal/announcement_adapter.py"
+    ]
+    assert mixed["target_ids"] == ["backend-main"]
+    assert nearby["runtime_impact"] == "unknown"
+    assert nearby["target_ids"] == []
+
+
 def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
     isolated_workflow_root: Path,
 ) -> None:

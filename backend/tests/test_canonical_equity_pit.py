@@ -24,7 +24,7 @@ from backend.services.canonical_equity_pit import (
 
 
 def test_canonical_terminal_evidence_contract_is_explicit_and_versioned() -> None:
-    assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v1"
+    assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v2"
 
 
 def test_pit_authority_status_preserves_string_enum_contract() -> None:
