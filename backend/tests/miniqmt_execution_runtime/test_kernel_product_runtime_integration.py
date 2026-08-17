@@ -1454,6 +1454,9 @@ def _plan_reader_facts():
         symbol="600000.SH",
         side=OrderSide.BUY,
         market_board="MAIN_BOARD",
+        requested_quantity=100,
+        legal_quantity=100,
+        decision="EMIT",
         lot_rule={"min_quantity": 100, "increment": 100},
         price_limit_rule={"limit_up": "11.00", "limit_down": "9.00"},
         decision_hash="d" * 64,
@@ -1954,6 +1957,39 @@ def test_plan_authority_reader_rejects_policy_fallback_and_incomplete_plan_sets(
         read(duplicate)
     assert duplicate_failure.value.reason_code == "MINIQMT_K6_PRODUCT_TRADING_RULE_AUTHORITY_INVALID"
 
+    orphan_emit = copy.deepcopy(plan)
+    orphan_emit.trading_rule_decisions.append(
+        SimpleNamespace(
+            decision_id="decision_orphan_emit",
+            symbol="600001.SH",
+            side=OrderSide.BUY,
+            market_board="MAIN_BOARD",
+            requested_quantity=100,
+            legal_quantity=100,
+            decision="EMIT",
+            lot_rule={"min_quantity": 100, "increment": 100},
+            price_limit_rule={},
+            decision_hash="e" * 64,
+        )
+    )
+    with pytest.raises(MiniQMTKernelProductCompositionError) as orphan_emit_failure:
+        read(orphan_emit)
+    assert orphan_emit_failure.value.reason_code == "MINIQMT_K6_PRODUCT_TRADING_RULE_AUTHORITY_INVALID"
+
+    rejected_with_parent = copy.deepcopy(plan)
+    rejected_with_parent.trading_rule_decisions[0].decision = "REJECT"
+    rejected_with_parent.trading_rule_decisions[0].legal_quantity = 0
+    with pytest.raises(MiniQMTKernelProductCompositionError) as rejected_with_parent_failure:
+        read(rejected_with_parent)
+    assert rejected_with_parent_failure.value.reason_code == "MINIQMT_K6_PRODUCT_TRADING_RULE_AUTHORITY_INVALID"
+
+    quantity_drift = copy.deepcopy(plan)
+    quantity_drift.trading_rule_decisions[0].requested_quantity = 200
+    quantity_drift.trading_rule_decisions[0].legal_quantity = 200
+    with pytest.raises(MiniQMTKernelProductCompositionError) as quantity_drift_failure:
+        read(quantity_drift)
+    assert quantity_drift_failure.value.reason_code == "MINIQMT_K6_PRODUCT_TRADING_RULE_AUTHORITY_INVALID"
+
     with pytest.raises(MiniQMTKernelProductCompositionError) as account_failure:
         read(plan, account_repository=SimpleNamespace(get_virtual_account=lambda _strategy_id: object()))
     assert account_failure.value.reason_code == "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID"
@@ -1982,6 +2018,45 @@ def test_plan_authority_reader_rejects_policy_fallback_and_incomplete_plan_sets(
             account_repository=SimpleNamespace(get_virtual_account=lambda _strategy_id: malformed_account),
         )
     assert malformed_failure.value.reason_code == "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID"
+
+
+def test_plan_authority_reader_keeps_non_emitted_reject_as_planning_subject() -> None:
+    plan, binding, session, repository, accounts, runtime_id = _plan_reader_facts()
+    plan.trading_rule_decisions.append(
+        SimpleNamespace(
+            decision_id="decision_rejected_subject",
+            symbol="600001.SH",
+            side=OrderSide.SELL,
+            market_board="MAIN_BOARD",
+            requested_quantity=100,
+            legal_quantity=0,
+            decision="REJECT",
+            lot_rule={"min_quantity": 100, "increment": 100},
+            price_limit_rule={"pre_trade_tradability": {"is_tradable": False}},
+            decision_hash="f" * 64,
+        )
+    )
+    reader = SimulationK6DPlanAuthorityReader(
+        simulation_repository=repository,
+        account_repository=accounts,
+        gateway_catalog=build_k6d_gateway_catalog_v1(),
+        session_authority=session,
+        logical_time_utc=datetime(2026, 7, 27, 1, 30, tzinfo=UTC),
+    )
+
+    authority = reader.read_plan_authority_v1(
+        runtime_id=runtime_id,
+        binding_id=binding.binding_id,
+        execution_plan_id=plan.plan_id,
+    )
+
+    assert [request.parent_intent_id for request in authority.ordered_creation_requests] == [
+        "intent_plan_reader"
+    ]
+    assert {decision.decision_id for decision in plan.trading_rule_decisions} == {
+        "decision_plan_reader",
+        "decision_rejected_subject",
+    }
 
 
 def test_product_committed_source_reader_requires_strict_route_event_and_receipt() -> None:
