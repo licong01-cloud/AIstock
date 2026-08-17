@@ -28,11 +28,15 @@ from backend.services.announcements.title_classifier import (
 )
 from backend.services.event_signal.announcement_adapter import (
     SOURCE_TYPE,
-    build_event_key,
     finish_run,
     start_run,
     upsert_facts,
     upsert_signals,
+)
+from backend.services.event_signal.announcement_issuer_binding import (
+    ISSUER_BINDING_LATERAL_SQL,
+    ISSUER_BINDING_PROJECTION_SQL,
+    attach_announcement_issuer_bindings,
 )
 
 
@@ -57,6 +61,13 @@ ST_SIGNAL_EVENT_TYPES: tuple[str, ...] = (
     "stock_st_imposed",
     "stock_st_added_or_continued",
     "stock_st_removal_applied",
+)
+
+TERMINAL_ST_KEYWORDS: tuple[str, ...] = (
+    "终止上市",
+    "摘牌",
+    "退市整理",
+    "delist",
 )
 
 
@@ -225,6 +236,7 @@ def fetch_st_classification_batch(
             c.classification_detail,
             c.time_mode,
             a.title,
+            {ISSUER_BINDING_PROJECTION_SQL}
             NULL::bigint AS ann_signal_id,
             'ACTIVE'::text AS ann_signal_status,
             NULL::text AS ann_signal_reason,
@@ -232,6 +244,7 @@ def fetch_st_classification_batch(
           FROM market.ann_event_classification c
           JOIN market.anns a
             ON a.id = c.ann_id
+          {ISSUER_BINDING_LATERAL_SQL}
          WHERE c.rule_version = %s
            AND c.time_mode = %s
            AND c.event_type = ANY(%s)
@@ -282,6 +295,14 @@ def _day_distance(left: Optional[dt.date], right: Optional[dt.date]) -> int:
     return abs((left - right).days)
 
 
+def _is_terminal_st_event(candidate: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(candidate.get(field) or "")
+        for field in ("st_type", "st_reason", "st_explain")
+    ).casefold()
+    return any(keyword.casefold() in text for keyword in TERMINAL_ST_KEYWORDS)
+
+
 def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
     """Select the nearest stock_st_events row for one announcement row."""
 
@@ -323,6 +344,7 @@ def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) 
         "st_explain": best.get("st_explain"),
         "source_api": best.get("source_api"),
         "distance_days": best_score[0],
+        "terminal": _is_terminal_st_event(best),
     }
 
 
@@ -391,6 +413,7 @@ def sync_st_first_announcement_event_signals(
     signal_rows = 0
     cross_checked_rows = 0
     st_event_matched_rows = 0
+    issuer_binding_counts: dict[str, int] = {}
     last_classification_id = 0
 
     with get_conn() as conn:
@@ -426,6 +449,12 @@ def sync_st_first_announcement_event_signals(
                 last_classification_id = int(rows[-1]["classification_id"])
                 stock_st_events = fetch_stock_st_events_for_rows(conn, rows)
                 rows, matched_rows = attach_st_cross_checks(rows, stock_st_events)
+                rows, batch_binding_counts = attach_announcement_issuer_bindings(
+                    rows,
+                    require_terminal_cross_check=True,
+                )
+                for status, count in batch_binding_counts.items():
+                    issuer_binding_counts[status] = issuer_binding_counts.get(status, 0) + count
                 event_ids = upsert_facts(conn, rows, run_id=run_id, rule_version=rule_version)
                 batch_signal_rows = upsert_signals(
                     conn,
@@ -459,6 +488,7 @@ def sync_st_first_announcement_event_signals(
                     "cross_checked_rows": cross_checked_rows,
                     "st_event_matched_rows": st_event_matched_rows,
                     "st_event_match_rate": (st_event_matched_rows / cross_checked_rows) if cross_checked_rows else None,
+                    "issuer_binding_counts": dict(sorted(issuer_binding_counts.items())),
                 },
             )
             return AdapterSummary(
@@ -488,6 +518,7 @@ def sync_st_first_announcement_event_signals(
                     "last_classification_id": last_classification_id,
                     "cross_checked_rows": cross_checked_rows,
                     "st_event_matched_rows": st_event_matched_rows,
+                    "issuer_binding_counts": dict(sorted(issuer_binding_counts.items())),
                 },
             )
             raise

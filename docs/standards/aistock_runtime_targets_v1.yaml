@@ -9,6 +9,7 @@ non_runtime_source_paths:
   - scripts/backfill_tushare_daily_basic_fields.py
   - scripts/cleanup_simulation_history.py
   - scripts/ingest_tushare_daily_basic.py
+  - scripts/repair_announcement_event_signal_issuer_binding.py
   - scripts/simulation_history_cleanup_core.py
 targets:
   backend-main:
