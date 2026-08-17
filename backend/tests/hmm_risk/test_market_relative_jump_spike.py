@@ -593,6 +593,15 @@ def test_public_market_component_reuses_the_exact_private_authority(monkeypatch:
     assert subject.market_planned_fit_count() == 152
 
 
+def test_public_composite_receipt_helpers_reuse_existing_market_authorities() -> None:
+    assert subject.market_development_score([]) == subject._market_lambda_score([])
+    failure = subject.jump_failure_receipt(42, 4.0, ValueError("synthetic"))
+    assert failure["status"] == "fit_failed"
+    assert failure["seed"] == 42
+    assert failure["jump_penalty"] == 4.0
+    assert failure["reason_code"] == subject.REASON_UNEXPECTED
+
+
 def test_development_quintiles_and_three_coverage_states() -> None:
     small_codes = [f"Q{index}" for index in range(5)]
     quintile_rows = [
