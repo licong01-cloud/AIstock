@@ -312,6 +312,10 @@ def test_market_conditioning_builds_exact_ten_dimensions_and_slope_identity() ->
     assert np.array_equal(values[1], np.concatenate([base[1], -base[1]]))
     assert "market_sign" not in conditioned.component.feature_names
     assert conditioned.receipt["dtype"] == "float64_le"
+    assert conditioned.receipt["unused_market_date_count"] == 0
+    assert conditioned.receipt["unused_market_date_first"] is None
+    assert conditioned.receipt["unused_market_date_last"] is None
+    assert conditioned.receipt["sector_date_set_sha256"] == conditioned.receipt["market_date_set_sha256"]
 
     coefficient = np.arange(1.0, 11.0, dtype="<f8")
     fit = subject.RidgeFit(
@@ -329,6 +333,28 @@ def test_market_conditioning_builds_exact_ten_dimensions_and_slope_identity() ->
     assert receipt["risk_off_slope"] == pytest.approx((beta - gamma).tolist())
 
 
+def test_market_conditioning_accepts_market_date_superset_and_records_unused_identity() -> None:
+    component = _prepared_relative_component(np.ones((2, 5), dtype=np.float64))
+    dates = component.sequences[0].dates
+    unused_day = dates[-1] + timedelta(days=1)
+
+    conditioned = subject._condition_component(
+        component,
+        {dates[0]: "risk_on", dates[1]: "risk_off", unused_day: "risk_on"},
+        fold="unit",
+        phase="train",
+    )
+
+    receipt = conditioned.receipt
+    assert receipt["sector_date_count"] == 2
+    assert receipt["market_date_count"] == 3
+    assert receipt["unused_market_date_count"] == 1
+    assert receipt["unused_market_date_first"] == unused_day.isoformat()
+    assert receipt["unused_market_date_last"] == unused_day.isoformat()
+    assert receipt["unused_market_date_set_sha256"] == subject.canonical_sha256([unused_day.isoformat()])
+    assert receipt["market_state_coverage_complete"] is True
+
+
 def test_market_conditioning_identity_and_non_finite_fail_typed() -> None:
     component = _prepared_relative_component(np.ones((2, 5), dtype=np.float64))
     dates = component.sequences[0].dates
@@ -340,6 +366,28 @@ def test_market_conditioning_identity_and_non_finite_fail_typed() -> None:
             phase="validation",
         )
     assert captured.value.reason_code == subject.REASON_MARKET_IDENTITY
+    assert captured.value.evidence["missing_market_date_count"] == 1
+    assert captured.value.evidence["missing_market_dates"] == [dates[1].isoformat()]
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject._condition_component(
+            component,
+            {dates[0]: "risk_on", dates[1]: "risk_off", dates[1] + timedelta(days=1): "unknown"},
+            fold="unit",
+            phase="validation",
+        )
+    assert captured.value.reason_code == subject.REASON_MARKET_IDENTITY
+    assert captured.value.evidence["invalid_market_state_count"] == 1
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject._condition_component(
+            component,
+            {dates[0]: "risk_on", dates[1]: "risk_off", "2022-01-06": "risk_on"},
+            fold="unit",
+            phase="validation",
+        )
+    assert captured.value.reason_code == subject.REASON_MARKET_IDENTITY
+    assert captured.value.evidence["invalid_market_date_key_count"] == 1
 
     invalid = _prepared_relative_component(np.asarray([[1.0] * 5, [1.0, 1.0, np.nan, 1.0, 1.0]]))
     with pytest.raises(subject.RidgeCandidateError) as captured:

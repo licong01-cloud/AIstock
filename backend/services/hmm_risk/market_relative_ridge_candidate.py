@@ -649,18 +649,54 @@ def _condition_component(
     phase: str,
 ) -> ConditionedComponent:
     expected_dates = {day for sequence in component.sequences for day in sequence.dates}
-    if set(market_states) != expected_dates:
+    invalid_market_date_keys = [day for day in market_states if type(day) is not date]
+    if invalid_market_date_keys:
         raise _fail(
             REASON_MARKET_IDENTITY,
-            "market states and sector feature dates do not have the same identity",
+            "market state date identity is invalid",
             stage="interaction",
             evidence={
                 "fold": fold,
                 "phase": phase,
                 "sector_date_count": len(expected_dates),
                 "market_date_count": len(market_states),
+                "invalid_market_date_key_count": len(invalid_market_date_keys),
+                "invalid_market_date_key_types": sorted({type(day).__name__ for day in invalid_market_date_keys}),
             },
         )
+    market_dates = set(market_states)
+    invalid_market_states = sorted(day for day, state in market_states.items() if state not in {"risk_on", "risk_off"})
+    if invalid_market_states:
+        raise _fail(
+            REASON_MARKET_IDENTITY,
+            "market sign identity is invalid",
+            stage="interaction",
+            evidence={
+                "fold": fold,
+                "phase": phase,
+                "invalid_market_state_count": len(invalid_market_states),
+                "invalid_market_state_dates": [day.isoformat() for day in invalid_market_states],
+            },
+        )
+    missing_market_dates = sorted(expected_dates - market_dates)
+    if missing_market_dates:
+        raise _fail(
+            REASON_MARKET_IDENTITY,
+            "sector feature dates are missing same-day market states",
+            stage="interaction",
+            evidence={
+                "fold": fold,
+                "phase": phase,
+                "sector_date_count": len(expected_dates),
+                "market_date_count": len(market_dates),
+                "missing_market_date_count": len(missing_market_dates),
+                "missing_market_dates": [day.isoformat() for day in missing_market_dates],
+                "missing_market_date_set_sha256": canonical_sha256([day.isoformat() for day in missing_market_dates]),
+            },
+        )
+    sector_dates = sorted(expected_dates)
+    sorted_market_dates = sorted(market_dates)
+    unused_market_dates = sorted(market_dates - expected_dates)
     sequences: list[SequenceData] = []
     identity_rows: list[list[str]] = []
     matrices: list[np.ndarray] = []
@@ -715,6 +751,15 @@ def _condition_component(
         "matrix_sha256": sha256_bytes(matrix.tobytes()),
         "interaction_row_count": len(identity_rows),
         "market_state_identity_sha256": canonical_sha256(identity_rows),
+        "sector_date_count": len(sector_dates),
+        "sector_date_set_sha256": canonical_sha256([day.isoformat() for day in sector_dates]),
+        "market_date_count": len(sorted_market_dates),
+        "market_date_set_sha256": canonical_sha256([day.isoformat() for day in sorted_market_dates]),
+        "unused_market_date_count": len(unused_market_dates),
+        "unused_market_date_first": unused_market_dates[0].isoformat() if unused_market_dates else None,
+        "unused_market_date_last": unused_market_dates[-1].isoformat() if unused_market_dates else None,
+        "unused_market_date_set_sha256": canonical_sha256([day.isoformat() for day in unused_market_dates]),
+        "market_state_coverage_complete": True,
         "market_sign": {"risk_on": 1.0, "risk_off": -1.0},
     }
     conditioned_component = ConditionedFeatureComponent(
