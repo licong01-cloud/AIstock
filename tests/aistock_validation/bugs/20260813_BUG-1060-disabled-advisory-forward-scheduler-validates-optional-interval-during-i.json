@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1060",
-  "closed_at": null,
+  "closed_at": "2026-08-17T17:05:06.713643Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -115,8 +115,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3366",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending_explicit_authorization",
+  "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Set invalid AISTOCK_ADVISORY_FORWARD_POLL_SECONDS with scheduler disabled and import backend.services.advisory_forward.scheduler",
   "required_verification": [
@@ -136,8 +137,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/validation/BUG-1060/post_restart_receipt_20260818.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1060",
+      "catalog_sha256": "7b1fafc3311c7eec2f7eb08ca681bfe19ded9fadd2b672a5acf1904ba203bb3b",
+      "contract_digest": "8b0ef7ec7cb95d444a965236c1b91c43dd7b68dc6bba09a6f67e27bfacbcfe03",
+      "expected_identity": "ab9ca737d2c13f50461ecedc0bc6626016e47282",
+      "generated_at": "2026-08-17T17:03:55.305150Z",
+      "mode": "read_only",
+      "observed_identity": "9a7a2718026f6d62f218fbe09d8b82f3d697b6c3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "642e54e00b528c84fc449f2f37f28499fbe691ffb750099e477c507796b4d998",
+      "receipt_sha256": "6b5dbbd67bf08b56848d15ac2b682c74546055f380cf3bba8ab203d4067c2a77",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f9dab65320c0790a9f7ff16d02eaa7fe190056fa4b6042fe7e2bb9fd793a5d33",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -147,7 +165,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -156,6 +174,14 @@
     "fingerprint": "9255dae298f5acec6af3ea1e",
     "source_event_id": "FE-20260813-9255dae298f5"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_forward_scheduler.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_postgres.py -q -p no:cacheprovider -> 25 passed",
+    "rtk nox -s advisory_modeling_backend -> passed (final related module matrix)",
+    "rtk nox -s paper_v2_backend -> 1051 passed, 2 skipped, 2 xfailed",
+    "rtk nox -s advisory_historical_range_backend platform_api_backend validation_module_registry_l0 -> 351 passed, 5 skipped; 13 passed; 8 passed with ownership 14/14",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md --tier F2 -> PASS, 21/21, 0 warnings",
+    "fresh-process Advisory forward matrix -> 30 passed; post-restart-verify 2026-08-18 -> workflow_gate=verified; runtime 9a7a2718 includes source fix ab9ca737"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -261,13 +287,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3366",
-  "validation_evidence": [
-    "python -m pytest backend/tests/advisory_model_first/test_forward_scheduler.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_postgres.py -q -p no:cacheprovider -> 25 passed",
-    "rtk nox -s advisory_modeling_backend -> passed (final related module matrix)",
-    "rtk nox -s paper_v2_backend -> 1051 passed, 2 skipped, 2 xfailed",
-    "rtk nox -s advisory_historical_range_backend platform_api_backend validation_module_registry_l0 -> 351 passed, 5 skipped; 13 passed; 8 passed with ownership 14/14",
-    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md --tier F2 -> PASS, 21/21, 0 warnings"
-  ]
+  }
 }
