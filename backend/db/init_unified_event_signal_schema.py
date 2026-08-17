@@ -19,7 +19,9 @@ MIGRATION_PATHS = [
 def init_unified_event_signal_schema() -> None:
     """Create unified event fact, relation, signal, rule-set, and run tables."""
 
-    load_dotenv(override=True)
+    # Preserve an explicit caller-selected database target.  Loading .env is
+    # defaults-only so DEV-first validation cannot be redirected to production.
+    load_dotenv(override=False)
     with get_conn() as conn:
         with conn.cursor() as cur:
             for migration_path in MIGRATION_PATHS:

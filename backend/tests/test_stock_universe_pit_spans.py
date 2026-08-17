@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 
 import pytest
 
 from backend.services.canonical_equity_pit import CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
+from scripts import build_stock_universe_pit_spans as pit_builder
 
 from scripts.build_stock_universe_pit_spans import (
     EventRow,
@@ -27,6 +29,7 @@ from scripts.build_stock_universe_pit_spans import (
     _validate,
     a_share_ts_code_filter,
     is_b_share_ts_code,
+    is_authoritative_st_name,
     reconstruct_missing_st_snapshot,
 )
 
@@ -39,6 +42,14 @@ def test_classify_st_event_restore_vs_still_risky() -> None:
     assert _classify_st_event("撤消*ST并实行ST", None, None) == ("st_negative", False)
     assert _classify_st_event("退市整理期", None, None) == ("delist_event", True)
     assert _classify_st_event("退市整理期", None, None, terminal_as_negative=True) == ("st_negative", False)
+
+
+def test_st_risk_narrative_does_not_become_terminal_evidence() -> None:
+    assert _classify_st_event(
+        "*ST",
+        "法院受理重整",
+        "如果重整失败，公司股票将面临被终止上市的风险。",
+    ) == ("st_negative", False)
 
 
 def test_validate_rejects_overlapping_spans() -> None:
@@ -421,6 +432,25 @@ def test_a_share_ts_code_filter_fragment() -> None:
         assert f"s.ts_code {exclude}" in fragment
 
 
+def test_authoritative_st_name_requires_explicit_risk_prefix() -> None:
+    for value in ("ST保千里", "*ST保千", "SST中纺", "S*ST佳通", "PT水仙"):
+        assert is_authoritative_st_name(value)
+    for value in ("保千里", "退市保千", "上海临港", ""):
+        assert not is_authoritative_st_name(value)
+
+
+def test_snapshot_gap_audit_keeps_terminal_exit_separate_from_st_membership() -> None:
+    source = inspect.getsource(pit_builder._audit_canonical_st_snapshots)
+
+    assert 'event.event_kind in {"st_negative", "st_restore"}' in source
+    assert "market.stock_namechange" in inspect.getsource(
+        pit_builder._load_namechange_st_codes_by_date
+    )
+    source = inspect.getsource(pit_builder._load_namechange_st_codes_by_date)
+    assert "stock.list_date <= anchor.anchor_date" in source
+    assert "stock.delist_date >= anchor.anchor_date" in source
+
+
 def test_universe_source_queries_exclude_b_shares() -> None:
     calendar = TradingCalendar([dt.date(2026, 1, 2), dt.date(2026, 1, 5)])
 
@@ -444,6 +474,9 @@ def test_universe_source_queries_exclude_b_shares() -> None:
     assert "'{issuer_binding,status}' = 'EXACT'" in delisting_sql
     assert "'{issuer_binding,actionable}' = 'true'" in delisting_sql
     assert "'{issuer_binding,resolved_ts_code}' = ts_code" in delisting_sql
-    assert "'{st_cross_check,matched}' = 'true'" in delisting_sql
-    assert "'{st_cross_check,terminal}' = 'true'" in delisting_sql
+    assert "'{terminal_cross_check,matched}'" in delisting_sql
+    assert "'{terminal_cross_check,terminal}'" in delisting_sql
+    assert "'{st_cross_check,matched}'" in delisting_sql
+    assert "'{st_cross_check,terminal}'" in delisting_sql
+    assert "COALESCE" in delisting_sql
     assert "signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')" in delisting_sql

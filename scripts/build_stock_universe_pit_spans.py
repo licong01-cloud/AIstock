@@ -409,6 +409,49 @@ def reconstruct_missing_st_snapshot(
     return frozenset(state)
 
 
+def is_authoritative_st_name(value: str | None) -> bool:
+    """Return whether a Tushare historical name explicitly denotes ST state."""
+
+    name = "".join(str(value or "").upper().split())
+    return name.startswith(("ST", "*ST", "SST", "S*ST", "PT"))
+
+
+def _load_namechange_st_codes_by_date(
+    conn: Any,
+    dates: Iterable[dt.date],
+) -> dict[dt.date, set[str]]:
+    anchor_dates = sorted(set(dates))
+    output = {date: set() for date in anchor_dates}
+    if not anchor_dates:
+        return output
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT anchor.anchor_date, historical_name.ts_code, historical_name.name
+              FROM unnest(%s::date[]) AS anchor(anchor_date)
+              JOIN market.stock_namechange historical_name
+                ON historical_name.start_date <= anchor.anchor_date
+               AND (
+                    historical_name.end_date IS NULL
+                    OR historical_name.end_date >= anchor.anchor_date
+               )
+              JOIN market.stock_basic stock
+                ON stock.ts_code = historical_name.ts_code
+               AND stock.exchange IN ('SSE', 'SZSE')
+               AND (stock.list_date IS NULL OR stock.list_date <= anchor.anchor_date)
+               AND (stock.delist_date IS NULL OR stock.delist_date >= anchor.anchor_date)
+             WHERE (historical_name.ts_code LIKE '%%.SH' OR historical_name.ts_code LIKE '%%.SZ')
+               {a_share_ts_code_filter("historical_name.ts_code")}
+             ORDER BY anchor.anchor_date, historical_name.ts_code, historical_name.start_date
+            """,
+            (anchor_dates,),
+        )
+        for anchor_date, ts_code, name in cur.fetchall():
+            if is_authoritative_st_name(name) and not is_b_share_ts_code(str(ts_code)):
+                output[anchor_date].add(str(ts_code))
+    return output
+
+
 def audit_st_snapshot_continuity(
     snapshots: Mapping[dt.date, Iterable[str]],
     *,
@@ -565,7 +608,10 @@ def _classify_st_event(
     terminal_as_negative: bool = False,
 ) -> tuple[str, bool]:
     text = " ".join([st_type or "", reason or "", explain or ""])
-    if any(keyword in text for keyword in TERMINAL_KEYWORDS):
+    # Tushare explanations frequently say an *ST security "faces delisting
+    # risk". Only the structured st_type can promote the row to an observed
+    # terminal event; narrative risk wording is not terminal evidence.
+    if any(keyword in (st_type or "") for keyword in TERMINAL_KEYWORDS):
         if terminal_as_negative:
             return "st_negative", False
         return "delist_event", True
@@ -752,8 +798,14 @@ def _load_confirmed_delisting_events(conn: Any, calendar: TradingCalendar, end_d
                AND evidence#>>'{{issuer_binding,status}}' = 'EXACT'
                AND evidence#>>'{{issuer_binding,actionable}}' = 'true'
                AND evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code
-               AND evidence#>>'{{st_cross_check,matched}}' = 'true'
-               AND evidence#>>'{{st_cross_check,terminal}}' = 'true'
+               AND COALESCE(
+                       evidence#>>'{{terminal_cross_check,matched}}',
+                       evidence#>>'{{st_cross_check,matched}}'
+                   ) = 'true'
+               AND COALESCE(
+                       evidence#>>'{{terminal_cross_check,terminal}}',
+                       evidence#>>'{{st_cross_check,terminal}}'
+                   ) = 'true'
                AND COALESCE((available_at AT TIME ZONE 'Asia/Shanghai')::date, source_event_date::date) <= %s
                {a_share_ts_code_filter("ts_code")}
              ORDER BY ts_code, effective_trade_date, available_at, signal_id
@@ -940,16 +992,20 @@ def _audit_canonical_st_snapshots(
         (
             event
             for event in events
-            if event.event_kind in {
-                "st_negative",
-                "st_restore",
-                "delisted",
-                "paused_listing",
-                "delisting_confirmed",
-            }
+            # stock_st snapshots describe risk-name membership. A terminal
+            # universe exit is independent: delisting-period securities can
+            # legitimately remain in stock_st until their final trading day.
+            if event.event_kind in {"st_negative", "st_restore"}
         ),
         key=lambda event: (event.action_date, event.ts_code, event.event_kind),
     )
+    anchor_dates = [
+        day
+        for indexes in grouped_indexes
+        for day in (days[indexes[0] - 1], days[indexes[-1] + 1])
+    ]
+    authoritative_st_names = _load_namechange_st_codes_by_date(conn, anchor_dates)
+    namechange_anchor_additions: set[tuple[dt.date, str]] = set()
     for indexes in grouped_indexes:
         previous_day = days[indexes[0] - 1]
         next_day = days[indexes[-1] + 1]
@@ -967,13 +1023,13 @@ def _audit_canonical_st_snapshots(
             )
             for snapshot_date, ts_code in cur.fetchall():
                 snapshots[snapshot_date].add(str(ts_code))
+        for snapshot_date in (previous_day, next_day):
+            for ts_code in authoritative_st_names.get(snapshot_date, set()):
+                if ts_code not in snapshots[snapshot_date]:
+                    snapshots[snapshot_date].add(ts_code)
+                    namechange_anchor_additions.add((snapshot_date, ts_code))
         gap_events = [
-            (
-                event.ts_code,
-                "terminal_exit"
-                if event.event_kind in {"delisted", "paused_listing", "delisting_confirmed"}
-                else event.event_kind,
-            )
+            (event.ts_code, event.event_kind)
             for event in relevant_events
             if previous_day < event.action_date <= next_day
         ]
@@ -988,6 +1044,10 @@ def _audit_canonical_st_snapshots(
         "observed_snapshot_day_count": len(observed.intersection(days)),
         "missing_snapshot_day_count": len(missing_days),
         "reconstructed_snapshot_day_count": len(missing_days),
+        "namechange_anchor_addition_count": len(namechange_anchor_additions),
+        "namechange_anchor_addition_codes": sorted(
+            {ts_code for _date, ts_code in namechange_anchor_additions}
+        ),
         "missing_snapshot_dates": [day.isoformat() for day in missing_days],
         "status": "ready",
     }

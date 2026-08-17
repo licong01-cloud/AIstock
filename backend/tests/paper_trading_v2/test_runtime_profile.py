@@ -77,6 +77,7 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
                 "coefficients_path": None,
                 "auto_compute": True,
                 "manual_snapshot_required": False,
+                "missing_sector_policy": "fail",
             },
             "tradability": {"exclude_suspended": True},
             "selection": {"top_k": 2},

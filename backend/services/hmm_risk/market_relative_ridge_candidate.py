@@ -1,10 +1,10 @@
-"""P2-3B market-regime plus direct sector-rotation Ridge candidate.
+"""P2-3B direct and P2-3C market-conditioned sector-rotation Ridge candidates.
 
-The module implements the user-approved C-011-P2-3B-D1 through D6 contract.
-It is offline-only: development folds may select one alpha per level, while the
-untouched holdout, production model/READY state, database, and runtime remain
-inaccessible.  A successful run writes only a compact candidate receipt through
-the explicit repository-external writer.
+The module implements the user-approved C-011-P2-3B-D1 through D6 and
+C-011-P2-3C-D1 through D6 contracts.  It is offline-only: development folds may
+select one alpha per level, while the untouched holdout, production model/READY
+state, database, and runtime remain inaccessible.  A successful run writes only
+a compact candidate receipt through the explicit repository-external writer.
 """
 
 from __future__ import annotations
@@ -31,12 +31,23 @@ from backend.services.hmm_risk.market_relative_jump_spike import (
     HOLDOUT_END,
     HOLDOUT_START,
     HOLDOUT_TRADING_DAYS,
+    MARKET_FEATURES,
     RELATIVE_FEATURES,
+    JumpFit,
     JumpSpikeError,
     PreparedComponent,
+    SequenceData,
+    causal_states,
+    fit_jump_model,
+    jump_failure_receipt,
+    jump_fit_receipt,
     market_planned_fit_count,
+    market_development_score,
+    market_fold_metrics,
     prepare_component,
     run_market_component,
+    semantic_mapping,
+    state_rows,
 )
 from backend.services.hmm_risk.state_model_set import canonical_json_bytes, canonical_sha256, sha256_bytes
 
@@ -46,6 +57,21 @@ MODEL_ORIGIN = "market_relative_ridge_v1"
 REPORT_SCHEMA_VERSION = "hmm_risk_market_relative_ridge_candidate_report_v1"
 REQUEST_SCHEMA_VERSION = "hmm_risk_market_relative_ridge_candidate_request_v1"
 COMPONENT_SCHEMA_VERSION = "hmm_risk_market_relative_ridge_component_v1"
+
+P2_3C_CONTRACT_VERSION = "C-011-P2-3C-D1-D6"
+P2_3C_ALGORITHM_VERSION = "hmm_risk_market_conditioned_ridge_candidate_v1"
+P2_3C_MODEL_ORIGIN = "market_conditioned_ridge_v1"
+P2_3C_REPORT_SCHEMA_VERSION = "hmm_risk_market_conditioned_ridge_candidate_report_v1"
+P2_3C_REQUEST_SCHEMA_VERSION = "hmm_risk_market_conditioned_ridge_candidate_request_v1"
+P2_3C_COMPONENT_SCHEMA_VERSION = "hmm_risk_market_conditioned_ridge_component_v1"
+P2_3C_MARKET_COMPONENT_SCHEMA_VERSION = "hmm_risk_market_conditioning_component_v1"
+P2_3C_FIXED_JUMP_PENALTY = 4.0
+P2_3C_FIXED_SEED = 42
+P2_3C_ATTEMPT_INDEX = 3
+P2_3A_NOT_AVAILABLE_REPORT_SHA256 = "034fdf3c7a2354bad62bdea0a55b675f2552c42a65d1ccacbc454561e75f12ec"
+P2_3B_NOT_AVAILABLE_REPORT_SHA256 = "d3298654ed9f2080f4623c2c50721ebf9951d2034d42cfdfe225f36e4ee0fc45"
+P2_3C_INTERACTION_FEATURES = tuple(f"market_sign_x_{name}" for name in RELATIVE_FEATURES)
+P2_3C_FEATURES = (*RELATIVE_FEATURES, *P2_3C_INTERACTION_FEATURES)
 
 ALPHA_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
 ALPHA_METRIC_TOLERANCE = 1e-4
@@ -70,10 +96,13 @@ REASON_HOLDOUT = "hmm_risk_rotation_holdout_access_forbidden"
 REASON_COLLISION = "hmm_risk_rotation_candidate_collision"
 REASON_READBACK = "hmm_risk_rotation_candidate_readback_mismatch"
 REASON_UNEXPECTED = "hmm_risk_rotation_unexpected_error"
+REASON_MARKET_IDENTITY = "hmm_risk_market_conditioning_identity_mismatch"
+REASON_MARKET_REGIME = "hmm_risk_market_conditioning_regime_unavailable"
+REASON_INTERACTION_NON_FINITE = "hmm_risk_market_conditioning_interaction_non_finite"
 
 
 class RidgeCandidateError(RuntimeError):
-    """Typed fail-closed error for the P2-3B candidate."""
+    """Typed fail-closed error for the P2-3B and P2-3C candidates."""
 
     def __init__(
         self,
@@ -116,6 +145,32 @@ class RidgeFit:
         if result.ndim != 1 or not np.isfinite(result).all():
             raise _fail(REASON_SCORE_NON_FINITE, "Ridge prediction is non-finite", stage="score")
         return result
+
+
+@dataclass(frozen=True)
+class MarketConditioningFold:
+    fold: str
+    train_states: dict[date, str]
+    validation_states: dict[date, str]
+    receipt: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ConditionedFeatureComponent:
+    component: str
+    level: str
+    feature_names: tuple[str, ...]
+    canonical_codes: tuple[str, ...]
+    sequences: tuple[SequenceData, ...]
+    unavailable_items: tuple[dict[str, Any], ...]
+    valid_row_count: int
+    valid_identity_sha256: str
+
+
+@dataclass(frozen=True)
+class ConditionedComponent:
+    component: ConditionedFeatureComponent
+    receipt: dict[str, Any]
 
 
 def _fail(
@@ -340,7 +395,9 @@ def build_target_rows(
     )
 
 
-def _feature_rows(component: PreparedComponent) -> dict[tuple[str, date], np.ndarray]:
+def _feature_rows(
+    component: PreparedComponent | ConditionedFeatureComponent,
+) -> dict[tuple[str, date], np.ndarray]:
     rows: dict[tuple[str, date], np.ndarray] = {}
     for sequence in component.sequences:
         for day, values in zip(sequence.dates, sequence.values, strict=True):
@@ -354,8 +411,386 @@ def _feature_rows(component: PreparedComponent) -> dict[tuple[str, date], np.nda
     return rows
 
 
-def _fit_ridge(
+def _record_fixed_market_fit(
     component: PreparedComponent,
+    *,
+    attempt_log: list[dict[str, Any]],
+    context: Mapping[str, Any],
+) -> JumpFit:
+    try:
+        fit = fit_jump_model(
+            component,
+            state_count=2,
+            jump_penalty=P2_3C_FIXED_JUMP_PENALTY,
+            seed=P2_3C_FIXED_SEED,
+        )
+        raw_receipt = jump_fit_receipt(fit, component)
+    except Exception as exc:
+        raw_receipt = jump_failure_receipt(P2_3C_FIXED_SEED, P2_3C_FIXED_JUMP_PENALTY, exc)
+        body = {key: value for key, value in raw_receipt.items() if key != "receipt_sha256"}
+        body = {**dict(context), **body}
+        attempt_log.append({**body, "receipt_sha256": canonical_sha256(body)})
+        raise
+    body = {key: value for key, value in raw_receipt.items() if key != "receipt_sha256"}
+    body = {**dict(context), **body}
+    attempt_log.append({**body, "receipt_sha256": canonical_sha256(body)})
+    return fit
+
+
+def _market_state_receipt(
+    component: PreparedComponent,
+    rows: Mapping[tuple[str, date], str],
+) -> tuple[dict[date, str], dict[str, Any]]:
+    if len(component.sequences) != 1 or component.sequences[0].key != "market":
+        raise _fail(REASON_MARKET_IDENTITY, "market component sequence identity is invalid", stage="market_state")
+    sequence = component.sequences[0]
+    expected_keys = {("market", day) for day in sequence.dates}
+    if set(rows) != expected_keys:
+        raise _fail(
+            REASON_MARKET_IDENTITY,
+            "market state rows do not match the prepared date identity",
+            stage="market_state",
+            evidence={"expected_count": len(expected_keys), "actual_count": len(rows)},
+        )
+    by_date: dict[date, str] = {}
+    state_rows_payload: list[list[str]] = []
+    for day in sequence.dates:
+        label = rows[("market", day)]
+        if label not in {"risk_on", "risk_off"}:
+            raise _fail(REASON_MARKET_IDENTITY, "market semantic state is invalid", stage="market_state")
+        by_date[day] = label
+        state_rows_payload.append([day.isoformat(), label])
+    transition_counts = {
+        "risk_off->risk_off": 0,
+        "risk_off->risk_on": 0,
+        "risk_on->risk_off": 0,
+        "risk_on->risk_on": 0,
+    }
+    for index in range(1, len(sequence.dates)):
+        if sequence.ordinals[index] != sequence.ordinals[index - 1] + 1:
+            continue
+        previous = by_date[sequence.dates[index - 1]]
+        current = by_date[sequence.dates[index]]
+        transition_counts[f"{previous}->{current}"] += 1
+    state_counts = {label: sum(value == label for value in by_date.values()) for label in ("risk_off", "risk_on")}
+    body = {
+        "arrival_cost_policy": "zero_at_each_segment_start_no_train_carry",
+        "state_row_count": len(state_rows_payload),
+        "state_rows": state_rows_payload,
+        "state_rows_sha256": canonical_sha256(state_rows_payload),
+        "date_set_sha256": canonical_sha256([item[0] for item in state_rows_payload]),
+        "state_counts": state_counts,
+        "transition_counts": transition_counts,
+        "transition_counts_used_for_acceptance": False,
+    }
+    return by_date, {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _market_fold_conditioning(
+    inputs: Mapping[str, Any],
+    *,
+    calendar: tuple[date, ...],
+    benchmark: Mapping[date, float],
+    fold: Mapping[str, Any],
+    attempt_log: list[dict[str, Any]],
+) -> MarketConditioningFold:
+    panel = _component_panel(inputs, "L2")
+    train = prepare_component(
+        panel,
+        component="market",
+        level="L2",
+        feature_names=MARKET_FEATURES,
+        calendar=calendar,
+        start=fold["train_start"],
+        end=fold["train_end"],
+        expected_days=fold["train_days"],
+        expected_sector_count=LEVEL_SPECS["L2"]["expected_sector_count"],
+        minimum_daily_count=LEVEL_SPECS["L2"]["minimum_daily_count"],
+        relative=False,
+    )
+    fit = _record_fixed_market_fit(
+        train,
+        attempt_log=attempt_log,
+        context={"component": "market", "fold": fold["fold"], "phase": "development"},
+    )
+    validation = prepare_component(
+        panel,
+        component="market",
+        level="L2",
+        feature_names=MARKET_FEATURES,
+        calendar=calendar,
+        start=fold["validation_start"],
+        end=fold["validation_end"],
+        expected_days=fold["validation_days"],
+        expected_sector_count=LEVEL_SPECS["L2"]["expected_sector_count"],
+        minimum_daily_count=LEVEL_SPECS["L2"]["minimum_daily_count"],
+        relative=False,
+        preprocessor=train.preprocessor,
+    )
+    mapping = semantic_mapping("market", MARKET_FEATURES, fit.centers)
+    train_states, train_state_receipt = _market_state_receipt(
+        train,
+        state_rows(train, causal_states(train, fit.centers, P2_3C_FIXED_JUMP_PENALTY), mapping),
+    )
+    validation_states, validation_state_receipt = _market_state_receipt(
+        validation,
+        state_rows(
+            validation,
+            causal_states(validation, fit.centers, P2_3C_FIXED_JUMP_PENALTY),
+            mapping,
+        ),
+    )
+    missing = {
+        "train": sorted({"risk_off", "risk_on"} - set(train_states.values())),
+        "validation": sorted({"risk_off", "risk_on"} - set(validation_states.values())),
+    }
+    if missing["train"] or missing["validation"]:
+        raise _fail(
+            REASON_MARKET_REGIME,
+            "market conditioning fold does not contain both semantic states",
+            stage="market_conditioning",
+            evidence={
+                "fold": fold["fold"],
+                "missing_states": missing,
+                "train_state_receipt": train_state_receipt,
+                "validation_state_receipt": validation_state_receipt,
+            },
+        )
+    validation_rows = {("market", day): label for day, label in validation_states.items()}
+    metrics = market_fold_metrics(
+        validation_rows,
+        benchmark,
+        calendar,
+        validation_start=fold["validation_start"],
+        validation_end=fold["validation_end"],
+    )
+    body = {
+        "fold": fold["fold"],
+        "train_start": fold["train_start"].isoformat(),
+        "train_end": fold["train_end"].isoformat(),
+        "validation_start": fold["validation_start"].isoformat(),
+        "validation_end": fold["validation_end"].isoformat(),
+        "jump_penalty": P2_3C_FIXED_JUMP_PENALTY,
+        "selected_seed": P2_3C_FIXED_SEED,
+        "preprocess": train.preprocessor.payload(),
+        "preprocess_sha256": canonical_sha256(train.preprocessor.payload()),
+        "fit": jump_fit_receipt(fit, train),
+        "centers": np.asarray(fit.centers, dtype="<f8").tolist(),
+        "centers_sha256": sha256_bytes(np.asarray(fit.centers, dtype="<f8").tobytes()),
+        "semantic_mapping": {str(key): value for key, value in sorted(mapping.items())},
+        "semantic_mapping_sha256": canonical_sha256({str(key): value for key, value in sorted(mapping.items())}),
+        "train_states": train_state_receipt,
+        "validation_states": validation_state_receipt,
+        "metrics": metrics,
+        "metric_valid": metrics.get("metric_valid") is True,
+        "holdout_accessed": False,
+    }
+    receipt = {**body, "receipt_sha256": canonical_sha256(body)}
+    return MarketConditioningFold(
+        fold=str(fold["fold"]),
+        train_states=train_states,
+        validation_states=validation_states,
+        receipt=receipt,
+    )
+
+
+def _run_market_conditioning_development(
+    inputs: Mapping[str, Any],
+    *,
+    calendar: tuple[date, ...],
+    benchmark: Mapping[date, float],
+    attempt_log: list[dict[str, Any]],
+) -> tuple[tuple[MarketConditioningFold, ...], dict[str, Any]]:
+    folds = tuple(
+        _market_fold_conditioning(
+            inputs,
+            calendar=calendar,
+            benchmark=benchmark,
+            fold=fold,
+            attempt_log=attempt_log,
+        )
+        for fold in FOLDS
+    )
+    fold_receipts = [item.receipt for item in folds]
+    score = market_development_score(fold_receipts)
+    if score.get("lambda_eligible") is not True:
+        reason_code = str(score.get("market_selection_reason_code") or REASON_MARKET_IDENTITY)
+        raise _fail(
+            reason_code,
+            "fixed market conditioning component fails development acceptance",
+            stage="market_development_acceptance",
+            evidence={
+                "fixed_jump_penalty": P2_3C_FIXED_JUMP_PENALTY,
+                "fixed_seed": P2_3C_FIXED_SEED,
+                "fold_receipts": fold_receipts,
+                "fold_receipts_sha256": canonical_sha256(fold_receipts),
+                "development_score": score,
+            },
+        )
+    body = {
+        "schema_version": P2_3C_MARKET_COMPONENT_SCHEMA_VERSION,
+        "component": "market",
+        "phase": "development",
+        "fixed_jump_penalty": P2_3C_FIXED_JUMP_PENALTY,
+        "fixed_seed": P2_3C_FIXED_SEED,
+        "folds": fold_receipts,
+        "fold_count": len(fold_receipts),
+        "development_score": score,
+        "holdout_accessed": False,
+    }
+    return folds, {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _condition_component(
+    component: PreparedComponent,
+    market_states: Mapping[date, str],
+    *,
+    fold: str,
+    phase: str,
+) -> ConditionedComponent:
+    expected_dates = {day for sequence in component.sequences for day in sequence.dates}
+    if set(market_states) != expected_dates:
+        raise _fail(
+            REASON_MARKET_IDENTITY,
+            "market states and sector feature dates do not have the same identity",
+            stage="interaction",
+            evidence={
+                "fold": fold,
+                "phase": phase,
+                "sector_date_count": len(expected_dates),
+                "market_date_count": len(market_states),
+            },
+        )
+    sequences: list[SequenceData] = []
+    identity_rows: list[list[str]] = []
+    matrices: list[np.ndarray] = []
+    for sequence in component.sequences:
+        base = np.asarray(sequence.values, dtype="<f8")
+        if base.ndim != 2 or base.shape[1] != len(RELATIVE_FEATURES):
+            raise _fail(
+                REASON_MARKET_IDENTITY,
+                "sector feature matrix shape is invalid for market conditioning",
+                stage="interaction",
+            )
+        if not np.isfinite(base).all():
+            raise _fail(
+                REASON_INTERACTION_NON_FINITE,
+                "sector feature matrix is non-finite before market conditioning",
+                stage="interaction",
+                evidence={"fold": fold, "phase": phase, "sequence_key": sequence.key},
+            )
+        labels = [market_states[day] for day in sequence.dates]
+        if any(label not in {"risk_on", "risk_off"} for label in labels):
+            raise _fail(REASON_MARKET_IDENTITY, "market sign identity is invalid", stage="interaction")
+        signs = np.asarray([1.0 if label == "risk_on" else -1.0 for label in labels], dtype="<f8")
+        conditioned = np.asarray(np.concatenate([base, base * signs[:, None]], axis=1), dtype="<f8")
+        if conditioned.shape != (base.shape[0], len(P2_3C_FEATURES)) or not np.isfinite(conditioned).all():
+            raise _fail(
+                REASON_INTERACTION_NON_FINITE,
+                "market-conditioned feature matrix is non-finite or has an invalid shape",
+                stage="interaction",
+                evidence={"fold": fold, "phase": phase, "sequence_key": sequence.key},
+            )
+        sequences.append(
+            SequenceData(
+                key=sequence.key,
+                dates=sequence.dates,
+                ordinals=sequence.ordinals,
+                values=conditioned,
+            )
+        )
+        matrices.append(conditioned)
+        identity_rows.extend(
+            [[sequence.key, day.isoformat(), label] for day, label in zip(sequence.dates, labels, strict=True)]
+        )
+    matrix = np.vstack(matrices).astype("<f8", copy=False)
+    body = {
+        "fold": fold,
+        "phase": phase,
+        "base_feature_names": list(RELATIVE_FEATURES),
+        "conditioned_feature_names": list(P2_3C_FEATURES),
+        "feature_count": len(P2_3C_FEATURES),
+        "dtype": "float64_le",
+        "shape": list(matrix.shape),
+        "matrix_sha256": sha256_bytes(matrix.tobytes()),
+        "interaction_row_count": len(identity_rows),
+        "market_state_identity_sha256": canonical_sha256(identity_rows),
+        "market_sign": {"risk_on": 1.0, "risk_off": -1.0},
+    }
+    conditioned_component = ConditionedFeatureComponent(
+        component=f"{component.component}_market_conditioned",
+        level=component.level,
+        feature_names=P2_3C_FEATURES,
+        canonical_codes=component.canonical_codes,
+        sequences=tuple(sequences),
+        unavailable_items=component.unavailable_items,
+        valid_row_count=component.valid_row_count,
+        valid_identity_sha256=component.valid_identity_sha256,
+    )
+    return ConditionedComponent(
+        component=conditioned_component,
+        receipt={**body, "receipt_sha256": canonical_sha256(body)},
+    )
+
+
+def _conditioned_fit_receipt(fit: RidgeFit) -> dict[str, Any]:
+    if fit.coefficient.shape != (len(P2_3C_FEATURES),) or not np.isfinite(fit.coefficient).all():
+        raise _fail(REASON_MARKET_IDENTITY, "conditioned Ridge coefficient identity is invalid", stage="fit_receipt")
+    beta = np.asarray(fit.coefficient[: len(RELATIVE_FEATURES)], dtype="<f8")
+    gamma = np.asarray(fit.coefficient[len(RELATIVE_FEATURES) :], dtype="<f8")
+    risk_on = np.asarray(beta + gamma, dtype="<f8")
+    risk_off = np.asarray(beta - gamma, dtype="<f8")
+    base = _fit_receipt(fit)
+    body = {key: value for key, value in base.items() if key != "receipt_sha256"}
+    body.update(
+        {
+            "feature_names": list(P2_3C_FEATURES),
+            "base_coefficient": beta.tolist(),
+            "interaction_coefficient": gamma.tolist(),
+            "risk_on_slope": risk_on.tolist(),
+            "risk_off_slope": risk_off.tolist(),
+            "risk_on_slope_sha256": sha256_bytes(risk_on.tobytes()),
+            "risk_off_slope_sha256": sha256_bytes(risk_off.tobytes()),
+        }
+    )
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _regime_split_metrics(
+    scores: Mapping[tuple[str, date], float],
+    targets: TargetRows,
+    states: Mapping[tuple[str, date], str],
+    market_states: Mapping[date, str],
+) -> dict[str, Any]:
+    if not set(targets.eligible_dates).issubset(market_states):
+        raise _fail(REASON_MARKET_IDENTITY, "target dates are missing market states", stage="diagnostic")
+    output: dict[str, Any] = {}
+    for regime in ("risk_off", "risk_on"):
+        dates = tuple(day for day in targets.eligible_dates if market_states[day] == regime)
+        date_set = set(dates)
+        subset_targets = TargetRows(
+            level=targets.level,
+            start=targets.start,
+            end=targets.end,
+            eligible_dates=dates,
+            values={identity: value for identity, value in targets.values.items() if identity[1] in date_set},
+            receipt={},
+        )
+        metrics = fold_metrics(
+            {identity: value for identity, value in scores.items() if identity[1] in date_set},
+            subset_targets,
+            {identity: value for identity, value in states.items() if identity[1] in date_set},
+        )
+        output[regime] = {
+            "date_count": len(dates),
+            "date_set_sha256": canonical_sha256([day.isoformat() for day in dates]),
+            "metrics": metrics,
+        }
+    return output
+
+
+def _fit_ridge(
+    component: PreparedComponent | ConditionedFeatureComponent,
     targets: TargetRows,
     *,
     alpha: float,
@@ -451,7 +886,10 @@ def _fit_receipt(fit: RidgeFit) -> dict[str, Any]:
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
-def predict_scores(component: PreparedComponent, fit: RidgeFit) -> tuple[dict[tuple[str, date], float], dict[str, Any]]:
+def predict_scores(
+    component: PreparedComponent | ConditionedFeatureComponent,
+    fit: RidgeFit,
+) -> tuple[dict[tuple[str, date], float], dict[str, Any]]:
     feature_rows = _feature_rows(component)
     identities = sorted(feature_rows, key=lambda item: (item[1], item[0]))
     if not identities:
@@ -892,8 +1330,327 @@ def _run_level(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def _run_conditioned_level_development(
+    level: str,
+    *,
+    inputs: Mapping[str, Any],
+    calendar: tuple[date, ...],
+    benchmark: Mapping[date, float],
+    market_folds: Sequence[MarketConditioningFold],
+    attempt_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if level not in LEVEL_SPECS:
+        raise _fail(REASON_INPUT_IDENTITY, f"unknown level: {level}", stage="input")
+    market_by_fold = {item.fold: item for item in market_folds}
+    if set(market_by_fold) != {str(item["fold"]) for item in FOLDS}:
+        raise _fail(REASON_MARKET_IDENTITY, "market fold identity is incomplete", stage="interaction")
+    panel = _component_panel(inputs, level)
+    prepared_folds: list[
+        tuple[
+            Mapping[str, Any],
+            PreparedComponent,
+            TargetRows,
+            PreparedComponent,
+            TargetRows,
+            ConditionedComponent,
+            ConditionedComponent,
+            MarketConditioningFold,
+        ]
+    ] = []
+    for fold in FOLDS:
+        train, train_target, validation, validation_target = _prepare_fold(
+            panel,
+            benchmark,
+            calendar,
+            level=level,
+            fold=fold,
+        )
+        market = market_by_fold[str(fold["fold"])]
+        conditioned_train = _condition_component(
+            train,
+            market.train_states,
+            fold=str(fold["fold"]),
+            phase="train",
+        )
+        conditioned_validation = _condition_component(
+            validation,
+            market.validation_states,
+            fold=str(fold["fold"]),
+            phase="validation",
+        )
+        prepared_folds.append(
+            (
+                fold,
+                train,
+                train_target,
+                validation,
+                validation_target,
+                conditioned_train,
+                conditioned_validation,
+                market,
+            )
+        )
+    alpha_receipts: list[dict[str, Any]] = []
+    for alpha in ALPHA_GRID:
+        fold_receipts: list[dict[str, Any]] = []
+        for (
+            fold,
+            train,
+            train_target,
+            _validation,
+            validation_target,
+            conditioned_train,
+            conditioned_validation,
+            market,
+        ) in prepared_folds:
+            fit = _fit_ridge(
+                conditioned_train.component,
+                train_target,
+                alpha=alpha,
+                attempt_log=attempt_log,
+                context={"component": level, "fold": fold["fold"], "phase": "selection"},
+            )
+            scores, score_receipt = predict_scores(conditioned_validation.component, fit)
+            states, projection_receipt = project_daily_states(
+                scores,
+                level=level,
+                minimum_daily_count=LEVEL_SPECS[level]["minimum_daily_count"],
+            )
+            metrics = fold_metrics(scores, validation_target, states)
+            body = {
+                "fold": fold["fold"],
+                "train_start": fold["train_start"].isoformat(),
+                "train_end": fold["train_end"].isoformat(),
+                "validation_start": fold["validation_start"].isoformat(),
+                "validation_end": fold["validation_end"].isoformat(),
+                "alpha": alpha,
+                "preprocess": train.preprocessor.payload(),
+                "preprocess_sha256": canonical_sha256(train.preprocessor.payload()),
+                "train_target": train_target.receipt,
+                "validation_target": validation_target.receipt,
+                "train_interaction": conditioned_train.receipt,
+                "validation_interaction": conditioned_validation.receipt,
+                "market_fold_receipt_sha256": market.receipt["receipt_sha256"],
+                "fit": _conditioned_fit_receipt(fit),
+                "scores": score_receipt,
+                "state_projection": projection_receipt,
+                "metrics": metrics,
+                "regime_split_diagnostics": _regime_split_metrics(
+                    scores,
+                    validation_target,
+                    states,
+                    market.validation_states,
+                ),
+                "metric_valid": metrics["metric_valid"],
+                "regime_split_used_for_selection": False,
+                "holdout_accessed": False,
+            }
+            fold_receipts.append({**body, "receipt_sha256": canonical_sha256(body)})
+        eligible = all(item["metric_valid"] is True for item in fold_receipts)
+        rank_ic = [float(item["metrics"]["mean_rank_ic"]) for item in fold_receipts] if eligible else []
+        spread = [float(item["metrics"]["mean_spread"]) for item in fold_receipts] if eligible else []
+        body = {
+            "alpha": alpha,
+            "folds": fold_receipts,
+            "fold_count": len(fold_receipts),
+            "alpha_eligible": eligible,
+            "median_rank_ic": float(np.median(rank_ic)) if rank_ic else None,
+            "median_spread": float(np.median(spread)) if spread else None,
+            "regime_split_used_for_selection": False,
+        }
+        alpha_receipts.append({**body, "receipt_sha256": canonical_sha256(body)})
+    try:
+        selected = _select_alpha(alpha_receipts)
+    except RidgeCandidateError as exc:
+        raise RidgeCandidateError(
+            exc.reason_code,
+            str(exc),
+            stage=exc.stage,
+            evidence={
+                **exc.evidence,
+                "alpha_receipts": alpha_receipts,
+                "alpha_receipts_sha256": canonical_sha256(alpha_receipts),
+            },
+        ) from exc
+    except Exception as exc:
+        raise RidgeCandidateError(
+            REASON_UNEXPECTED,
+            f"unexpected conditioned {level} alpha selection failure",
+            stage="alpha_selection",
+            evidence={
+                "exception_type": type(exc).__name__,
+                "error_message": str(exc),
+                "alpha_receipts": alpha_receipts,
+                "alpha_receipts_sha256": canonical_sha256(alpha_receipts),
+            },
+        ) from exc
+    try:
+        _require_positive_development(level, selected)
+    except RidgeCandidateError as exc:
+        raise RidgeCandidateError(
+            exc.reason_code,
+            str(exc),
+            stage=exc.stage,
+            evidence={
+                **exc.evidence,
+                "alpha_receipts": alpha_receipts,
+                "alpha_receipts_sha256": canonical_sha256(alpha_receipts),
+            },
+        ) from exc
+    body = {
+        "schema_version": P2_3C_COMPONENT_SCHEMA_VERSION,
+        "component": level,
+        "level": level,
+        "phase": "development",
+        "base_feature_names": list(RELATIVE_FEATURES),
+        "conditioned_feature_names": list(P2_3C_FEATURES),
+        "alpha_receipts": alpha_receipts,
+        "selected_alpha": selected["alpha"],
+        "selected_median_rank_ic": selected["median_rank_ic"],
+        "selected_median_spread": selected["median_spread"],
+        "holdout_accessed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _run_market_conditioning_final(
+    inputs: Mapping[str, Any],
+    *,
+    calendar: tuple[date, ...],
+    attempt_log: list[dict[str, Any]],
+) -> tuple[dict[date, str], dict[str, Any]]:
+    panel = _component_panel(inputs, "L2")
+    component = prepare_component(
+        panel,
+        component="market",
+        level="L2",
+        feature_names=MARKET_FEATURES,
+        calendar=calendar,
+        start=DEVELOPMENT_START,
+        end=DEVELOPMENT_END,
+        expected_days=DEVELOPMENT_TRADING_DAYS,
+        expected_sector_count=LEVEL_SPECS["L2"]["expected_sector_count"],
+        minimum_daily_count=LEVEL_SPECS["L2"]["minimum_daily_count"],
+        relative=False,
+    )
+    fit = _record_fixed_market_fit(
+        component,
+        attempt_log=attempt_log,
+        context={"component": "market", "fold": "final-development", "phase": "final"},
+    )
+    mapping = semantic_mapping("market", MARKET_FEATURES, fit.centers)
+    states, state_receipt = _market_state_receipt(
+        component,
+        state_rows(
+            component,
+            causal_states(component, fit.centers, P2_3C_FIXED_JUMP_PENALTY),
+            mapping,
+        ),
+    )
+    missing = sorted({"risk_off", "risk_on"} - set(states.values()))
+    if missing:
+        raise _fail(
+            REASON_MARKET_REGIME,
+            "final development market fit does not contain both semantic states",
+            stage="market_conditioning",
+            evidence={"missing_states": missing, "state_receipt": state_receipt},
+        )
+    body = {
+        "schema_version": P2_3C_MARKET_COMPONENT_SCHEMA_VERSION,
+        "component": "market",
+        "phase": "final-development",
+        "fixed_jump_penalty": P2_3C_FIXED_JUMP_PENALTY,
+        "fixed_seed": P2_3C_FIXED_SEED,
+        "preprocess": component.preprocessor.payload(),
+        "preprocess_sha256": canonical_sha256(component.preprocessor.payload()),
+        "fit": jump_fit_receipt(fit, component),
+        "centers": np.asarray(fit.centers, dtype="<f8").tolist(),
+        "centers_sha256": sha256_bytes(np.asarray(fit.centers, dtype="<f8").tobytes()),
+        "semantic_mapping": {str(key): value for key, value in sorted(mapping.items())},
+        "semantic_mapping_sha256": canonical_sha256({str(key): value for key, value in sorted(mapping.items())}),
+        "states": state_receipt,
+        "holdout_accessed": False,
+    }
+    return states, {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _run_conditioned_level_final(
+    level: str,
+    *,
+    inputs: Mapping[str, Any],
+    calendar: tuple[date, ...],
+    benchmark: Mapping[date, float],
+    market_states: Mapping[date, str],
+    selected_alpha: float,
+    attempt_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    spec = LEVEL_SPECS[level]
+    panel = _component_panel(inputs, level)
+    component = prepare_component(
+        panel,
+        component=f"{level}_ridge",
+        level=level,
+        feature_names=RELATIVE_FEATURES,
+        calendar=calendar,
+        start=DEVELOPMENT_START,
+        end=DEVELOPMENT_END,
+        expected_days=DEVELOPMENT_TRADING_DAYS,
+        expected_sector_count=spec["expected_sector_count"],
+        minimum_daily_count=spec["minimum_daily_count"],
+        relative=True,
+    )
+    targets = build_target_rows(
+        panel,
+        benchmark,
+        calendar,
+        level=level,
+        start=DEVELOPMENT_START,
+        end=DEVELOPMENT_END,
+        expected_days=DEVELOPMENT_TRADING_DAYS,
+        expected_sector_count=spec["expected_sector_count"],
+        minimum_daily_count=spec["minimum_daily_count"],
+    )
+    conditioned = _condition_component(
+        component,
+        market_states,
+        fold="final-development",
+        phase="final",
+    )
+    fit = _fit_ridge(
+        conditioned.component,
+        targets,
+        alpha=float(selected_alpha),
+        attempt_log=attempt_log,
+        context={"component": level, "fold": "final-development", "phase": "final"},
+    )
+    body = {
+        "schema_version": P2_3C_COMPONENT_SCHEMA_VERSION,
+        "component": level,
+        "level": level,
+        "phase": "final-development",
+        "selected_alpha": float(selected_alpha),
+        "canonical_sector_count": len(component.canonical_codes),
+        "canonical_sector_sha256": canonical_sha256(list(component.canonical_codes)),
+        "preprocess": component.preprocessor.payload(),
+        "preprocess_sha256": canonical_sha256(component.preprocessor.payload()),
+        "interaction": conditioned.receipt,
+        "target": targets.receipt,
+        "fit": _conditioned_fit_receipt(fit),
+        "valid_row_count": component.valid_row_count,
+        "valid_identity_sha256": component.valid_identity_sha256,
+        "unavailable_items": list(component.unavailable_items),
+        "unavailable_item_count": len(component.unavailable_items),
+        "holdout_accessed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def planned_fit_count() -> int:
     return market_planned_fit_count() + 2 * (len(ALPHA_GRID) * len(FOLDS) + 1)
+
+
+def p2_3c_planned_fit_count() -> int:
+    return len(FOLDS) + 2 * len(ALPHA_GRID) * len(FOLDS) + 3
 
 
 def _runtime_versions() -> dict[str, Any]:
@@ -966,6 +1723,59 @@ def _request_identity(request: Mapping[str, Any], producer_commit: str) -> dict[
         "forbidden_holdout_date_set_sha256": forbidden_hash,
         "source_sha256": canonical_sha256(source),
     }
+
+
+def validate_p2_3c_static_request(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate every P2-3C request identity that does not depend on source Git."""
+
+    if request.get("schema_version") != P2_3C_REQUEST_SCHEMA_VERSION:
+        raise _fail(REASON_INPUT_IDENTITY, "P2-3C request schema is invalid", stage="input")
+    if request.get("contract_version") != P2_3C_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT_IDENTITY, "P2-3C request contract is invalid", stage="input")
+    if request.get("candidate_attempt_index") != P2_3C_ATTEMPT_INDEX:
+        raise _fail(REASON_INPUT_IDENTITY, "P2-3C candidate attempt index is invalid", stage="input")
+    prior = request.get("prior_not_available_report_sha256s")
+    expected_prior = {
+        "P2-3A": P2_3A_NOT_AVAILABLE_REPORT_SHA256,
+        "P2-3B": P2_3B_NOT_AVAILABLE_REPORT_SHA256,
+    }
+    if prior != expected_prior:
+        raise _fail(REASON_INPUT_IDENTITY, "prior NOT_AVAILABLE receipt identities are invalid", stage="input")
+    fixed_market = request.get("fixed_market_parameters")
+    if fixed_market != {"jump_penalty": P2_3C_FIXED_JUMP_PENALTY, "seed": P2_3C_FIXED_SEED}:
+        raise _fail(REASON_INPUT_IDENTITY, "fixed market parameter identity is invalid", stage="input")
+    source = request.get("source")
+    if not isinstance(source, Mapping):
+        raise _fail(REASON_INPUT_IDENTITY, "request source is missing", stage="input")
+    forbidden_hash = _require_sha256(
+        request.get("forbidden_holdout_date_set_sha256"), "forbidden_holdout_date_set_sha256"
+    )
+    if (
+        request.get("holdout_start") != HOLDOUT_START.isoformat()
+        or request.get("holdout_end") != HOLDOUT_END.isoformat()
+    ):
+        raise _fail(REASON_HOLDOUT, "forbidden holdout boundary is invalid", stage="input")
+    return {
+        "schema_version": P2_3C_REQUEST_SCHEMA_VERSION,
+        "contract_version": P2_3C_CONTRACT_VERSION,
+        "candidate_attempt_index": P2_3C_ATTEMPT_INDEX,
+        "prior_not_available_report_sha256s": expected_prior,
+        "fixed_market_parameters": fixed_market,
+        "holdout_start": HOLDOUT_START.isoformat(),
+        "holdout_end": HOLDOUT_END.isoformat(),
+        "holdout_trading_day_count": HOLDOUT_TRADING_DAYS,
+        "forbidden_holdout_date_set_sha256": forbidden_hash,
+        "source_sha256": canonical_sha256(source),
+    }
+
+
+def _p2_3c_request_identity(request: Mapping[str, Any], producer_commit: str) -> dict[str, Any]:
+    static_identity = validate_p2_3c_static_request(request)
+    if len(producer_commit) != 40 or any(char not in "0123456789abcdef" for char in producer_commit):
+        raise _fail(REASON_INPUT_IDENTITY, "producer commit is not a full lowercase Git SHA", stage="input")
+    if str(request.get("expected_producer_commit") or "") != producer_commit:
+        raise _fail(REASON_INPUT_IDENTITY, "producer commit differs from request", stage="input")
+    return {**static_identity, "expected_producer_commit": producer_commit}
 
 
 def run_p2_3b_candidate(
@@ -1152,12 +1962,214 @@ def run_p2_3b_candidate(
         ) from exc
 
 
+def run_p2_3c_candidate(
+    inputs: Mapping[str, Any],
+    request: Mapping[str, Any],
+    *,
+    producer_commit: str,
+) -> dict[str, Any]:
+    """Execute the approved P2-3C 36-fit development contract without holdout access."""
+
+    request_identity = _p2_3c_request_identity(request, producer_commit)
+    raw_calendar = inputs.get("trading_dates")
+    if not isinstance(raw_calendar, (tuple, list)):
+        raise _fail(REASON_INPUT_IDENTITY, "trading calendar is missing", stage="input")
+    calendar = tuple(_as_date(value) for value in raw_calendar)
+    if calendar != tuple(sorted(set(calendar))):
+        raise _fail(REASON_INPUT_IDENTITY, "trading calendar is not sorted and unique", stage="input")
+    development_dates = _calendar_slice(
+        calendar,
+        start=DEVELOPMENT_START,
+        end=DEVELOPMENT_END,
+        expected_days=DEVELOPMENT_TRADING_DAYS,
+    )
+    if any(day >= HOLDOUT_START for day in calendar):
+        raise _fail(
+            REASON_HOLDOUT,
+            "P2-3C inputs contain forbidden holdout dates",
+            stage="input",
+            evidence={"max_input_date": calendar[-1].isoformat()},
+        )
+    dataset_manifest = inputs.get("dataset_manifest")
+    mapping_manifest = inputs.get("mapping_manifest")
+    if not isinstance(dataset_manifest, Mapping) or not isinstance(mapping_manifest, (Mapping, list)):
+        raise _fail(REASON_INPUT_IDENTITY, "dataset or mapping manifest is missing", stage="input")
+    benchmark = _benchmark_rows(dataset_manifest)
+    attempt_log: list[dict[str, Any]] = []
+    completed_stages: list[dict[str, Any]] = []
+
+    def require_attempt_count(expected: int, stage: str) -> None:
+        if len(attempt_log) != expected:
+            raise _fail(
+                REASON_INPUT_IDENTITY,
+                "completed fit attempt count differs from the approved P2-3C stage boundary",
+                stage=stage,
+                evidence={"expected": expected, "actual": len(attempt_log)},
+            )
+
+    try:
+        market_folds, market_development = _run_market_conditioning_development(
+            inputs,
+            calendar=calendar,
+            benchmark=benchmark,
+            attempt_log=attempt_log,
+        )
+        completed_stages.append(market_development)
+        require_attempt_count(3, "market_development_finalization")
+
+        l1_development = _run_conditioned_level_development(
+            "L1",
+            inputs=inputs,
+            calendar=calendar,
+            benchmark=benchmark,
+            market_folds=market_folds,
+            attempt_log=attempt_log,
+        )
+        completed_stages.append(l1_development)
+        require_attempt_count(18, "L1_development_finalization")
+
+        l2_development = _run_conditioned_level_development(
+            "L2",
+            inputs=inputs,
+            calendar=calendar,
+            benchmark=benchmark,
+            market_folds=market_folds,
+            attempt_log=attempt_log,
+        )
+        completed_stages.append(l2_development)
+        require_attempt_count(33, "L2_development_finalization")
+
+        final_market_states, market_final = _run_market_conditioning_final(
+            inputs,
+            calendar=calendar,
+            attempt_log=attempt_log,
+        )
+        completed_stages.append(market_final)
+        l1_final = _run_conditioned_level_final(
+            "L1",
+            inputs=inputs,
+            calendar=calendar,
+            benchmark=benchmark,
+            market_states=final_market_states,
+            selected_alpha=float(l1_development["selected_alpha"]),
+            attempt_log=attempt_log,
+        )
+        completed_stages.append(l1_final)
+        l2_final = _run_conditioned_level_final(
+            "L2",
+            inputs=inputs,
+            calendar=calendar,
+            benchmark=benchmark,
+            market_states=final_market_states,
+            selected_alpha=float(l2_development["selected_alpha"]),
+            attempt_log=attempt_log,
+        )
+        completed_stages.append(l2_final)
+        require_attempt_count(p2_3c_planned_fit_count(), "finalization")
+    except (RidgeCandidateError, JumpSpikeError) as exc:
+        evidence = {
+            **exc.evidence,
+            "completed_fit_count": len(attempt_log),
+            "fit_attempts_sha256": canonical_sha256(attempt_log),
+            "fit_attempts": attempt_log,
+            "completed_component_count": len(completed_stages),
+            "completed_component_receipt_sha256s": [str(item["receipt_sha256"]) for item in completed_stages],
+            "completed_components": completed_stages,
+        }
+        raise RidgeCandidateError(exc.reason_code, str(exc), stage=exc.stage, evidence=evidence) from exc
+    except Exception as exc:
+        evidence = {
+            "exception_type": type(exc).__name__,
+            "error_message": str(exc),
+            "completed_fit_count": len(attempt_log),
+            "fit_attempts_sha256": canonical_sha256(attempt_log),
+            "fit_attempts": attempt_log,
+            "completed_component_count": len(completed_stages),
+            "completed_component_receipt_sha256s": [str(item["receipt_sha256"]) for item in completed_stages],
+            "completed_components": completed_stages,
+        }
+        raise RidgeCandidateError(
+            REASON_UNEXPECTED,
+            "unexpected P2-3C candidate failure",
+            stage="unknown",
+            evidence=evidence,
+        ) from exc
+    try:
+        body = {
+            "schema_version": P2_3C_REPORT_SCHEMA_VERSION,
+            "contract_version": P2_3C_CONTRACT_VERSION,
+            "algorithm_version": P2_3C_ALGORITHM_VERSION,
+            "model_origin": P2_3C_MODEL_ORIGIN,
+            "status": "P2_3C_CANDIDATE_FROZEN_PENDING_P2_4_HOLDOUT_ACCEPTANCE",
+            "producer_commit": producer_commit,
+            "runtime_versions": _runtime_versions(),
+            "request_identity": request_identity,
+            "request_identity_sha256": canonical_sha256(request_identity),
+            "candidate_attempt_index": P2_3C_ATTEMPT_INDEX,
+            "prior_not_available_report_sha256s": request_identity["prior_not_available_report_sha256s"],
+            "fixed_market_parameters": request_identity["fixed_market_parameters"],
+            "dataset_manifest_sha256": canonical_sha256(dataset_manifest),
+            "mapping_manifest_sha256": canonical_sha256(mapping_manifest),
+            "database_identity": inputs.get("database"),
+            "calendar_manifest_sha256": canonical_sha256(dataset_manifest.get("calendar_benchmark")),
+            "feature_formula_sha256": canonical_sha256(
+                {"L1": inputs.get("feature_definition"), "L2": inputs.get("l2_feature_definition")}
+            ),
+            "development_start": DEVELOPMENT_START.isoformat(),
+            "development_end": DEVELOPMENT_END.isoformat(),
+            "development_trading_day_count": len(development_dates),
+            "development_date_set_sha256": canonical_sha256([day.isoformat() for day in development_dates]),
+            "forbidden_holdout_start": HOLDOUT_START.isoformat(),
+            "forbidden_holdout_end": HOLDOUT_END.isoformat(),
+            "forbidden_holdout_date_set_sha256": request_identity["forbidden_holdout_date_set_sha256"],
+            "planned_fit_count": p2_3c_planned_fit_count(),
+            "completed_fit_count": len(attempt_log),
+            "fit_attempts_sha256": canonical_sha256(attempt_log),
+            "components": completed_stages,
+            "component_receipt_sha256s": [str(item["receipt_sha256"]) for item in completed_stages],
+            "component_count": len(completed_stages),
+            "candidate_status": "development_candidate_frozen",
+            "failure_stage": None,
+            "failure_reason_code": None,
+            "holdout_accessed": False,
+            "selection_performed": True,
+            "partial_component_selection_performed": False,
+            "selection_scope": "development_only",
+            "regime_split_used_for_selection": False,
+            "product_acceptance_performed": False,
+            "candidate_receipt_write": False,
+            "failure_receipt_write": False,
+            "model_write": False,
+            "ready_write": False,
+            "database_write": False,
+            "runtime_action": False,
+        }
+        return {**body, "report_sha256": canonical_sha256(body)}
+    except Exception as exc:
+        raise RidgeCandidateError(
+            REASON_UNEXPECTED,
+            "P2-3C candidate finalization failed",
+            stage="finalization",
+            evidence={
+                "exception_type": type(exc).__name__,
+                "error_message": str(exc),
+                "completed_fit_count": len(attempt_log),
+                "fit_attempts_sha256": canonical_sha256(attempt_log),
+                "fit_attempts": attempt_log,
+                "completed_component_count": len(completed_stages),
+                "completed_component_receipt_sha256s": [str(item["receipt_sha256"]) for item in completed_stages],
+                "completed_components": completed_stages,
+            },
+        ) from exc
+
+
 def failure_report(
     request: Mapping[str, Any],
     *,
     producer_commit: str,
     error: BaseException,
     completed_fit_count: int = 0,
+    candidate_mode: str = "p2-3b",
 ) -> dict[str, Any]:
     if isinstance(error, (RidgeCandidateError, JumpSpikeError)):
         reason_code = error.reason_code
@@ -1167,25 +2179,44 @@ def failure_report(
         reason_code = REASON_UNEXPECTED
         stage = "unknown"
         evidence = {"exception_type": type(error).__name__, "error_message": str(error)}
+    if candidate_mode == "p2-3b":
+        identity = {
+            "schema_version": REPORT_SCHEMA_VERSION,
+            "contract_version": CONTRACT_VERSION,
+            "algorithm_version": ALGORITHM_VERSION,
+            "model_origin": MODEL_ORIGIN,
+            "planned_fit_count": planned_fit_count(),
+        }
+    elif candidate_mode == "p2-3c":
+        identity = {
+            "schema_version": P2_3C_REPORT_SCHEMA_VERSION,
+            "contract_version": P2_3C_CONTRACT_VERSION,
+            "algorithm_version": P2_3C_ALGORITHM_VERSION,
+            "model_origin": P2_3C_MODEL_ORIGIN,
+            "planned_fit_count": p2_3c_planned_fit_count(),
+        }
+    else:
+        raise _fail(REASON_INPUT_IDENTITY, "unknown candidate mode", stage="failure_receipt")
+    partial_component_selection_performed = bool(
+        isinstance(evidence, Mapping)
+        and (
+            int(evidence.get("completed_component_count") or 0) > (1 if candidate_mode == "p2-3c" else 0)
+            or "selected_alpha" in evidence
+        )
+    )
     body = {
-        "schema_version": REPORT_SCHEMA_VERSION,
-        "contract_version": CONTRACT_VERSION,
-        "algorithm_version": ALGORITHM_VERSION,
-        "model_origin": MODEL_ORIGIN,
+        **identity,
         "status": "NOT_AVAILABLE_FOR_PROMOTION",
         "producer_commit": producer_commit,
         "runtime_versions": _failure_runtime_versions(),
         "request_sha256": canonical_sha256(request),
-        "planned_fit_count": planned_fit_count(),
         "completed_fit_count": completed_fit_count,
         "failure_stage": stage,
         "failure_reason_code": reason_code,
         "failure_evidence": evidence,
         "holdout_accessed": False,
         "selection_performed": False,
-        "partial_component_selection_performed": bool(
-            isinstance(evidence, Mapping) and int(evidence.get("completed_component_count") or 0) > 0
-        ),
+        "partial_component_selection_performed": partial_component_selection_performed,
         "selection_scope": "development_only",
         "product_acceptance_performed": False,
         "candidate_receipt_write": False,

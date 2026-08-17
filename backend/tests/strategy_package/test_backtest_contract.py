@@ -44,6 +44,7 @@ def test_backtest_contract_never_reinjects_hmm_runtime_from_qe_config() -> None:
         "coefficients_path": None,
         "auto_compute": True,
         "manual_snapshot_required": False,
+        "missing_sector_policy": "fail",
     }
     assert disabled["qe_backtest_runtime_contract"]["runtime_features"]["hmm"] == {
         "enabled": False,

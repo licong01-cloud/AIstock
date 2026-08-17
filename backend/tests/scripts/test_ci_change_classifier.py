@@ -313,6 +313,7 @@ def test_issuer_bound_pit_files_select_local_data_plan(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
             "backend/tests/announcements/test_title_classifier.py",
+            "backend/tests/test_announcement_event_schema.py",
             "backend/tests/event_signal/test_st_announcement_adapter.py",
             "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py",
             "scripts/classify_announcement_titles_v0.py",
@@ -584,6 +585,8 @@ def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
             "backend/tests/event_signal/test_st_announcement_adapter.py",
             "scripts/repair_announcement_event_signal_issuer_binding.py",
             "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+            "scripts/sync_stock_namechange.py",
+            "backend/tests/scripts/test_sync_stock_namechange.py",
         ]
     )
 

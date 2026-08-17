@@ -21,6 +21,12 @@ def _row(**overrides):
         "ann_signal_evidence": {"st_cross_check": {"matched": True, "terminal": True}},
         "classification_detail": {},
         "issuer_candidate_ts_codes": ["002070.SZ"],
+        "issuer_candidate_authorities": [
+            {
+                "ts_code": "002070.SZ",
+                "authority_source": "tushare.namechange_interval_v1",
+            }
+        ],
     }
     value.update(overrides)
     return value
@@ -42,6 +48,15 @@ def test_candidate_sql_rejects_security_lifetime_mismatch() -> None:
     assert "stock.delist_date >= peer.ann_date" in ISSUER_BINDING_LATERAL_SQL
 
 
+def test_candidate_sql_uses_audited_name_authorities_only() -> None:
+    assert "market.stock_namechange historical_name" in ISSUER_BINDING_LATERAL_SQL
+    assert "historical_name.start_date <= peer.ann_date" in ISSUER_BINDING_LATERAL_SQL
+    assert "historical_name.end_date >= peer.ann_date" in ISSUER_BINDING_LATERAL_SQL
+    assert "tushare.namechange_interval_v1" in ISSUER_BINDING_LATERAL_SQL
+    assert "tushare.stock_basic_terminal_display_v1" in ISSUER_BINDING_LATERAL_SQL
+    assert "regexp_replace(stock.name, '\\(退\\)$', '') = peer.name" in ISSUER_BINDING_LATERAL_SQL
+
+
 def test_provider_alias_is_preserved_but_suppressed() -> None:
     decision = resolve_announcement_issuer_binding(
         _row(ts_code="000001.SZ"),
@@ -57,14 +72,33 @@ def test_provider_alias_is_preserved_but_suppressed() -> None:
 
 def test_ambiguous_and_unresolved_bindings_fail_closed() -> None:
     ambiguous = resolve_announcement_issuer_binding(
-        _row(issuer_candidate_ts_codes=["000001.SZ", "002070.SZ"])
+        _row(
+            issuer_candidate_ts_codes=["000001.SZ", "002070.SZ"],
+            issuer_candidate_authorities=[
+                {"ts_code": "000001.SZ", "authority_source": "tushare.namechange_interval_v1"},
+                {"ts_code": "002070.SZ", "authority_source": "tushare.namechange_interval_v1"},
+            ],
+        )
     )
-    unresolved = resolve_announcement_issuer_binding(_row(issuer_candidate_ts_codes=[]))
+    unresolved = resolve_announcement_issuer_binding(
+        _row(issuer_candidate_ts_codes=[], issuer_candidate_authorities=[])
+    )
 
     assert ambiguous.status is IssuerBindingStatus.AMBIGUOUS
     assert unresolved.status is IssuerBindingStatus.UNRESOLVED
     assert ambiguous.signal_status == unresolved.signal_status == "SUPPRESSED"
     assert ambiguous.fact_status == unresolved.fact_status == "UNKNOWN"
+
+
+def test_candidate_without_authority_evidence_fails_closed() -> None:
+    decision = resolve_announcement_issuer_binding(
+        _row(issuer_candidate_authorities=[]),
+        require_terminal_cross_check=True,
+    )
+
+    assert decision.status is IssuerBindingStatus.UNRESOLVED
+    assert decision.reason_code == "announcement_issuer_binding_authority_missing"
+    assert decision.signal_status == "SUPPRESSED"
 
 
 def test_pit_time_inconsistency_is_not_silently_rewritten() -> None:
@@ -104,6 +138,12 @@ def test_attach_records_evidence_without_mutating_raw_row() -> None:
     assert enriched[0]["ann_signal_status"] == "SUPPRESSED"
     assert enriched[0]["issuer_fact_status"] == "SUPERSEDED"
     assert enriched[0]["ann_signal_evidence"]["issuer_binding"]["resolved_ts_code"] == "002070.SZ"
+    assert enriched[0]["ann_signal_evidence"]["issuer_binding"]["candidate_authorities"] == [
+        {
+            "ts_code": "002070.SZ",
+            "authority_source": "tushare.namechange_interval_v1",
+        }
+    ]
     assert counts == {"DUPLICATE_PROVIDER_ALIAS": 1}
 
 
