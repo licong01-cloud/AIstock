@@ -7,6 +7,7 @@ import pytest
 
 from backend.services.advisory_model_first.model_bundle import (
     load_exact_shadow_bundle,
+    load_frozen_research_bundle,
     publish_shadow_binding,
 )
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
@@ -174,6 +175,26 @@ def test_v2_bundle_publishes_and_exact_loader_reads_all_five_members(tmp_path: P
     assert loaded.baselines["model_top5"]["mean_daily_top5_excess_return_5"] == 0.01
     assert loaded.baselines["model_top5"]["mean_excess_return_5"] == 0.01
     assert "selection_rank_top5" in loaded.baselines
+    research_loaded = load_frozen_research_bundle(
+        model_root=tmp_path / "published",
+        bundle_id=bundle_id,
+        expected_package_id=train.package_id,
+        expected_manifest_sha256=train.manifest_sha256,
+        expected_selection_runtime_semantics_hash=train.selection_runtime_semantics_hash,
+        booster_factory=_Booster,
+    )
+    assert research_loaded.bundle_id == bundle_id
+    assert research_loaded.manifest_file_sha256 == loaded.manifest_file_sha256
+    with pytest.raises(AdvisoryModelFirstError) as identity_error:
+        load_frozen_research_bundle(
+            model_root=tmp_path / "published",
+            bundle_id=bundle_id,
+            expected_package_id="different-package",
+            expected_manifest_sha256=train.manifest_sha256,
+            expected_selection_runtime_semantics_hash=train.selection_runtime_semantics_hash,
+            booster_factory=_Booster,
+        )
+    assert identity_error.value.reason_code == "ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH"
     tampered_report = json.loads(test_report.read_text(encoding="utf-8"))
     tampered_report["evaluation_id"] = "different-evaluation"
     test_report.write_text(json.dumps(tampered_report), encoding="utf-8")

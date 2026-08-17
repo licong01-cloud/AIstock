@@ -219,12 +219,15 @@ class HistoricalRangeR5OutcomeRequestFactory:
                     requested_subject_types=tuple(
                         sorted(HistoricalRangeOutcomeSubjectType, key=lambda item: item.value)
                     ),
+                    requested_outcome_logical_ids=tuple(request.requested_outcome_logical_ids),
                     requested_projections=tuple(
                         sorted(HistoricalRangeOutcomeProjection, key=lambda item: item.value)
                     ),
                     horizons=tuple(request.horizons),
                     producer_code_hash=self._identities.outcome_producer_hash,
                     outcome_contract_version=R5_OUTCOME_CONTRACT_VERSION,
+                    correction_reason=request.correction_reason,
+                    correction_evidence_ref=request.correction_evidence_ref,
                     operation_idempotency_key=derive_prefixed_id(
                         "ahroutkey",
                         {
