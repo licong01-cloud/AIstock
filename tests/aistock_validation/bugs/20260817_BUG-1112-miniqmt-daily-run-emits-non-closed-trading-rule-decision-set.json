@@ -1,0 +1,311 @@
+{
+  "actual": "The immutable plan correctly retains every trading-rule decision for TCA planning-subject coverage, including one REJECT decision with legal_quantity=0 and no emitted parent. The MiniQMT product reader incorrectly requires the parent-reference set to equal the full decision set, so it rejects the valid 60-decision/59-parent partition before broker submission. broker_called=false and submitted_intents=0.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/decision.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+    "backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py",
+    "tests/aistock_validation/bugs/20260817_BUG-1112-miniqmt-daily-run-emits-non-closed-trading-rule-decision-set.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1112",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-17T02:00:39.789859Z",
+  "description": "The immutable plan correctly retains every trading-rule decision for TCA planning-subject coverage, including one REJECT decision with legal_quantity=0 and no emitted parent. The MiniQMT product reader incorrectly requires the parent-reference set to equal the full decision set, so it rejects the valid 60-decision/59-parent partition before broker submission. broker_called=false and submitted_intents=0.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260817-4105b4fa0b0e",
+      "timestamp": "2026-08-17T02:00:39.789840Z"
+    },
+    {
+      "action": "root_cause_refined",
+      "actor": "codex",
+      "note": "Design review confirmed immutable plans must retain emitted and rejected planning subjects; fix the K6 product partition validator without filtering REJECT evidence or weakening parent authority.",
+      "timestamp": "2026-08-17T02:18:25.325506Z"
+    },
+    {
+      "action": "validation_scope_expanded",
+      "actor": "codex",
+      "note": "Required MiniQMT L2 exposed a clean-main baseline assertion left stale by merged V25 retirement d75488bc; scope adds only the exact import-boundary test so the gate asserts the explicit active registry instead of obsolete count 11.",
+      "timestamp": "2026-08-17T02:40:30.641238Z"
+    },
+    {
+      "action": "design_compliance_reviewed",
+      "actor": "codex",
+      "note": "DESIGN-COMPLIANCE-001 passed all four checks: full emitted/rejected partition delivered, invalid authority remains loud, approved TCA planning-subject semantics preserved, and no new config approval DDL DML asset or process-control gate added.",
+      "timestamp": "2026-08-17T03:02:00.991285Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime:simrun_59bf16c6d270db73",
+    "source:backend/services/simulation_runtime/decision.py:400-421",
+    "source:backend/services/simulation_runtime/miniqmt_kernel_product.py:373-385",
+    "design:docs/architecture/miniqmt_adaptive_is_phase0_tca_design.md:417,1405,1533",
+    "baseline:origin/main@6a1289d1 test_plugin_import_boundaries.py:847 expected_count_gte_11 actual_count_9 after V25 retirement d75488bc"
+  ],
+  "expected": "Every persisted MiniQMT execution plan keeps the complete planning-decision authority: each EMIT or ADJUST decision maps to exactly one matching parent with the same legal quantity, while each unreferenced decision is strictly REJECT with legal_quantity=0. Missing, duplicate, orphan-emittable, parent-rejected, or quantity-drift authority remains fail-closed before broker submission.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/simulation_runtime/decision.py",
+      "backend/services/simulation_runtime/lifecycle.py",
+      "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+      "backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/decision.py",
+        "backend/services/simulation_runtime/lifecycle.py",
+        "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+        "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+        "backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/decision.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/lifecycle.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/decision.py",
+        "backend/services/simulation_runtime/lifecycle.py",
+        "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+        "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+        "backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/decision.py",
+      "backend/services/simulation_runtime/lifecycle.py",
+      "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+      "backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py"
+    ]
+  },
+  "first_seen_at": "2026-08-17T02:00:39.789859Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3544,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3544",
+  "last_seen_at": "2026-08-17T02:00:39.789859Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect simulation run simrun_59bf16c6d270db73 for trade_date 2026-08-17 and compare payload trading_rule_decision_count=60 with execution_plan_intent_count=59; failure stage MINIQMT_KERNEL_V2_PLAN_START_FAILED.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "simulation_core_l2",
+    "miniqmt_execution_runtime_l2"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked BUG-1112 K6 product reader and passed the emitted-parent/rejected-subject positive and fail-closed authority matrix.",
+      "Fresh nox MiniQMT L2 process loaded the persisted BUG-1112 source and passed 1499 tests with 82 explicit skips; no backend process control.",
+      "Fresh nox Simulation Core L2 process loaded the persisted BUG-1112 source and passed 601 tests with 1 explicit skip; no backend process control.",
+      "Fresh nox MiniQMT and Simulation Core processes loaded tracked BUG-1112 source and passed 1499+601 tests; no backend process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT daily run emits non-closed trading-rule decision set",
+  "trigger_condition": {
+    "fingerprint": "4105b4fa0b0ecc98e3377791",
+    "source_event_id": "FE-20260817-4105b4fa0b0e"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "miniqmt_execution_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2",
+        "miniqmt_execution_runtime_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "miniqmt_execution_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2",
+          "miniqmt_execution_runtime_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
