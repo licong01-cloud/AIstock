@@ -156,8 +156,20 @@ class MarketConditioningFold:
 
 
 @dataclass(frozen=True)
+class ConditionedFeatureComponent:
+    component: str
+    level: str
+    feature_names: tuple[str, ...]
+    canonical_codes: tuple[str, ...]
+    sequences: tuple[SequenceData, ...]
+    unavailable_items: tuple[dict[str, Any], ...]
+    valid_row_count: int
+    valid_identity_sha256: str
+
+
+@dataclass(frozen=True)
 class ConditionedComponent:
-    component: PreparedComponent
+    component: ConditionedFeatureComponent
     receipt: dict[str, Any]
 
 
@@ -383,7 +395,9 @@ def build_target_rows(
     )
 
 
-def _feature_rows(component: PreparedComponent) -> dict[tuple[str, date], np.ndarray]:
+def _feature_rows(
+    component: PreparedComponent | ConditionedFeatureComponent,
+) -> dict[tuple[str, date], np.ndarray]:
     rows: dict[tuple[str, date], np.ndarray] = {}
     for sequence in component.sequences:
         for day, values in zip(sequence.dates, sequence.values, strict=True):
@@ -703,15 +717,12 @@ def _condition_component(
         "market_state_identity_sha256": canonical_sha256(identity_rows),
         "market_sign": {"risk_on": 1.0, "risk_off": -1.0},
     }
-    conditioned_component = PreparedComponent(
+    conditioned_component = ConditionedFeatureComponent(
         component=f"{component.component}_market_conditioned",
         level=component.level,
         feature_names=P2_3C_FEATURES,
-        expected_sector_count=component.expected_sector_count,
-        minimum_daily_count=component.minimum_daily_count,
         canonical_codes=component.canonical_codes,
         sequences=tuple(sequences),
-        preprocessor=component.preprocessor,
         unavailable_items=component.unavailable_items,
         valid_row_count=component.valid_row_count,
         valid_identity_sha256=component.valid_identity_sha256,
@@ -779,7 +790,7 @@ def _regime_split_metrics(
 
 
 def _fit_ridge(
-    component: PreparedComponent,
+    component: PreparedComponent | ConditionedFeatureComponent,
     targets: TargetRows,
     *,
     alpha: float,
@@ -875,7 +886,10 @@ def _fit_receipt(fit: RidgeFit) -> dict[str, Any]:
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
-def predict_scores(component: PreparedComponent, fit: RidgeFit) -> tuple[dict[tuple[str, date], float], dict[str, Any]]:
+def predict_scores(
+    component: PreparedComponent | ConditionedFeatureComponent,
+    fit: RidgeFit,
+) -> tuple[dict[tuple[str, date], float], dict[str, Any]]:
     feature_rows = _feature_rows(component)
     identities = sorted(feature_rows, key=lambda item: (item[1], item[0]))
     if not identities:
@@ -1445,7 +1459,31 @@ def _run_conditioned_level_development(
             "regime_split_used_for_selection": False,
         }
         alpha_receipts.append({**body, "receipt_sha256": canonical_sha256(body)})
-    selected = _select_alpha(alpha_receipts)
+    try:
+        selected = _select_alpha(alpha_receipts)
+    except RidgeCandidateError as exc:
+        raise RidgeCandidateError(
+            exc.reason_code,
+            str(exc),
+            stage=exc.stage,
+            evidence={
+                **exc.evidence,
+                "alpha_receipts": alpha_receipts,
+                "alpha_receipts_sha256": canonical_sha256(alpha_receipts),
+            },
+        ) from exc
+    except Exception as exc:
+        raise RidgeCandidateError(
+            REASON_UNEXPECTED,
+            f"unexpected conditioned {level} alpha selection failure",
+            stage="alpha_selection",
+            evidence={
+                "exception_type": type(exc).__name__,
+                "error_message": str(exc),
+                "alpha_receipts": alpha_receipts,
+                "alpha_receipts_sha256": canonical_sha256(alpha_receipts),
+            },
+        ) from exc
     try:
         _require_positive_development(level, selected)
     except RidgeCandidateError as exc:
@@ -2159,6 +2197,13 @@ def failure_report(
         }
     else:
         raise _fail(REASON_INPUT_IDENTITY, "unknown candidate mode", stage="failure_receipt")
+    partial_component_selection_performed = bool(
+        isinstance(evidence, Mapping)
+        and (
+            int(evidence.get("completed_component_count") or 0) > (1 if candidate_mode == "p2-3c" else 0)
+            or "selected_alpha" in evidence
+        )
+    )
     body = {
         **identity,
         "status": "NOT_AVAILABLE_FOR_PROMOTION",
@@ -2171,10 +2216,7 @@ def failure_report(
         "failure_evidence": evidence,
         "holdout_accessed": False,
         "selection_performed": False,
-        "partial_component_selection_performed": bool(
-            isinstance(evidence, Mapping)
-            and int(evidence.get("completed_component_count") or 0) > (1 if candidate_mode == "p2-3c" else 0)
-        ),
+        "partial_component_selection_performed": partial_component_selection_performed,
         "selection_scope": "development_only",
         "product_acceptance_performed": False,
         "candidate_receipt_write": False,

@@ -304,6 +304,8 @@ def test_market_conditioning_builds_exact_ten_dimensions_and_slope_identity() ->
     )
 
     values = conditioned.component.sequences[0].values
+    assert isinstance(conditioned.component, subject.ConditionedFeatureComponent)
+    assert not hasattr(conditioned.component, "preprocessor")
     assert conditioned.component.feature_names == subject.P2_3C_FEATURES
     assert values.shape == (2, 10)
     assert np.array_equal(values[0], np.concatenate([base[0], base[0]]))
@@ -612,6 +614,56 @@ def test_real_conditioned_l1_runs_all_fifteen_folds_before_train_only_selection(
     assert all(item["regime_split_used_for_selection"] is False for item in result["alpha_receipts"])
 
 
+def test_conditioned_alpha_selection_failure_preserves_all_fold_receipts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calendar = _approved_calendar()
+    panel = _panel([f"L1-{index:02d}" for index in range(31)], calendar)
+    market_folds: list[subject.MarketConditioningFold] = []
+    for fold in subject.FOLDS:
+        train_dates = [day for day in calendar if fold["train_start"] <= day <= fold["train_end"]]
+        validation_dates = [day for day in calendar if fold["validation_start"] <= day <= fold["validation_end"]]
+        market_folds.append(
+            subject.MarketConditioningFold(
+                fold=str(fold["fold"]),
+                train_states={day: "risk_on" if index % 2 else "risk_off" for index, day in enumerate(train_dates)},
+                validation_states={
+                    day: "risk_on" if index % 2 else "risk_off" for index, day in enumerate(validation_dates)
+                },
+                receipt=_stage_receipt(str(fold["fold"])),
+            )
+        )
+    monkeypatch.setattr(
+        subject,
+        "_select_alpha",
+        lambda receipts: (_ for _ in ()).throw(
+            subject.RidgeCandidateError(
+                subject.REASON_SELECTION_UNAVAILABLE,
+                "synthetic selection failure",
+                stage="alpha_selection",
+            )
+        ),
+    )
+    attempts: list[dict[str, object]] = []
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject._run_conditioned_level_development(
+            "L1",
+            inputs={"panel": panel},
+            calendar=tuple(calendar),
+            benchmark=_benchmark(calendar),
+            market_folds=market_folds,
+            attempt_log=attempts,
+        )
+
+    assert captured.value.reason_code == subject.REASON_SELECTION_UNAVAILABLE
+    assert len(attempts) == 15
+    receipts = captured.value.evidence["alpha_receipts"]
+    assert len(receipts) == 5
+    assert all(item["fold_count"] == 3 for item in receipts)
+    assert captured.value.evidence["alpha_receipts_sha256"] == subject.canonical_sha256(receipts)
+
+
 def test_top_level_requires_exact_184_attempts_and_has_zero_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     calendar = _approved_calendar()
     inputs = {
@@ -741,7 +793,7 @@ def test_top_level_preserves_completed_components_and_finalization_failures(
 
 @pytest.mark.parametrize(
     ("failure_stage", "expected_fit_count", "expected_component_count", "expected_partial_selection"),
-    (("market", 3, 0, False), ("L1", 18, 1, False), ("L2", 33, 2, True)),
+    (("market", 3, 0, False), ("L1", 18, 1, True), ("L2", 33, 2, True)),
 )
 def test_p2_3c_stops_at_exact_market_l1_l2_boundaries(
     monkeypatch: pytest.MonkeyPatch,
@@ -773,6 +825,7 @@ def test_p2_3c_stops_at_exact_market_l1_l2_boundaries(
                 subject.REASON_DEVELOPMENT_NON_POSITIVE,
                 f"{level} development failed",
                 stage="development_acceptance",
+                evidence={"selected_alpha": 100.0},
             )
         return _stage_receipt(f"{level}-development", selected_alpha=100.0)
 
@@ -795,6 +848,24 @@ def test_p2_3c_stops_at_exact_market_l1_l2_boundaries(
         candidate_mode="p2-3c",
     )
     assert failure["partial_component_selection_performed"] is expected_partial_selection
+
+
+def test_p2_3c_selection_unavailable_receipts_do_not_claim_partial_selection() -> None:
+    error = subject.RidgeCandidateError(
+        subject.REASON_SELECTION_UNAVAILABLE,
+        "no eligible alpha",
+        stage="alpha_selection",
+        evidence={"alpha_receipts": [{"alpha": 0.1, "alpha_eligible": False}]},
+    )
+    report = subject.failure_report(
+        _p2_3c_request(),
+        producer_commit="a" * 40,
+        error=error,
+        completed_fit_count=18,
+        candidate_mode="p2-3c",
+    )
+
+    assert report["partial_component_selection_performed"] is False
 
 
 def test_p2_3c_success_requires_exact_thirty_six_attempts_and_writes_no_model(
