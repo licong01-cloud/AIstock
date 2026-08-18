@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_AUTHORITY_ID,
@@ -375,6 +375,15 @@ class StrategyPackageManifest(BaseModel):
     @property
     def is_legacy_runtime_manifest(self) -> bool:
         return self.manifest_version == "1.0"
+
+    @model_serializer(mode="wrap")
+    def _serialize_compatible_manifest(self, handler: Any) -> dict[str, Any]:
+        payload = handler(self)
+        if self.canonical_pit_binding is None:
+            # Preserve the published v1 JSON identity while allowing v2
+            # manifests to carry their mandatory canonical PIT binding.
+            payload.pop("canonical_pit_binding", None)
+        return payload
 
     @model_validator(mode="after")
     def _validate_alpha_shape(self) -> "StrategyPackageManifest":

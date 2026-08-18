@@ -52,7 +52,9 @@ def _alpha_core_manifest() -> StrategyPackageManifest:
 
 def test_legacy_manifest_identity_is_stable_and_classified_reproduction_only() -> None:
     legacy = freeze_manifest(make_manifest())
-    before = legacy.model_dump(mode="json", exclude={"canonical_pit_binding"})
+    before = legacy.model_dump(mode="json")
+
+    assert "canonical_pit_binding" not in before
 
     restored = StrategyPackageManifest.model_validate(before)
 
@@ -82,6 +84,9 @@ def test_v2_builder_creates_new_version_without_mutating_published_source() -> N
     assert migrated.package_version == "2.0.0"
     assert migrated.manifest_version == "alpha_core_v2"
     assert migrated.manifest_sha256 == compute_manifest_sha256(migrated)
+    assert migrated.model_dump(mode="json")["canonical_pit_binding"]["release_id"] == (
+        "qe_hmm_full_v2_20260731"
+    )
     assert migrated.source_evidence["canonical_pit_migration"] == {
         "schema_version": "strategy_package_canonical_pit_migration_source_v1",
         "source_package_id": legacy.package_id,
