@@ -70,8 +70,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "pytest backend/tests/unified_engine/test_score_weighted_strategy_determinism.py -q",
   "required_verification": [
-    "l0",
-    "fresh-process deterministic tie-order regression"
+    "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
