@@ -311,7 +311,11 @@ class CatalogSourceFileCache:
             if item.get("start_date") or item.get("range_start")
         ]
         universe_keys = sorted(
-            {str(item.get("universe_key") or "shsz_st_pit_active_v1") for item in parameters}
+            {
+                str(item["universe_key"]).strip()
+                for item in parameters
+                if str(item.get("universe_key") or "").strip()
+            }
         )
         if not trade_dates:
             raise CatalogSourceCacheError("catalog plan has no trade-date source bounds")
@@ -585,7 +589,7 @@ class CatalogSourceFileCache:
             "historical_trading_calendar_window": ("range_start", "trade_date"),
             "historical_market_history_window": ("universe_key", "start_date", "trade_date"),
             "historical_decision_mark_daily_market": ("trade_date",),
-            "historical_decision_mark_market_state": ("trade_date",),
+            "historical_decision_mark_market_state": ("universe_key", "trade_date"),
             "historical_fundamental_moneyflow_window": (
                 "universe_key",
                 "start_date",
@@ -599,14 +603,7 @@ class CatalogSourceFileCache:
             tuple(
                 (
                     field,
-                    str(
-                        parameters.get(field)
-                        or (
-                            "shsz_st_pit_active_v1"
-                            if field == "universe_key"
-                            else ""
-                        )
-                    ),
+                    str(parameters.get(field) or ""),
                 )
                 for field in fields_by_query[query_id]
             ),
@@ -620,7 +617,7 @@ class CatalogSourceFileCache:
         parameters: Mapping[str, Any],
     ) -> tuple[int, str, str]:
             trade_date = str(parameters["trade_date"])
-            universe_key = str(parameters.get("universe_key") or "shsz_st_pit_active_v1")
+            universe_key = str(parameters.get("universe_key") or "").strip()
             if query_id in {"historical_pit_universe_existing_readonly", "historical_st_risk_existing_readonly"}:
                 symbols = [row[0] for row in conn.execute("SELECT ts_code FROM pit WHERE universe_key=? AND eligible_start<=? AND eligible_end>=? ORDER BY ts_code", (universe_key, trade_date, trade_date))]
                 if any(not str(symbol).strip() for symbol in symbols):
@@ -648,7 +645,11 @@ class CatalogSourceFileCache:
                 return (*frame_payloads(row[0] for row in conn.execute("SELECT daily_payload FROM market WHERE trade_date=? ORDER BY ts_code", (trade_date,))), _JSONB_SCHEMA_HASH)
             if query_id == "historical_decision_mark_market_state":
                 suspended = {row[0] for row in conn.execute("SELECT DISTINCT ts_code FROM suspend WHERE trade_date=? AND suspend_type='S'", (trade_date,))}
-                pit = {row[0] for row in conn.execute("SELECT ts_code FROM pit WHERE universe_key='shsz_st_pit_active_v1' AND eligible_start<=? AND eligible_end>=?", (trade_date, trade_date))}
+                if not universe_key:
+                    raise CatalogSourceContentError(
+                        "historical decision mark state has no explicit PIT universe binding"
+                    )
+                pit = {row[0] for row in conn.execute("SELECT ts_code FROM pit WHERE universe_key=? AND eligible_start<=? AND eligible_end>=?", (universe_key, trade_date, trade_date))}
                 payloads = (canonical_payload_bytes({"ts_code": row["ts_code"], "list_date": row["list_date"], "delist_date": row["delist_date"], "list_status": row["list_status"], "suspended": row["ts_code"] in suspended, "pit_eligible": row["ts_code"] in pit}) for row in conn.execute("SELECT * FROM stock_basic WHERE list_date IS NULL OR list_date<=? ORDER BY ts_code", (trade_date,)))
                 return (*frame_payloads(payloads), _JSONB_SCHEMA_HASH)
             if query_id == "historical_fundamental_moneyflow_window":

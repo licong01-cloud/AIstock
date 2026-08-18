@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
+from backend.services.advisory_model_first import model_inference
 from backend.services.advisory_model_first.feature_schema_v1 import MODEL_FEATURE_COLUMNS
 from backend.services.advisory_model_first.model_bundle import LoadedAdvisoryModelBundle
 from backend.services.advisory_model_first.model_binding_resolution import (
@@ -121,6 +122,7 @@ class _SelectionService:
             status=SelectionRunStatus.SUCCEEDED,
             trade_date=pd.Timestamp("2026-07-21").date(),
             package_ids=[PACKAGE_ID],
+            runtime_config={},
             manifest_sha256_by_package={PACKAGE_ID: MANIFEST_SHA256},
             aggregate_results=[
                 _candidate("000001.SZ", rank=1, score=0.8),
@@ -192,9 +194,11 @@ class _FeatureSource:
     def __init__(self, inputs: RealtimeFeatureInputs) -> None:
         self.inputs = inputs
         self.calls = 0
+        self.last_kwargs: dict[str, object] = {}
 
-    def load(self, **_: object) -> RealtimeFeatureInputs:
+    def load(self, **kwargs: object) -> RealtimeFeatureInputs:
         self.calls += 1
+        self.last_kwargs = dict(kwargs)
         return self.inputs
 
 
@@ -441,6 +445,40 @@ def test_model_shadow_scores_complete_persisted_candidate_group() -> None:
     assert [item["advisory_model_rank"] for item in result["candidates"]] == [1, 2]
     assert all(item["is_top5"] for item in result["candidates"])
     assert feature_source.calls == 1
+
+
+def test_model_shadow_propagates_validated_canonical_runtime_universe(monkeypatch) -> None:
+    selection_service = _SelectionService()
+    selection_service.run.runtime_config = {"canonical_pit_authority_profile": {"enabled": True}}
+    feature_source = _FeatureSource(_feature_inputs())
+    lease = SimpleNamespace(universe_key="aistock_equity_pit_canonical_v2")
+    monkeypatch.setattr(model_inference, "has_canonical_pit_runtime_profile", lambda _config: True)
+    monkeypatch.setattr(
+        model_inference,
+        "require_canonical_pit_runtime_binding",
+        lambda _config, *, trade_date: lease,
+    )
+    monkeypatch.setattr(
+        model_inference,
+        "require_canonical_pit_generation_current",
+        lambda _config: lease,
+    )
+    service = _shadow_service(
+        program_service=_ProgramService(),
+        selection_service=selection_service,
+        review_source=_ReviewSource(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "EXPERIMENTAL_SHADOW"
+    assert feature_source.last_kwargs["pit_universe_key"] == lease.universe_key
 
 
 def test_model_shadow_attaches_outcome_predictions_from_same_feature_matrix() -> None:

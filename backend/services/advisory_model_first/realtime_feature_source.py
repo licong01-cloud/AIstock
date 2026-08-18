@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from backend.db.pg_pool import get_conn
+from backend.services.canonical_equity_pit import require_canonical_rolling_universe_key
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.fresh_hmm import continue_sector_hmm
 from backend.services.industry_code_map import encode_l2_codes, load_sw_l2_code_map
@@ -152,6 +153,7 @@ class PostgresRealtimeFeatureSource:
         target_trade_date: date,
         continuation_cutoff: date,
         hmm_models: dict[str, Any],
+        pit_universe_key: str | None = None,
     ) -> RealtimeFeatureInputs:
         normalized_symbols = tuple(sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()}))
         if not normalized_symbols:
@@ -280,6 +282,7 @@ class PostgresRealtimeFeatureSource:
                         symbols=normalized_symbols,
                         decision_as_of_trade_date=decision_as_of_trade_date,
                         target_trade_date=target_trade_date,
+                        pit_universe_key=pit_universe_key,
                     )
                 except AdvisoryModelFirstError as exc:
                     LOGGER.warning(
@@ -340,8 +343,13 @@ class PostgresRealtimeFeatureSource:
         symbols: Sequence[str],
         decision_as_of_trade_date: date,
         target_trade_date: date,
+        pit_universe_key: str | None = None,
     ) -> tuple[dict[str, PriceRangeRealtimeContext], tuple[dict[str, Any], ...]]:
-        universe_key = require_live_st_pit_universe_key(DEFAULT_ST_PIT_UNIVERSE_KEY)
+        universe_key = (
+            require_live_st_pit_universe_key(DEFAULT_ST_PIT_UNIVERSE_KEY)
+            if pit_universe_key is None
+            else require_canonical_rolling_universe_key(pit_universe_key)
+        )
         cursor.execute(
             """
             SELECT status, dirty, start_date, end_date

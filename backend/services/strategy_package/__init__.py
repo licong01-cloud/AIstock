@@ -2,7 +2,12 @@
 
 from .components import StrategyPackageComponentService
 from .manifest import compute_manifest_sha256, freeze_manifest
-from .models import StrategyPackageComponentInput, StrategyPackageComponentRecord, StrategyPackageManifest
+from .models import (
+    StrategyPackageCanonicalPitBindingV2,
+    StrategyPackageComponentInput,
+    StrategyPackageComponentRecord,
+    StrategyPackageManifest,
+)
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .runtime_variant import (
     RuntimeVariantKind,
@@ -42,6 +47,7 @@ __all__ = [
     "StrategyPackageComponentRecord",
     "StrategyPackageComponentService",
     "StrategyPackageManifest",
+    "StrategyPackageCanonicalPitBindingV2",
     "StrategyPackageRuntimeVariant",
     "StrategyPackageValidationRun",
     "StrategyPackageValidator",

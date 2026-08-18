@@ -123,7 +123,7 @@ _DECISION_MARK_MARKET_STATE_SQL = """
     ), pit AS (
         SELECT ts_code
         FROM market.stock_universe_pit_spans
-        WHERE universe_key = 'shsz_st_pit_active_v1'
+        WHERE universe_key = %s
           AND eligible_start <= %s
           AND eligible_end >= %s
     )
@@ -1259,7 +1259,20 @@ class _PostgresRequirementResolver(HistoricalRangeSourceRequirementResolver):
                 canonical_json_sha256({"fields": sorted(parameters)}),
             )
         trade_date = date.fromisoformat(str(parameters["trade_date"]))
-        universe_key = str(parameters.get("universe_key") or "shsz_st_pit_active_v1")
+        universe_key = str(parameters.get("universe_key") or "").strip()
+        universe_queries = {
+            "historical_pit_universe_existing_readonly",
+            "historical_st_risk_existing_readonly",
+            "historical_market_history_window",
+            "historical_decision_mark_market_state",
+            "historical_fundamental_moneyflow_window",
+        }
+        if query_id in universe_queries and not universe_key:
+            raise HistoricalRangeSourceInputUnavailable(
+                requirement.missing_reason_code,
+                "historical source requirement has no explicit PIT universe binding",
+                context={"requirement_id": requirement.requirement_id, "query_template_id": query_id},
+            )
         if query_id == "historical_pit_universe_existing_readonly":
             return self._stream_universe(_UNIVERSE_SQL, (universe_key, trade_date, trade_date))
         if query_id == "historical_st_risk_existing_readonly":
@@ -1279,7 +1292,7 @@ class _PostgresRequirementResolver(HistoricalRangeSourceRequirementResolver):
         if query_id == "historical_decision_mark_market_state":
             return self._stream_query(
                 _DECISION_MARK_MARKET_STATE_SQL,
-                (trade_date, trade_date, trade_date, trade_date),
+                (trade_date, universe_key, trade_date, trade_date, trade_date),
             )
         if query_id == "historical_fundamental_moneyflow_window":
             start = date.fromisoformat(str(parameters["start_date"]))
