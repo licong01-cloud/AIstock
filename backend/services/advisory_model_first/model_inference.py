@@ -18,9 +18,14 @@ from backend.services.advisory_model_first.model_bundle import (
     LoadedAdvisoryModelBundle,
     load_exact_shadow_bundle,
 )
+from backend.services.advisory_model_first.meta_label_bundle import (
+    load_exact_meta_label_runtime_bundle,
+    score_meta_label_bundle,
+)
 from backend.services.advisory_model_first.model_binding_resolution import (
     AdvisoryModelBindingResolutionV1,
     AdvisoryModelBindingResolver,
+    META_LABEL_MODEL_ROLE,
 )
 from backend.services.advisory_model_first.outcome_inference import (
     score_outcome_bundle,
@@ -71,6 +76,8 @@ class AdvisoryModelShadowService:
         feature_source: PostgresRealtimeFeatureSource | None = None,
         model_root_provider: Any | None = None,
         bundle_loader: Any = load_exact_shadow_bundle,
+        meta_label_bundle_loader: Any = load_exact_meta_label_runtime_bundle,
+        meta_label_scorer: Any = score_meta_label_bundle,
         outcome_bundle_loader: Any = load_exact_outcome_bundle,
         outcome_scorer: Any = score_outcome_bundle,
         price_range_bundle_loader: Any = load_exact_price_range_bundle,
@@ -85,6 +92,8 @@ class AdvisoryModelShadowService:
             lambda: os.getenv("AISTOCK_ADVISORY_MODEL_ROOT", "").strip()
         )
         self._bundle_loader = bundle_loader
+        self._meta_label_bundle_loader = meta_label_bundle_loader
+        self._meta_label_scorer = meta_label_scorer
         self._outcome_bundle_loader = outcome_bundle_loader
         self._outcome_scorer = outcome_scorer
         self._price_range_bundle_loader = price_range_bundle_loader
@@ -289,13 +298,22 @@ class AdvisoryModelShadowService:
             active_binding=binding,
             selection_run=selection_run,
         )
-        bundle = self._bundle_loader(
-            model_root=model_root,
-            package_id=resolution.package_id,
-            manifest_sha256=resolution.manifest_sha256,
-            style_profile_hash=resolution.style_profile_hash,
-        )
-        _validate_bundle_runtime(bundle, resolution=resolution)
+        is_meta_label = resolution.model_role == META_LABEL_MODEL_ROLE
+        if is_meta_label:
+            bundle = self._meta_label_bundle_loader(
+                model_root=model_root,
+                bundle_id=resolution.bundle_id,
+                bundle_manifest_sha256=resolution.bundle_manifest_sha256,
+            )
+            _validate_meta_label_bundle_runtime(bundle, resolution=resolution)
+        else:
+            bundle = self._bundle_loader(
+                model_root=model_root,
+                package_id=resolution.package_id,
+                manifest_sha256=resolution.manifest_sha256,
+                style_profile_hash=resolution.style_profile_hash,
+            )
+            _validate_bundle_runtime(bundle, resolution=resolution)
         decision_date = _resolve_decision_date(list_version=list_version, selection_run=selection_run)
         if decision_date >= target_trade_date:
             raise AdvisoryModelFirstError(
@@ -306,13 +324,19 @@ class AdvisoryModelShadowService:
                     "target_trade_date": target_trade_date.isoformat(),
                 },
             )
+        if is_meta_label and int(program.target_count) != 20:
+            raise AdvisoryModelFirstError(
+                "meta-label challenger requires the frozen Selection Top20 candidate group",
+                reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
+                context={"program_target_count": int(program.target_count)},
+            )
         candidates = _candidate_frame(
             selection_run.aggregate_results,
             program_id=program_id,
             binding_version_id=binding["binding_version_id"],
             decision_date=decision_date,
             target_trade_date=target_trade_date,
-            target_count=int(program.target_count),
+            target_count=20 if is_meta_label else int(program.target_count),
             bundle=bundle,
             resolution=resolution,
         )
@@ -328,8 +352,10 @@ class AdvisoryModelShadowService:
             symbols=candidates["instrument"].tolist(),
             decision_as_of_trade_date=decision_date,
             target_trade_date=target_trade_date,
-            continuation_cutoff=date.fromisoformat(str(bundle.manifest["continuation_cutoff"])),
-            hmm_models=bundle.hmm_models,
+            continuation_cutoff=date.fromisoformat(
+                str(bundle["continuation_cutoff"] if is_meta_label else bundle.manifest["continuation_cutoff"])
+            ),
+            hmm_models=bundle["hmm_models"] if is_meta_label else bundle.hmm_models,
             **({"pit_universe_key": pit_universe_key} if pit_universe_key is not None else {}),
         )
         built = build_advisory_feature_matrix(
@@ -355,34 +381,49 @@ class AdvisoryModelShadowService:
                 reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
                 context={"candidate_count": len(candidates), "feature_count": len(built.features)},
             )
-        scored = _score(bundle, built.features)
-        outcome = self._outcome_shadow(
-            model_root=model_root,
-            parent_bundle=bundle,
-            features=built.features,
-            scored_candidates=scored,
-            program_id=program_id,
-            target_trade_date=target_trade_date,
-            resolution=resolution,
-        )
-        price_range = self._price_range_shadow(
-            model_root=model_root,
-            parent_bundle=bundle,
-            features=built.features,
-            scored_candidates=scored,
-            outcome=outcome,
-            realtime=realtime,
-            list_items=list_items,
-            review_policy=program.review_policy,
-            review_policy_sha256=program.review_policy_sha256,
-            program_id=program_id,
-            target_trade_date=target_trade_date,
-            resolution=resolution,
-        )
+        if is_meta_label:
+            scored = _meta_label_candidates(
+                self._meta_label_scorer(bundle, built.features),
+                features=built.features,
+            )
+            outcome = unavailable_outcome_envelope(
+                reason_code="ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+                message="meta-label entry-priority challenger does not provide an outcome child model",
+            )
+            price_range = unavailable_price_range_envelope(
+                reason_code="ADVISORY_PRICE_RANGE_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+                message="meta-label entry-priority challenger does not provide a price-range child model",
+            )
+        else:
+            scored = _score(bundle, built.features)
+            outcome = self._outcome_shadow(
+                model_root=model_root,
+                parent_bundle=bundle,
+                features=built.features,
+                scored_candidates=scored,
+                program_id=program_id,
+                target_trade_date=target_trade_date,
+                resolution=resolution,
+            )
+            price_range = self._price_range_shadow(
+                model_root=model_root,
+                parent_bundle=bundle,
+                features=built.features,
+                scored_candidates=scored,
+                outcome=outcome,
+                realtime=realtime,
+                list_items=list_items,
+                review_policy=program.review_policy,
+                review_policy_sha256=program.review_policy_sha256,
+                program_id=program_id,
+                target_trade_date=target_trade_date,
+                resolution=resolution,
+            )
+        manifest = bundle["manifest"] if is_meta_label else bundle.manifest
         shortlist_count = min(5, len(scored))
         return {
             "status": "EXPERIMENTAL_SHADOW",
-            "calibration_state": bundle.manifest["calibration_state"],
+            "calibration_state": manifest["calibration_state"],
             "program_id": program_id,
             "binding_version_id": binding["binding_version_id"],
             "package_id": resolution.package_id,
@@ -390,16 +431,17 @@ class AdvisoryModelShadowService:
             "style_profile_id": resolution.style_profile_id,
             "style_profile_hash": resolution.style_profile_hash,
             "model_descriptor_sha256": resolution.descriptor_sha256,
+            "model_role": resolution.model_role,
             "decision_as_of_trade_date": decision_date.isoformat(),
             "target_trade_date": target_trade_date.isoformat(),
-            "selection_runtime_semantics_hash": bundle.manifest["selection_runtime_semantics_hash"],
-            "model_version": bundle.manifest["request_id"],
-            "bundle_id": bundle.bundle_id,
-            "feature_schema_version": bundle.manifest["feature_schema_version"],
+            "selection_runtime_semantics_hash": resolution.selection_runtime_semantics_hash,
+            "model_version": manifest["request_id"],
+            "bundle_id": resolution.bundle_id,
+            "feature_schema_version": manifest["feature_schema_version"],
             "candidate_count": len(scored),
             "shortlist_count": shortlist_count,
             "candidates": scored,
-            "baselines": bundle.baselines,
+            "baselines": bundle["baselines"] if is_meta_label else bundle.baselines,
             "hmm_unavailable": list(realtime.hmm_unavailable),
             "outcome": outcome,
             "price_range": price_range,
@@ -702,6 +744,47 @@ def validate_frozen_bundle_runtime(
     _validate_bundle_runtime(bundle, resolution=resolution)
 
 
+def _validate_meta_label_bundle_runtime(
+    bundle: Mapping[str, Any],
+    *,
+    resolution: AdvisoryModelBindingResolutionV1,
+) -> None:
+    manifest = bundle.get("manifest")
+    feature_schema = bundle.get("feature_schema")
+    if not isinstance(manifest, Mapping) or not isinstance(feature_schema, Mapping):
+        raise AdvisoryModelFirstError(
+            "meta-label runtime bundle is incomplete",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        )
+    if (
+        resolution.model_role != META_LABEL_MODEL_ROLE
+        or manifest.get("schema_version") != "advisory_meta_label_bundle_v1"
+        or manifest.get("model_role") != META_LABEL_MODEL_ROLE
+        or manifest.get("status") != "EXPERIMENTAL_MODEL"
+        or manifest.get("calibration_state") != "UNCALIBRATED"
+        or manifest.get("program_id") != resolution.program_id
+        or manifest.get("binding_version_id") != resolution.binding_version_id
+        or manifest.get("package_id") != resolution.package_id
+        or manifest.get("manifest_sha256") != resolution.manifest_sha256
+        or manifest.get("style_profile_id") != resolution.style_profile_id
+        or manifest.get("style_profile_hash") != resolution.style_profile_hash
+        or manifest.get("shadow_policy_sha256") != resolution.shadow_policy_sha256
+        or manifest.get("feature_schema_version") != resolution.feature_schema_version
+        or manifest.get("feature_schema_hash") != resolution.feature_schema_hash
+        or manifest.get("bundle_id") != resolution.bundle_id
+        or bundle.get("manifest_file_sha256") != resolution.bundle_manifest_sha256
+        or tuple(feature_schema.get("trained_feature_names") or ()) != tuple(MODEL_FEATURE_COLUMNS)
+        or not _matches_terminal_weights(
+            resolution.terminal_weights,
+            component_roles=resolution.component_roles,
+        )
+    ):
+        raise AdvisoryModelFirstError(
+            "meta-label bundle runtime semantics are incompatible with the Advisory shadow path",
+            reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
+        )
+
+
 def _valid_m5_runtime_policy(bundle: LoadedAdvisoryModelBundle) -> bool:
     manifest = bundle.manifest
     try:
@@ -790,7 +873,7 @@ def _candidate_frame(
     decision_date: date,
     target_trade_date: date,
     target_count: int,
-    bundle: LoadedAdvisoryModelBundle,
+    bundle: Any,
     resolution: AdvisoryModelBindingResolutionV1,
 ) -> pd.DataFrame:
     if target_count < 1 or target_count > 20:
@@ -816,7 +899,11 @@ def _candidate_frame(
             reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
             context={"expected_count": target_count, "actual_count": len(selected), "actual_ranks": actual_ranks},
         )
-    terminal_weights = bundle.manifest.get("terminal_weights") or {}
+    terminal_weights = (
+        resolution.terminal_weights
+        if resolution.model_role == META_LABEL_MODEL_ROLE
+        else bundle.manifest.get("terminal_weights") or {}
+    )
     candidate_group_size = len(selected)
     payloads: list[dict[str, Any]] = []
     component_ids = tuple(resolution.component_roles[role] for role in ("lstm", "fund"))
@@ -968,6 +1055,113 @@ def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[di
     )
 
 
+def _meta_label_candidates(
+    scored: pd.DataFrame,
+    *,
+    features: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    required = {
+        "instrument",
+        "selection_effective_rank",
+        "take_probability",
+        "skip_probability",
+        "advisory_model_confidence",
+        "entry_priority_rank",
+        "selection_exit_rank",
+        "model_status",
+        "calibration_state",
+    }
+    if not isinstance(scored, pd.DataFrame) or not required.issubset(scored):
+        raise AdvisoryModelFirstError(
+            "meta-label scorer output is incomplete",
+            reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
+        )
+    expected = features[["instrument", "selection_effective_rank", "parent_combined_score"]].copy()
+    expected["instrument"] = expected["instrument"].astype(str)
+    actual = scored.copy()
+    actual["instrument"] = actual["instrument"].astype(str)
+    if (
+        len(actual) != len(expected)
+        or actual["instrument"].nunique() != len(actual)
+        or expected["instrument"].nunique() != len(expected)
+        or set(actual["instrument"]) != set(expected["instrument"])
+    ):
+        raise AdvisoryModelFirstError(
+            "meta-label scorer does not preserve the complete candidate group",
+            reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
+        )
+    actual = actual.merge(
+        expected,
+        on="instrument",
+        how="left",
+        validate="one_to_one",
+        suffixes=("", "_expected"),
+    )
+    numeric_columns = (
+        "take_probability",
+        "skip_probability",
+        "advisory_model_confidence",
+        "entry_priority_rank",
+        "selection_effective_rank",
+        "selection_effective_rank_expected",
+        "selection_exit_rank",
+        "parent_combined_score",
+    )
+    try:
+        numeric = {column: pd.to_numeric(actual[column], errors="raise") for column in numeric_columns}
+    except (TypeError, ValueError) as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label scorer output contains an invalid numeric value",
+            reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
+        ) from exc
+    ranks = sorted(int(value) for value in numeric["entry_priority_rank"])
+    if (
+        ranks != list(range(1, len(actual) + 1))
+        or not np.isfinite(np.column_stack([numeric[column] for column in numeric_columns])).all()
+        or not np.allclose(
+            numeric["take_probability"] + numeric["skip_probability"],
+            1.0,
+            rtol=0.0,
+            atol=1e-10,
+        )
+        or ((numeric["take_probability"] < 0.0) | (numeric["take_probability"] > 1.0)).any()
+        or not np.array_equal(
+            numeric["selection_effective_rank"].to_numpy(dtype=int),
+            numeric["selection_effective_rank_expected"].to_numpy(dtype=int),
+        )
+        or not np.array_equal(
+            numeric["selection_exit_rank"].to_numpy(dtype=int),
+            numeric["selection_effective_rank_expected"].to_numpy(dtype=int),
+        )
+        or set(actual["model_status"]) != {"EXPERIMENTAL_MODEL"}
+        or set(actual["calibration_state"]) != {"UNCALIBRATED"}
+    ):
+        raise AdvisoryModelFirstError(
+            "meta-label scorer output violates the frozen entry/exit rank contract",
+            reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
+        )
+    output = [
+        {
+            "symbol": str(row.instrument),
+            "selection_effective_rank": int(row.selection_effective_rank_expected),
+            "selection_exit_rank": int(row.selection_exit_rank),
+            "selection_score": float(row.parent_combined_score),
+            "advisory_model_rank": int(row.entry_priority_rank),
+            "entry_priority_rank": int(row.entry_priority_rank),
+            "advisory_model_score": float(row.take_probability),
+            "take_probability": float(row.take_probability),
+            "skip_probability": float(row.skip_probability),
+            "advisory_model_confidence": float(row.advisory_model_confidence),
+            "model_status": str(row.model_status),
+            "calibration_state": str(row.calibration_state),
+            "is_top5": int(row.entry_priority_rank) <= 5,
+            "top_feature_contributions": [],
+        }
+        for row in actual.itertuples(index=False)
+    ]
+    return sorted(output, key=lambda item: (item["advisory_model_rank"], item["symbol"]))
+
+
 def score_frozen_feature_matrix_from_booster_outputs(
     bundle: LoadedAdvisoryModelBundle,
     features: pd.DataFrame,
@@ -1112,6 +1306,7 @@ def _unavailable_response(
         "selection_runtime_semantics_hash": None,
         "model_version": None,
         "bundle_id": None,
+        "model_role": None,
         "feature_schema_version": None,
         "candidate_count": 0,
         "shortlist_count": 0,

@@ -471,10 +471,13 @@ class AdvisoryForwardService:
             "style_profile_hash": resolution.style_profile_hash,
             "bundle_id": resolution.bundle_id,
             "bundle_manifest_sha256": resolution.bundle_manifest_sha256,
+            "model_role": resolution.model_role,
+            "shadow_policy_sha256": resolution.shadow_policy_sha256,
             "selection_runtime_semantics_hash": resolution.selection_runtime_semantics_hash,
             "feature_schema_version": resolution.feature_schema_version,
             "feature_schema_hash": resolution.feature_schema_hash,
             "component_roles": dict(resolution.component_roles),
+            "terminal_weights": dict(resolution.terminal_weights),
             "descriptor_sha256": resolution.descriptor_sha256,
         }
 

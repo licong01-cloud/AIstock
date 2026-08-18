@@ -5,7 +5,7 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -14,7 +14,10 @@ from backend.services.strategy_package.runtime_variant import canonical_json_sha
 
 
 DESCRIPTOR_SCHEMA_VERSION = "advisory_program_model_binding_v1"
+DESCRIPTOR_SCHEMA_VERSION_V2 = "advisory_program_model_binding_v2"
 CANDIDATE_PROJECTION_SCHEMA_VERSION = "advisory_candidate_projection_v1"
+QUALITY_RERANKER_MODEL_ROLE = "quality_reranker"
+META_LABEL_MODEL_ROLE = "meta_label_take_skip_confidence"
 _DESCRIPTOR_IDENTITY_PATTERNS = {
     "program_id": re.compile(r"^advp_[A-Za-z0-9_-]{1,123}$"),
     "binding_version_id": re.compile(r"^advb_[A-Za-z0-9_-]{1,123}$"),
@@ -36,6 +39,9 @@ class AdvisoryModelBindingResolutionV1:
     bundle_manifest_sha256: str
     component_roles: dict[str, str]
     descriptor_sha256: str
+    model_role: str = QUALITY_RERANKER_MODEL_ROLE
+    shadow_policy_sha256: str | None = None
+    terminal_weights: dict[str, float] = field(default_factory=dict)
 
 
 class AdvisoryModelBindingResolver:
@@ -145,6 +151,13 @@ class AdvisoryModelBindingResolver:
                 context={"program_id": program_id, "binding_version_id": binding_version_id},
             )
         payload = _read_json(Path(normalized_path))
+        schema_version = str(payload.get("schema_version") or "")
+        if schema_version not in {DESCRIPTOR_SCHEMA_VERSION, DESCRIPTOR_SCHEMA_VERSION_V2}:
+            raise AdvisoryModelFirstError(
+                "Advisory model descriptor schema is unsupported",
+                reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+                context={"schema_version": schema_version},
+            )
         required = {
             "schema_version",
             "program_id",
@@ -163,6 +176,8 @@ class AdvisoryModelBindingResolver:
             "created_at",
             "descriptor_sha256",
         }
+        if schema_version == DESCRIPTOR_SCHEMA_VERSION_V2:
+            required.update({"model_role", "shadow_policy_sha256"})
         missing = sorted(required - set(payload))
         if missing:
             raise AdvisoryModelFirstError(
@@ -178,7 +193,7 @@ class AdvisoryModelBindingResolver:
                 reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
             )
         expected_identity = {
-            "schema_version": DESCRIPTOR_SCHEMA_VERSION,
+            "schema_version": schema_version,
             "program_id": program_id,
             "binding_version_id": binding_version_id,
             "package_ids": [package_id],
@@ -197,6 +212,8 @@ class AdvisoryModelBindingResolver:
             "bundle_id",
             "bundle_manifest_sha256",
         )
+        if schema_version == DESCRIPTOR_SCHEMA_VERSION_V2:
+            sha_fields += ("shadow_policy_sha256",)
         if any(not _is_sha256(str(payload.get(field) or "")) for field in sha_fields):
             raise AdvisoryModelFirstError(
                 "Advisory model descriptor contains an invalid content identity",
@@ -220,6 +237,23 @@ class AdvisoryModelBindingResolver:
                 "Advisory candidate projection component roles are invalid",
                 reason_code="ADVISORY_MODEL_CANDIDATE_PROJECTION_UNSUPPORTED",
             )
+        model_role = QUALITY_RERANKER_MODEL_ROLE
+        shadow_policy_sha256: str | None = None
+        terminal_weights: dict[str, float] = {}
+        if schema_version == DESCRIPTOR_SCHEMA_VERSION_V2:
+            model_role = str(payload.get("model_role") or "").strip()
+            if model_role != META_LABEL_MODEL_ROLE:
+                raise AdvisoryModelFirstError(
+                    "Advisory model descriptor declares an unsupported model role",
+                    reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+                    context={"model_role": model_role},
+                )
+            shadow_policy_sha256 = str(payload["shadow_policy_sha256"])
+            terminal_weights = _normalized_terminal_weights(
+                projection.get("terminal_weights"),
+                component_roles=component_roles,
+                reason_code="ADVISORY_MODEL_CANDIDATE_PROJECTION_UNSUPPORTED",
+            )
         return AdvisoryModelBindingResolutionV1(
             program_id=program_id,
             binding_version_id=binding_version_id,
@@ -234,6 +268,9 @@ class AdvisoryModelBindingResolver:
             bundle_manifest_sha256=str(payload["bundle_manifest_sha256"]),
             component_roles=component_roles,
             descriptor_sha256=descriptor_sha256,
+            model_role=model_role,
+            shadow_policy_sha256=shadow_policy_sha256,
+            terminal_weights=terminal_weights,
         )
 
 
@@ -248,6 +285,7 @@ def publish_program_model_descriptor(
             "descriptor_sha256 is derived and cannot be supplied",
             reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
         )
+    schema_version = str(body.get("schema_version") or "")
     required = {
         "schema_version",
         "program_id",
@@ -265,6 +303,8 @@ def publish_program_model_descriptor(
         "candidate_projection",
         "created_at",
     }
+    if schema_version == DESCRIPTOR_SCHEMA_VERSION_V2:
+        required.update({"model_role", "shadow_policy_sha256"})
     missing = sorted(required - set(body))
     if missing:
         raise AdvisoryModelFirstError(
@@ -325,6 +365,7 @@ def _validate_publish_payload(body: Mapping[str, Any]) -> None:
     package_ids = body.get("package_ids")
     projection = body.get("candidate_projection")
     roles = projection.get("component_roles") if isinstance(projection, Mapping) else None
+    schema_version = str(body.get("schema_version") or "")
     sha_fields = (
         "manifest_sha256",
         "style_profile_hash",
@@ -333,8 +374,10 @@ def _validate_publish_payload(body: Mapping[str, Any]) -> None:
         "bundle_id",
         "bundle_manifest_sha256",
     )
+    if schema_version == DESCRIPTOR_SCHEMA_VERSION_V2:
+        sha_fields += ("shadow_policy_sha256",)
     valid = (
-        body.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+        schema_version in {DESCRIPTOR_SCHEMA_VERSION, DESCRIPTOR_SCHEMA_VERSION_V2}
         and bool(str(body.get("program_id") or "").strip())
         and bool(str(body.get("binding_version_id") or "").strip())
         and isinstance(package_ids, list)
@@ -354,6 +397,47 @@ def _validate_publish_payload(body: Mapping[str, Any]) -> None:
             "Advisory Program model descriptor publish payload is invalid",
             reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
         )
+    if schema_version == DESCRIPTOR_SCHEMA_VERSION_V2:
+        if str(body.get("model_role") or "").strip() != META_LABEL_MODEL_ROLE:
+            raise AdvisoryModelFirstError(
+                "Advisory Program model descriptor publish payload has an unsupported model role",
+                reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+            )
+        _normalized_terminal_weights(
+            projection.get("terminal_weights") if isinstance(projection, Mapping) else None,
+            component_roles=normalized_roles,
+            reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+        )
+
+
+def _normalized_terminal_weights(
+    value: Any,
+    *,
+    component_roles: Mapping[str, str],
+    reason_code: str,
+) -> dict[str, float]:
+    component_ids = set(component_roles.values())
+    if not isinstance(value, Mapping) or set(value) != component_ids:
+        raise AdvisoryModelFirstError(
+            "Advisory candidate projection terminal weights are invalid",
+            reason_code=reason_code,
+        )
+    try:
+        normalized = {str(key): float(raw) for key, raw in value.items()}
+    except (TypeError, ValueError) as exc:
+        raise AdvisoryModelFirstError(
+            "Advisory candidate projection terminal weights are invalid",
+            reason_code=reason_code,
+        ) from exc
+    if (
+        any(not (weight > 0.0) for weight in normalized.values())
+        or abs(sum(normalized.values()) - 1.0) > 1e-10
+    ):
+        raise AdvisoryModelFirstError(
+            "Advisory candidate projection terminal weights are invalid",
+            reason_code=reason_code,
+        )
+    return normalized
 
 
 def _read_json(path: Path) -> dict[str, Any]:

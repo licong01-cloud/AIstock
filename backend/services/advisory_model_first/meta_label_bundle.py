@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import tempfile
+from datetime import date
 from math import isfinite
 from pathlib import Path
 from typing import Any, Mapping
@@ -214,9 +215,90 @@ def load_meta_label_bundle(
     return result
 
 
+def load_exact_meta_label_runtime_bundle(
+    *,
+    model_root: str | Path,
+    bundle_id: str,
+    bundle_manifest_sha256: str,
+    load_booster: bool = True,
+) -> dict[str, Any]:
+    """Load one descriptor-selected meta-label bundle without scanning or fallback."""
+
+    if not _is_sha256(bundle_id) or not _is_sha256(bundle_manifest_sha256):
+        raise AdvisoryModelFirstError(
+            "meta-label runtime bundle identity is invalid",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        )
+    root = Path(model_root).resolve()
+    bundle_path = (root / "meta_label_bundles" / bundle_id).resolve()
+    try:
+        bundle_path.relative_to(root)
+    except ValueError as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime bundle escapes its configured root",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        ) from exc
+    manifest_path = bundle_path / "manifest.json"
+    if not manifest_path.is_file() or _sha256(manifest_path) != bundle_manifest_sha256:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime manifest differs from the descriptor identity",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        )
+    loaded = load_meta_label_bundle(
+        bundle_path,
+        expected_bundle_id=bundle_id,
+        load_booster=load_booster,
+    )
+    feature_schema = _read_runtime_json(bundle_path / "feature_schema.json", expected_type=dict)
+    hmm_models = _read_runtime_json(bundle_path / "fresh_hmm_models.json", expected_type=dict)
+    hmm_unavailable = _read_runtime_json(
+        bundle_path / "fresh_hmm_unavailable.json", expected_type=list
+    )
+    baselines = _read_runtime_json(bundle_path / "baseline_comparison.json", expected_type=dict)
+    models = hmm_models.get("models")
+    if hmm_models.get("schema_version") != "fresh_sector_hmm_bundle_v1" or not isinstance(models, Mapping) or not models:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime HMM bundle is invalid",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        )
+    cutoffs = {
+        str(model.get("continuation_cutoff") or "")
+        for model in models.values()
+        if isinstance(model, Mapping)
+    }
+    if len(cutoffs) != 1 or "" in cutoffs or len(models) != sum(
+        isinstance(model, Mapping) for model in models.values()
+    ):
+        raise AdvisoryModelFirstError(
+            "meta-label runtime HMM models do not share one continuation cutoff",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        )
+    continuation_cutoff = next(iter(cutoffs))
+    try:
+        date.fromisoformat(continuation_cutoff)
+    except ValueError as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime HMM continuation cutoff is invalid",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        ) from exc
+    loaded.update(
+        {
+            "feature_schema": feature_schema,
+            "hmm_models": hmm_models,
+            "hmm_unavailable": tuple(hmm_unavailable),
+            "baselines": baselines,
+            "continuation_cutoff": continuation_cutoff,
+            "manifest_file_sha256": bundle_manifest_sha256,
+        }
+    )
+    return loaded
+
+
 def score_meta_label_bundle(bundle: Mapping[str, Any], features: pd.DataFrame) -> pd.DataFrame:
     root = Path(bundle["bundle_path"])
-    schema = json.loads((root / "feature_schema.json").read_text(encoding="utf-8"))
+    schema = bundle.get("feature_schema")
+    if not isinstance(schema, Mapping):
+        schema = json.loads((root / "feature_schema.json").read_text(encoding="utf-8"))
     names = tuple(schema["trained_feature_names"])
     missing = sorted(set(names) - set(features))
     if missing:
@@ -230,8 +312,35 @@ def score_meta_label_bundle(bundle: Mapping[str, Any], features: pd.DataFrame) -
     for column in matrix:
         matrix[column] = pd.to_numeric(matrix[column], errors="coerce")
     for column, values in vocabulary.items():
-        matrix[column] = pd.Categorical(matrix[column], categories=values)
-    probability = bundle["booster"].predict(matrix)
+        numeric = pd.to_numeric(matrix[column], errors="coerce")
+        unseen = numeric.notna() & ~numeric.isin(values)
+        if unseen.any():
+            missing_indicator = f"{column}__missing"
+            if missing_indicator not in matrix:
+                raise AdvisoryModelFirstError(
+                    "meta-label categorical vocabulary has no missing indicator",
+                    reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+                    context={"feature": column},
+                )
+            matrix.loc[unseen, missing_indicator] = 1
+            numeric = numeric.mask(unseen)
+        matrix[column] = pd.Categorical(numeric, categories=values)
+    booster = bundle["booster"]
+    try:
+        if tuple(booster.feature_name()) != names:
+            raise AdvisoryModelFirstError(
+                "meta-label model feature order differs from its frozen schema",
+                reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+            )
+        probability = booster.predict(matrix)
+    except AdvisoryModelFirstError:
+        raise
+    except Exception as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label model scoring failed",
+            reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
+            context={"error_type": type(exc).__name__},
+        ) from exc
     probability = np.asarray(probability, dtype=float)
     if probability.ndim != 1 or len(probability) != len(features):
         raise AdvisoryModelFirstError(
@@ -257,6 +366,28 @@ def score_meta_label_bundle(bundle: Mapping[str, Any], features: pd.DataFrame) -
     output["model_status"] = "EXPERIMENTAL_MODEL"
     output["calibration_state"] = "UNCALIBRATED"
     return output.reset_index(drop=True)
+
+
+def _read_runtime_json(path: Path, *, expected_type: type) -> Any:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime bundle file cannot be read",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+            context={"filename": path.name},
+        ) from exc
+    if not isinstance(payload, expected_type):
+        raise AdvisoryModelFirstError(
+            "meta-label runtime bundle file has an invalid shape",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+            context={"filename": path.name},
+        )
+    return payload
+
+
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 def _write_json(path: Path, payload: Any) -> None:

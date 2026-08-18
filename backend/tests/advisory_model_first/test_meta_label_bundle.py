@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.meta_label_bundle import (
     _stable_hmm_payload,
     find_meta_label_bundle_for_request,
+    load_exact_meta_label_runtime_bundle,
     load_meta_label_bundle,
     publish_meta_label_bundle,
     score_meta_label_bundle,
@@ -31,7 +33,16 @@ def _publish(tmp_path, resource):
         request=request,
         booster=_Booster(),
         feature_schema={"trained_feature_names": ["x"], "categorical_vocabulary": {}},
-        runtime_hmm_models={"models": {}},
+        runtime_hmm_models={
+            "schema_version": "fresh_sector_hmm_bundle_v1",
+            "observation_order": ["sector_return_1"],
+            "models": {
+                "1": {
+                    "schema_version": "fresh_sector_hmm_v1",
+                    "continuation_cutoff": "2026-02-02",
+                }
+            },
+        },
         runtime_hmm_unavailable=[],
         walk_forward_hmm_receipt={"blocks": []},
         trial_metrics=pd.DataFrame({"trial_id": ["a"], "score": [1.0]}),
@@ -87,7 +98,65 @@ def test_meta_label_bundle_exact_request_rejects_multiple_claimants(tmp_path) ->
     assert excinfo.value.reason_code == "ADVISORY_META_LABEL_BUNDLE_INVALID"
 
 
+def test_exact_meta_label_runtime_loader_validates_manifest_and_hmm_cutoff(tmp_path) -> None:
+    bundle_id, path, _ = _publish(tmp_path, 1)
+    manifest_sha256 = hashlib.sha256((path / "manifest.json").read_bytes()).hexdigest()
+
+    loaded = load_exact_meta_label_runtime_bundle(
+        model_root=tmp_path,
+        bundle_id=bundle_id,
+        bundle_manifest_sha256=manifest_sha256,
+        load_booster=False,
+    )
+
+    assert loaded["continuation_cutoff"] == "2026-02-02"
+    assert loaded["manifest_file_sha256"] == manifest_sha256
+    assert loaded["feature_schema"]["trained_feature_names"] == ["x"]
+
+
+def test_exact_meta_label_runtime_loader_rejects_descriptor_manifest_drift(tmp_path) -> None:
+    bundle_id, _, _ = _publish(tmp_path, 1)
+
+    with pytest.raises(AdvisoryModelFirstError) as excinfo:
+        load_exact_meta_label_runtime_bundle(
+            model_root=tmp_path,
+            bundle_id=bundle_id,
+            bundle_manifest_sha256="f" * 64,
+            load_booster=False,
+        )
+
+    assert excinfo.value.reason_code == "ADVISORY_META_LABEL_BUNDLE_INVALID"
+
+
+def test_exact_meta_label_runtime_loader_rejects_bundle_root_symlink_escape(tmp_path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    bundle_id, path, _ = _publish(outside, 1)
+    manifest_sha256 = hashlib.sha256((path / "manifest.json").read_bytes()).hexdigest()
+    model_root = tmp_path / "model-root"
+    model_root.mkdir()
+    try:
+        (model_root / "meta_label_bundles").symlink_to(
+            outside / "meta_label_bundles", target_is_directory=True
+        )
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {type(exc).__name__}")
+
+    with pytest.raises(AdvisoryModelFirstError) as excinfo:
+        load_exact_meta_label_runtime_bundle(
+            model_root=model_root,
+            bundle_id=bundle_id,
+            bundle_manifest_sha256=manifest_sha256,
+            load_booster=False,
+        )
+
+    assert excinfo.value.reason_code == "ADVISORY_META_LABEL_BUNDLE_INVALID"
+
+
 class _InvalidBooster:
+    def feature_name(self):
+        return ["x"]
+
     def predict(self, _matrix):
         return [float("nan")]
 
@@ -109,3 +178,41 @@ def test_meta_label_scorer_rejects_non_finite_probability(tmp_path) -> None:
     with pytest.raises(AdvisoryModelFirstError) as excinfo:
         score_meta_label_bundle(bundle, features)
     assert excinfo.value.reason_code == "ADVISORY_META_LABEL_SCORING_INVALID"
+
+
+class _InspectingBooster:
+    def __init__(self) -> None:
+        self.matrix = None
+
+    def feature_name(self):
+        return ["l2_code_id", "l2_code_id__missing"]
+
+    def predict(self, matrix):
+        self.matrix = matrix.copy()
+        return [0.6]
+
+
+def test_meta_label_scorer_marks_unseen_category_missing_instead_of_silent_nan(tmp_path) -> None:
+    (tmp_path / "feature_schema.json").write_text(
+        '{"trained_feature_names":["l2_code_id","l2_code_id__missing"],'
+        '"categorical_vocabulary":{"l2_code_id":[1,2]}}',
+        encoding="utf-8",
+    )
+    booster = _InspectingBooster()
+    bundle = {"bundle_path": tmp_path, "booster": booster}
+    features = pd.DataFrame(
+        {
+            "decision_as_of_trade_date": ["2026-01-01"],
+            "target_trade_date": ["2026-01-02"],
+            "instrument": ["000001.SZ"],
+            "selection_effective_rank": [1],
+            "l2_code_id": [999],
+            "l2_code_id__missing": [0],
+        }
+    )
+
+    scored = score_meta_label_bundle(bundle, features)
+
+    assert scored.iloc[0]["take_probability"] == pytest.approx(0.6)
+    assert pd.isna(booster.matrix["l2_code_id"].iloc[0])
+    assert booster.matrix["l2_code_id__missing"].iloc[0] == 1
