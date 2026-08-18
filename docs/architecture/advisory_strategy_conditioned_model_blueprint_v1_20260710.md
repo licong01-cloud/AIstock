@@ -1,16 +1,16 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.1
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.2
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-16
+> 修订日期：2026-08-18
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0A_P0D_SOURCE_COMPLETE_REAL_META_LABEL_TRAINED_PENDING_MERGES_AND_FORWARD_ACTIVATION`
-> 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；但只完成固定历史日期的按需影子推理，尚未形成任何每日 `PUBLISHED` 推荐、前向模型 observation 或持仓 episode。因此不再用 `4/5 = 80%` 表示总体可用进度
-> 当前源码/运行时：M0-M5C 源码均已进入 `main`；PR #3346 已于 2026-08-12 squash 合入为 `034ccd36dd94441ec8c0fe0f94010d6874b8b799`。M2/M3/M4 仅对目标多 Alpha Program 的 `decision=2026-07-15 / target=2026-07-16` 完成按需 GET readback；这不是每日发布或前向运行验证
-> 当前生产前向状态：两个 Program 自 2026-07-17 为 `ENABLED` 且配置 `daily_after_close`，但截至 2026-08-12 均为 `last_review_trade_date=null`、`entered_episode_count=0`、`active_count=0`、`metric_status=NO_EPISODES`、无 `PUBLISHED` list version；现有 `2026-07-16` 记录均为 `REPLAY`
-> 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`，仅为未激活 experimental challenger
-> 演进方向：先建立无资金、无下单的每日前向发布与 champion/challenger 跟踪，再把纯 Top20 重排主线调整为 policy-aligned meta-label `take/skip/confidence`；CPCV/PBO、自适应 conformal 和跨包共享均为结果驱动的研究方法，不是新增审批或运行门禁
-> 历史验证执行方向：用户已明确批准 H0，将历史回放从“逐日独立进程/工作区”改为批量执行形态；实盘仍每日单日运行，两者共享同一逐日业务语义、PIT 截止和结果合同。H0 不成为模型训练、前向发布或当前 A/B/C 结果闭合的前置条件
-> 当前双轨目标：模型主线继续使用已有 QE H5/Parquet/Qlib Bin 与预测 PKL 完成真实模型及前向证据；历史验证线在当前 v6 golden baseline 冻结后，实施单日实盘/历史批量同核执行优化
+> 当前状态：`P0A_P0D_SOURCE_MERGED_FORWARD_RUNNING_GOLDEN_FROZEN_H0_IMPLEMENTATION_READY`
+> 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。模型 observation 已持久化，但 P0-D exact bundle 尚未写入 runtime descriptor，成熟 future OOS 仍未形成，因此不把当前 open mark 胜率描述为成熟模型胜率
+> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D 源码均已进入 `main`；P0-D PR #3368 于 2026-08-13 合入 `458199cd902323e006ac23d3767c908637068fa8`。当前 backend-main 健康运行在 `9a7a2718026f6d62f218fbe09d8b82f3d697b6c3`，包含上述源码；P0-D bundle 仍为 `EXPERIMENTAL_MODEL/UNCALIBRATED/NOT_ACTIVATED`
+> 当前生产前向状态：截至 2026-08-18 02:14，每个 Program 均有 `decision=2026-08-13/14/17` 三个 `PUBLISHED` run；target `2026-08-14/17` 已 `SETTLED`，各 Program `entered_episode_count=20`、`active_count=20`、`metric_status=READY`。target `2026-08-18` 在开盘前正确保持 `WAITING_DATA/DATA_UNAVAILABLE`，不是运行失败
+> 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`。源码合入不等于 descriptor 接入或 bundle 激活
+> 演进方向：下一步先把 P0-D exact experimental bundle 接入独立 challenger descriptor，同时保持 baseline、Selection rank 和正式 Program policy 不变；自然 future OOS 继续积累，不用 open mark 或冻结历史 test 冒充成熟胜率
+> 历史验证执行方向：44 日 A/B/C v6 golden 已冻结，结果 hash 为 `500d96e08ca8504e892578d933098d4bf44cc0614b8431f128475b0c6fbae7d9`。H0 可以进入独立实现，但必须先关闭会污染等价基线的 Historical Range 正确性 BUG，再将历史回放从逐日独立进程/工作区改为批量形态
+> 当前双轨目标：模型/前向线完成 P0-D challenger 接入并等待自然成熟；历史验证线以冻结 v6 为不可变 oracle，完成正确性 BUG 后实施单日实盘/历史批量同核执行优化
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
 ## 0. 权威边界与本次纠偏
@@ -19,7 +19,7 @@
 
 本次修订纠正过去近三周的严重优先级偏移：此前开发把 Phase 1R 历史范围任务、Source Catalog、逐窗口哈希、capture/build/SEALED、CAS、lease/fencing、source revision、历史固化和完整证据链放在模型训练之前，导致真实模型和用户可见荐股能力均未实现。该顺序自本修订起废止。
 
-M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。自 v3.1 起，后续工作分为互不阻断的模型/前向主线和历史验证执行线：
+M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。自2026-08-16优先级纠偏起，后续工作分为互不阻断的模型/前向主线和历史验证执行线：
 
 1. P0-A 建立每天自然向前运行的 baseline publish、challenger observation 和 episode 跟踪，不回填旧日期。
 2. P0-B 同期解除单一目标常量，用 Program active binding 动态解析 exact bundle。
@@ -54,8 +54,8 @@ H0 的权威详细设计为
 - A/B 仅在 raw-affecting identity 完全相同时共享不可变 raw Alpha artifact，之后分别执行各自增强逻辑。
 - source validation 从“每日两次全量扫描”改为批次 seal、chunk token、逐日读 receipt 和异常 full rehash；日期 cutoff、availability、source revision 和未来毒化测试不得削弱。
 
-该授权不包含当前 v6 运行中热改代码、不包含把历史批量结果写入实盘 binding、不包含多进程并发提速承诺，
-也不包含通用缓存平台、通用回测引擎或生产调度平台。当前 v6 必须先按原 code-release 完成并冻结 golden evidence。
+该授权不包含修改、覆盖或回写已冻结v6代码身份/结果，不包含把历史批量结果写入实盘binding，也不包含多进程并发提速承诺，
+更不包含通用缓存平台、通用回测引擎或生产调度平台。已冻结v6保持原code-release和golden evidence只读。
 
 ### 0.2 从属设计处置
 
@@ -80,16 +80,16 @@ H0 的权威详细设计为
 
 长期趋势策略另行完成长期重排、生存、time-to-hit 和大行情捕获模型，不阻断短反弹主线。
 
-截至 2026-08-12：
+截至 2026-08-18：
 
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
 | SHORT_REBOUND Top20→Top5 | `PURE_RERANKER_RESEARCH_COMPLETE_NOT_ACTIVATED` | M5A 已完成 45 个 booster 和一次冻结 test；winner 平均 5 日超额收益 `0.0071894`，低于 selection rank 的 `0.0085591`，95% block-bootstrap lift 区间跨 0。纯重排保留为历史基线，不再是唯一质量主线 |
 | 预期收益与持股周期 | `M5B_REAL_CALIBRATION_COMPLETE_NOT_ACTIVATED` | 最终 request `advoutcal_ec16422ad1a97040583e5273` 生成 v2 bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533` 并通过 exact retry；8/10 binary head 可校准、2 个五日 head 因排序反转明确保持 `UNCALIBRATED`，逐 head solver/版本/迭代/收敛证据完整，holding 仍独立 `UNCALIBRATED`。冻结 test 未显示足以支持激活的校准改善，现行 M3 v1 binding 保持不变 |
 | 买入/止盈/止损区间 | `M4_POINT_INFERENCE_VERIFIED` | 四头真实模型、decision-cutoff 未复权投影、dividend PIT 输入、exact binding 和风险边界已贯通；目标多 Alpha Program 的固定日期按需 GET 对 20/20 候选返回完整价格范围 |
-| 荐股页面模型展示 | `SOURCE_COMPLETE_POINT_READBACK_VERIFIED` | 页面源码可展示 Top5、五期限收益、概率、MFE/MAE、持股与价格范围；HTTP 和固定历史日期 readback 已验证，但没有每日前向发布数据 |
-| 每日前向发布与 episode | `NOT_IMPLEMENTED_ZERO_FORWARD_DAYS` | 两个 ENABLED Program 均无 review、无 `PUBLISHED` list、无 episode；`daily_after_close` 目前只是配置字段，没有 Advisory 自动执行器 |
-| 多 Program 模型分发 | `TARGET_MULTI_ALPHA_ONLY` | 当前模型服务通过常量绑定一个目标 Program/package/manifest；第二个 ENABLED 单 Alpha Program 明确返回 `MODEL_UNAVAILABLE`，尚未实现按 active binding 动态加载 |
+| 荐股页面模型展示 | `FORWARD_API_AND_PAGE_SOURCE_COMPLETE` | 页面/API 可展示 Top5、五期限收益、概率、MFE/MAE、持股、价格范围和前向状态；当前 runtime 已有真实发布与 episode，但 P0-D challenger 仍未接入 descriptor |
+| 每日前向发布与 episode | `FORWARD_RUNNING_3_PUBLISHED_DAYS_2_SETTLED` | 两个 ENABLED Program 均已对 decision `2026-08-13/14/17` 发布；target `2026-08-14/17` 已结算，各有20个 active episode；target `2026-08-18` 开盘前保持 `WAITING_DATA` |
+| 多 Program 模型分发 | `DYNAMIC_BINDING_VERIFIED_ONE_CONFIGURED_MODEL_PACKAGE` | active binding 动态解析已完成；目标多 Alpha 可解析现有 M1 descriptor，单 Alpha 无 bundle 时基线继续且模型 typed unavailable。P0-D exact bundle 尚未接入 descriptor |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
@@ -102,13 +102,13 @@ H0 的权威详细设计为
 |---|---:|---|
 | 模型组件实现 | `4/4` | Top5、收益/周期、价格范围、页面/API 均有真实模型实现 |
 | 固定日期按需推理 | `TARGET_MULTI_ALPHA_VERIFIED` | 仅目标多 Alpha Program 在 `2026-07-16` 的 persisted replay 上验证；不是生产前向运行 |
-| 每日前向发布 | `0 PUBLISHED DAYS` | 两个 ENABLED Program 均无正式发布日期和 review 状态 |
-| episode 前向跟踪 | `0 EPISODES` | 无 active/closed episode，暂无真正未来 OOS 指标 |
-| 多 Program 模型覆盖 | `1 TARGET PROGRAM` | 单 Alpha Program 尚无动态 bundle；基线荐股不应因此受阻 |
+| 每日前向发布 | `3 PUBLISHED DAYS / PROGRAM` | decision `2026-08-13/14/17` 已发布；前两批 target 已结算，当前 target `2026-08-18` 等待权威开盘数据 |
+| episode 前向跟踪 | `20 ACTIVE / PROGRAM, 0 MATURE MODEL OUTCOMES` | 两个 Program 各有20个 active episode；当前 win rate 是 `OPEN_MARK_TO_MARKET`，不得冒充成熟 future OOS |
+| 多 Program 模型覆盖 | `DYNAMIC RESOLVER, 1 CONFIGURED LEGACY MODEL PACKAGE` | 无 bundle 的单 Alpha typed unavailable不阻断基线；P0-D meta-label descriptor仍待独立接入 |
 | 模型质量升级 | `0/3 建议激活` | M5A、M5B、M5C 都已完成真实冻结 test，但均未满足替换现行基线的研究结论；不是代码失败，也不能冒充质量成功 |
 | 长期趋势模型 | `NOT_STARTED` | 长期趋势原生多 Alpha 父包尚未形成可训练输入 |
 
-PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c0fe0f94010d6874b8b799`。M5C bundle 未激活，M4 v1 price-range binding 保持不变；源码合入不等于 bundle 激活、每日发布或前向验证。
+PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c0fe0f94010d6874b8b799`；P0-D PR #3368 已于 2026-08-13 合入 `458199cd902323e006ac23d3767c908637068fa8`。M5C 与 P0-D bundle 均未激活，M4 v1 price-range binding 保持不变；源码合入、descriptor 接入、运行时加载和 bundle 激活继续分别报告。
 
 ### 1.2 真实训练与实验数据总表
 
@@ -123,9 +123,10 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 | M5A Top5 tournament | train request `advm5train_a64594d6f22f618a4afef84a`；test request `advm5test_818fe5a6c8ee323d2fbf25d4`；bundle `1757b24b854f8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb` | 45 trials、37 candidates；winner 为 5-seed `EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`；test 400 个 Top5/80 日 | tournament 18.925 秒、RSS 409,169,920 bytes；test 2.131 秒、RSS 342,462,464 bytes | winner 5日平均超额 `0.0071894`、命中率 `0.5425`、NDCG@5 `0.34150`；selection rank 为 `0.0085591`、`0.5375`、`0.32399`；均值 lift `-0.0013696`，95% block-bootstrap `[-0.0093061, 0.0053392]` | 相比 M1/HMM/随机有改善，但未证明超过现行 selection rank，不激活 |
 | M5B outcome calibration | request `advoutcal_ec16422ad1a97040583e5273`；bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533` | validation 940 feature-covered/1000 labels；test 1600/1600；8/10 binary heads calibrated，2 个 h5 heads 因 order reversal 保持 raw | 11.659 秒；RSS 399,200,256 bytes | 8 个 calibrated binary head 的 test Brier/logloss/ECE 均未优于 raw；收益区间名义 coverage 平均绝对偏差 `0.00984 -> 0.03129`；path upper `0.01432 -> 0.01394` | artifact 完整、exact retry 一致，但总体质量不支持激活；M3 v1 binding 不变 |
 | M5C entry-gap calibration | request `advprcal_7cb766fe38898e12a008a328`；bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead` | validation 940 feature-covered/1000 eligible；test 1599/1599；central-80 CQR | 2.679 秒；RSS 395,853,824 bytes | validation coverage `0.810638` 导致 `delta=0`；test raw/calibrated coverage 均 `0.727955`，mean width 均 `0.0122280` | 全局常数校准无法修正 validation→test 漂移，`activation_recommended=false`；源码已合入但不激活 |
-| 生产前向基线 | 两个 ENABLED Program；各有一条 `decision=2026-08-13 / target=2026-08-14` 的真实 PUBLISHED forward run | `PUBLISHED=2`；多 Alpha model=`EXPERIMENTAL_SHADOW`；单 Alpha model=`UNAVAILABLE` | scheduler 300 秒轮询；当前运行态已启用 | 2026-08-14 00:17 target-open 尚无权威价格，两条 settlement 均为 `WAITING_DATA/DATA_UNAVAILABLE` | 前向发布闭环已开始；target-open episode 与成熟 forward outcome 仍待自然数据，不伪造结果 |
+| 生产前向基线 | 两个 ENABLED Program；各有 `decision=2026-08-13/14/17` 三条真实 PUBLISHED forward run | `PUBLISHED=6`；target `2026-08-14/17` 共4条已SETTLED；每个Program 20个active episode | scheduler 300 秒轮询；2026-08-18 02:14 configured/running/thread_alive均true、last_error=null | 当前两个Program `latest_review_trade_date=2026-08-17`；open-mark metric为READY，但尚无成熟model outcome；target `2026-08-18` 开盘前两条均WAITING_DATA | 每日发布、target-open和episode闭环已验证；继续自然积累，open mark不冒充成熟胜率 |
 | P0-C policy dataset | bundle `81e2c9bac5ce1f8e2fdc5a6174bc948dfbe984cf5028726c89ea72eb59fc69bd` | 386 candidate days；7,720 candidates；7,716 matured labels；28/28 READY CPCV paths | 28.9 秒；RSS 1.72GB | take 4,199 / skip 3,517；holding median 6 days；Selection rank buckets 均约 54% take rate | policy-aligned 标签和评价输入已完成；PR #3367 已合入 `49973d6e` |
-| P0-D meta-label | final-source request v2 `advmetareq_0451bd4cb1f8cc7add8b9956`；bundle `e555903ec928fd39ea09180133401a6490a4e6d5440e3ef63642909e1329e03a` | 2 families × 3 seeds × 28 paths = 168；winner `FAMILY_CORE_HMM/20260817` | 332.182 秒；RSS 2.91GB；exact retry 3.529 秒；与旧 bundle 12/12 功能 identity hashes 一致 | winner `19.4357 bps` vs Selection `15.7801 bps`，lift `+3.6556 bps`，path win rate `64.29%`，PBO `0.40`，AUC `0.5142` | 最终源码已重训，保持 `EXPERIMENTAL_MODEL/UNCALIBRATED/NOT_ACTIVATED`；PR #3368 等待最终CI/合入 |
+| P0-D meta-label | final-source request v2 `advmetareq_0451bd4cb1f8cc7add8b9956`；bundle `e555903ec928fd39ea09180133401a6490a4e6d5440e3ef63642909e1329e03a` | 2 families × 3 seeds × 28 paths = 168；winner `FAMILY_CORE_HMM/20260817` | 332.182 秒；RSS 2.91GB；exact retry 3.529 秒；与旧 bundle 12/12 功能 identity hashes 一致 | winner `19.4357 bps` vs Selection `15.7801 bps`，lift `+3.6556 bps`，path win rate `64.29%`，PBO `0.40`，AUC `0.5142` | PR #3368 已合入 `458199cd`；保持 `EXPERIMENTAL_MODEL/UNCALIBRATED/NOT_ACTIVATED`，尚无runtime descriptor，不自动替换baseline |
+| H0 v6 golden | report `docs/analysis/advisory_historical_fullstack_comparison_result_20260817.md`；artifact `F:/Dev/AIstock_model_artifacts/advisory_fullstack_comparison_configfix_20260817/comparison_result_v6.json` | 44个decision dates，`2026-05-15..2026-07-16`；A/B/C三臂；C修复后独立重跑44/44 | result hash `500d96e0...`；contract hash `652eef96...`；artifact file SHA256 `9c59219d...` | HMM和M5A均在44/44日改变排名；修复前后C逐日artifact hash 44/44一致；完整收益/episode/市场切片已冻结 | PR #3558 已合入 `1d1fc932`；作为H0不可变行为oracle，不回写或重算旧run |
 
 ### 1.3 方向一致性复核
 
@@ -136,9 +137,9 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 - Selection、StrategyPackage、Paper、模拟盘和 QE 资产业务逻辑未被 M5C 修改；模型失败或未激活不阻断现有荐股基线。
 - 没有新增角色、审批、二次策略包准入、ModelOps、历史补账、旧 batch/root 处理或通用缓存平台；H0 是用户明确批准的现有历史验证执行优化，不改变该边界。
 - 真实负面实验结果均保留，没有把 artifact 发布、源码合入或 API 可返回误写为模型效果成功。
-- 当前模型推理是独立 GET 侧路，并由静态 target binding 限定单一 Program；Program review 不消费模型 Top5，`daily_after_close` 也没有执行器。这两项是待实现功能，不再描述为已完成的“策略条件化运行时”。
+- 当前每日执行器和 active-binding 动态解析已经运行；Program review 仍不消费模型 Top5，P0-D bundle也未接入descriptor。当前模型通道的unavailable/legacy descriptor状态与baseline发布分离，不能把前向基线episode或open mark指标记作P0-D效果。
 
-模型/前向主线的最小必要架构工作仍是每日前向发布/episode 跟踪，以及按 Program active binding 动态解析 bundle。它们直接产生模型未来质量证据。与其并列的 H0 只优化已授权历史验证的执行形态，不能阻塞或替代前向主线。模型方向同时从纯重排转向 policy-aligned meta-label；M5A/M5B/M5C 暴露的 selection-prior、分布漂移和近乎单类标签问题作为对照事实保留。
+模型/前向主线的最小剩余工作是把P0-D exact bundle接入独立challenger descriptor并继续自然积累成熟future OOS；每日发布、target-open episode和动态binding本身已关闭功能缺口。与其并列的H0只优化已授权历史验证执行形态，且必须先关闭会污染等价oracle的Historical Range正确性BUG。模型方向继续使用policy-aligned meta-label；M5A/M5B/M5C暴露的selection-prior、分布漂移和近乎单类标签问题作为对照事实保留。
 
 ## 2. Scope / 当前实施范围
 
@@ -548,7 +549,9 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW`。
 
-状态：`SOURCE_MERGED_RUNTIME_PUBLISHED_TARGET_OPEN_WAITING_DATA`。
+状态：`SOURCE_MERGED_RUNTIME_PUBLISH_AND_SETTLEMENT_VERIFIED_FORWARD_ACCUMULATING`。
+
+运行时证据：两个ENABLED Program均有decision `2026-08-13/14/17` 的PUBLISHED run；target `2026-08-14/17` 已SETTLED并各形成20个active episode。target `2026-08-18` 在开盘前保持WAITING_DATA，继续按同一时钟自然结算。
 
 任务列表：
 
@@ -565,7 +568,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW_PARALLEL_WITH_P0_A`。
 
-状态：`SOURCE_MERGED_DYNAMIC_BINDING_RUNTIME_READBACK_VERIFIED`。
+状态：`SOURCE_MERGED_DYNAMIC_BINDING_RUNTIME_FORWARD_VERIFIED`。
 
 任务列表：
 
@@ -598,7 +601,9 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_AFTER_P0_C`。
 
-状态：`SOURCE_AND_REAL_WSL_EXPERIMENT_REATTESTED_PENDING_MERGE_NOT_ACTIVATED`。
+状态：`SOURCE_MERGED_REAL_WSL_EXPERIMENT_REATTESTED_DESCRIPTOR_PENDING_NOT_ACTIVATED`。
+
+PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`。该状态只关闭源码与真实WSL实验；bundle尚未写入Program exact descriptor，现有baseline和旧model descriptor均未被P0-D替换。
 
 任务列表：
 
@@ -614,14 +619,14 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`H0_AFTER_CURRENT_V6_GOLDEN_FREEZE_PARALLEL_WITH_FORWARD_MATURITY`。
 
-状态：`USER_APPROVED_F2_DETAILED_DESIGN_READY_IMPLEMENTATION_NOT_STARTED`。
+状态：`USER_APPROVED_GOLDEN_FROZEN_IMPLEMENTATION_READY_NOT_STARTED`。
 
 详细设计：
 `docs/architecture/advisory_live_daily_historical_batch_shared_kernel_f2_detailed_design_20260816.md`。
 
 任务列表：
 
-1. 以当前44日 A/B/C 回放的冻结输入、逐日业务产物和性能收据作为 golden baseline；当前 v6 未完成前不得热改其 code-release。
+1. 以已完成44日A/B/C回放的冻结输入、逐日业务产物和可用性能收据作为golden baseline；不得修改、覆盖或回写其code-release和旧run。
 2. 将实盘单日和历史批量执行器收敛到唯一的日信号、Selection/HMM/risk/tradability 与 list transition 业务组合，禁止复制回测专用选股算法。
 3. 历史执行采用持久 worker 和默认5日 chunk；静态工作区按内容 identity 复用，日期动态目录、PIT 视图、结果和 checkpoint 逐日隔离。
 4. 批量读取必须通过 `AdvisoryPITAsOfViewV1` 向日内核授权；增加未来行/未来修订毒化测试，证明较早日期语义 hash 不变。
@@ -720,7 +725,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-146 | 每个历史交易日独立artifact、typed failure和checkpoint；raw可预计算，顺序相关的list/episode transition在首个未完成日停止并exact resume |
 | F-147 | 当前v6冻结为golden baseline；代表日和完整窗口以业务语义hash验证batch与single-day等价，运行信封字段单独比较 |
 | F-148 | 首版使用单持久worker和默认5日chunk，先验证内存/I/O/恢复再评估并发；并发不是业务完成或性能验收的替代 |
-| F-149 | H0不修改实盘binding、Program发布语义、策略包状态、Selection/Paper/QMT，也不在当前v6运行中热改code-release |
+| F-149 | H0不修改实盘binding、Program发布语义、策略包状态、Selection/Paper/QMT，也不修改、覆盖或回写已冻结v6的code-release与结果 |
 | F-150 | 性能receipt分解workspace/source/raw/overlay/publish耗时、I/O、RSS和cache hit；目标未达不得删减PIT、typed failure或业务逻辑 |
 
 ## 11. Design Acceptance Matrix
@@ -741,7 +746,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-112 | Advisory-only model-first modules | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `backend/tests/advisory_model_first/test_price_range_boundaries.py` | implemented_verified | none |
 | F-113 | blueprint §§3,14 and model-first error contracts | artifact: `docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`; F2 validator receipts | implemented_verified | none |
 | F-114 | model-first import and changed-file boundaries | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `backend/tests/advisory_model_first/test_price_range_boundaries.py` | implemented_verified | none |
-| F-115 | blueprint 分层进度 ledger | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`; validation-receipt: runtime API current-state 2026-08-12 | APPROVED_BY_USER_CURRENT_TRUTH_VERIFIED | none |
+| F-115 | blueprint 分层进度 ledger | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`; runtime API/DB-backed readback 2026-08-18；v6 report/result identities | APPROVED_BY_USER_CURRENT_TRUTH_REFRESHED_20260818 | none |
 | F-116 | `candidate_group.py`, `prediction_source.py`, `qe_file_source.py` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; artifact: M1 406-date/8120-row request | implemented_verified | none |
 | F-117 | Qlib daily/limit fields and price-range labels | `backend/tests/advisory_model_first/test_labels.py`; `backend/tests/advisory_model_first/test_price_range_labels.py` | implemented_verified | none |
 | F-118 | `fresh_hmm.py` | `backend/tests/advisory_model_first/test_fresh_hmm.py`; artifact: M1 `fresh_hmm_models.json` | implemented_verified | none |
@@ -760,20 +765,20 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-131 | policy-aligned meta-label take/skip/confidence | `backend/tests/advisory_model_first/test_meta_label_training.py`; `backend/tests/advisory_model_first/test_meta_label_bundle.py`; artifact: final-source bundle `e555903e...` | implemented_real_wsl_verified_experimental_not_activated | none |
 | F-132 | `AdvisoryPolicyEpisodeLabelV1` + existing review transition semantics | `backend/tests/advisory_model_first/test_policy_episode_labels.py`; `backend/tests/advisory_model_first/test_policy_dataset_bundle.py`; artifact: P0-C bundle `81e2c9ba...` | implemented_real_file_dataset_verified | none |
 | F-133 | purged rolling/CPCV + PBO/equivalent report | `backend/tests/advisory_model_first/test_policy_cpcv.py`; `backend/tests/advisory_model_first/test_policy_pbo.py`; artifact: P0-C 28 paths and P0-D 168 trial-path rows/70 PBO partitions | implemented_real_cpcv_pbo_verified | none |
-| F-134 | daily forward observations and matured policy episodes | `backend/tests/advisory_model_first/test_forward_publication.py`; `backend/tests/advisory_model_first/test_forward_postgres.py`; artifact: 2026-08-14 forward observations with maturity date 2026-09-11 | APPROVED_BY_USER_FORWARD_EVIDENCE_IMMATURE | approved_by_user: wait for natural episode/outcome maturity and do not backfill |
+| F-134 | daily forward observations and matured policy episodes | `backend/tests/advisory_model_first/test_forward_publication.py`; `backend/tests/advisory_model_first/test_forward_postgres.py`; runtime: eachProgram 3 PUBLISHED runs, 2 SETTLED target dates and 20 active episodes as of 2026-08-18 | APPROVED_BY_USER_FORWARD_RUNNING_EVIDENCE_IMMATURE | approved_by_user: wait for natural model episode/outcome maturity; current OPEN_MARK_TO_MARKET metrics are not mature OOS and are not backfilled |
 | F-135 | rolling/adaptive calibration matched study | `backend/tests/advisory_model_first/test_adaptive_calibration.py` (target path) | APPROVED_BY_USER_P1A_DESIGN_READY_WAITING_NATURAL_FORWARD_LABELS | none |
 | F-136 | compatible-set pooled/multi-task experiment | `backend/tests/advisory_model_first/test_strategy_conditioned_pooling.py` (target path) | APPROVED_BY_USER_P1B_DIRECTION_READY_WAITING_COMPATIBLE_PACKAGE_DATA | none |
 | F-137 | Advisory-only forward boundaries | `backend/tests/advisory_model_first/test_forward_boundaries.py`; `backend/tests/advisory_model_first/test_meta_label_boundaries.py`; artifact: Advisory forward boundary readback | implemented_runtime_boundary_verified | none |
 | F-138 | P0-C Top40/held-symbol rank reconstruction | `backend/tests/advisory_model_first/test_policy_rank_source.py`; artifact: P0-C `candidate_rankings.parquet` | implemented_real_file_reconstruction_verified | none |
 | F-139 | candidate meta-label evaluator + shadow portfolio policy simulator | `backend/tests/advisory_model_first/test_policy_episode_labels.py`; `backend/tests/advisory_model_first/test_shadow_portfolio_policy.py`; artifact: P0-D matched baseline report | implemented_real_policy_simulation_verified_not_activated | none |
-| F-140 | after-close publication and target-open episode clock | `backend/tests/advisory_model_first/test_forward_date_clock.py`; `backend/tests/advisory_model_first/test_forward_recovery.py`; artifact: decision 2026-08-13 / target 2026-08-14 persisted forward runs | APPROVED_BY_USER_LIVE_DATE_CLOCK_VERIFIED_TARGET_OPEN_WAITING_DATA | approved_by_user: no target-open fallback; runtime settlement is a separate natural-data state |
+| F-140 | after-close publication and target-open episode clock | `backend/tests/advisory_model_first/test_forward_date_clock.py`; `backend/tests/advisory_model_first/test_forward_recovery.py`; runtime: target 2026-08-14/17 SETTLED, target 2026-08-18 pre-open WAITING_DATA | APPROVED_BY_USER_RUNTIME_TARGET_OPEN_SETTLEMENT_VERIFIED | approved_by_user: no target-open fallback; each future target remains WAITING_DATA until authoritative open arrives |
 | F-141 | H0 shared day business composition + two executors | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-142 | `AdvisoryPITAsOfViewV1` + historical batch source | `backend/tests/advisory_execution/test_pit_asof_view.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-143 | content-addressed runtime workspace session | `backend/tests/strategy_package/test_runtime_workspace_session.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-144 | immutable raw Alpha day artifact reuse | `backend/tests/advisory_historical_range/test_raw_alpha_reuse.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-145 | batch/chunk/day source validation policy | `backend/tests/advisory_historical_range/test_batch_source_validation.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-146 | day checkpoint + ordered list transition recovery | `backend/tests/advisory_historical_range/test_batch_recovery.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
-| F-147 | semantic hash oracle + current v6 golden receipt | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path); artifact: current v6 frozen comparison receipt | APPROVED_BY_USER_DESIGN_READY | none |
+| F-147 | semantic hash oracle + current v6 golden receipt | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path); report `docs/analysis/advisory_historical_fullstack_comparison_result_20260817.md`; artifact `comparison_result_v6.json`, result hash `500d96e0...`, contract `652eef96...`, 44 dates | APPROVED_BY_USER_GOLDEN_FROZEN_IMPLEMENTATION_ORACLE_READY | approved_by_user: batch semantic normalization and parity implementation remain pending |
 | F-148 | single-worker chunk policy + resource receipt | `backend/tests/advisory_historical_range/test_batch_resource_policy.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-149 | execution boundary and no-live-activation assertions | `backend/tests/advisory_execution/test_execution_boundaries.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-150 | stage telemetry and performance report | `backend/tests/advisory_historical_range/test_batch_telemetry.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
@@ -816,7 +821,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 ### 12.4 H0 单日/批量等价与性能验证
 
-- 先冻结当前 v6 的 package/manifest/code-release/source catalog/date plan、逐日 raw/candidate/list/outcome 语义和阶段耗时，作为不可变 golden evidence。
+- 使用已冻结v6的package/manifest/code-release/source catalog/date plan、逐日raw/candidate/list/outcome语义和可用阶段耗时，作为不可变golden evidence。
 - 单交易日分别经现有 single-day 路径与新 batch size=1 路径执行；候选、分数、rank、stage trace、source refs、名单动作和业务语义 hash 必须一致。
 - 代表日覆盖5月/6月/7月、ST、停牌、行业映射缺失、HMM排除、无候选和模型特征缺失；再对完整44日窗口比较逐日语义。
 - 在 D+1 及以后数据中注入价格、行业、ST、HMM或修订变化，D 日结果必须不变；绕过 `AsOfDataView` 的直接 batch frame 访问测试必须失败。
@@ -840,14 +845,14 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 下一阶段发布顺序固定为：
 
-1. 完成 P0-A/P0-B 详细设计，复用现有 review/list/episode，确定 challenger 最小持久化和动态 bundle 解析。
-2. 合入 P0-A/P0-B 源码；若需要最小 DDL，遵守 DEV-first 和生产具体授权，不扩大为通用平台。
-3. 用户单独重启后，对两个 ENABLED Program 执行一个交易日的真实发布 readback，随后由日调度自然积累。
-4. 并行完成 P0-C file-based policy episode 标签和 purged rolling/CPCV 评价。
-5. 在 WSL 训练 P0-D meta-label bundle，先进入 challenger 前向发布，不自动替换 baseline。
-6. 完成当前 v6 A/B/C、outcome和报告，冻结逐日业务/性能 golden evidence；H0 不回写或重算该批次。
-7. 在独立后续 revision 实施 H0，先通过 batch size=1 与代表日等价，再运行完整窗口和性能基准；任何语义修订创建新 identity。
-8. 前向标签成熟后再运行 P1-A；兼容策略包具备独立 bundle 后再运行 P1-B。H0 可在等待自然标签期间推进，但不得阻断模型主线。
+1. `COMPLETED`：P0-A/P0-B 详细设计、源码、真实发布和动态 bundle 解析已完成。
+2. `COMPLETED`：用户重启后的两个 ENABLED Program 真实发布、target-open settlement和episode readback已完成；后续由日调度自然积累。
+3. `COMPLETED`：P0-C file-based policy episode标签与purged rolling/CPCV评价已合入。
+4. `SOURCE_MERGED_RUNTIME_DESCRIPTOR_PENDING`：P0-D meta-label bundle已真实训练并合入源码；下一步仅以独立experimental descriptor接入challenger，不自动替换baseline。
+5. `COMPLETED_GOLDEN_FROZEN`：v6 A/B/C、outcome、统计和报告已完成；44日逐日结果是H0不可变oracle，不回写或重算。
+6. `NEXT_CORRECTNESS_FIRST`：先关闭仍会改变Historical Range候选、day terminal receipt、outcome timeline/hash或父子lease语义的P1 BUG，再实施H0，避免用批量拓扑固化错误业务结果。
+7. `NEXT_H0`：在独立revision实施H0，先通过batch size=1与代表日等价，再运行完整44日和性能基准；任何业务语义修订创建新identity并更新golden。
+8. `CONDITIONAL`：前向标签成熟后运行P1-A；至少两个兼容策略包具备独立bundle后运行P1-B；LONG_TREND包就绪后运行P2。H0可在等待自然标签期间推进，但不得阻断模型主线。
 
 源码合入、WSL训练、模型文件生成、后端重启、模型加载和页面可见是独立状态，不得合并声明完成。
 
@@ -881,7 +886,7 @@ production_dml_gate = noop for training; daily Advisory publication is normal ru
 production_backend_dependency_gate = noop unless WSL dependency is proven missing
 production_frontend_dependency_gate = noop unless UI implementation introduces a real dependency
 runtime_activation_and_backend_restart = separate user-confirmed actions
-historical_batch_activation = separate user-confirmed action after source merge; no activation during current v6
+historical_batch_activation = separate user-confirmed action after source merge; never activate against or overwrite the frozen v6 run identity
 ```
 
 训练过程不启动、停止或重启用户服务。模型源代码合入、WSL训练完成、模型文件生成、后端加载、页面可见和模型启用必须分别报告，不能合并成一个完成状态。
@@ -918,17 +923,16 @@ historical_batch_activation = separate user-confirmed action after source merge;
 
 ## 16. 当前下一步
 
-M0-M5C 的代码、真实 WSL 实验和固定日期推理已形成当前基线；M5A/M5B/M5C 均不激活。P0-A/P0-B 已合入并在两个 ENABLED Program 上产生首日真实 PUBLISHED forward run；2026-08-14 00:17 target-open 行情尚未到达，因此 settlement 正确保持 `WAITING_DATA` 且尚无 episode。P0-C 已通过 PR #3367 合入；P0-D 已用最终源码重训为 experimental bundle，PR #3368 等待最终CI/合入且未写 descriptor、未激活。
+M0-M5C 的代码、真实 WSL 实验和固定日期推理已形成当前基线；M5A/M5B/M5C 均不激活。P0-A/P0-B 已在两个 ENABLED Program 上连续产生真实 `PUBLISHED` run：target `2026-08-14/17` 已结算，各 Program 形成20个active episode；target `2026-08-18` 在开盘前正确保持 `WAITING_DATA`。P0-C 已通过 PR #3367 合入，P0-D 已通过 PR #3368 合入 `458199cd`，但未写 exact runtime descriptor、未激活。v6 44日 A/B/C/C5 对照已冻结，PR #3558 合入 `1d1fc932`，结果hash为 `500d96e0...`。
 
 下一工作严格按以下顺序执行；模型/前向与 H0 历史执行是互不阻断的两条线：
 
-1. **合入 P0-D 源码**：刷新 PR #3368 的 F2/CI 证据并合入；bundle 保持 experimental、uncalibrated、not activated。
-2. **完成首日 target-open 验收**：权威 open/suspend 数据到达后读取两条 settlement；至少一个 episode 创建，或所有未进入均有明确 typed reason；不回退 signal close。
-3. **前向 challenger 接入**：仅在独立 descriptor 授权后绑定 P0-D exact bundle，baseline 不变；自然积累 future OOS，不补历史。
-4. **冻结当前历史对照 golden**：完成当前 v6 A/B/C、outcome与报告，保存逐日语义和性能收据；不在运行中修改code-release。
-5. **实施 H0**：在独立后续 revision 以 batch size=1 等价、代表日、完整窗口、未来毒化和恢复测试逐级替换历史执行拓扑；实盘继续单日运行。
-6. **P1-A adaptive calibration**：只有 forward residual 成熟后执行；M4近单类binary先重审，不再重复静态校准。
-7. **P1-B 跨包条件化共享**：至少两个兼容策略包拥有独立真实 bundle 后再做 matched 实验。
-8. **P2 LONG_TREND**：策略包就绪后复用前向与动态分发基础，训练独立长期标签和模型。
+1. **P0-D experimental challenger descriptor 接入**：绑定 exact bundle `e555903e...`，保持 `EXPERIMENTAL_MODEL/UNCALIBRATED/NOT_ACTIVATED`；不得覆盖baseline、Selection rank、正式Program policy或现有M1 descriptor。源码合入、后端重启和运行时readback继续由用户分别确认。
+2. **关闭 Historical Range 正确性缺口**：按单BUG流程优先处理 BUG-1078、BUG-1080、BUG-1083、BUG-1098、BUG-1110、BUG-1111；它们分别影响可运行包真实性、day terminal receipt、已发布成功日、父子lease、T+1 outcome timeline和planner semantics hash。正确性未关闭前不以H0性能结果声明完成。
+3. **实施 H0**：在独立后续revision以冻结v6为oracle，按H0-0至H0-6推进batch size=1、代表日、完整44日、未来毒化、raw共享反例、chunk恢复和性能验收；实盘继续单日运行。BUG-991的重复catalog查询/worker开销作为H0性能证据，不替代F-141至F-150。
+4. **继续自然前向证据**：当前open-mark指标只证明episode已建立；模型maturity trade date到达前保持 `EVIDENCE_IMMATURE`，不补历史、不用冻结test或基线episode冒充P0-D胜率。
+5. **P1-A adaptive calibration**：只有forward residual成熟后执行；M4近单类binary先重审，不再重复静态校准。
+6. **P1-B 跨包条件化共享**：至少两个兼容策略包拥有独立真实bundle后再做matched实验。
+7. **P2 LONG_TREND**：策略包就绪后复用前向与动态分发基础，训练独立长期标签和模型。
 
 继续禁止未授权历史补账/归档、旧 batch/root 清理、通用缓存/调度平台、ModelOps、角色审批和额外门禁。Historical Range 仅按 H0 详细设计执行当前已授权验证优化；任何变更若既不能关闭 P0-A至P0-D/P1/P2 的明确模型能力，也不能满足 F-141 至 F-150 的直接性能与等价目标，不进入当前路线。
