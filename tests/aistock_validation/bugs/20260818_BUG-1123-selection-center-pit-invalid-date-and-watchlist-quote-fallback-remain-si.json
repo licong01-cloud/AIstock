@@ -4,7 +4,7 @@
     "backend/services/selection_center/result_enrichment.py",
     "backend/tests/selection_center/test_result_enrichment.py",
     "backend/services/watchlist_service.py",
-    "backend/tests/test_watchlist_category_entry_tracking.py",
+    "backend/tests/watchlist/test_realtime_amount_units.py",
     "tests/aistock_validation/bugs/20260818_BUG-1123-selection-center-pit-invalid-date-and-watchlist-quote-fallback-remain-si.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -36,14 +36,14 @@
       "backend/services/selection_center/result_enrichment.py",
       "backend/tests/selection_center/test_result_enrichment.py",
       "backend/services/watchlist_service.py",
-      "backend/tests/test_watchlist_category_entry_tracking.py"
+      "backend/tests/watchlist/test_realtime_amount_units.py"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/selection_center/result_enrichment.py",
         "backend/tests/selection_center/test_result_enrichment.py",
         "backend/services/watchlist_service.py",
-        "backend/tests/test_watchlist_category_entry_tracking.py"
+        "backend/tests/watchlist/test_realtime_amount_units.py"
       ],
       "impacted_modules": [
         "selection_center",
@@ -87,11 +87,13 @@
           "rule_id": "watchlist_services"
         },
         {
-          "file": "backend/tests/test_watchlist_category_entry_tracking.py",
-          "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
+          "file": "backend/tests/watchlist/test_realtime_amount_units.py",
+          "impact_modules": [
+            "local_data"
+          ],
+          "primary_module": "watchlist",
+          "risk_level": "high",
+          "rule_id": "watchlist_services"
         }
       ],
       "risk_levels": [
@@ -102,7 +104,7 @@
         "backend/services/selection_center/result_enrichment.py",
         "backend/tests/selection_center/test_result_enrichment.py",
         "backend/services/watchlist_service.py",
-        "backend/tests/test_watchlist_category_entry_tracking.py"
+        "backend/tests/watchlist/test_realtime_amount_units.py"
       ],
       "unmatched_files": []
     },
@@ -111,7 +113,7 @@
       "backend/services/selection_center/result_enrichment.py",
       "backend/tests/selection_center/test_result_enrichment.py",
       "backend/services/watchlist_service.py",
-      "backend/tests/test_watchlist_category_entry_tracking.py"
+      "backend/tests/watchlist/test_realtime_amount_units.py"
     ]
   },
   "first_seen_at": "2026-08-18T01:28:33.806440Z",
@@ -128,7 +130,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/test_watchlist_category_entry_tracking.py -q -p no:cacheprovider",
+  "reproduce_command": "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider",
   "required_verification": [
     "l0",
     "paper_v2_backend",
@@ -140,7 +142,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/test_watchlist_category_entry_tracking.py::test_entry_price_bulk_logs_tdx_failure_and_keeps_xtquant_fallback backend/tests/test_watchlist_category_entry_tracking.py::test_entry_price_bulk_logs_xtquant_row_failure_and_keeps_db_fallback -q -p no:cacheprovider -> fresh process 7 passed"
+      "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> fresh process passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
