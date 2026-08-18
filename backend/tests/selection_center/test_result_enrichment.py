@@ -114,6 +114,32 @@ def test_historical_selection_rejects_invalid_pit_reference_date_before_query() 
     assert cursor.executed == []
 
 
+def test_historical_selection_fails_closed_when_pit_price_query_fails() -> None:
+    def raise_connection_failure():
+        raise RuntimeError("database unavailable")
+
+    service = SelectionResultEnrichmentService(
+        conn_factory=raise_connection_failure,
+        symbol_name_resolver=_FakeNameResolver(),
+        quote_fetcher=_quote,
+        today_provider=lambda: date(2026, 5, 25),
+    )
+
+    with pytest.raises(DataUnavailableError, match="historical selection entry price rows") as exc_info:
+        service.enrich_candidates(
+            [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
+            trade_date=date(2026, 5, 13),
+            runtime_config={"point_in_time_context": {"reference_price_trade_date": "2026-05-12"}},
+        )
+
+    assert exc_info.value.context == {
+        "trade_date": "2026-05-12",
+        "symbol_count": 1,
+        "source": "market.kline_daily_raw",
+    }
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
 def test_current_day_selection_entry_price_uses_tdx_quote_and_display_fields_persist() -> None:
     service = SelectionResultEnrichmentService(
         conn_factory=lambda: pytest.fail("current-day enrichment must not query PIT daily rows"),

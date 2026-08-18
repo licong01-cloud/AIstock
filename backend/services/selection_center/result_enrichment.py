@@ -178,8 +178,15 @@ class SelectionResultEnrichmentService:
                         (trade_date, clean),
                     )
                     rows = cur.fetchall()
-        except Exception:
-            return {}
+        except Exception as exc:
+            raise DataUnavailableError(
+                "historical selection entry price rows are unavailable",
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "symbol_count": len(clean),
+                    "source": "market.kline_daily_raw",
+                },
+            ) from exc
         result: dict[str, dict[str, float]] = {}
         for row in rows:
             symbol = str(row.get("ts_code") or "").strip()
