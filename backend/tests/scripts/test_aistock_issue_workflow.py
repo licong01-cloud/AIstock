@@ -2563,6 +2563,141 @@ def test_post_restart_verify_bug992_contract_verifies_after_run_reaches_success(
     assert _smoke_probe(payload)["semantic"]["verdict"] == "passed"
 
 
+def test_post_restart_verify_verifies_openapi_document_smoke(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/openapi.json",
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps({"openapi": "3.1.0", "info": {"title": "AIstock"}, "paths": {"/api/v1/health": {}}}).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "openapi_document"
+    assert smoke["semantic"]["verdict"] == "passed"
+
+
+def test_post_restart_verify_blocks_openapi_document_without_paths(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/openapi.json",
+    )
+    _install_stub_probes(monkeypatch, smoke_body=b'{"openapi":"3.1.0"}')
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "paths" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_blocks_failed_historical_range_operation(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/api/v1/advisory/historical-range-operations/ahrop_17dcb4ce0ba99506ebca2ad072b0ad23",
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "data": {"operation": {"operation_id": "ahrop_17dc", "status": "FAILED"}}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "run_terminal_success"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_verifies_idle_correlation_status(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps({"status": "idle", "refresh_errors": [], "db_correlation_count": 42}).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "correlation_status"
+    assert smoke["semantic"]["verdict"] == "passed"
+
+
+def test_post_restart_verify_blocks_correlation_status_with_refresh_errors(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps({"status": "idle", "refresh_errors": ["db unavailable"]}).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "refresh errors" in smoke["semantic"]["reason"]
+
+
 _BUG_993_BUG989_CHANGED_FILES = [
     "aistock_models/aistock_models/gats_industry_provider.py",
     "backend/services/quantevolver/config_composer.py",
@@ -3057,6 +3192,121 @@ def test_close_sync_rejects_receipt_without_complete_probe_evidence(
     assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
     assert any("probe set mismatch" in item for item in payload["post_restart_receipt_errors"])
     assert any("contract digest mismatch" in item for item in payload["post_restart_receipt_errors"])
+
+
+def test_close_sync_rejects_legacy_receipt_without_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    receipt_payload.pop("business_smoke_semantic", None)
+    for probe in receipt_payload["probes"]:
+        probe.pop("semantic", None)
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "legacy.json",
+        receipt_payload,
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "business-smoke semantic verdict is missing" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_failed_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"] = {
+                "schema_version": workflow.BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": "run_terminal_success",
+                "verdict": "failed",
+                "reason": "run payload reports failure status: run.status=FAILED_RETRYABLE",
+                "facts": {"statuses": {"run.status": "FAILED_RETRYABLE"}},
+                "response_sha256": "sha-business_smoke_ref",
+            }
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "failed-semantic.json",
+        receipt_payload,
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "business-smoke semantic verdict is not passed" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_tampered_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["verdict"] = "failed"
+            probe["semantic"]["reason"] = "tampered after digest"
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "tampered.json",
+        receipt_payload,
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "probe evidence digest mismatch" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
 
 
 def test_close_sync_rejects_non_backend_runtime_contract_conflicts(

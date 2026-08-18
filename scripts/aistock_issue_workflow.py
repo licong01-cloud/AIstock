@@ -2346,7 +2346,7 @@ _RUN_STATUS_FAILURE = frozenset({
 })
 _HEALTH_FAILURE_STATUSES = _RUN_STATUS_FAILURE | {"DEGRADED", "DOWN", "STALLED", "UNHEALTHY"}
 _HEALTH_SUCCESS_STATUSES = frozenset({"healthy", "ok", "passed", "ready", "success", "succeeded", "up"})
-_CONTAINER_KEYS = ("run", "result", "batch", "task", "plan", "data", "scheduler", "summary")
+_CONTAINER_KEYS = ("run", "result", "batch", "task", "plan", "operation", "data", "scheduler", "summary")
 _STATUS_FIELD_NAMES = ("status", "state", "verdict")
 
 _COLLECTION_LIST_KEYS = (
@@ -2543,16 +2543,50 @@ def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, 
     return "passed", None, {"kind": "object"}
 
 
+def _validate_openapi_document(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """The OpenAPI document smoke must prove the app serves its route schema."""
+    if not isinstance(payload, dict):
+        return "failed", "openapi payload must be a JSON object", {}
+    version = payload.get("openapi")
+    if not isinstance(version, str) or not version.strip():
+        return "failed", "openapi payload is missing the openapi version field", {}
+    paths = payload.get("paths")
+    if not isinstance(paths, dict) or not paths:
+        return "failed", "openapi payload is missing a non-empty paths mapping", {}
+    return "passed", None, {"openapi": version.strip(), "paths": len(paths)}
+
+
+def _validate_correlation_status(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Correlation status reports idle/computing plus explicit refresh errors."""
+    if not isinstance(payload, dict):
+        return "failed", "correlation status payload must be a JSON object", {}
+    status = payload.get("status")
+    if not isinstance(status, str) or not status.strip():
+        return "failed", "correlation status payload is missing the status field", {}
+    normalized = status.strip()
+    if normalized.upper() in _HEALTH_FAILURE_STATUSES:
+        return "failed", f"correlation status payload reports failure status: {normalized}", {}
+    refresh_errors = payload.get("refresh_errors")
+    if refresh_errors:
+        count = len(refresh_errors) if isinstance(refresh_errors, list) else 1
+        return "failed", "correlation status payload reports refresh errors", {"refresh_errors": count}
+    if normalized.lower() in {"idle", "computing"}:
+        return "passed", None, {"status": normalized}
+    return "failed", f"correlation status payload reports unknown status: {normalized}", {}
+
+
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/simulation-runtime/scheduler/status$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/simulation-runtime/platform-diagnostics$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
-    (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "scheduler_status", _validate_scheduler_status),
+    (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
     (re.compile(r"^/api/v1/simulation-runtime/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/simulation-runtime/execution-plans/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/advisory/historical-range-operations/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/advisory/historical-range-runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/multi-alpha/combine-backtest/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/simulation-runtime/runs$"), "collection", _validate_collection_payload),
@@ -2573,6 +2607,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/qlib/config$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/runtime-contracts/[^/]+$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/validation/plans/[^/]+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/openapi\.json$"), "openapi_document", _validate_openapi_document),
 )
 
 
