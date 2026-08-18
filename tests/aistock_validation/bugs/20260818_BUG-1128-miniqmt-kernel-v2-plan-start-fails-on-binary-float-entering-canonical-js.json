@@ -1,6 +1,8 @@
 {
   "actual": "Production read-only evidence 2026-08-18: run simrun_a00542d8e17154f4 (binding simbind_e12b636ec0d6291f, execution plan plan_ad6435e2ecd31cd9, strategy ma_8ec5e389_sim_20260703, backend minqmt_sim, execution policy b0_quote_v2:SNIPER_MINIQMT:ma_8ec5e389:20260714:v1) is FAILED_RETRYABLE with failure stage MINIQMT_KERNEL_V2_PLAN_START_FAILED and error 'TypeError: binary float is forbidden in canonical JSON'. submitted intents=0, trading-rule decisions=60, execution-plan intents=59; the 60/59 partition is the legal partition fixed by BUG-1112 and must not be re-judged as non-closed. No registered open BUG covers this. Root cause to locate read-only: which exact binary-float field reaches canonical JSON through the chain immutable ExecutionPlan -> MiniQMT product reader -> KERNEL_V2 plan-start input -> B0 quote/context/config -> plugin binding/config -> canonical hash/receipt/outbox. Design contracts: binary float may only convert to finite canonical decimal text at the explicit external source boundary; durable config/hash/receipt/canonical JSON authority must never store binary float (K6-D design 20260804, K1 contracts design 20260722). BUG-1112 is prerequisite background only; do not reuse it.",
   "allowed_write_scope": [
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+    "backend/services/simulation_runtime/miniqmt_kernel_product.py",
     "tests/aistock_validation/bugs/20260818_BUG-1128-miniqmt-kernel-v2-plan-start-fails-on-binary-float-entering-canonical-js.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -60,13 +62,28 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked BUG-1128 K6-D plan-authority reader and passed the real-run binary-float canonicalization, equivalent-representation, fail-closed carrier and legal reject-partition matrix (62 passed in test_kernel_product_runtime_integration.py).",
+      "Fresh nox MiniQMT L2 process loaded the persisted BUG-1128 source and passed 1503 tests with 82 explicit skips; no backend process control.",
+      "Fresh nox Simulation Core L2 process loaded the persisted BUG-1128 source and passed 616 tests with 2 explicit skips; no backend process control.",
+      "Fresh pytest process loaded the tracked BUG-1128 plan-authority reader and passed 62 tests in test_kernel_product_runtime_integration.py including the real-run binary-float canonicalization matrix; no backend process control.",
+      "Fresh nox miniqmt_execution_runtime_l2 process loaded the persisted BUG-1128 source and passed 1503 tests with 82 explicit skips; no backend process control.",
+      "Fresh nox simulation_core_l2 process loaded the persisted BUG-1128 source and passed 616 tests with 2 explicit skips; no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
