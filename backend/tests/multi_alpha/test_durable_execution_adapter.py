@@ -87,8 +87,19 @@ def _request(
             "strategy": {
                 "class": "ScoreWeightedTopkStrategyV2",
                 "kwargs": {"topk": 20, "n_drop": 2},
+            },
+            "backtest": {
+                "start_time": "2026-03-30",
+                "end_time": "2026-04-28",
+            },
+        },
+        "task": {
+            "dataset": {
+                "kwargs": {
+                    "segments": {"test": ["2026-03-30", "2026-04-28"]},
+                }
             }
-        }
+        },
     }
     (runtime / "conf.yaml").write_text(
         yaml.safe_dump(conf, sort_keys=False),
@@ -255,8 +266,30 @@ class _WorkspaceClient:
                 "max_drawdown": -0.1,
                 "sharpe": 2.0,
                 "calmar": 5.0,
+                "n_trading_days": 2,
             },
             "summary": {"Rank IC": 0.08},
+            "return_curves": {"dates": ["2026-01-03", "2026-01-04"]},
+        }
+
+
+class _MismatchedWindowWorkspaceClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _tb):
+        return None
+
+    async def get_workspace_file(self, _task_id: str, _loop_id: str, _path: str) -> dict[str, Any]:
+        return {
+            "absolute_returns": {
+                "cagr": 0.5,
+                "max_drawdown": -0.1,
+                "sharpe": 2.0,
+                "calmar": 5.0,
+            },
+            "summary": {"Rank IC": 0.08},
+            "return_curves": {"dates": ["2026-01-04"]},
         }
 
 
@@ -488,6 +521,21 @@ def test_materialize_and_atomic_publish_reuses_existing_combiner_and_runtime(tmp
     assert set(materialized.weights) == {"leg_a", "leg_b"}
     assert published.prediction_path.exists()
     assert (published.workspace / "conf.yaml").exists()
+    effective_conf = yaml.safe_load((published.workspace / "conf.yaml").read_text(encoding="utf-8"))
+    assert effective_conf["port_analysis_config"]["backtest"]["start_time"] == "2026-01-02"
+    assert effective_conf["port_analysis_config"]["backtest"]["end_time"] == "2026-01-04"
+    assert effective_conf["task"]["dataset"]["kwargs"]["segments"]["test"] == [
+        "2026-01-02",
+        "2026-01-04",
+    ]
+    materialization = json.loads((published.workspace / "materialization.json").read_text(encoding="utf-8"))
+    assert materialization["prediction_window"] == {
+        "requested_start": "2026-01-02",
+        "requested_end": "2026-01-04",
+        "effective_start": "2026-01-03",
+        "effective_end": "2026-01-04",
+        "trading_date_count": 2,
+    }
     assert published.artifact_manifest["schema_version"] == "multi_alpha_child_artifact_manifest_v1"
     assert published.artifact_manifest["l2_artifact"]["path"] == "combined_factors_df.parquet"
     assert replay.artifact_manifest == published.artifact_manifest
@@ -1075,6 +1123,18 @@ def test_collect_result_persists_hash_linked_manifest_idempotently(tmp_path: Pat
     assert first.result_manifest == second.result_manifest
     assert first.result_manifest["completed_after_deadline"] is True
     assert first.result_manifest["execution_deadline"] == deadline_evidence
+    assert first.result_manifest["prediction_window"] == {
+        "requested_start": "2026-01-02",
+        "requested_end": "2026-01-04",
+        "effective_start": "2026-01-03",
+        "effective_end": "2026-01-04",
+        "trading_date_count": 2,
+    }
+    assert first.result_manifest["result_window"] == {
+        "effective_start": "2026-01-03",
+        "effective_end": "2026-01-04",
+        "trading_date_count": 2,
+    }
     assert first.result_manifest_path.exists()
     assert json.loads(first.result_manifest_path.read_text(encoding="utf-8")) == first.result_manifest
 
@@ -1103,6 +1163,33 @@ def test_collect_result_distinguishes_not_visible_from_invalid_content(tmp_path:
     with pytest.raises(DurableExecutionAdapterError) as invalid:
         asyncio.run(adapter.collect_result(intent=intent, artifacts=published))
     assert invalid.value.reason_code == "multi_alpha_child_result_invalid"
+
+
+def test_collect_result_rejects_success_payload_outside_materialized_prediction_window(tmp_path: Path) -> None:
+    adapter, repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    published = adapter.publish_artifacts(materialized)
+    intent = adapter.prepare_submission_intent(
+        run=repository.run,
+        child=repository.child,
+        attempt=repository.attempt,
+        node_id="wsl2-5080",
+    )
+    adapter._workspace_client_factory = lambda _node_id: _MismatchedWindowWorkspaceClient()
+
+    with pytest.raises(DurableExecutionAdapterError) as mismatch:
+        asyncio.run(adapter.collect_result(intent=intent, artifacts=published))
+
+    assert mismatch.value.reason_code == "multi_alpha_result_window_mismatch"
+    assert mismatch.value.context["mismatches"] == {
+        "effective_start": {"expected": "2026-01-03", "observed": "2026-01-04"},
+        "trading_date_count": {"expected": 2, "observed": 1},
+    }
+    assert not (published.workspace / "qlib_results_enhanced.json").exists()
 
 
 def test_inspect_remote_returns_receipt_and_status_without_fallback(tmp_path: Path) -> None:
