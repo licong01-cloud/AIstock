@@ -171,7 +171,11 @@ _MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT = 100
 # carrying any of these (as a dict) is already terminally resolved: the stale-run sweep
 # must skip it before claiming a retry attempt so the terminalized run does not cost
 # claim/clear writes on every scheduler tick. Present-but-non-dict carriers are NOT
-# skipped here; the isolated path keeps raising the typed invalid-carrier error.
+# skipped here; the isolated path keeps raising the typed invalid-carrier error. The
+# isolated path also validates the outbox before its carrier check, so a run with a
+# corrupt outbox AND a valid dict carrier is skipped by this hoist instead of raising;
+# that combination is unreachable because the carrier write implies a previously valid
+# outbox and nothing mutates the outbox afterwards.
 _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS = (
     "local_sim_projection_readback_failure",
     "local_sim_projection_terminal_failure",
@@ -8572,7 +8576,7 @@ class SimulationLifecycleScheduler:
                 "binding_id": binding.binding_id,
                 "plan_id": plan.plan_id,
                 "plan_execution_policy_version_id": plan_policy_id or None,
-                "plan_algo_code": algo_code or None,
+                "plan_algo_code": algo_code,
                 "required_algo_code": "TWAP",
                 "broker_call_attempted": False,
                 "fallback_used": False,

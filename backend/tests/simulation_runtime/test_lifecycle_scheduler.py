@@ -10391,7 +10391,16 @@ def test_scheduler_historical_failed_localsim_legacy_plan_terminalizes_without_v
     assert retry_control is None or recovery_retry_key not in retry_control.get("entries", {})
 
     # The terminal carrier is idempotent: later scheduler cadence skips the run without
-    # rewriting evidence or re-driving anything.
+    # rewriting evidence or re-driving anything. The hoisted skip must also bypass the
+    # retry-attempt claim entirely, so a terminalized run costs no claim/clear writes.
+    claim_calls: list[dict[str, Any]] = []
+    original_claim = repo.claim_simulation_retry_attempt
+
+    def counting_claim(**kwargs: Any) -> Any:
+        claim_calls.append(kwargs)
+        return original_claim(**kwargs)
+
+    repo.claim_simulation_retry_attempt = counting_claim  # type: ignore[method-assign]
     repeated = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
         trade_date=TRADE_DATE + timedelta(days=2),
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
@@ -10399,6 +10408,7 @@ def test_scheduler_historical_failed_localsim_legacy_plan_terminalizes_without_v
         limit=10,
         as_of_time=datetime(2026, 5, 23, 10, 0),
     )
+    assert claim_calls == []
     assert all(item.get("run_id") != run.run_id for item in repeated)
     reloaded = repo.get_simulation_daily_run(run.run_id)
     assert reloaded.status == SimulationDailyRunStatus.FAILED_TERMINAL
