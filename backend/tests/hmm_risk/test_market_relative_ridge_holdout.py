@@ -17,6 +17,25 @@ def _receipt(body: dict[str, object]) -> dict[str, object]:
     return {**body, "receipt_sha256": subject.canonical_sha256(body)}
 
 
+def _development_request_identity() -> dict[str, object]:
+    return {
+        "candidate_attempt_index": 3,
+        "contract_version": "C-011-P2-3C-D1-D6",
+        "expected_producer_commit": subject.EXPECTED_CANDIDATE_PRODUCER,
+        "fixed_market_parameters": {"jump_penalty": 4.0, "seed": 42},
+        "forbidden_holdout_date_set_sha256": "2783d628df3160f0786b0d6d1f8c4f89a46952ca7903559fa33e616d05e0232b",
+        "holdout_end": subject.HOLDOUT_END.isoformat(),
+        "holdout_start": subject.HOLDOUT_START.isoformat(),
+        "holdout_trading_day_count": subject.HOLDOUT_TRADING_DAYS,
+        "prior_not_available_report_sha256s": {
+            "P2-3A": "034fdf3c7a2354bad62bdea0a55b675f2552c42a65d1ccacbc454561e75f12ec",
+            "P2-3B": "d3298654ed9f2080f4623c2c50721ebf9951d2034d42cfdfe225f36e4ee0fc45",
+        },
+        "schema_version": "hmm_risk_market_conditioned_ridge_candidate_request_v1",
+        "source_sha256": "2806f0bd63869f7eb11d1f00d4682332339ce96838c29d720cff492efdb61518",
+    }
+
+
 def _candidate_report() -> dict[str, object]:
     components: list[dict[str, object]] = []
     for component in ("market", "L1", "L2"):
@@ -68,6 +87,7 @@ def _candidate_report() -> dict[str, object]:
             ),
         ]
     )
+    request_identity = _development_request_identity()
     body: dict[str, object] = {
         "schema_version": subject.P2_3C_REPORT_SCHEMA_VERSION,
         "status": "P2_3C_CANDIDATE_FROZEN_PENDING_P2_4_HOLDOUT_ACCEPTANCE",
@@ -75,7 +95,8 @@ def _candidate_report() -> dict[str, object]:
         "completed_fit_count": 36,
         "planned_fit_count": 36,
         "candidate_attempt_index": 3,
-        "request_identity_sha256": subject.EXPECTED_DEVELOPMENT_REQUEST_SHA256,
+        "request_identity": request_identity,
+        "request_identity_sha256": subject.canonical_sha256(request_identity),
         "feature_formula_sha256": "4" * 64,
         "components": components,
         "component_receipt_sha256s": [item["receipt_sha256"] for item in components],

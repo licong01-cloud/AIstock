@@ -1,6 +1,8 @@
 {
   "actual": "The merged P2-4 preflight compares candidate.request_identity_sha256 (canonical hash of the persisted request_identity object: 7cf7f7a7...) against EXPECTED_DEVELOPMENT_REQUEST_SHA256 (canonical hash of the full P2-3C request file: 4807125d...). The authoritative frozen candidate 792d4f6a... is therefore rejected before holdout access. Preserve both authorities separately, keep the full request hash for P2-4 development_request_sha256, validate the candidate identity against its exact identity hash, and add a regression that fails on the merged implementation and passes without changing candidate, model, thresholds, holdout, DB, or runtime semantics.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+    "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
     "tests/aistock_validation/bugs/20260818_BUG-1132-p2-4-evaluator-rejects-canonical-frozen-candidate-request-identity.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -25,8 +27,15 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
+    "added_files": [
+      "tests/aistock_validation/bugs/20260818_BUG-1132-p2-4-evaluator-rejects-canonical-frozen-candidate-request-identity.json"
+    ],
+    "changed_files": [
+      "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260818_BUG-1132-p2-4-evaluator-rejects-canonical-frozen-candidate-request-identity.json"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +45,12 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260818_BUG-1132-p2-4-evaluator-rejects-canonical-frozen-candidate-request-identity.json"
+    ]
   },
   "first_seen_at": "2026-08-18T17:51:48.260997Z",
   "fix_branch": null,
