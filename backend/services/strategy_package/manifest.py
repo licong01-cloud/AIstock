@@ -150,6 +150,10 @@ def _drop_empty_asset_fields(value: Any) -> Any:
             cleaned[key] = _drop_empty_asset_field_defaults(item)
         elif key == "runtime_assets" and item in (None, {}, []):
             continue
+        elif key == "canonical_pit_binding" and item in (None, {}, []):
+            # New optional schema data must not change the identity of an
+            # already-published v1 manifest when it is read by the v2 model.
+            continue
         else:
             cleaned[key] = item
     return cleaned

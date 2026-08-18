@@ -10,13 +10,21 @@ from backend.services.advisory_historical_range.decision_mark_provider import (
     HistoricalRangeDecisionMarkProvider,
 )
 from backend.services.advisory_historical_range.models import (
+    HistoricalRangeAdmittedPackageProjectionV1,
     HistoricalRangeArtifactKind,
     HistoricalRangeEpisodeMarkV2,
+    HistoricalRangeFrozenProgramV1,
     HistoricalRangeRevisionAdmissibility,
     HistoricalRangeSourceRevisionCatalogV1,
     HistoricalRangeSourceRevisionMemberV1,
     HistoricalRangeSourceRevisionRefV1,
 )
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    canonical_rule_parameters_digest,
+)
+from backend.services.strategy_package.models import StrategyPackageCanonicalPitBindingV2
 from backend.services.advisory_historical_range.source_roles import DECISION_MARK_SOURCE_ROLES_V1
 from backend.tests.advisory_historical_range.conftest import artifact_ref, digest, frozen_program, research_spec
 
@@ -57,13 +65,52 @@ def _catalog() -> HistoricalRangeSourceRevisionCatalogV1:
 
 
 class _Reader:
-    def read(self, *, decision_trade_date: date):
+    def read(self, *, decision_trade_date: date, universe_key: str):
+        assert decision_trade_date == date(2026, 6, 3)
+        assert universe_key == "shsz_st_pit_active_v1"
+        return (
+            {"000001.SZ": {"ts_code": "000001.SZ", "close_li": 10000, "adj_factor": "1.2"}},
+            {"000001.SZ": {"ts_code": "000001.SZ", "suspended": False, "pit_eligible": True}},
+            datetime(2026, 7, 22, tzinfo=UTC),
+        )
+
+
+class _CanonicalReader(_Reader):
+    def read(self, *, decision_trade_date: date, universe_key: str):
+        assert universe_key == "aistock_equity_pit_snapshot_qe_hmm_full_v2_20260731"
         assert decision_trade_date == date(2026, 6, 3)
         return (
             {"000001.SZ": {"ts_code": "000001.SZ", "close_li": 10000, "adj_factor": "1.2"}},
             {"000001.SZ": {"ts_code": "000001.SZ", "suspended": False, "pit_eligible": True}},
             datetime(2026, 7, 22, tzinfo=UTC),
         )
+
+
+def _canonical_program() -> HistoricalRangeFrozenProgramV1:
+    program = frozen_program(research_spec())
+    binding = StrategyPackageCanonicalPitBindingV2(
+        authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        rule_parameters_digest=canonical_rule_parameters_digest(),
+        release_id="qe_hmm_full_v2_20260731",
+        release_cutoff="2026-07-31",
+        frozen_snapshot_digest="a" * 64,
+        release_manifest_digest="b" * 64,
+        qualification_method="REVALIDATED",
+        qualification_evidence_digest="c" * 64,
+    )
+    projection_payload = program.admitted_package_projection.model_dump(mode="json")
+    projection_payload["canonical_pit_binding"] = binding.model_dump(mode="json")
+    projection = HistoricalRangeAdmittedPackageProjectionV1.model_validate(projection_payload)
+    payload = program.model_dump(mode="json")
+    payload.update(
+        {
+            "admitted_package_projection": projection.model_dump(mode="json"),
+            "admitted_package_projection_hash": digest(projection.model_dump(mode="json")),
+            "frozen_program_hash": None,
+        }
+    )
+    return HistoricalRangeFrozenProgramV1.model_validate(payload)
 
 
 class _Verifier:
@@ -117,6 +164,31 @@ def test_decision_mark_provider_seals_unfiltered_market_mark_with_exact_source_r
     assert mark.availability == "AVAILABLE"
     assert verifier.calls == 2
     assert result.artifact_ref.artifact_kind is HistoricalRangeArtifactKind.DECISION_MARK_SET
+
+
+def test_decision_mark_provider_uses_v2_package_frozen_universe_key(tmp_path: Path) -> None:
+    catalog = _catalog()
+    provider = HistoricalRangeDecisionMarkProvider(
+        reader=_CanonicalReader(),
+        source_verifier=_Verifier(catalog),
+        artifact_store=HistoricalRangeArtifactStore(root=tmp_path / "artifacts"),
+    )
+
+    result = provider.produce(
+        resolved_request_hash=digest("resolved-request-v2"),
+        catalog=catalog,
+        program=_canonical_program(),
+        range_run_id="range_v2",
+        day_run_id="day_v2",
+        decision_trade_date=date(2026, 6, 3),
+        request_ref=artifact_ref(HistoricalRangeArtifactKind.REQUEST, "request-v2"),
+        included_symbols={"000001.SZ"},
+        previous_marks_by_symbol={},
+        predecessor_day_receipt_ref=None,
+        decision_cutoff=datetime(2026, 6, 3, 15, tzinfo=UTC),
+    )
+
+    assert result.mark_set.marks[0].availability == "AVAILABLE"
 
 
 def test_decision_mark_provider_closes_second_day_upstream_lineage_in_canonical_order(tmp_path: Path) -> None:
