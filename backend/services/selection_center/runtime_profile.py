@@ -14,6 +14,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
+from backend.services.selection_center.canonical_pit_runtime import (
+    CANONICAL_PIT_POINTER_PROFILE_SCHEMA,
+    CANONICAL_PIT_RUNTIME_LEASE_KEY,
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
+    SelectionPitRuntimeLease,
+    validate_canonical_pit_runtime_profile,
+)
 from backend.services.trading_core.errors import (
     HMMRuntimeUnavailableError,
     RuntimeConfigInvalidError,
@@ -66,6 +73,7 @@ _PROFILE_HASH_EXCLUDED_KEYS = frozenset(
         "_miniqmt_current_positions",
         "_miniqmt_latest_cash",
         "_miniqmt_total_equity",
+        CANONICAL_PIT_RUNTIME_LEASE_KEY,
     }
 )
 
@@ -132,17 +140,18 @@ class RuntimeRiskPolicyProfile(BaseModel):
 
     enabled: bool = False
     policy_version: str = "platform_risk_policy_v1"
-    providers: list[Literal["st_pit", "announcement_risk", "event_signal_policy"]] = Field(default_factory=lambda: ["st_pit"])
+    providers: list[Literal["st_pit", "announcement_risk", "event_signal_policy"]] = Field(
+        default_factory=lambda: ["st_pit"]
+    )
     st_universe_key: str = "shsz_st_pit_active_v1"
     event_signal_profile_id: str | None = None
     event_signal_asof_policy: Literal["disabled", "effective_trade_date"] = "disabled"
     event_signal_merge_policy: Literal["disabled", "block_first"] = "disabled"
-    hard_actions: list[Literal["block_buy", "force_exit"]] = Field(
-        default_factory=lambda: ["block_buy", "force_exit"]
-    )
+    hard_actions: list[Literal["block_buy", "force_exit"]] = Field(default_factory=lambda: ["block_buy", "force_exit"])
     visible_time_mode: Literal["next_trading_session", "trade_date"] = "next_trading_session"
     strict_data_ready: bool = True
     score_overlay: RuntimeRiskScoreOverlayProfile = Field(default_factory=RuntimeRiskScoreOverlayProfile)
+    canonical_pit_runtime_lease: dict[str, Any] | None = Field(default=None, exclude=True, repr=False)
 
     @field_validator("policy_version", "event_signal_profile_id")
     @classmethod
@@ -213,6 +222,7 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
     """
 
     config = runtime_config or {}
+    validate_canonical_pit_runtime_profile(config)
     raw_profile = config.get("runtime_profile")
     if raw_profile is not None and not isinstance(raw_profile, dict):
         raise RuntimeConfigInvalidError(
@@ -273,6 +283,13 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
         merged = dict(config["risk_policy"])
         merged.update(risk_policy_payload)
         risk_policy_payload = merged
+    if "canonical_pit_runtime_lease" in risk_policy_payload:
+        raise RuntimeConfigInvalidError(
+            "canonical PIT runtime lease must be attached by the Selection admission boundary"
+        )
+    raw_lease = config.get(CANONICAL_PIT_RUNTIME_LEASE_KEY)
+    if raw_lease is not None:
+        risk_policy_payload["canonical_pit_runtime_lease"] = SelectionPitRuntimeLease.from_mapping(raw_lease).as_dict()
     payload["risk_policy"] = risk_policy_payload
 
     try:
@@ -328,8 +345,13 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
 
 def normalize_selection_runtime_config(runtime_config: dict[str, Any] | None) -> dict[str, Any]:
     config = dict(runtime_config or {})
+    pit_profile_mode = validate_canonical_pit_runtime_profile(config)
     profile = parse_selection_runtime_profile(config)
     config["runtime_profile"] = profile.model_dump(mode="json")
+    if pit_profile_mode == CANONICAL_PIT_POINTER_PROFILE_SCHEMA:
+        risk_policy = config["runtime_profile"].get("risk_policy")
+        if isinstance(risk_policy, dict):
+            risk_policy.pop("st_universe_key", None)
     return config
 
 
@@ -411,7 +433,11 @@ def refresh_generated_runtime_profile_binding(runtime_config: dict[str, Any]) ->
     binding = config.get(RUNTIME_PROFILE_BINDING_KEY)
     if not isinstance(binding, dict):
         return config
-    if binding.get("source") not in {"platform_default", "generated_effective_runtime_config", "ad_hoc_non_trading_preview"}:
+    if binding.get("source") not in {
+        "platform_default",
+        "generated_effective_runtime_config",
+        "ad_hoc_non_trading_preview",
+    }:
         return config
     refreshed = dict(binding)
     refreshed["config_sha256"] = runtime_profile_config_sha256(config)
@@ -536,13 +562,22 @@ def validate_runtime_profile_binding(
 
 
 def runtime_profile_config_sha256(runtime_config: dict[str, Any] | None) -> str:
+    source_config = dict(runtime_config or {})
+    pit_profile_mode = validate_canonical_pit_runtime_profile(source_config)
+    raw_lease = source_config.get(CANONICAL_PIT_RUNTIME_LEASE_KEY)
+    if raw_lease is not None:
+        if pit_profile_mode != CANONICAL_PIT_POINTER_PROFILE_SCHEMA:
+            raise RuntimeConfigInvalidError("canonical PIT runtime lease requires the explicit pointer profile")
+        SelectionPitRuntimeLease.from_mapping(raw_lease)
     config = {
         key: value
-        for key, value in dict(runtime_config or {}).items()
+        for key, value in source_config.items()
         if key not in _PROFILE_HASH_EXCLUDED_KEYS and not str(key).startswith("_")
     }
     normalized = normalize_selection_runtime_config(config)
     payload: dict[str, Any] = {"runtime_profile": normalized["runtime_profile"]}
+    if CANONICAL_PIT_RUNTIME_PROFILE_KEY in normalized:
+        payload[CANONICAL_PIT_RUNTIME_PROFILE_KEY] = normalized[CANONICAL_PIT_RUNTIME_PROFILE_KEY]
     for key in ("runtime_variant", "selection_artifact_config", "selection_artifact", "model", "metadata"):
         if key in normalized:
             payload[key] = normalized[key]
