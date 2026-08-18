@@ -2002,6 +2002,7 @@ def _runtime_contract_digest(contract: dict[str, Any]) -> str:
         "catalog_ref": contract.get("catalog_ref"),
         "operator_runbook_ref": contract.get("operator_runbook_ref"),
         "expected_identity_ref": contract.get("expected_identity_ref"),
+        "expected_terminal_outcome": contract.get("expected_terminal_outcome"),
         "probe_origins": target.get("probe_origins") or [],
         "probes": target.get("probes") or {},
     }
@@ -2111,6 +2112,22 @@ def build_runtime_contract(
             blocking.append("legacy or runtime BUG requires an explicit runtime_contract schema upgrade")
     elif runtime_impact == "unknown":
         blocking.append("runtime_impact is unknown and cannot be treated as none")
+    expectation, expectation_errors = _normalize_expected_terminal_outcome(
+        explicit.get("expected_terminal_outcome")
+    )
+    blocking.extend(expectation_errors)
+    if expectation is not None:
+        smoke_ref = ((target or {}).get("probes") or {}).get("business_smoke_ref")
+        smoke_path = urllib.parse.urlsplit(str(smoke_ref or "")).path or "/"
+        smoke_contract = _business_smoke_semantic_contract(smoke_path) if smoke_ref else None
+        resolved_contract_id = smoke_contract[0] if smoke_contract else None
+        if not smoke_ref:
+            blocking.append("expected_terminal_outcome requires a resolved business_smoke_ref probe")
+        elif resolved_contract_id != expectation.get("contract_id"):
+            blocking.append(
+                "expected_terminal_outcome contract does not match the business_smoke_ref probe contract: "
+                f"declared={expectation.get('contract_id')} resolved={resolved_contract_id or 'none'}"
+            )
     persistence_basis = str(explicit.get("persistence_basis") or ("git_tracked_source" if backend_restart_required else "not_required"))
     valid_persistence_basis = {"git_tracked_source", "controlled_migration", "controlled_config", "not_required"}
     if persistence_basis not in valid_persistence_basis:
@@ -2136,6 +2153,7 @@ def build_runtime_contract(
         "catalog_ref": catalog_ref,
         "operator_runbook_ref": (target or {}).get("operator_runbook_ref"),
         "expected_identity_ref": (target or {}).get("expected_identity_ref"),
+        "expected_terminal_outcome": expectation,
         "persistence_basis": persistence_basis,
         "fresh_process_evidence": observed_fresh_process_evidence,
         "post_restart_effective_gate": post_restart_gate,
@@ -2320,6 +2338,19 @@ def _read_only_http_probe(
 # ---------------------------------------------------------------------------
 
 BUSINESS_SMOKE_SEMANTIC_SCHEMA = "aistock_business_smoke_semantic_verdict_v1"
+EXPECTED_TERMINAL_OUTCOME_SCHEMA = "aistock_expected_terminal_outcome_v1"
+SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA = "simulation_run_terminal_evidence_v1"
+_EXPECTATION_CAPABLE_CONTRACT_IDS = frozenset({"run_terminal_evidence"})
+_EXPECTED_TERMINAL_OUTCOME_FIELDS = (
+    "schema_version",
+    "contract_id",
+    "expected_status",
+    "expected_previous_status",
+    "expected_reason_code",
+    "expected_evidence_schema",
+)
+_EXPECTED_REASON_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,127}$")
+_EXPECTED_EVIDENCE_SCHEMA_RE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 
 _RUN_STATUS_SUCCESS = frozenset({
     "APPLIED",
@@ -2407,6 +2438,75 @@ def _collect_status_fields(payload: Any) -> dict[str, str]:
     return found
 
 
+def _normalize_expected_terminal_outcome(raw: Any) -> tuple[dict[str, Any] | None, list[str]]:
+    """Validate and normalize a declared expected terminal outcome.
+
+    The declaration is the only channel through which a failure-class terminal
+    status may satisfy a run-class business-smoke semantic contract. It is
+    fail-closed: any schema violation yields blocking errors and no
+    expectation. Normalization emits the fixed field set in canonical order so
+    digests are stable.
+    """
+    if raw is None:
+        return None, []
+    if not isinstance(raw, dict):
+        return None, ["expected_terminal_outcome must be an object"]
+    errors: list[str] = []
+    unknown_fields = sorted(set(raw) - set(_EXPECTED_TERMINAL_OUTCOME_FIELDS))
+    if unknown_fields:
+        errors.append(f"expected_terminal_outcome has unknown fields: {unknown_fields}")
+    if raw.get("schema_version") != EXPECTED_TERMINAL_OUTCOME_SCHEMA:
+        errors.append(f"expected_terminal_outcome schema_version must be {EXPECTED_TERMINAL_OUTCOME_SCHEMA}")
+    contract_id = str(raw.get("contract_id") or "").strip()
+    if contract_id not in _EXPECTATION_CAPABLE_CONTRACT_IDS:
+        errors.append(
+            "expected_terminal_outcome contract_id is not expectation-capable: "
+            f"{contract_id or 'missing'}"
+        )
+    expected_status = str(raw.get("expected_status") or "").strip().upper()
+    if expected_status not in _RUN_STATUS_FAILURE:
+        errors.append(
+            "expected_terminal_outcome expected_status must be a declared failure-class "
+            f"terminal status: {expected_status or 'missing'}"
+        )
+    expected_previous_status = str(raw.get("expected_previous_status") or "").strip().upper()
+    if expected_previous_status not in (_RUN_STATUS_FAILURE | _RUN_STATUS_SUCCESS):
+        errors.append(
+            "expected_terminal_outcome expected_previous_status must be a known terminal "
+            f"status: {expected_previous_status or 'missing'}"
+        )
+    expected_reason_code = str(raw.get("expected_reason_code") or "").strip()
+    if not _EXPECTED_REASON_CODE_RE.fullmatch(expected_reason_code):
+        errors.append(
+            "expected_terminal_outcome expected_reason_code must be an upper snake-case "
+            f"reason code: {expected_reason_code or 'missing'}"
+        )
+    expected_evidence_schema = str(raw.get("expected_evidence_schema") or "").strip()
+    if not _EXPECTED_EVIDENCE_SCHEMA_RE.fullmatch(expected_evidence_schema):
+        errors.append(
+            "expected_terminal_outcome expected_evidence_schema must be a lower snake-case "
+            f"schema id: {expected_evidence_schema or 'missing'}"
+        )
+    if errors:
+        return None, errors
+    normalized = {
+        "schema_version": EXPECTED_TERMINAL_OUTCOME_SCHEMA,
+        "contract_id": contract_id,
+        "expected_status": expected_status,
+        "expected_previous_status": expected_previous_status,
+        "expected_reason_code": expected_reason_code,
+        "expected_evidence_schema": expected_evidence_schema,
+    }
+    return normalized, []
+
+
+def _expectation_outcome_digest(expectation: dict[str, Any] | None) -> str | None:
+    if expectation is None:
+        return None
+    encoded = json.dumps(expectation, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _validate_run_terminal_success(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """Run-class payloads must prove terminal target closure."""
     if not isinstance(payload, dict):
@@ -2430,6 +2530,125 @@ def _validate_run_terminal_success(payload: Any) -> tuple[str, str | None, dict[
             {"statuses": normalized},
         )
     return "passed", None, {"statuses": normalized}
+
+
+def _validate_run_terminal_evidence(
+    payload: Any,
+    *,
+    expectation: dict[str, Any] | None = None,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Bounded terminal-evidence payloads prove an exact expected terminal outcome.
+
+    Without a declared expectation this contract is exactly as strict as
+    ``run_terminal_success``: failure-class and non-terminal statuses fail
+    closed. With a declared expectation the verdict passes only when the run
+    status, the evidence carrier schema, the terminal reason code and the
+    previous status all match the declaration exactly; every mismatch fails
+    closed with the specific drift.
+    """
+    if not isinstance(payload, dict):
+        return "failed", "run terminal-evidence payload must be a JSON object", {}
+    if payload.get("ok") is False:
+        return "failed", "run terminal-evidence payload reports ok=false", {}
+    if payload.get("schema_version") != SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA:
+        return (
+            "failed",
+            "run terminal-evidence payload schema mismatch: "
+            f"expected {SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA}, "
+            f"observed {payload.get('schema_version')!r}",
+            {},
+        )
+    run = payload.get("run")
+    if not isinstance(run, dict):
+        return "failed", "run terminal-evidence payload is missing the run object", {}
+    raw_status = run.get("status")
+    if not isinstance(raw_status, str) or not raw_status.strip():
+        return "failed", "run terminal-evidence payload is missing run.status", {}
+    status = raw_status.strip().upper()
+    facts: dict[str, Any] = {"statuses": {"run.status": status}}
+    if expectation is None:
+        if status in _RUN_STATUS_FAILURE:
+            return (
+                "failed",
+                f"run payload reports failure status: run.status={status}",
+                facts,
+            )
+        if status not in _RUN_STATUS_SUCCESS:
+            return (
+                "failed",
+                f"run payload has not reached terminal target closure: run.status={status}",
+                facts,
+            )
+        return "passed", None, facts
+    expected_status = str(expectation.get("expected_status") or "").strip().upper()
+    if expected_status not in _RUN_STATUS_FAILURE:
+        return (
+            "failed",
+            "declared expected terminal status is not failure-class: "
+            f"{expected_status or 'missing'}",
+            facts,
+        )
+    if status != expected_status:
+        return (
+            "failed",
+            f"run status does not match the declared expected terminal status: "
+            f"run.status={status} expected={expected_status}",
+            facts,
+        )
+    carriers = run.get("terminal_evidence")
+    if not isinstance(carriers, list):
+        return (
+            "failed",
+            "run terminal-evidence payload is missing the terminal_evidence carrier list",
+            facts,
+        )
+    expected_schema = str(expectation.get("expected_evidence_schema") or "").strip()
+    carrier = next(
+        (
+            item
+            for item in carriers
+            if isinstance(item, dict) and str(item.get("schema_version") or "").strip() == expected_schema
+        ),
+        None,
+    )
+    if carrier is None:
+        return (
+            "failed",
+            f"expected terminal evidence carrier is absent: schema={expected_schema}",
+            facts,
+        )
+    facts["matched_evidence"] = {
+        "schema_version": expected_schema,
+        "reason_code": carrier.get("reason_code"),
+        "previous_status": carrier.get("previous_status"),
+        "terminal_status": carrier.get("terminal_status"),
+    }
+    expected_reason = str(expectation.get("expected_reason_code") or "").strip()
+    if str(carrier.get("reason_code") or "").strip() != expected_reason:
+        return (
+            "failed",
+            f"terminal evidence reason code does not match the declaration: "
+            f"observed={carrier.get('reason_code')!r} expected={expected_reason}",
+            facts,
+        )
+    expected_previous = str(expectation.get("expected_previous_status") or "").strip().upper()
+    observed_previous = str(carrier.get("previous_status") or "").strip().upper()
+    if observed_previous != expected_previous:
+        return (
+            "failed",
+            f"terminal evidence previous status does not match the declaration: "
+            f"observed={observed_previous or 'missing'} expected={expected_previous}",
+            facts,
+        )
+    observed_terminal = str(carrier.get("terminal_status") or "").strip().upper()
+    if observed_terminal != expected_status:
+        return (
+            "failed",
+            f"terminal evidence terminal status does not match the declaration: "
+            f"observed={observed_terminal or 'missing'} expected={expected_status}",
+            facts,
+        )
+    return "passed", None, facts
 
 
 def _scheduler_failure_markers(payload: Any) -> list[str]:
@@ -2585,6 +2804,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
     (re.compile(r"^/api/v1/simulation-runtime/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/simulation-runtime/runs/[^/]+/terminal-evidence$"), "run_terminal_evidence", _validate_run_terminal_evidence),
     (re.compile(r"^/api/v1/simulation-runtime/execution-plans/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
     (re.compile(r"^/api/v1/advisory/historical-range-operations/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
@@ -2620,13 +2840,23 @@ def _business_smoke_semantic_contract(path: str) -> tuple[str, Any] | None:
     return None
 
 
-def _evaluate_business_smoke_semantics(url: str, body: str, *, response_sha256: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _evaluate_business_smoke_semantics(
+    url: str,
+    body: str,
+    *,
+    response_sha256: str,
+    expectation: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Evaluate the target-owned semantic contract for a business-smoke payload.
 
     Returns (payload_schema, semantic) evidence. Fail-closed: unparsable
-    bodies, unregistered endpoints, and contract violations all yield a
-    failed verdict; nothing falls back to HTTP-only success.
+    bodies, unregistered endpoints, expectation/contract mismatches, and
+    contract violations all yield a failed verdict; nothing falls back to
+    HTTP-only success. The declared expectation (when any) is embedded in the
+    semantic verdict with its digest so receipts stay bound to the exact
+    declaration that produced them.
     """
+    expectation_digest = _expectation_outcome_digest(expectation)
     path = urllib.parse.urlsplit(url).path or "/"
     contract = _business_smoke_semantic_contract(path)
     contract_id = contract[0] if contract else None
@@ -2641,6 +2871,8 @@ def _evaluate_business_smoke_semantics(url: str, body: str, *, response_sha256: 
             "reason": "business-smoke payload is not parseable JSON",
             "facts": {},
             "response_sha256": response_sha256,
+            "expectation": expectation,
+            "expectation_digest": expectation_digest,
         }
         return schema, semantic
     schema = {"json": True, "kind": _json_payload_kind(payload)}
@@ -2652,10 +2884,45 @@ def _evaluate_business_smoke_semantics(url: str, body: str, *, response_sha256: 
             "reason": f"no target-owned business-smoke semantic contract is registered for endpoint path: {path}",
             "facts": {},
             "response_sha256": response_sha256,
+            "expectation": expectation,
+            "expectation_digest": expectation_digest,
         }
         return schema, semantic
     contract_id, validator = contract
-    verdict, reason, facts = validator(payload)
+    if expectation is not None:
+        if contract_id not in _EXPECTATION_CAPABLE_CONTRACT_IDS:
+            semantic = {
+                "schema_version": BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": contract_id,
+                "verdict": "failed",
+                "reason": (
+                    "a declared expected terminal outcome is not supported by the "
+                    f"semantic contract resolved for this probe: {contract_id}"
+                ),
+                "facts": {},
+                "response_sha256": response_sha256,
+                "expectation": expectation,
+                "expectation_digest": expectation_digest,
+            }
+            return schema, semantic
+        if str(expectation.get("contract_id") or "").strip() != contract_id:
+            semantic = {
+                "schema_version": BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": contract_id,
+                "verdict": "failed",
+                "reason": (
+                    "declared expected terminal outcome targets a different semantic "
+                    f"contract: declared={expectation.get('contract_id')!r} resolved={contract_id!r}"
+                ),
+                "facts": {},
+                "response_sha256": response_sha256,
+                "expectation": expectation,
+                "expectation_digest": expectation_digest,
+            }
+            return schema, semantic
+        verdict, reason, facts = validator(payload, expectation=expectation)
+    else:
+        verdict, reason, facts = validator(payload)
     semantic = {
         "schema_version": BUSINESS_SMOKE_SEMANTIC_SCHEMA,
         "contract_id": contract_id,
@@ -2663,6 +2930,8 @@ def _evaluate_business_smoke_semantics(url: str, body: str, *, response_sha256: 
         "reason": reason,
         "facts": facts,
         "response_sha256": response_sha256,
+        "expectation": expectation,
+        "expectation_digest": expectation_digest,
     }
     return schema, semantic
 
@@ -2831,6 +3100,7 @@ def _probe_evidence_digest(results: list[dict[str, Any]]) -> str:
                 "semantic_contract_id": semantic.get("contract_id"),
                 "semantic_verdict": semantic.get("verdict"),
                 "semantic_reason": semantic.get("reason"),
+                "semantic_expectation_digest": semantic.get("expectation_digest"),
             }
         )
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -2849,6 +3119,7 @@ def _post_restart_receipt_summary(receipt_path: Path, receipt: dict[str, Any]) -
         "observed_identity": receipt.get("observed_identity"),
         "runtime_identity_proof_digest": receipt.get("runtime_identity_proof_digest"),
         "contract_digest": receipt.get("contract_digest"),
+        "expected_terminal_outcome_digest": receipt.get("expected_terminal_outcome_digest"),
         "catalog_sha256": receipt.get("catalog_sha256"),
         "probe_evidence_digest": receipt.get("probe_evidence_digest"),
         "post_restart_effective_gate": receipt.get("post_restart_effective_gate"),
@@ -2911,12 +3182,14 @@ def build_post_restart_verify(
                 )
             )
     smoke_result = next((item for item in results if item.get("name") == "business_smoke_ref"), None)
+    expectation = contract.get("expected_terminal_outcome") if isinstance(contract.get("expected_terminal_outcome"), dict) else None
     business_smoke_semantic: dict[str, Any] | None = None
     if isinstance(smoke_result, dict) and smoke_result.get("status") == "passed":
         schema_evidence, semantic = _evaluate_business_smoke_semantics(
             str(smoke_result.get("url") or ""),
             str(smoke_result.get("_response_body") or ""),
             response_sha256=str(smoke_result.get("response_sha256") or ""),
+            expectation=expectation,
         )
         smoke_result["payload_schema"] = schema_evidence
         smoke_result["semantic"] = semantic
@@ -2966,6 +3239,8 @@ def build_post_restart_verify(
         "runtime_identity_proof": identity_proof,
         "runtime_identity_proof_digest": _runtime_identity_proof_digest(identity_proof),
         "contract_digest": _runtime_contract_digest(contract),
+        "expected_terminal_outcome": expectation,
+        "expected_terminal_outcome_digest": _expectation_outcome_digest(expectation),
         "catalog_sha256": _runtime_catalog_sha256(root=REPO_ROOT),
         "required_probe_names": required_probe_names,
         "runtime_identity_match": identity_match,
@@ -15535,6 +15810,63 @@ def build_close_sync_plan(
                     if str(semantic.get("response_sha256") or "") != str(smoke_probe.get("response_sha256") or ""):
                         runtime_receipt_errors.append(
                             "post-restart receipt business-smoke semantic digest does not match probe evidence"
+                        )
+            current_expectation = runtime_contract.get("expected_terminal_outcome")
+            receipt_expectation = runtime_receipt.get("expected_terminal_outcome")
+            if current_expectation is None:
+                if receipt_expectation is not None:
+                    runtime_receipt_errors.append(
+                        "post-restart receipt carries an expected terminal outcome but the current "
+                        "runtime contract declares none"
+                    )
+                if runtime_receipt.get("expected_terminal_outcome_digest"):
+                    runtime_receipt_errors.append(
+                        "post-restart receipt carries an expected terminal outcome digest but the "
+                        "current runtime contract declares none"
+                    )
+            else:
+                if receipt_expectation != current_expectation:
+                    runtime_receipt_errors.append(
+                        "post-restart receipt expected terminal outcome does not match the current "
+                        "runtime contract declaration"
+                    )
+                if str(runtime_receipt.get("expected_terminal_outcome_digest") or "") != str(
+                    _expectation_outcome_digest(current_expectation) or ""
+                ):
+                    runtime_receipt_errors.append(
+                        "post-restart receipt expected terminal outcome digest mismatch"
+                    )
+            smoke_semantic = smoke_probe.get("semantic") if isinstance(smoke_probe, dict) else None
+            top_level_semantic = runtime_receipt.get("business_smoke_semantic")
+            if top_level_semantic is not None and top_level_semantic != smoke_semantic:
+                runtime_receipt_errors.append(
+                    "post-restart receipt top-level business-smoke semantic does not match probe evidence"
+                )
+            if isinstance(smoke_semantic, dict):
+                semantic_expectation = smoke_semantic.get("expectation")
+                if current_expectation is None:
+                    if semantic_expectation is not None:
+                        runtime_receipt_errors.append(
+                            "post-restart receipt semantic verdict carries an expectation the current "
+                            "runtime contract does not declare"
+                        )
+                    if smoke_semantic.get("expectation_digest"):
+                        runtime_receipt_errors.append(
+                            "post-restart receipt semantic verdict carries an expectation digest the "
+                            "current runtime contract does not declare"
+                        )
+                else:
+                    if semantic_expectation != current_expectation:
+                        runtime_receipt_errors.append(
+                            "post-restart receipt semantic verdict expectation does not match the current "
+                            "runtime contract declaration"
+                        )
+                    if str(smoke_semantic.get("expectation_digest") or "") != str(
+                        _expectation_outcome_digest(current_expectation) or ""
+                    ):
+                        runtime_receipt_errors.append(
+                            "post-restart receipt semantic verdict expectation digest does not match the "
+                            "current runtime contract declaration"
                         )
             if runtime_receipt.get("probe_evidence_digest") != _probe_evidence_digest(receipt_probes):
                 runtime_receipt_errors.append("post-restart receipt probe evidence digest mismatch")

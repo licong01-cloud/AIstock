@@ -26,6 +26,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260818-6eda37ad2d31",
       "timestamp": "2026-08-18T08:30:21.100743Z"
+    },
+    {
+      "action": "declare_expected_terminal_outcome",
+      "actor": "claude",
+      "note": "2026-08-18 BUG-1130 dogfood: declare the exact expected terminal outcome for simrun_7bf1e0c1b6b7d055 so this BUG's own post-restart verify exercises the new run_terminal_evidence contract and proves the read-only terminal-evidence endpoint live after the user backend restart.",
+      "timestamp": "2026-08-18T10:05:00Z"
     }
   ],
   "evidence_uris": [
@@ -177,9 +183,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055/terminal-evidence",
+    "expected_terminal_outcome": {
+      "contract_id": "run_terminal_evidence",
+      "expected_evidence_schema": "localsim_historical_legacy_plan_terminalization_v1",
+      "expected_previous_status": "FAILED_RETRYABLE",
+      "expected_reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+      "expected_status": "FAILED_TERMINAL",
+      "schema_version": "aistock_expected_terminal_outcome_v1"
+    },
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/simulation_runtime/test_ops_api.py -q -> 57 passed in a fresh Python process (5 bounded terminal-evidence projection tests)",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 380 passed, 2 skipped in a fresh Python process (expected-terminal-outcome matrix, close-sync digest binding, BUG-992 scenario rewrites)",
+      "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation -> passed in a fresh Python process",
+      "python -m nox -s l0 -> passed in a fresh Python process (guardrail scan blocking=0)"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
