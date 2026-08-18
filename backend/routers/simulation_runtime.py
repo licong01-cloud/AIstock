@@ -290,6 +290,17 @@ def get_simulation_run(
         _raise_http(exc)
 
 
+@router.get("/runs/{run_id}/terminal-evidence")
+def get_simulation_run_terminal_evidence(
+    run_id: str,
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.get_run_terminal_evidence(run_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/execution-plans/{plan_id}")
 def get_execution_plan(
     plan_id: str,

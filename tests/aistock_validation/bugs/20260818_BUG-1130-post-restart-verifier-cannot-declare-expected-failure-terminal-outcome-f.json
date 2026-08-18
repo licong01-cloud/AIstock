@@ -1,0 +1,340 @@
+{
+  "actual": "Verifier has no expectation channel; every FAILED_TERMINAL is an unconditional business failure; close-sync cannot distinguish an expected terminalization from a genuine failure; BUG-992 close-sync is blocked by the false negative.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/routers/simulation_runtime.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/tests/simulation_runtime/test_ops_api.py",
+    "tests/aistock_validation/bugs/20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json",
+    "tests/aistock_validation/bugs/20260818_BUG-1130-post-restart-verifier-cannot-declare-expected-failure-terminal-outcome-f.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1130",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-18T08:30:21.100755Z",
+  "description": "Verifier has no expectation channel; every FAILED_TERMINAL is an unconditional business failure; close-sync cannot distinguish an expected terminalization from a genuine failure; BUG-992 close-sync is blocked by the false negative.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260818-6eda37ad2d31",
+      "timestamp": "2026-08-18T08:30:21.100743Z"
+    },
+    {
+      "action": "declare_expected_terminal_outcome",
+      "actor": "claude",
+      "note": "2026-08-18 BUG-1130 dogfood: declare the exact expected terminal outcome for simrun_7bf1e0c1b6b7d055 so this BUG's own post-restart verify exercises the new run_terminal_evidence contract and proves the read-only terminal-evidence endpoint live after the user backend restart.",
+      "timestamp": "2026-08-18T10:05:00Z"
+    },
+    {
+      "action": "post_pr_adversarial_review",
+      "actor": "claude",
+      "note": "2026-08-19 adversarial review round 3 on PR #3606 (four independent lenses: workflow semantics, backend endpoint, test sufficiency, security). Two HIGH findings fixed: 1) expectation now binds the subject run via required expected_run_id (schema field, digest field, verifier exact-match, build-time cross-check against business_smoke_ref) closing the cross-run evidence-replay hole; 2) the no-expectation branch of run_terminal_evidence now runs the same full status/state/verdict scan as run_terminal_success so contradictory failure signals anywhere in the payload fail closed. Three LOW findings fixed: close-sync rejects a passed-gate receipt whose top-level business_smoke_semantic key was stripped; the terminal-evidence projection rejects non-canonical schema keys and maps unserializable carriers to a typed 404 instead of a 500; tests gain a hardcoded expectation-digest anchor plus non-dict and run_id declaration rejection cases. Declined: whole-response byte bounding (carrier-section bound is the documented contract). Trust anchor documented: receipt integrity rests on git/PR review of the BUG-record diff (business_smoke_ref + expected_terminal_outcome).",
+      "timestamp": "2026-08-19T01:30:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/issue_workflow/BUG-992/post-restart-receipt-20260818.json"
+  ],
+  "expected": "Runtime contract can explicitly declare an exact expected terminal outcome bound into contract and receipt digests; verifier passes only on exact match of status, previous status, reason code, and evidence carrier schema served by a bounded read-only evidence projection; missing declaration keeps strict fail-closed run_terminal_success semantics; close-sync rejects stale or mismatched expectation receipts.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/routers/simulation_runtime.py",
+      "backend/services/simulation_runtime/ops.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "tests/aistock_validation/bugs/20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json"
+    ],
+    "ownership": {
+      "changed_files": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/routers/simulation_runtime.py",
+        "backend/services/simulation_runtime/ops.py",
+        "backend/tests/simulation_runtime/test_ops_api.py",
+        "tests/aistock_validation/bugs/20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.center",
+        "validation.runner",
+        "validation.module_quality",
+        "tests.backend",
+        "validation.coverage",
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "tests.validation_history"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "backend/routers/simulation_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/ops.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_ops_api.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "tests/aistock_validation/bugs/20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json",
+          "impact_modules": [
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_bug_registry"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium",
+        "critical"
+      ],
+      "suggested_scope": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/routers/simulation_runtime.py",
+        "backend/services/simulation_runtime/ops.py",
+        "backend/tests/simulation_runtime/test_ops_api.py",
+        "tests/aistock_validation/bugs/20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/routers/simulation_runtime.py",
+      "backend/services/simulation_runtime/ops.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "tests/aistock_validation/bugs/20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json"
+    ]
+  },
+  "first_seen_at": "2026-08-18T08:30:21.100755Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3604,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3604",
+  "last_seen_at": "2026-08-18T08:30:21.100755Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-992 --target backend-main --expected-identity 5bc68ab89f7b21730e6da28f446fee9464dee316",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055/terminal-evidence",
+    "expected_terminal_outcome": {
+      "contract_id": "run_terminal_evidence",
+      "expected_evidence_schema": "localsim_historical_legacy_plan_terminalization_v1",
+      "expected_previous_status": "FAILED_RETRYABLE",
+      "expected_reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+      "expected_run_id": "simrun_7bf1e0c1b6b7d055",
+      "expected_status": "FAILED_TERMINAL",
+      "schema_version": "aistock_expected_terminal_outcome_v1"
+    },
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/simulation_runtime/test_ops_api.py -q -> 57 passed in a fresh Python process (5 bounded terminal-evidence projection tests)",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 380 passed, 2 skipped in a fresh Python process (expected-terminal-outcome matrix, close-sync digest binding, BUG-992 scenario rewrites)",
+      "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation -> passed in a fresh Python process",
+      "python -m nox -s l0 -> passed in a fresh Python process (guardrail scan blocking=0)"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "post-restart verifier cannot declare expected failure terminal outcome for run-class business smoke",
+  "trigger_condition": {
+    "fingerprint": "6eda37ad2d31636e08955a29",
+    "source_event_id": "FE-20260818-6eda37ad2d31"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
