@@ -2227,6 +2227,22 @@ def _validate_runtime_probe_ref(
     return None
 
 
+def _json_payload_kind(payload: Any) -> str:
+    if isinstance(payload, dict):
+        return "object"
+    if isinstance(payload, list):
+        return "array"
+    return "scalar"
+
+
+def _payload_schema_evidence(body: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return {"json": False, "kind": "none"}
+    return {"json": True, "kind": _json_payload_kind(payload)}
+
+
 def _read_only_http_probe(
     name: str,
     url: str,
@@ -2238,25 +2254,415 @@ def _read_only_http_probe(
     allowed = {_normalized_http_origin(item) for item in allowed_origins}
     allowed.discard(None)
     if origin is None:
-        return {"name": name, "url": url, "status": "blocked", "error": "probe ref must be an http(s) read-only endpoint without credentials"}
+        reason = "probe ref must be an http(s) read-only endpoint without credentials"
+        return {
+            "name": name,
+            "url": url,
+            "status": "blocked",
+            "error": reason,
+            "transport": {"status_code": None, "ok": False, "error": reason},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
     if origin not in allowed:
-        return {"name": name, "url": url, "status": "blocked", "error": f"probe origin is not catalog-allowed: {origin}"}
+        reason = f"probe origin is not catalog-allowed: {origin}"
+        return {
+            "name": name,
+            "url": url,
+            "status": "blocked",
+            "error": reason,
+            "transport": {"status_code": None, "ok": False, "error": reason},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
     request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/plain,*/*"})
     try:
         with _open_read_only_url(request, timeout_seconds=timeout_seconds) as response:
             body = response.read(1024 * 1024)
             status_code = int(getattr(response, "status", 200))
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return {"name": name, "url": url, "status": "failed", "error": str(exc)}
+        return {
+            "name": name,
+            "url": url,
+            "status": "failed",
+            "error": str(exc),
+            "transport": {"status_code": None, "ok": False, "error": str(exc)},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
+    transport_ok = 200 <= status_code < 400
     return {
         "name": name,
         "url": url,
-        "status": "passed" if 200 <= status_code < 400 else "failed",
+        "status": "passed" if transport_ok else "failed",
         "status_code": status_code,
+        "transport": {
+            "status_code": status_code,
+            "ok": transport_ok,
+            "error": None if transport_ok else f"unexpected HTTP status code: {status_code}",
+        },
+        "payload_schema": _payload_schema_evidence(body),
         "response_sha256": hashlib.sha256(body).hexdigest(),
         "response_bytes": len(body),
         "_response_body": body.decode("utf-8", errors="replace"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Target-owned business-smoke semantic contracts (BUG-1084).
+#
+# HTTP 2xx only proves transport success. A business-smoke probe may only
+# contribute to a verified gate when the response payload satisfies the
+# semantic success contract owned by the probed endpoint family. Endpoint
+# path families map to contract kinds below; an endpoint without a
+# registered contract, an unparsable payload, missing key fields, type
+# errors, or conflicting fields all fail closed -- there is intentionally
+# no HTTP-only fallback.
+# ---------------------------------------------------------------------------
+
+BUSINESS_SMOKE_SEMANTIC_SCHEMA = "aistock_business_smoke_semantic_verdict_v1"
+
+_RUN_STATUS_SUCCESS = frozenset({
+    "APPLIED",
+    "CLOSED",
+    "COMPLETED",
+    "DONE",
+    "FILLED",
+    "PASSED",
+    "READY",
+    "SUCCESS",
+    "SUCCEEDED",
+})
+_RUN_STATUS_FAILURE = frozenset({
+    "ABORTED",
+    "BLOCKED",
+    "CANCELED",
+    "CANCELLED",
+    "DEAD",
+    "ERROR",
+    "FAILED",
+    "FAILED_RETRYABLE",
+    "FAILED_TERMINAL",
+    "REJECTED",
+    "TIMED_OUT",
+    "TIMEOUT",
+})
+_HEALTH_FAILURE_STATUSES = _RUN_STATUS_FAILURE | {"DEGRADED", "DOWN", "STALLED", "UNHEALTHY"}
+_HEALTH_SUCCESS_STATUSES = frozenset({"healthy", "ok", "passed", "ready", "success", "succeeded", "up"})
+_CONTAINER_KEYS = ("run", "result", "batch", "task", "plan", "operation", "data", "scheduler", "summary")
+_STATUS_FIELD_NAMES = ("status", "state", "verdict")
+
+_COLLECTION_LIST_KEYS = (
+    "items",
+    "runs",
+    "tasks",
+    "nodes",
+    "schedules",
+    "entries",
+    "results",
+    "rows",
+    "records",
+    "batches",
+    "experiments",
+    "strategies",
+    "programs",
+    "data",
+)
+_SCHEDULER_BLOCKING_LIST_KEYS = frozenset({
+    "blockers",
+    "blocking_reasons",
+    "current_trade_date_blockers",
+    "errors",
+    "failure_reasons",
+    "last_result_errors",
+})
+_SCHEDULER_BLOCKING_VALUE_KEYS = frozenset({"blocking_result", "last_blocking_result"})
+_SCHEDULER_REASON_KEYS = frozenset({
+    "blocked_reason",
+    "blocking_reason",
+    "failure_reason",
+    "recovery_failure_reason",
+})
+
+
+def _collect_status_fields(payload: Any) -> dict[str, str]:
+    """Collect status/state/verdict fields from a payload and known containers."""
+    found: dict[str, str] = {}
+    queue: list[tuple[str, Any]] = [("", payload)]
+    depth = 0
+    while queue and depth <= 4:
+        depth += 1
+        label, container = queue.pop(0)
+        if not isinstance(container, dict):
+            continue
+        for field in _STATUS_FIELD_NAMES:
+            value = container.get(field)
+            if isinstance(value, str) and value.strip():
+                name = f"{label}.{field}" if label else field
+                found.setdefault(name, value.strip())
+        for key in _CONTAINER_KEYS:
+            nested = container.get(key)
+            if isinstance(nested, dict):
+                nested_label = f"{label}.{key}" if label else key
+                queue.append((nested_label, nested))
+    return found
+
+
+def _validate_run_terminal_success(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Run-class payloads must prove terminal target closure."""
+    if not isinstance(payload, dict):
+        return "failed", "run payload must be a JSON object", {}
+    if payload.get("ok") is False:
+        return "failed", "run payload reports ok=false", {}
+    statuses = _collect_status_fields(payload)
+    if not statuses:
+        return "failed", "run payload is missing a status/state field to prove target closure", {}
+    normalized = {name: value.upper() for name, value in statuses.items()}
+    failures = {name: value for name, value in normalized.items() if value in _RUN_STATUS_FAILURE}
+    if failures:
+        detail = ", ".join(f"{name}={value}" for name, value in sorted(failures.items()))
+        return "failed", f"run payload reports failure status: {detail}", {"statuses": normalized}
+    open_states = {name: value for name, value in normalized.items() if value not in _RUN_STATUS_SUCCESS}
+    if open_states:
+        detail = ", ".join(f"{name}={value}" for name, value in sorted(open_states.items()))
+        return (
+            "failed",
+            f"run payload has not reached terminal target closure: {detail}",
+            {"statuses": normalized},
+        )
+    return "passed", None, {"statuses": normalized}
+
+
+def _scheduler_failure_markers(payload: Any) -> list[str]:
+    """Scan a scheduler/health-class payload for blocking or failure markers."""
+    markers: list[str] = []
+    queue: list[tuple[str, Any]] = [("", payload)]
+    visited = 0
+    while queue and visited < 400:
+        prefix, node = queue.pop(0)
+        if isinstance(node, dict):
+            visited += 1
+            for key, value in node.items():
+                name = f"{prefix}.{key}" if prefix else str(key)
+                lowered = str(key).lower()
+                if lowered in _SCHEDULER_BLOCKING_LIST_KEYS and value:
+                    markers.append(name)
+                elif lowered in _SCHEDULER_BLOCKING_VALUE_KEYS and isinstance(value, dict) and value:
+                    markers.append(name)
+                elif lowered in _SCHEDULER_REASON_KEYS and isinstance(value, str) and value.strip():
+                    markers.append(name)
+                elif lowered in _STATUS_FIELD_NAMES and isinstance(value, str) and value.strip().upper() in _HEALTH_FAILURE_STATUSES:
+                    markers.append(f"{name}={value.strip()}")
+                if isinstance(value, (dict, list)) and len(str(prefix).split(".")) < 8:
+                    queue.append((name, value))
+        elif isinstance(node, list):
+            visited += 1
+            for index, value in enumerate(node):
+                if isinstance(value, (dict, list)):
+                    queue.append((f"{prefix}[{index}]", value))
+    return sorted(set(markers))
+
+
+def _validate_scheduler_status(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Scheduler/health-class payloads must prove ok=true without blockers."""
+    if not isinstance(payload, dict):
+        return "failed", "scheduler payload must be a JSON object", {}
+    if payload.get("ok") is not True:
+        if "ok" not in payload:
+            return "failed", "scheduler payload is missing the required ok=true envelope", {}
+        return "failed", "scheduler payload reports ok=false", {}
+    markers = _scheduler_failure_markers(payload)
+    if markers:
+        return (
+            "failed",
+            "scheduler payload exposes blocking/failure markers: " + ", ".join(markers[:8]),
+            {"markers": markers},
+        )
+    return "passed", None, {}
+
+
+def _validate_health_ok(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Health endpoints must report ok=true or an explicitly healthy status."""
+    if not isinstance(payload, dict):
+        return "failed", "health payload must be a JSON object", {}
+    if payload.get("ok") is False:
+        return "failed", "health payload reports ok=false", {}
+    status = payload.get("status") or payload.get("state")
+    if isinstance(status, str) and status.strip().upper() in _HEALTH_FAILURE_STATUSES:
+        return "failed", f"health payload reports unhealthy status: {status.strip()}", {}
+    errors = payload.get("errors")
+    if errors:
+        return "failed", "health payload reports errors", {}
+    if payload.get("ok") is True:
+        return "passed", None, {}
+    if isinstance(status, str) and status.strip().lower() in _HEALTH_SUCCESS_STATUSES:
+        return "passed", None, {"status": status.strip()}
+    return "failed", "health payload is missing ok=true or an explicitly healthy status", {}
+
+
+def _validate_collection_payload(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Collection endpoints must return a list or a non-error list envelope."""
+    if isinstance(payload, list):
+        return "passed", None, {"kind": "array", "size": len(payload)}
+    if not isinstance(payload, dict):
+        return "failed", "collection payload must be a JSON array or object", {}
+    if payload.get("ok") is False:
+        return "failed", "collection payload reports ok=false", {}
+    errors = payload.get("errors")
+    if errors:
+        return "failed", "collection payload reports errors", {}
+    for field in _STATUS_FIELD_NAMES:
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
+            return "failed", f"collection payload reports failure {field}={value.strip()}", {}
+    for key in _COLLECTION_LIST_KEYS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return "passed", None, {"items_key": key, "size": len(value)}
+    if payload.get("ok") is True:
+        return "passed", None, {"ok": True}
+    for field in _STATUS_FIELD_NAMES:
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip().lower() in _HEALTH_SUCCESS_STATUSES:
+            return "passed", None, {field: value.strip()}
+    return "failed", "collection payload is missing an items array or an explicit ok/success marker", {}
+
+
+def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Object endpoints must return a non-error object or array payload."""
+    if isinstance(payload, list):
+        return "passed", None, {"kind": "array", "size": len(payload)}
+    if not isinstance(payload, dict):
+        return "failed", "object payload must be a JSON object or array", {}
+    if payload.get("ok") is False:
+        return "failed", "object payload reports ok=false", {}
+    errors = payload.get("errors")
+    if errors:
+        return "failed", "object payload reports errors", {}
+    for field in _STATUS_FIELD_NAMES:
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
+            return "failed", f"object payload reports failure {field}={value.strip()}", {}
+    return "passed", None, {"kind": "object"}
+
+
+def _validate_openapi_document(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """The OpenAPI document smoke must prove the app serves its route schema."""
+    if not isinstance(payload, dict):
+        return "failed", "openapi payload must be a JSON object", {}
+    version = payload.get("openapi")
+    if not isinstance(version, str) or not version.strip():
+        return "failed", "openapi payload is missing the openapi version field", {}
+    paths = payload.get("paths")
+    if not isinstance(paths, dict) or not paths:
+        return "failed", "openapi payload is missing a non-empty paths mapping", {}
+    return "passed", None, {"openapi": version.strip(), "paths": len(paths)}
+
+
+def _validate_correlation_status(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Correlation status reports idle/computing plus explicit refresh errors."""
+    if not isinstance(payload, dict):
+        return "failed", "correlation status payload must be a JSON object", {}
+    status = payload.get("status")
+    if not isinstance(status, str) or not status.strip():
+        return "failed", "correlation status payload is missing the status field", {}
+    normalized = status.strip()
+    if normalized.upper() in _HEALTH_FAILURE_STATUSES:
+        return "failed", f"correlation status payload reports failure status: {normalized}", {}
+    refresh_errors = payload.get("refresh_errors")
+    if refresh_errors:
+        count = len(refresh_errors) if isinstance(refresh_errors, list) else 1
+        return "failed", "correlation status payload reports refresh errors", {"refresh_errors": count}
+    if normalized.lower() in {"idle", "computing"}:
+        return "passed", None, {"status": normalized}
+    return "failed", f"correlation status payload reports unknown status: {normalized}", {}
+
+
+_BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
+    (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
+    (re.compile(r"^/api/v1/simulation-runtime/scheduler/status$"), "scheduler_status", _validate_scheduler_status),
+    (re.compile(r"^/api/v1/simulation-runtime/platform-diagnostics$"), "scheduler_status", _validate_scheduler_status),
+    (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
+    (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
+    (re.compile(r"^/api/v1/simulation-runtime/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/simulation-runtime/execution-plans/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/advisory/historical-range-operations/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/advisory/historical-range-runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/multi-alpha/combine-backtest/runs/[^/]+$"), "run_terminal_success", _validate_run_terminal_success),
+    (re.compile(r"^/api/v1/simulation-runtime/runs$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/advisory/historical-range-batches$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/quantevolver/evolution/tasks$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/quantevolver/experiments$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/quantevolver/strategies$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/multi-alpha/combine/tasks$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/multi-alpha/combine-backtest/runs$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/ingestion/schedule$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/data-stats$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/local-data/schedules$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/dispatch/nodes$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+/.+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/advisory/historical-range-options$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/model-shadow$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/local-data/targets/[^/]+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/qlib/config$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/runtime-contracts/[^/]+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/validation/plans/[^/]+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/openapi\.json$"), "openapi_document", _validate_openapi_document),
+)
+
+
+def _business_smoke_semantic_contract(path: str) -> tuple[str, Any] | None:
+    for pattern, contract_id, validator in _BUSINESS_SMOKE_SEMANTIC_CONTRACTS:
+        if pattern.fullmatch(path):
+            return contract_id, validator
+    return None
+
+
+def _evaluate_business_smoke_semantics(url: str, body: str, *, response_sha256: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Evaluate the target-owned semantic contract for a business-smoke payload.
+
+    Returns (payload_schema, semantic) evidence. Fail-closed: unparsable
+    bodies, unregistered endpoints, and contract violations all yield a
+    failed verdict; nothing falls back to HTTP-only success.
+    """
+    path = urllib.parse.urlsplit(url).path or "/"
+    contract = _business_smoke_semantic_contract(path)
+    contract_id = contract[0] if contract else None
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        schema = {"json": False, "kind": "none"}
+        semantic = {
+            "schema_version": BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+            "contract_id": contract_id,
+            "verdict": "failed",
+            "reason": "business-smoke payload is not parseable JSON",
+            "facts": {},
+            "response_sha256": response_sha256,
+        }
+        return schema, semantic
+    schema = {"json": True, "kind": _json_payload_kind(payload)}
+    if contract is None:
+        semantic = {
+            "schema_version": BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+            "contract_id": None,
+            "verdict": "failed",
+            "reason": f"no target-owned business-smoke semantic contract is registered for endpoint path: {path}",
+            "facts": {},
+            "response_sha256": response_sha256,
+        }
+        return schema, semantic
+    contract_id, validator = contract
+    verdict, reason, facts = validator(payload)
+    semantic = {
+        "schema_version": BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+        "contract_id": contract_id,
+        "verdict": verdict,
+        "reason": reason,
+        "facts": facts,
+        "response_sha256": response_sha256,
+    }
+    return schema, semantic
 
 
 def _identity_values(body: str) -> set[str]:
@@ -2407,22 +2813,30 @@ def _runtime_identity_proof_errors(
 
 
 def _probe_evidence_digest(results: list[dict[str, Any]]) -> str:
-    payload = [
-        {
-            "name": item.get("name"),
-            "url": item.get("url"),
-            "status": item.get("status"),
-            "status_code": item.get("status_code"),
-            "response_sha256": item.get("response_sha256"),
-            "response_bytes": item.get("response_bytes"),
-        }
-        for item in results
-    ]
+    payload = []
+    for item in results:
+        transport = item.get("transport") if isinstance(item.get("transport"), dict) else {}
+        semantic = item.get("semantic") if isinstance(item.get("semantic"), dict) else {}
+        payload.append(
+            {
+                "name": item.get("name"),
+                "url": item.get("url"),
+                "status": item.get("status"),
+                "status_code": item.get("status_code"),
+                "response_sha256": item.get("response_sha256"),
+                "response_bytes": item.get("response_bytes"),
+                "transport_ok": transport.get("ok"),
+                "semantic_contract_id": semantic.get("contract_id"),
+                "semantic_verdict": semantic.get("verdict"),
+                "semantic_reason": semantic.get("reason"),
+            }
+        )
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
 def _post_restart_receipt_summary(receipt_path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
+    semantic = receipt.get("business_smoke_semantic") if isinstance(receipt.get("business_smoke_semantic"), dict) else {}
     return {
         "schema_version": RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA,
         "receipt_sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
@@ -2437,6 +2851,13 @@ def _post_restart_receipt_summary(receipt_path: Path, receipt: dict[str, Any]) -
         "probe_evidence_digest": receipt.get("probe_evidence_digest"),
         "post_restart_effective_gate": receipt.get("post_restart_effective_gate"),
         "mode": receipt.get("mode"),
+        "business_smoke_semantic": {
+            "contract_id": semantic.get("contract_id"),
+            "verdict": semantic.get("verdict"),
+            "reason": semantic.get("reason"),
+        }
+        if semantic
+        else None,
         "response_content_persisted": False,
     }
 
@@ -2487,6 +2908,20 @@ def build_post_restart_verify(
                     timeout_seconds=timeout_seconds,
                 )
             )
+    smoke_result = next((item for item in results if item.get("name") == "business_smoke_ref"), None)
+    business_smoke_semantic: dict[str, Any] | None = None
+    if isinstance(smoke_result, dict) and smoke_result.get("status") == "passed":
+        schema_evidence, semantic = _evaluate_business_smoke_semantics(
+            str(smoke_result.get("url") or ""),
+            str(smoke_result.get("_response_body") or ""),
+            response_sha256=str(smoke_result.get("response_sha256") or ""),
+        )
+        smoke_result["payload_schema"] = schema_evidence
+        smoke_result["semantic"] = semantic
+        business_smoke_semantic = semantic
+        if semantic.get("verdict") != "passed":
+            smoke_result["status"] = "failed"
+            smoke_result["error"] = str(semantic.get("reason") or "business-smoke semantic contract failed")
     identity_result = next((item for item in results if item.get("name") == "identity_ref"), {})
     identity_proof, identity_error = _build_runtime_identity_proof(
         expected_identity=expected,
@@ -2534,6 +2969,7 @@ def build_post_restart_verify(
         "runtime_identity_match": identity_match,
         "post_restart_effective_gate": "passed" if passed else "failed",
         "workflow_gate": "verified" if passed else "blocked",
+        "business_smoke_semantic": business_smoke_semantic,
         "probes": sanitized_results,
         "probe_evidence_digest": _probe_evidence_digest(sanitized_results),
         "blocking": flow._unique_strings(blocking),
@@ -15074,6 +15510,30 @@ def build_close_sync_plan(
                     runtime_receipt_errors.append(f"post-restart receipt probe is incomplete or failed: {probe.get('name')}")
                 if "response_preview" in probe or "_response_body" in probe:
                     runtime_receipt_errors.append(f"post-restart receipt probe leaks response content: {probe.get('name')}")
+            smoke_probe = next(
+                (
+                    probe
+                    for probe in receipt_probes
+                    if isinstance(probe, dict) and probe.get("name") == "business_smoke_ref"
+                ),
+                None,
+            )
+            if smoke_probe is not None:
+                semantic = smoke_probe.get("semantic")
+                if not isinstance(semantic, dict) or semantic.get("schema_version") != BUSINESS_SMOKE_SEMANTIC_SCHEMA:
+                    runtime_receipt_errors.append(
+                        "post-restart receipt business-smoke semantic verdict is missing or has an unknown schema"
+                    )
+                else:
+                    if semantic.get("verdict") != "passed":
+                        runtime_receipt_errors.append(
+                            "post-restart receipt business-smoke semantic verdict is not passed: "
+                            f"{semantic.get('reason')}"
+                        )
+                    if str(semantic.get("response_sha256") or "") != str(smoke_probe.get("response_sha256") or ""):
+                        runtime_receipt_errors.append(
+                            "post-restart receipt business-smoke semantic digest does not match probe evidence"
+                        )
             if runtime_receipt.get("probe_evidence_digest") != _probe_evidence_digest(receipt_probes):
                 runtime_receipt_errors.append("post-restart receipt probe evidence digest mismatch")
     runtime_gate_passed = bool(
