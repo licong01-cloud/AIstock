@@ -7,6 +7,14 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from backend.db import pg_pool
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_UNIVERSE_KEY,
+    PitAuthorityStatus,
+    PitConsumerBinding,
+    canonical_rule_parameters_digest,
+)
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import (
     DailySuspendStatus,
@@ -20,6 +28,7 @@ from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2R
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
 from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
+from backend.services.selection_center.canonical_pit_runtime import CanonicalPitGenerationDriftError
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
@@ -41,6 +50,40 @@ from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
 from backend.services.trading_core.models import AccountSnapshot, Fill, MinuteBar, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
 from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test, make_manifest
+
+
+class ActiveCanonicalPitResolver:
+    def __init__(self, *, generation: int = 1) -> None:
+        self.binding = PitConsumerBinding(
+            authority_id=CANONICAL_PIT_AUTHORITY_ID,
+            authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+            universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+            rule_version=CANONICAL_PIT_RULE_VERSION,
+            rule_parameters_digest=canonical_rule_parameters_digest(),
+            activation_generation=generation,
+            activation_envelope_digest="b" * 64,
+            expected_source_commit="source-commit",
+            state_source_digest="a" * 64,
+            coverage_start=date(2018, 8, 1),
+            coverage_end=date(2026, 7, 31),
+        )
+        self.calls = 0
+
+    def resolve_live_binding(self) -> PitConsumerBinding:
+        self.calls += 1
+        return self.binding
+
+
+class DriftingCanonicalPitResolver:
+    def __init__(self, *, drift_on_call: int) -> None:
+        self.current = ActiveCanonicalPitResolver(generation=1).binding
+        self.drifted = ActiveCanonicalPitResolver(generation=2).binding
+        self.drift_on_call = drift_on_call
+        self.calls = 0
+
+    def resolve_live_binding(self) -> PitConsumerBinding:
+        self.calls += 1
+        return self.drifted if self.calls >= self.drift_on_call else self.current
 
 
 class FakeCalendar:
@@ -1421,6 +1464,67 @@ def test_day_runner_v25_portfolio_uses_twap_without_requesting_day_features() ->
     assert not any(item["event_type"] == "DAY_FEATURE_SYMBOL_EXCLUDED" for item in events)
 
 
+def test_day_runner_stops_before_order_write_when_canonical_pit_generation_drifts() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest(topk=2)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
+    portfolio_service = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    )
+    portfolio = portfolio_service.create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="canonical PIT drift",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.TDX_REALTIME,
+    )
+    _profile, legacy_version = portfolio_service.create_runtime_profile(
+        portfolio_id=portfolio.portfolio_id,
+        profile_name="canonical PIT profile",
+        config_json={"runtime_profile": {"selection": {"top_k": 2}}},
+    )
+    canonical_version = portfolio_service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=legacy_version.profile_version_id,
+    )
+    portfolio_service.activate_runtime_config(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 2),
+        profile_version_id=canonical_version.profile_version_id,
+    )
+    resolver = DriftingCanonicalPitResolver(drift_on_call=4)
+    runner = PaperTradingDayRunner(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=PaperV2MinuteMarketDataProvider(
+            limit_price_provider=FakeLimitProvider(),
+            suspend_status_provider=FakeSuspendProvider(),
+            tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
+        ),
+        runtime=runtime_with_authoritative_scores(
+            manifest,
+            data_source=MinuteDataSource.TDX_REALTIME.value,
+            rows=[
+                {"symbol": "000001.SZ", "score": 0.91, "rank": 1, "target_weight": 0.03, "reference_price": 10.0},
+                {"symbol": "000002.SZ", "score": 0.89, "rank": 2, "target_weight": 0.03, "reference_price": 10.0},
+            ],
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        pit_authority_resolver=resolver,
+    )
+
+    with pytest.raises(CanonicalPitGenerationDriftError):
+        runner.run_day(portfolio_id=portfolio.portfolio_id, trade_date=date(2024, 1, 2))
+
+    run = next(iter(paper_repo.runs.values()))
+    assert run.status == RunStatus.FAILED
+    assert not paper_repo.orders
+    assert not paper_repo.fills
+
+
 def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
@@ -1467,10 +1571,15 @@ def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -
         config_json=runtime_config,
         created_by="unit_test",
     )
+    canonical_version = profile_service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=version.profile_version_id,
+        created_by="unit_test",
+    )
     activation = profile_service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 3),
-        profile_version_id=version.profile_version_id,
+        profile_version_id=canonical_version.profile_version_id,
         activated_by="unit_test",
         reason="risk policy forced exit test",
     )
@@ -1502,6 +1611,7 @@ def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -
                 )
             }
         ),
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
     ).run_day(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 3),
@@ -2300,10 +2410,17 @@ class FakeReplayDayRunner:
     def __init__(self) -> None:
         self.calls = []
 
-    def run_day(self, *, portfolio_id: str, trade_date: date, runtime_config: dict):
+    def run_day(
+        self,
+        *,
+        portfolio_id: str,
+        trade_date: date,
+        runtime_config: dict,
+        inherit_existing_pit_lease: bool = False,
+    ):
         from backend.services.paper_trading_v2.models import PaperDayRunResult, PaperRun
 
-        self.calls.append((portfolio_id, trade_date, runtime_config))
+        self.calls.append((portfolio_id, trade_date, runtime_config, inherit_existing_pit_lease))
         run = PaperRun(
             run_id=f"run_{trade_date:%Y%m%d}",
             portfolio_id=portfolio_id,
@@ -2360,6 +2477,7 @@ def test_historical_replay_runs_paper_day_runner_over_trading_days() -> None:
     assert result.data_source == MinuteDataSource.DB_HISTORICAL
     assert [item.trade_date for item in result.day_results] == [date(2024, 1, 2), date(2024, 1, 3)]
     assert len(fake_day_runner.calls) == 2
+    assert all(call[3] is False for call in fake_day_runner.calls)
 
 
 def test_historical_replay_rejects_existing_runs_before_partial_replay() -> None:

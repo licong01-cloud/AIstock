@@ -1840,6 +1840,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/services/hmm_risk/b3_training.py",
         "backend/services/hmm_risk/market_relative_jump_spike.py",
         "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+        "backend/services/hmm_risk/market_relative_ridge_holdout.py",
         "backend/services/hmm_risk/state_model_set.py",
         "backend/services/announcements/title_classifier.py",
         "backend/services/event_signal/st_announcement_adapter.py",
@@ -1863,6 +1864,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/hmm_risk/prepare_state_model_set.py",
         "scripts/hmm_risk/run_market_relative_jump_spike.py",
         "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
+        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
         "noxfile.py",
     }
     known_client_files = {
@@ -2243,6 +2245,9 @@ def _payload_schema_evidence(body: bytes) -> dict[str, Any]:
     return {"json": True, "kind": _json_payload_kind(payload)}
 
 
+_READ_ONLY_HTTP_PROBE_MAX_BYTES = 8 * 1024 * 1024
+
+
 def _read_only_http_probe(
     name: str,
     url: str,
@@ -2276,8 +2281,8 @@ def _read_only_http_probe(
     request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/plain,*/*"})
     try:
         with _open_read_only_url(request, timeout_seconds=timeout_seconds) as response:
-            body = response.read(1024 * 1024)
             status_code = int(getattr(response, "status", 200))
+            body = response.read(_READ_ONLY_HTTP_PROBE_MAX_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return {
             "name": name,
@@ -2288,6 +2293,26 @@ def _read_only_http_probe(
             "payload_schema": {"json": False, "kind": "none"},
         }
     transport_ok = 200 <= status_code < 400
+    if len(body) > _READ_ONLY_HTTP_PROBE_MAX_BYTES:
+        reason = (
+            "probe response exceeds maximum allowed size: "
+            f">{_READ_ONLY_HTTP_PROBE_MAX_BYTES} bytes"
+        )
+        return {
+            "name": name,
+            "url": url,
+            "status": "failed",
+            "status_code": status_code,
+            "error": reason,
+            "transport": {
+                "status_code": status_code,
+                "ok": transport_ok,
+                "error": None if transport_ok else f"unexpected HTTP status code: {status_code}",
+            },
+            "payload_schema": {"json": False, "kind": "none"},
+            "response_bytes": len(body),
+            "response_limit_bytes": _READ_ONLY_HTTP_PROBE_MAX_BYTES,
+        }
     return {
         "name": name,
         "url": url,

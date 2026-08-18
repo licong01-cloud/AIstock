@@ -1728,6 +1728,44 @@ def test_bug_1107_offline_hmm_ridge_runtime_contract_is_none_and_exact() -> None
     assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
+def test_bug_1125_offline_hmm_holdout_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_unregistered = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_holdout_runtime.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_unregistered["runtime_impact"] == "backend"
+    assert nearby_unregistered["target_ids"] == ["backend-main"]
+
+
 def test_bug_1113_offline_subset_is_exact_and_global_service_is_backend() -> None:
     changed_files = [
         "backend/services/announcements/title_classifier.py",
@@ -2216,8 +2254,8 @@ class _StubProbeResponse:
     def __exit__(self, *args: Any) -> None:
         return None
 
-    def read(self, _limit: int) -> bytes:
-        return self.body
+    def read(self, limit: int) -> bytes:
+        return self.body[:limit]
 
 
 def _install_stub_probes(
@@ -3122,6 +3160,57 @@ def test_read_only_probe_rejects_non_catalog_origin_without_network_call(
 
     assert result["status"] == "blocked"
     assert "not catalog-allowed" in result["error"]
+
+
+def test_read_only_probe_accepts_complete_json_larger_than_one_mib(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = json.dumps({"openapi": "3.1.0", "padding": "x" * (1024 * 1024)}).encode()
+    assert 1024 * 1024 < len(body) < workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES
+
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *args, **kwargs: _StubProbeResponse(body),
+    )
+
+    result = workflow._read_only_http_probe(
+        "business_smoke_ref",
+        "http://127.0.0.1:8001/openapi.json",
+        allowed_origins=["http://127.0.0.1:8001"],
+    )
+
+    assert result["status"] == "passed"
+    assert result["payload_schema"] == {"json": True, "kind": "object"}
+    assert result["response_bytes"] == len(body)
+    assert result["response_sha256"] == workflow.hashlib.sha256(body).hexdigest()
+    assert result["_response_body"] == body.decode()
+
+
+def test_read_only_probe_fails_loudly_when_response_exceeds_explicit_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = b"x" * (workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES + 1)
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *args, **kwargs: _StubProbeResponse(body),
+    )
+
+    result = workflow._read_only_http_probe(
+        "business_smoke_ref",
+        "http://127.0.0.1:8001/openapi.json",
+        allowed_origins=["http://127.0.0.1:8001"],
+    )
+
+    assert result["status"] == "failed"
+    assert result["transport"] == {"status_code": 200, "ok": True, "error": None}
+    assert result["payload_schema"] == {"json": False, "kind": "none"}
+    assert result["response_bytes"] == workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES + 1
+    assert result["response_limit_bytes"] == workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES
+    assert "exceeds maximum allowed size" in result["error"]
+    assert "response_sha256" not in result
+    assert "_response_body" not in result
 
 
 def test_close_sync_runtime_bug_requires_passed_post_restart_receipt(

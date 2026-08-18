@@ -11,17 +11,18 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.db.pg_pool import get_conn
-from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
+from backend.services.paper_trading_v2.canonical_pit_control import PaperCanonicalPitControlService
 from backend.services.paper_trading_v2.coldstart_sentinel import ColdstartSentinelService, PaperV2DaemonUnavailableError
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
-from backend.services.paper_trading_v2.live_dashboard import PaperTradingLiveDashboardService
+from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.execution import list_minqmt_execution_quality_reports
+from backend.services.paper_trading_v2.live_dashboard import PaperTradingLiveDashboardService
+from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
 from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
+from backend.services.paper_trading_v2.models import BrokerBackendId, PaperSessionMode
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
-from backend.services.paper_trading_v2.models import BrokerBackendId, PaperSessionMode
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, TradingCoreError, UnsupportedFeatureError
@@ -139,6 +140,17 @@ class ActivateRuntimeConfigRequest(BaseModel):
     activated_by: str | None = None
     reason: str | None = None
     replace_existing: bool = False
+
+
+class CanonicalPitMigrationRequest(BaseModel):
+    apply: bool = False
+    created_by: str | None = None
+    reason: str | None = None
+
+
+class CanonicalPitShadowRequest(BaseModel):
+    trade_date: date
+    symbols: list[str] = Field(min_length=1, max_length=500)
 
 
 class CreateLiveApprovalCandidateRequest(BaseModel):
@@ -344,19 +356,19 @@ def get_trading_day_defaults(
         with get_conn() as conn:
             with conn.cursor() as cur:
                 data_ready_dataset_dates: dict[str, date] = {}
-                data_ready_missing_datasets: list[str] = []
+                data_ready_unavailable_datasets: list[str] = []
                 effective_end = as_of
-                data_ready_latest_date, data_ready_dataset_dates, data_ready_missing_datasets = _resolve_defaults_data_ready_end(
+                data_ready_latest_date, data_ready_dataset_dates, data_ready_unavailable_datasets = _resolve_defaults_data_ready_end(
                     cur,
                     as_of=as_of,
                     require_minute_data=require_minute_data,
                 )
-                if data_ready_missing_datasets:
+                if data_ready_unavailable_datasets:
                     raise DataUnavailableError(
                         "paper v2 trading-day defaults require completed DB minute/day data",
                         context={
                             "as_of_date": as_of.isoformat(),
-                            "missing_datasets": data_ready_missing_datasets,
+                            "missing_datasets": data_ready_unavailable_datasets,
                             "available_dataset_dates": {
                                 key: value.isoformat()
                                 for key, value in data_ready_dataset_dates.items()
@@ -400,7 +412,7 @@ def get_trading_day_defaults(
             key: value.isoformat()
             for key, value in data_ready_dataset_dates.items()
         },
-        "data_ready_missing_datasets": data_ready_missing_datasets,
+        "data_ready_missing_datasets": data_ready_unavailable_datasets,
         "latest_trading_day": latest.isoformat(),
         "trading_days": [day.isoformat() for day in sorted(dates)],
         "replay_start_date": replay_start.isoformat(),
@@ -815,6 +827,38 @@ def list_portfolio_runtime_profile_versions(
         _raise_http(exc)
 
 
+@router.post(
+    "/portfolios/{portfolio_id}/runtime-profiles/versions/{profile_version_id}/canonical-pit-migration"
+)
+def migrate_portfolio_runtime_profile_to_canonical_pit(
+    portfolio_id: str,
+    profile_version_id: str,
+    req: CanonicalPitMigrationRequest,
+) -> dict[str, Any]:
+    service = PaperTradingV2PortfolioService()
+    try:
+        plan = service.plan_runtime_profile_canonical_pit_migration(
+            portfolio_id=portfolio_id,
+            profile_version_id=profile_version_id,
+        )
+        if not req.apply:
+            return {"ok": True, "applied": False, "plan": plan}
+        version = service.migrate_runtime_profile_version_to_canonical_pit(
+            portfolio_id=portfolio_id,
+            profile_version_id=profile_version_id,
+            created_by=req.created_by,
+            reason=req.reason,
+        )
+        return {
+            "ok": True,
+            "applied": True,
+            "plan": plan,
+            "version": version.model_dump(mode="json"),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.post("/portfolios/{portfolio_id}/runtime-config-activations")
 def activate_portfolio_runtime_config(portfolio_id: str, req: ActivateRuntimeConfigRequest) -> dict[str, Any]:
     try:
@@ -840,6 +884,39 @@ def list_portfolio_runtime_config_activations(portfolio_id: str, limit: int = 10
             "portfolio_id": portfolio_id,
             "activations": [activation.model_dump(mode="json") for activation in activations],
         }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/canonical-pit/inventory")
+def get_canonical_pit_inventory(
+    portfolio_id: str | None = Query(default=None, min_length=1),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "inventory": PaperCanonicalPitControlService().inventory(portfolio_id=portfolio_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/canonical-pit/activation-readiness")
+def get_canonical_pit_activation_readiness(
+    portfolio_id: str | None = Query(default=None, min_length=1),
+) -> dict[str, Any]:
+    try:
+        readiness = PaperCanonicalPitControlService().activation_readiness(portfolio_id=portfolio_id)
+        return {"ok": True, "readiness": readiness}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/canonical-pit/shadow")
+def compare_canonical_pit_shadow(req: CanonicalPitShadowRequest) -> dict[str, Any]:
+    try:
+        shadow = PaperCanonicalPitControlService().shadow_compare(
+            trade_date=req.trade_date,
+            symbols=req.symbols,
+        )
+        return {"ok": True, "shadow": shadow}
     except TradingCoreError as exc:
         _raise_http(exc)
 

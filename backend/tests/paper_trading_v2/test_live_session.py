@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -21,6 +22,10 @@ from backend.services.paper_trading_v2.models import (
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
+from backend.services.selection_center.canonical_pit_runtime import (
+    CanonicalPitGenerationDriftError,
+    migrate_runtime_config_to_canonical_pointer,
+)
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
@@ -30,6 +35,7 @@ from backend.services.trading_core.errors import BrokerConnectivityError, DataUn
 from backend.services.trading_core.models import AccountSnapshot, MinuteBar, OrderIntent, OrderSide, OrderStatus, PositionLot, RunStatus
 from backend.services.trading_core.oms import OMS
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
+from backend.tests.paper_trading_v2.test_day_runner import ActiveCanonicalPitResolver, DriftingCanonicalPitResolver
 
 
 class FakeCalendar:
@@ -447,6 +453,79 @@ def make_bars() -> list[MinuteBar]:
         )
         for i in range(2)
     ]
+
+
+def test_live_tick_stops_before_fill_persistence_when_canonical_pit_generation_drifts() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    admission_resolver = ActiveCanonicalPitResolver(generation=1)
+    pointer_config = migrate_runtime_config_to_canonical_pointer(
+        {
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        }
+    )
+    session = PaperTradingSessionService(
+        repository=paper_repo,
+        pit_authority_resolver=admission_resolver,
+    ).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config=pointer_config,
+    )
+    run_config = deepcopy(session.runtime_config)
+    run_config["validated_execution_policy"] = {
+        "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 2, "allow_partial_fill": True}},
+    }
+    run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.TDX_REALTIME,
+            runtime_config=run_config,
+        )
+    )
+    order = OMS().create_order(
+        OrderIntent(
+            package_id="pkg_test",
+            portfolio_id=portfolio_id,
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=600,
+            target_trade_date=date(2024, 1, 2),
+        )
+    )
+    paper_repo.save_order(run.run_id, order)
+    initial_state = paper_repo.save_order_execution_state(
+        OrderExecutionState(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            order_id=order.order_id,
+            symbol=order.symbol,
+            trade_date=run.trade_date,
+            algo_code="TWAP",
+            filled_quantity=0,
+            remaining_quantity=order.quantity,
+            status=order.status.value,
+        )
+    )
+    resolver = DriftingCanonicalPitResolver(drift_on_call=3)
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket(make_bars()),
+        pit_authority_resolver=resolver,
+    )
+
+    with pytest.raises(CanonicalPitGenerationDriftError):
+        live_executor.tick(session, as_of_time=datetime(2024, 1, 2, 9, 31))
+
+    assert paper_repo.list_fills_for_run(run.run_id) == []
+    assert paper_repo.cash_entries.get(run.run_id, []) == []
+    persisted_state = paper_repo.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)[0]
+    assert persisted_state == initial_state
 
 
 def test_live_session_tick_processes_new_minute_bar_once() -> None:

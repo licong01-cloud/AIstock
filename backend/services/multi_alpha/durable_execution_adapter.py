@@ -66,12 +66,94 @@ from backend.services.quantevolver.qe_workspace_client import (
     QEWorkspaceFileNotFound,
 )
 from backend.services.quantevolver.qe_execution_reservation import (
+    QEExecutionCapacityObservation,
     make_qe_execution_reservation_id,
 )
 
 
 ARTIFACT_MANIFEST_SCHEMA = "multi_alpha_child_artifact_manifest_v1"
 RESULT_MANIFEST_SCHEMA = "multi_alpha_child_result_manifest_v1"
+
+
+def _prediction_window_contract(
+    frame: pd.DataFrame,
+    *,
+    requested_start: str,
+    requested_end: str,
+) -> dict[str, Any]:
+    if "trade_date" not in frame.columns:
+        raise DurableExecutionAdapterError(
+            "materialized prediction is missing trade_date",
+            reason_code="multi_alpha_prediction_window_invalid",
+        )
+    dates = pd.to_datetime(frame["trade_date"], errors="coerce").dropna().dt.normalize()
+    if dates.empty:
+        raise DurableExecutionAdapterError(
+            "materialized prediction has no valid trade dates",
+            reason_code="multi_alpha_prediction_window_invalid",
+        )
+    return {
+        "requested_start": requested_start,
+        "requested_end": requested_end,
+        "effective_start": dates.min().date().isoformat(),
+        "effective_end": dates.max().date().isoformat(),
+        "trading_date_count": int(dates.nunique()),
+    }
+
+
+def _validate_result_window(
+    payload: Mapping[str, Any],
+    *,
+    expected: Mapping[str, Any],
+) -> dict[str, Any]:
+    curves = payload.get("return_curves")
+    raw_dates = curves.get("dates") if isinstance(curves, Mapping) else None
+    if not isinstance(raw_dates, list) or not raw_dates:
+        raise DurableExecutionAdapterError(
+            "QE Workspace result is missing return-curve date evidence",
+            reason_code="multi_alpha_result_window_evidence_missing",
+            context={"expected_window": dict(expected)},
+        )
+    parsed = pd.to_datetime(pd.Series(raw_dates, dtype="object"), errors="coerce").dropna().dt.normalize()
+    if len(parsed) != len(raw_dates):
+        raise DurableExecutionAdapterError(
+            "QE Workspace result contains invalid return-curve dates",
+            reason_code="multi_alpha_result_window_invalid",
+            context={"expected_window": dict(expected), "date_count": len(raw_dates)},
+        )
+    observed = {
+        "effective_start": parsed.min().date().isoformat(),
+        "effective_end": parsed.max().date().isoformat(),
+        "trading_date_count": int(parsed.nunique()),
+    }
+    mismatches = {
+        key: {"expected": expected.get(key), "observed": observed.get(key)}
+        for key in ("effective_start", "effective_end", "trading_date_count")
+        if expected.get(key) != observed.get(key)
+    }
+    absolute = payload.get("absolute_returns")
+    reported_days = absolute.get("n_trading_days") if isinstance(absolute, Mapping) else None
+    if reported_days is not None:
+        try:
+            normalized_reported_days = int(reported_days)
+        except (TypeError, ValueError) as exc:
+            raise DurableExecutionAdapterError(
+                "QE Workspace result has invalid n_trading_days",
+                reason_code="multi_alpha_result_window_invalid",
+                context={"n_trading_days": reported_days},
+            ) from exc
+        if normalized_reported_days != observed["trading_date_count"]:
+            mismatches["n_trading_days"] = {
+                "expected": observed["trading_date_count"],
+                "observed": normalized_reported_days,
+            }
+    if mismatches:
+        raise DurableExecutionAdapterError(
+            "QE Workspace result window does not match the materialized prediction window",
+            reason_code="multi_alpha_result_window_mismatch",
+            context={"expected_window": dict(expected), "observed_window": observed, "mismatches": mismatches},
+        )
+    return observed
 
 
 def _runtime_external_data_bindings(backtest_config: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -527,6 +609,11 @@ class QEWorkspacePredBacktestAdapter:
                 "dropped_leg_id": materialization.child.get("dropped_leg_id"),
                 "weights": dict(materialization.weights),
                 "per_window_weights": [dict(item) for item in materialization.per_window_weights],
+                "prediction_window": _prediction_window_contract(
+                    materialization.prediction_frame,
+                    requested_start=materialization.request.oos_start,
+                    requested_end=materialization.request.oos_end,
+                ),
                 "input_manifest_hash": materialization.child["input_manifest_hash"],
                 "external_runtime_data_bindings": external_data_bindings,
             }
@@ -1188,6 +1275,28 @@ class QEWorkspacePredBacktestAdapter:
             "execution_environment_manifest_sha256": manifest_hash,
         }
 
+    def observe_submission_capacity(
+        self,
+        *,
+        run: Mapping[str, Any],
+        intent: DurableSubmissionIntent,
+    ) -> QEExecutionCapacityObservation:
+        """Read capacity for an already-waiting attempt without source DML."""
+
+        node_parallelism = json_mapping(
+            run.get("node_parallelism_json"),
+            field_name="node_parallelism_json",
+        )
+        return self._submission_coordinator.observe_capacity(
+            node_id=intent.node_id,
+            requested_node_capacity=node_parallelism.get(intent.node_id),
+            source_kind="multi_alpha_durable_attempt",
+            source_execution_id=intent.attempt_id,
+            qe_task_id=intent.qe_task_id,
+            qe_loop_id=intent.qe_loop_id,
+            submission_intent_hash=intent.submission_intent_hash,
+        )
+
     async def submit(
         self,
         *,
@@ -1556,6 +1665,15 @@ class QEWorkspacePredBacktestAdapter:
                 },
             )
         raw_metrics = dict(raw)
+        materialization_metadata = self.load_materialization_metadata(artifacts)
+        prediction_window = materialization_metadata.get("prediction_window")
+        if not isinstance(prediction_window, Mapping):
+            raise DurableExecutionAdapterError(
+                "durable materialization metadata is missing prediction-window evidence",
+                reason_code="multi_alpha_materialization_window_missing",
+                context={"attempt_id": intent.attempt_id},
+            )
+        result_window = _validate_result_window(raw_metrics, expected=prediction_window)
         raw_result_path = artifacts.workspace / "qlib_results_enhanced.json"
         existing_raw = self._read_json_if_exists(raw_result_path)
         if existing_raw is not None and existing_raw != raw_metrics:
@@ -1608,6 +1726,8 @@ class QEWorkspacePredBacktestAdapter:
             "raw_result_file": raw_result_path.name,
             "raw_result_hash": artifact_manifest_hash_for(raw_metrics),
             "metrics_hash": metrics_hash,
+            "prediction_window": dict(prediction_window),
+            "result_window": result_window,
             "prediction_store_manifest": prediction_store_manifest,
             "completed_after_deadline": bool(deadline_evidence),
         }

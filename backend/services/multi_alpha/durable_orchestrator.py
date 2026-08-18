@@ -532,10 +532,13 @@ class DurableMultiAlphaOrchestrator:
         self._p0_2_schema_ready = False
         self._last_claimed_run_id: str | None = None
         self._last_claimed_attempt_id: str | None = None
+        self._last_deferred_attempt_id: str | None = None
         self._last_claimed_command_id: str | None = None
         self._last_claimed_delivery_id: str | None = None
         self._monotonic = monotonic
         self._last_remote_observation_at: dict[str, float] = {}
+        self._last_capacity_wait_at: dict[str, tuple[float, str]] = {}
+        self._last_full_capacity_observation_at: dict[str, float] = {}
 
     @property
     def owner_id(self) -> str:
@@ -591,7 +594,7 @@ class DurableMultiAlphaOrchestrator:
             recoveries = 0
             cancellations = 0
         planned = await self._run_bounded_pass(self.planner_pass_once)
-        dispatched = await self._run_attempt_pass(self.dispatch_pass_once)
+        dispatched = await self._run_dispatch_pass()
         cancel_reconciled = (
             await self._run_attempt_pass(self.cancel_reconcile_pass_once)
             if self._p0_2_schema_ready
@@ -671,7 +674,12 @@ class DurableMultiAlphaOrchestrator:
                         archive_enabled=bool(
                             getattr(self._archive_capture, "enabled", False)
                         ),
-                        excluded_recent_attempt_ids=self._recent_remote_observation_ids(),
+                        excluded_recent_attempt_ids=tuple(
+                            sorted(
+                                set(self._recent_remote_observation_ids())
+                                | set(self._recent_capacity_wait_ids())
+                            )
+                        ),
                     )
                     if not due:
                         mark_durable_orchestrator_ready(owner_id=self._owner_id)
@@ -728,6 +736,54 @@ class DurableMultiAlphaOrchestrator:
             if observed_at > cutoff
         }
         return tuple(sorted(self._last_remote_observation_at))
+
+    def _recent_capacity_wait_ids(self) -> tuple[str, ...]:
+        now = self._monotonic()
+        cutoff = now - float(self._config.remote_poll_seconds)
+        self._last_capacity_wait_at = {
+            attempt_id: observation
+            for attempt_id, observation in self._last_capacity_wait_at.items()
+            if observation[0] > cutoff
+        }
+        self._last_full_capacity_observation_at = {
+            node_id: observed_at
+            for node_id, observed_at in self._last_full_capacity_observation_at.items()
+            if observed_at > cutoff
+        }
+        return tuple(sorted(self._last_capacity_wait_at))
+
+    def _record_capacity_wait(
+        self,
+        *,
+        attempt_id: str,
+        node_id: str,
+        confirm_node_full: bool = True,
+    ) -> None:
+        now = self._monotonic()
+        normalized_node_id = str(node_id).strip()
+        self._last_capacity_wait_at[attempt_id] = (now, normalized_node_id)
+        if confirm_node_full:
+            self._last_full_capacity_observation_at[normalized_node_id] = now
+
+    def _capacity_probe_due_for_node(self, node_id: str) -> bool:
+        observed_at = self._last_full_capacity_observation_at.get(str(node_id).strip())
+        if observed_at is None:
+            return True
+        return (
+            self._monotonic() - observed_at
+            >= float(self._config.remote_poll_seconds)
+        )
+
+    def _release_capacity_waits_for_node(self, node_id: str) -> None:
+        normalized = str(node_id or "").strip()
+        if not normalized:
+            return
+        self._last_full_capacity_observation_at.pop(normalized, None)
+        self._last_capacity_wait_at = {
+            attempt_id: observation
+            for attempt_id, observation in self._last_capacity_wait_at.items()
+            if observation[1] != normalized
+        }
 
     async def planner_pass_once(self, *, excluded_run_ids: Sequence[str] = ()) -> bool:
         run = await asyncio.to_thread(
@@ -919,46 +975,81 @@ class DurableMultiAlphaOrchestrator:
         *,
         excluded_attempt_ids: Sequence[str] = (),
     ) -> bool:
-        attempt = await asyncio.to_thread(
-            self._repository.claim_next_attempt,
-            owner_id=self._owner_id,
-            lease_seconds=self._config.lease_seconds,
+        self._last_deferred_attempt_id = None
+        locally_throttled = set(self._recent_capacity_wait_ids())
+        observation = await asyncio.to_thread(
+            self._repository.observe_next_dispatchable_attempt,
             p0_2_schema_ready=self._p0_2_schema_ready,
-            claim_kind="dispatch",
-            excluded_attempt_ids=excluded_attempt_ids,
+            excluded_attempt_ids=tuple(
+                sorted(locally_throttled | set(excluded_attempt_ids))
+            ),
         )
-        if attempt is None:
+        if observation is None:
             return False
-        attempt_id = str(attempt["attempt_id"])
-        self._last_claimed_attempt_id = attempt_id
-        token = _ownership_token(attempt)
+        attempt_id = str(observation["attempt_id"])
+        token: OwnershipToken | None = None
         try:
             child = _required(
                 "child",
-                attempt["child_id"],
-                self._repository.get_child(str(attempt["child_id"])),
+                observation["child_id"],
+                self._repository.get_child(str(observation["child_id"])),
             )
             run = _required(
                 "run",
-                attempt["run_id"],
-                self._repository.get_run(str(attempt["run_id"])),
-            )
-            artifacts = self._adapter.load_published_artifacts(
-                run_id=str(run["id"]),
-                child_id=str(child["child_id"]),
-                attempt_id=attempt_id,
+                observation["run_id"],
+                self._repository.get_run(str(observation["run_id"])),
             )
             request = self._adapter.request_from_run(run)
             node_id = str(
-                attempt.get("node_id")
+                observation.get("node_id")
                 or request.backtest_config.get("node_id")
                 or "wsl2-5080"
             )
             intent = self._adapter.prepare_submission_intent(
                 run=run,
                 child=child,
-                attempt=attempt,
+                attempt=observation,
                 node_id=node_id,
+            )
+            if str(observation.get("phase") or "") == "waiting_capacity":
+                if not self._capacity_probe_due_for_node(node_id):
+                    self._last_deferred_attempt_id = attempt_id
+                    self._record_capacity_wait(
+                        attempt_id=attempt_id,
+                        node_id=node_id,
+                        confirm_node_full=False,
+                    )
+                    return False
+                capacity = await asyncio.to_thread(
+                    self._adapter.observe_submission_capacity,
+                    run=run,
+                    intent=intent,
+                )
+                if not capacity.available:
+                    self._last_deferred_attempt_id = attempt_id
+                    self._record_capacity_wait(
+                        attempt_id=attempt_id,
+                        node_id=node_id,
+                    )
+                    return False
+            attempt = await asyncio.to_thread(
+                self._repository.claim_observed_dispatch_attempt,
+                attempt_id,
+                p0_2_schema_ready=self._p0_2_schema_ready,
+                expected_row_version=int(observation["row_version"]),
+                owner_id=self._owner_id,
+                lease_seconds=self._config.lease_seconds,
+            )
+            if attempt is None:
+                self._last_deferred_attempt_id = attempt_id
+                return False
+            self._last_claimed_attempt_id = attempt_id
+            self._last_capacity_wait_at.pop(attempt_id, None)
+            token = _ownership_token(attempt)
+            artifacts = self._adapter.load_published_artifacts(
+                run_id=str(run["id"]),
+                child_id=str(child["child_id"]),
+                attempt_id=attempt_id,
             )
             refreshed = await asyncio.to_thread(
                 self._repository.heartbeat_attempt,
@@ -973,7 +1064,12 @@ class DurableMultiAlphaOrchestrator:
                 attempt_token=token,
             )
             if outcome.waiting_capacity:
-                return True
+                self._last_deferred_attempt_id = attempt_id
+                self._record_capacity_wait(
+                    attempt_id=attempt_id,
+                    node_id=node_id,
+                )
+                return False
             token = self._owned_attempt_token_from_outcome(
                 attempt_id=attempt_id,
                 outcome=outcome,
@@ -996,6 +1092,21 @@ class DurableMultiAlphaOrchestrator:
                 attempt_id,
                 _exception_payload(exc),
             )
+            if token is None:
+                claimed_after_error = await asyncio.to_thread(
+                    self._repository.claim_observed_dispatch_attempt,
+                    attempt_id,
+                    p0_2_schema_ready=self._p0_2_schema_ready,
+                    expected_row_version=int(observation["row_version"]),
+                    owner_id=self._owner_id,
+                    lease_seconds=self._config.lease_seconds,
+                )
+                if claimed_after_error is None:
+                    self._last_deferred_attempt_id = attempt_id
+                    return False
+                token = _ownership_token(claimed_after_error)
+                self._last_claimed_attempt_id = attempt_id
+            assert token is not None
             await self._fail_attempt_from_current_owner(
                 attempt_id=attempt_id,
                 token=token,
@@ -1593,6 +1704,7 @@ class DurableMultiAlphaOrchestrator:
                     error=exc,
                 )
                 return
+            self._release_capacity_waits_for_node(intent.node_id)
             current = _required(
                 "attempt",
                 attempt_id,
@@ -1698,6 +1810,7 @@ class DurableMultiAlphaOrchestrator:
                 owner_id=self._owner_id,
                 remote_status="failed",
             )
+            self._release_capacity_waits_for_node(intent.node_id)
             await self._terminalize_attempt_and_child(
                 attempt_id=attempt_id,
                 token=token,
@@ -1718,6 +1831,7 @@ class DurableMultiAlphaOrchestrator:
                 owner_id=self._owner_id,
                 remote_status="cancelled",
             )
+            self._release_capacity_waits_for_node(intent.node_id)
             await self._terminalize_attempt_and_child(
                 attempt_id=attempt_id,
                 token=token,
@@ -2671,6 +2785,32 @@ class DurableMultiAlphaOrchestrator:
             latest = self._latest_claimed_identity("attempt", before)
             if latest:
                 excluded.append(latest)
+        return completed
+
+    async def _run_dispatch_pass(self) -> int:
+        """Dispatch a bounded batch without counting unchanged capacity waits.
+
+        A deferred row is excluded for the remainder of this pass so work for
+        another node can proceed.  If the batch contains only deferred rows the
+        returned progress is zero, preventing the worker from self-waking.
+        """
+
+        completed = 0
+        excluded: list[str] = []
+        for _ in range(self._config.items_per_pass):
+            dispatched = await self.dispatch_pass_once(
+                excluded_attempt_ids=tuple(excluded),
+            )
+            if dispatched:
+                completed += 1
+                attempt_id = self._last_claimed_attempt_id
+            else:
+                attempt_id = self._last_deferred_attempt_id
+            if attempt_id and attempt_id not in excluded:
+                excluded.append(attempt_id)
+                continue
+            if not dispatched:
+                break
         return completed
 
     async def _run_finalizer_pass(self) -> int:

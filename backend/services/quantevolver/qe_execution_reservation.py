@@ -124,6 +124,17 @@ class QEExecutionReservationAcquireResult:
 
 
 @dataclass(frozen=True)
+class QEExecutionCapacityObservation:
+    """Read-only snapshot used to avoid claiming a source that still cannot run."""
+
+    available: bool
+    duplicate_replay: bool
+    active_count: int
+    node_capacity: int
+    reservation: Mapping[str, Any] | None
+
+
+@dataclass(frozen=True)
 class QEExecutionReservationSchemaHealth:
     ready: bool
     missing_tables: tuple[str, ...]
@@ -486,6 +497,41 @@ class QEExecutionReservationRepository:
                     node_capacity=node_capacity,
                     reservation=reservation,
                     source_claim=dict(source_claim),
+                )
+
+    def observe_execution_capacity(
+        self,
+        spec: QEExecutionReservationSpec,
+        *,
+        node_capacity: int,
+    ) -> QEExecutionCapacityObservation:
+        """Observe capacity without locks, source claims, events, or DML.
+
+        The later reservation transaction remains authoritative and repeats the
+        same checks under the node advisory lock.  This snapshot only prevents
+        known-full nodes from forcing a queued source through a write lease on
+        every scheduler wake.
+        """
+
+        _validate_positive("node_capacity", node_capacity)
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                self._require_node(cur, spec.node_id)
+                existing = self._get_source_reservation(
+                    cur,
+                    spec.source_kind,
+                    spec.source_execution_id,
+                )
+                if existing is not None:
+                    self._assert_reservation_identity(existing, spec)
+                active_count = self._count_active_on_node(cur, spec.node_id)
+                duplicate_replay = existing is not None
+                return QEExecutionCapacityObservation(
+                    available=duplicate_replay or active_count < node_capacity,
+                    duplicate_replay=duplicate_replay,
+                    active_count=active_count,
+                    node_capacity=node_capacity,
+                    reservation=dict(existing) if existing is not None else None,
                 )
 
     def record_queue_only_wait_if_unreserved(
@@ -997,6 +1043,22 @@ class QEExecutionReservationRepository:
             FROM infra.qe_execution_reservation
             WHERE source_kind = %s AND source_execution_id = %s
             FOR UPDATE
+            """,
+            (source_kind, source_execution_id),
+        )
+        return cur.fetchone()
+
+    @staticmethod
+    def _get_source_reservation(
+        cur: Any,
+        source_kind: str,
+        source_execution_id: str,
+    ) -> Mapping[str, Any] | None:
+        cur.execute(
+            """
+            SELECT *
+            FROM infra.qe_execution_reservation
+            WHERE source_kind = %s AND source_execution_id = %s
             """,
             (source_kind, source_execution_id),
         )
