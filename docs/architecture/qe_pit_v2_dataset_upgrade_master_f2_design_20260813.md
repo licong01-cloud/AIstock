@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：W0～W2、W3-A与W3-B源码已合入，W3-B merge commit为`7d4120b1`；W3-C功能提交为`2ae89f7a`，已无冲突同步`origin/main@6538d32d`并在集成HEAD `b0bd967d`进入最终门禁，等待创建PR；真实数据构建和生产激活均未授权
+- 状态：W0～W3源码已合入，W3-D已在最终main完成统一身份验证；W4-A Selection runtime binding切片正在独立worktree实现，W4-B Paper持久化/session接入尚未开始；真实v2 dataset candidate和生产激活均未授权
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
@@ -407,6 +407,16 @@ W2任务：
 - PIT只决定`eligible_for_new_position/holding_must_exit`；停牌、涨跌停、时段和报价仍由`orderable_now`决定。
 - 增加shadow mode：同一trade date只读计算v1/v2差异和原因，不提交订单、不写正式荐股结果。
 
+W4采用两个不可冒充完整交付的短切片：
+
+- **W4-A Selection Runtime Binding**：新增显式`canonical_authority_pointer_v1` profile、不可变
+  `activation_generation` lease、legacy profile纯函数迁移、Selection/Simulation admission冻结与落证前drift拒绝；不修改
+  Paper持久化、DayRunner、订单或tradability语义。
+- **W4-B Paper Runtime Integration**：在W4-A合入后让新的Paper runtime profile version显式携带pointer profile，Paper
+  session/day run继承Selection lease并在读写边界检查generation；实现shadow、旧profile库存/迁移和activation readiness。
+
+W4-A通过只代表Selection/Simulation enablement，不代表Paper、完整W4、candidate或activation完成。
+
 #### P3-C StrategyPackage/Advisory（W5）
 
 - 新package manifest冻结authority、rule、parameter digest、release/cutoff/snapshot identity。
@@ -738,7 +748,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-011 | §6 P5、§7.1；minute source/overlay | `backend/tests/dataset_release/test_minute_overlay.py` | design_ready_for_review | none |
 | F-012 | §7.1；component validators | `backend/tests/dataset_release/test_candidate_validator.py`；`backend/tests/dataset_release/test_index_context.py` | design_ready_for_review | none |
 | F-013 | §6 P3-A/P8；W3-B/C QE/HMM/训练scope | `backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`；`backend/tests/hmm_data_source/test_isolation_constraints.py`；`backend/tests/test_qe_hmm_canonical_pit_integration.py` | w3b_merged_w3c_direct_tests_passed | none |
-| F-014 | §6 P3-B；Selection/Paper/Simulation planned scope | planned `backend/tests/selection_center/test_canonical_pit_runtime.py`；`backend/tests/paper_trading_v2/test_runtime_profile.py` | design_ready_for_review | none |
+| F-014 | §6 P3-B；W4-A `canonical_pit_runtime.py`、`runtime_profile.py`、`risk_policy.py`、Simulation selection；W4-B Paper planned scope | `backend/tests/selection_center/test_canonical_pit_runtime.py`；`backend/tests/selection_center/test_risk_policy.py`；`backend/tests/simulation_runtime/test_strategy_package_selection_service.py`；planned W4-B `backend/tests/paper_trading_v2/test_runtime_profile.py` | design_ready_for_review | none |
 | F-015 | §6 P3-C/P8；StrategyPackage/Advisory planned scope | planned `backend/tests/strategy_package/test_canonical_pit_compatibility.py` | design_ready_for_review | none |
 | F-016 | §6 P5；W6/W7 source identity contract | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
 | F-017 | §6 P5/P6；W7/W8 path and Merkle contract | artifact: `tests/aistock_validation/pit_v2/historical_immutability_receipt.json` | design_ready_for_review | none |
@@ -764,8 +774,8 @@ survivorship limitation，不得把v1重新声明为长期权威。
 |---|---|
 | W1 Core/Registry源码 | `merged_4e1f667e` |
 | W2 Dataset Release源码 | `merged_589678f3` |
-| W3消费者源码 | `w3a_w3b_merged_w3c_final_head_review_passed_ready_for_pr` |
-| W4～W6消费者/集成源码 | `not_started_or_separately_owned` |
+| W3消费者源码 | `w3_source_ready_final_main_validation_passed` |
+| W4～W6消费者/集成源码 | `w4a_in_progress_w4b_w5_w6_pending` |
 | 真实小样本 | `not_run_not_authorized` |
 | 真实全量candidate | `not_run_not_authorized` |
 | DEV DDL/DML | `not_revalidated_in_this_design_revision` |
@@ -826,3 +836,6 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-8A | W3-C实现首轮 | 旧HMM parser把QE兼容key与物理frozen key强制相等且仍要求v1 ready/scope；formal config未通过W3-A重验；repair preflight隐式继承旧universe/window；PR #2770精确重叠 | 分离并交叉校验双key/release/rule/cutoff；sealed request经neutral adapter重验且legacy不兜底；repair参数显式化；保护重叠文件并新增generation-bound online adapter；首轮直接矩阵58 passed | resolved |
 | Review-8B | W3-C身份完整性复审 | 首轮只绑定release/rule/key，未把runtime artifact fingerprint绑定sealed request instruments pin；测试fixture一度使用错误runtime-pins schema | 增加artifact_root/`qlib_instruments_sha256`严格绑定与非canonical fingerprint拒绝；切换为真实`qe_formal_frozen_runtime_pins_v1`；直接矩阵63 passed，HMM evolution 218、data source 78、HMM-risk 484、Qlib 15全部PASS | pass_pending_commit |
 | Review-8C | W3-C正式请求与流式租约最终复审 | HMM局部parser只校验runtime pins子集，可能接受QE所属契约会拒绝的不完整正式请求；同一请求的W3-A/W2投影再次读取调用方可变mapping；重复请求不可序列化时会泄漏原生异常；在线流读取中途generation漂移缺直接证据 | 先调用QE owning request contract完整校验10字段pins并生成detached canonical snapshot，再从同一快照经W3-A与W2独立投影；规范化失败统一为`InvalidSpecError`；补不完整pins和流中漂移拒绝测试。直接矩阵65 passed；最终required nox矩阵218+78（1 skipped）+485+15全部PASS；F2 30/30、catalog 7、registry 8/14-of-14、L0 blocking=0、classifier 11/11且unmapped=0；功能提交`2ae89f7a`已无冲突同步`origin/main@6538d32d`，集成HEAD `b0bd967d`进入最终门禁 | pass_ready_for_pr_final_head |
+| Review-9A | W4-A Selection runtime binding实现与复审 | 首轮允许外部请求携带格式正确但未与实时pointer比对的lease，且Selection计算完成后未在落证前复核generation；master F-014一度使用validator不支持的partial状态 | 初始请求lease必须与resolver实时身份完全一致；下游继承使用显式边界；落证前二次generation/source/envelope/coverage核验并typed fail；F-014恢复设计态且在正文明确W4-A不得冒充完整W4。Selection/Simulation/Paper-profile/StrategyPackage相邻矩阵152 passed；F2 30/30、L0 blocking=0、catalog 7、registry 8、ownership 9/9、Ruff/compile/diff均PASS | w4a_pass_pending_user_commit_authorization |
+| Review-9B | W4-A authority/schema安全复审 | lease parser曾允许字符串/浮点generation隐式转整数；下游继承通过admission布尔开关绕过pointer复核；显式profile为null及hash计算先移除非法lease会弱化fail-closed边界 | generation与identity改为严格canonical JSON类型；拆分命名明确的inherit API且admission始终实时复核；null/混合profile拒绝；profile hash排除临时lease前先验证完整envelope；同generation下source/envelope/state/coverage任一漂移均typed拒绝 | resolved |
+| Review-9C | W4-A证据与相邻调用链最终复审 | 普通DSE v1仅保存稳定profile hash，未独立投影本次Selection使用的authority generation | 将完整`canonical_pit_authority` lease加入DSE v1 payload并纳入artifact hash；DSE v2仍由完整effective config chain携带同一lease。最终相邻矩阵163 passed；F2 30/30、L0 skill findings=0/repository baseline=1/blocking=0、catalog 7、registry 8/14、ownership 9/9、Ruff/compile/diff均PASS | w4a_pass_pending_user_commit_authorization |
