@@ -6806,6 +6806,7 @@ class SimulationLifecycleScheduler:
             "local_sim_projection_readback_failure",
             "local_sim_projection_terminal_failure",
             "local_sim_projection_readback_terminal_failure",
+            "localsim_historical_legacy_plan_terminalization_v1",
         ):
             if carrier_field not in run.run_payload_json:
                 continue
@@ -6849,6 +6850,24 @@ class SimulationLifecycleScheduler:
                 SimulationDailyRunStatus.FAILED_TERMINAL,
             }:
                 return None
+            try:
+                self._assert_local_sim_plan_uses_twap(binding=binding, plan=plan)
+            except RuntimeConfigInvalidError as exc:
+                error_context = getattr(exc, "context", None)
+                reason_code = error_context.get("reason_code") if isinstance(error_context, Mapping) else None
+                if reason_code != "LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED":
+                    raise
+                return self._terminalize_historical_localsim_legacy_plan_run(
+                    run=run,
+                    plan=plan,
+                    binding=binding,
+                    outbox=outbox,
+                    states=states,
+                    active_states=active_states,
+                    policy_error=exc,
+                    scheduler_trade_date=scheduler_trade_date,
+                    as_of_time=as_of_time,
+                )
             return self._recover_historical_failed_localsim_active_generation(
                 run=run,
                 plan=plan,
@@ -7097,6 +7116,92 @@ class SimulationLifecycleScheduler:
             f"historical_failed_{evidence_suffix}_active_recovery": True,
             "scheduler_trade_date": scheduler_trade_date.isoformat(),
             "driven_status": driven.status,
+        }
+
+    def _terminalize_historical_localsim_legacy_plan_run(
+        self,
+        *,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        binding: SimulationReleaseBinding,
+        outbox: LocalSimProjectionOutboxV1,
+        states: tuple[LocalSimExecutionStateV1, ...],
+        active_states: tuple[LocalSimExecutionStateV1, ...],
+        policy_error: RuntimeConfigInvalidError,
+        scheduler_trade_date: date,
+        as_of_time: datetime | None,
+    ) -> dict[str, Any]:
+        """Terminally close a historical failed run whose frozen plan is retired legacy policy.
+
+        The TWAP-only runtime authority permanently rejects the frozen plan, so the
+        durable minute loop can never lawfully advance it again; leaving the run in
+        FAILED_RETRYABLE would retry a permanent policy rejection forever. Terminalize
+        as FAILED_TERMINAL with loud typed evidence instead. This path performs no
+        runtime-context load, no market-data load, no broker call, no parent resubmit,
+        no predecessor projection replay and no minute-loop advance; predecessor and
+        current durable states stay immutable audit facts.
+        """
+
+        error_context = dict(policy_error.context) if isinstance(policy_error.context, Mapping) else {}
+        evidence = {
+            "schema_version": "localsim_historical_legacy_plan_terminalization_v1",
+            "reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+            "run_id": run.run_id,
+            "binding_id": run.binding_id,
+            "plan_id": plan.plan_id,
+            "plan_execution_policy_version_id": error_context.get("plan_execution_policy_version_id"),
+            "plan_algo_code": error_context.get("plan_algo_code"),
+            "required_algo_code": error_context.get("required_algo_code") or "TWAP",
+            "retired_policy_reason_code": error_context.get("reason_code"),
+            "stale_trade_date": run.trade_date.isoformat(),
+            "scheduler_trade_date": scheduler_trade_date.isoformat(),
+            "previous_status": run.status.value,
+            "terminal_status": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+            "outbox_id": outbox.outbox_id,
+            "receipt_id": outbox.receipt_id,
+            "generation": outbox.generation,
+            "authoritative_state_count": len(states),
+            "active_state_count": len(active_states),
+            "authoritative_state_set_sha256": canonical_json_sha256(
+                [
+                    {"state_id": state.state_id, "state_hash": state.state_hash}
+                    for state in sorted(states, key=lambda item: item.state_id)
+                ]
+            ),
+            "broker_called": bool(run.run_payload_json.get("broker_called")),
+            "parent_resubmitted": False,
+            "broker_replayed": False,
+            "predecessor_projection_replayed": False,
+            "durable_minute_loop_advanced": False,
+            "legacy_execution_restored": False,
+            "fallback_used": False,
+            "runtime_context_loaded": False,
+            "market_data_loaded": False,
+            "verified_at": (
+                self._scheduler_time(as_of_time) if as_of_time is not None else self._scheduler_now()
+            ).isoformat(),
+        }
+        updated = self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.FAILED_TERMINAL,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+                "localsim_historical_legacy_plan_terminalization_v1": evidence,
+            },
+        )
+        return {
+            "run_id": updated.run_id,
+            "trade_date": updated.trade_date.isoformat(),
+            "strategy_id": updated.strategy_id,
+            "broker_backend": updated.broker_backend.value,
+            "previous_status": run.status.value,
+            "status": updated.status.value,
+            "reason": "localsim_historical_failed_run_legacy_plan_retired",
+            "reason_code": evidence["reason_code"],
+            "historical_failed_legacy_plan_terminalization": True,
+            "scheduler_trade_date": scheduler_trade_date.isoformat(),
+            "durable_minute_loop_advanced": False,
+            "legacy_execution_restored": False,
         }
 
     @staticmethod
