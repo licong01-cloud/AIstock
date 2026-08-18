@@ -2254,8 +2254,8 @@ class _StubProbeResponse:
     def __exit__(self, *args: Any) -> None:
         return None
 
-    def read(self, _limit: int) -> bytes:
-        return self.body
+    def read(self, limit: int) -> bytes:
+        return self.body[:limit]
 
 
 def _install_stub_probes(
