@@ -2128,6 +2128,15 @@ def build_runtime_contract(
                 "expected_terminal_outcome contract does not match the business_smoke_ref probe contract: "
                 f"declared={expectation.get('contract_id')} resolved={resolved_contract_id or 'none'}"
             )
+        elif resolved_contract_id == "run_terminal_evidence":
+            run_id_match = re.search(r"/runs/([^/]+)/terminal-evidence$", smoke_path)
+            probe_run_id = urllib.parse.unquote(run_id_match.group(1)) if run_id_match else ""
+            declared_run_id = str(expectation.get("expected_run_id") or "")
+            if probe_run_id != declared_run_id:
+                blocking.append(
+                    "expected_terminal_outcome expected_run_id does not match the business_smoke_ref "
+                    f"subject run: declared={declared_run_id or 'missing'} probe={probe_run_id or 'none'}"
+                )
     persistence_basis = str(explicit.get("persistence_basis") or ("git_tracked_source" if backend_restart_required else "not_required"))
     valid_persistence_basis = {"git_tracked_source", "controlled_migration", "controlled_config", "not_required"}
     if persistence_basis not in valid_persistence_basis:
@@ -2348,9 +2357,11 @@ _EXPECTED_TERMINAL_OUTCOME_FIELDS = (
     "expected_previous_status",
     "expected_reason_code",
     "expected_evidence_schema",
+    "expected_run_id",
 )
 _EXPECTED_REASON_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,127}$")
 _EXPECTED_EVIDENCE_SCHEMA_RE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
+_EXPECTED_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{2,127}$")
 
 _RUN_STATUS_SUCCESS = frozenset({
     "APPLIED",
@@ -2487,6 +2498,12 @@ def _normalize_expected_terminal_outcome(raw: Any) -> tuple[dict[str, Any] | Non
             "expected_terminal_outcome expected_evidence_schema must be a lower snake-case "
             f"schema id: {expected_evidence_schema or 'missing'}"
         )
+    expected_run_id = str(raw.get("expected_run_id") or "").strip()
+    if not _EXPECTED_RUN_ID_RE.fullmatch(expected_run_id):
+        errors.append(
+            "expected_terminal_outcome expected_run_id must be a non-empty run id "
+            f"(alphanumeric, underscore or dash): {expected_run_id or 'missing'}"
+        )
     if errors:
         return None, errors
     normalized = {
@@ -2496,6 +2513,7 @@ def _normalize_expected_terminal_outcome(raw: Any) -> tuple[dict[str, Any] | Non
         "expected_previous_status": expected_previous_status,
         "expected_reason_code": expected_reason_code,
         "expected_evidence_schema": expected_evidence_schema,
+        "expected_run_id": expected_run_id,
     }
     return normalized, []
 
@@ -2540,11 +2558,12 @@ def _validate_run_terminal_evidence(
     """Bounded terminal-evidence payloads prove an exact expected terminal outcome.
 
     Without a declared expectation this contract is exactly as strict as
-    ``run_terminal_success``: failure-class and non-terminal statuses fail
-    closed. With a declared expectation the verdict passes only when the run
-    status, the evidence carrier schema, the terminal reason code and the
-    previous status all match the declaration exactly; every mismatch fails
-    closed with the specific drift.
+    ``run_terminal_success``: every status/state/verdict field in the payload
+    and its known containers is scanned, and failure-class or non-terminal
+    values fail closed. With a declared expectation the verdict passes only
+    when the subject run id, the run status, the evidence carrier schema, the
+    terminal reason code and the previous status all match the declaration
+    exactly; every mismatch fails closed with the specific drift.
     """
     if not isinstance(payload, dict):
         return "failed", "run terminal-evidence payload must be a JSON object", {}
@@ -2567,16 +2586,20 @@ def _validate_run_terminal_evidence(
     status = raw_status.strip().upper()
     facts: dict[str, Any] = {"statuses": {"run.status": status}}
     if expectation is None:
-        if status in _RUN_STATUS_FAILURE:
+        statuses = _collect_status_fields(payload)
+        statuses.setdefault("run.status", status)
+        normalized = {name: value.upper() for name, value in statuses.items()}
+        facts = {"statuses": normalized}
+        failures = {name: value for name, value in normalized.items() if value in _RUN_STATUS_FAILURE}
+        if failures:
+            detail = ", ".join(f"{name}={value}" for name, value in sorted(failures.items()))
+            return "failed", f"run payload reports failure status: {detail}", facts
+        open_states = {name: value for name, value in normalized.items() if value not in _RUN_STATUS_SUCCESS}
+        if open_states:
+            detail = ", ".join(f"{name}={value}" for name, value in sorted(open_states.items()))
             return (
                 "failed",
-                f"run payload reports failure status: run.status={status}",
-                facts,
-            )
-        if status not in _RUN_STATUS_SUCCESS:
-            return (
-                "failed",
-                f"run payload has not reached terminal target closure: run.status={status}",
+                f"run payload has not reached terminal target closure: {detail}",
                 facts,
             )
         return "passed", None, facts
@@ -2586,6 +2609,16 @@ def _validate_run_terminal_evidence(
             "failed",
             "declared expected terminal status is not failure-class: "
             f"{expected_status or 'missing'}",
+            facts,
+        )
+    expected_run_id = str(expectation.get("expected_run_id") or "").strip()
+    observed_run_id = str(run.get("run_id") or "").strip()
+    facts["run_id"] = observed_run_id
+    if not expected_run_id or observed_run_id != expected_run_id:
+        return (
+            "failed",
+            "run id does not match the declared expected terminal outcome subject: "
+            f"observed={observed_run_id or 'missing'} expected={expected_run_id or 'missing'}",
             facts,
         )
     if status != expected_status:
@@ -15838,7 +15871,10 @@ def build_close_sync_plan(
                     )
             smoke_semantic = smoke_probe.get("semantic") if isinstance(smoke_probe, dict) else None
             top_level_semantic = runtime_receipt.get("business_smoke_semantic")
-            if top_level_semantic is not None and top_level_semantic != smoke_semantic:
+            if top_level_semantic != smoke_semantic and (
+                top_level_semantic is not None
+                or runtime_receipt.get("post_restart_effective_gate") == "passed"
+            ):
                 runtime_receipt_errors.append(
                     "post-restart receipt top-level business-smoke semantic does not match probe evidence"
                 )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import Counter
 from datetime import UTC, date, datetime
 from typing import Any, Callable, Mapping
@@ -40,6 +41,7 @@ MINIQMT_DURABLE_HEALTH_STALE_CADENCE_MULTIPLIER = 2
 SIMULATION_RUN_TERMINAL_EVIDENCE_SCHEMA = "simulation_run_terminal_evidence_v1"
 _TERMINAL_EVIDENCE_CARRIER_LIMIT = 8
 _TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT = 16384
+_TERMINAL_EVIDENCE_SCHEMA_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 
 
 def _required_scheduler_status_mapping(status: dict[str, Any], key: str) -> dict[str, Any]:
@@ -1513,6 +1515,8 @@ class SimulationRuntimeOpsService:
         for key, value in run.run_payload_json.items():
             if not isinstance(value, dict):
                 continue
+            if not _TERMINAL_EVIDENCE_SCHEMA_KEY_RE.fullmatch(str(key)):
+                continue
             if value.get("schema_version") != key:
                 continue
             reason_code = value.get("reason_code")
@@ -1531,7 +1535,24 @@ class SimulationRuntimeOpsService:
                     "carrier_limit": _TERMINAL_EVIDENCE_CARRIER_LIMIT,
                 },
             )
-        encoded = json.dumps(carriers, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        try:
+            encoded = json.dumps(
+                carriers,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise DataUnavailableError(
+                "simulation run terminal evidence is not JSON serializable",
+                context={
+                    "reason_code": "SIMULATION_RUN_TERMINAL_EVIDENCE_UNSERIALIZABLE",
+                    "stage": "RUN_TERMINAL_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "error_type": exc.__class__.__name__,
+                },
+            ) from exc
         if len(encoded) > _TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT:
             raise DataUnavailableError(
                 "simulation run terminal evidence exceeds the serialized size bound",

@@ -32,6 +32,12 @@
       "actor": "claude",
       "note": "2026-08-18 BUG-1130 dogfood: declare the exact expected terminal outcome for simrun_7bf1e0c1b6b7d055 so this BUG's own post-restart verify exercises the new run_terminal_evidence contract and proves the read-only terminal-evidence endpoint live after the user backend restart.",
       "timestamp": "2026-08-18T10:05:00Z"
+    },
+    {
+      "action": "post_pr_adversarial_review",
+      "actor": "claude",
+      "note": "2026-08-19 adversarial review round 3 on PR #3606 (four independent lenses: workflow semantics, backend endpoint, test sufficiency, security). Two HIGH findings fixed: 1) expectation now binds the subject run via required expected_run_id (schema field, digest field, verifier exact-match, build-time cross-check against business_smoke_ref) closing the cross-run evidence-replay hole; 2) the no-expectation branch of run_terminal_evidence now runs the same full status/state/verdict scan as run_terminal_success so contradictory failure signals anywhere in the payload fail closed. Three LOW findings fixed: close-sync rejects a passed-gate receipt whose top-level business_smoke_semantic key was stripped; the terminal-evidence projection rejects non-canonical schema keys and maps unserializable carriers to a typed 404 instead of a 500; tests gain a hardcoded expectation-digest anchor plus non-dict and run_id declaration rejection cases. Declined: whole-response byte bounding (carrier-section bound is the documented contract). Trust anchor documented: receipt integrity rests on git/PR review of the BUG-record diff (business_smoke_ref + expected_terminal_outcome).",
+      "timestamp": "2026-08-19T01:30:00Z"
     }
   ],
   "evidence_uris": [
@@ -189,6 +195,7 @@
       "expected_evidence_schema": "localsim_historical_legacy_plan_terminalization_v1",
       "expected_previous_status": "FAILED_RETRYABLE",
       "expected_reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+      "expected_run_id": "simrun_7bf1e0c1b6b7d055",
       "expected_status": "FAILED_TERMINAL",
       "schema_version": "aistock_expected_terminal_outcome_v1"
     },

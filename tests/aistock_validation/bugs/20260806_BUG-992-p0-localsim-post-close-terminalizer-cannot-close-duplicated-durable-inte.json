@@ -59,7 +59,8 @@
     {
       "action": "declare_expected_terminal_outcome",
       "actor": "claude",
-      "note": "2026-08-18 BUG-1130: declare the exact expected terminal outcome for run simrun_7bf1e0c1b6b7d055 and move business_smoke_ref to the bounded read-only terminal-evidence projection so the post-restart verifier can prove status=FAILED_TERMINAL, previous_status=FAILED_RETRYABLE, reason LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED and carrier localsim_historical_legacy_plan_terminalization_v1 instead of failing closed on every FAILED_TERMINAL."
+      "note": "2026-08-18 BUG-1130: declare the exact expected terminal outcome for run simrun_7bf1e0c1b6b7d055 and move business_smoke_ref to the bounded read-only terminal-evidence projection so the post-restart verifier can prove status=FAILED_TERMINAL, previous_status=FAILED_RETRYABLE, reason LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED and carrier localsim_historical_legacy_plan_terminalization_v1 instead of failing closed on every FAILED_TERMINAL. 2026-08-19 review round 3: expectation gains expected_run_id=simrun_7bf1e0c1b6b7d055 so the declaration binds the exact subject run.",
+      "timestamp": "2026-08-18T10:05:00Z"
     }
   ],
   "evidence_uris": [
@@ -168,6 +169,7 @@
       "expected_evidence_schema": "localsim_historical_legacy_plan_terminalization_v1",
       "expected_previous_status": "FAILED_RETRYABLE",
       "expected_reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+      "expected_run_id": "simrun_7bf1e0c1b6b7d055",
       "expected_status": "FAILED_TERMINAL",
       "schema_version": "aistock_expected_terminal_outcome_v1"
     },

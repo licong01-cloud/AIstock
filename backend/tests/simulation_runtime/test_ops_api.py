@@ -979,6 +979,10 @@ def test_run_terminal_evidence_projects_typed_terminalization_carrier(
             "untyped_note": "not a carrier",
             "mismatched_key": {"schema_version": "some_other_schema_v1", "reason_code": "IGNORED"},
             "no_reason_carrier": {"schema_version": "no_reason_carrier"},
+            " whitespace_padded_key_v1": {
+                "schema_version": " whitespace_padded_key_v1",
+                "reason_code": "IGNORED",
+            },
         },
     )
 
@@ -1060,6 +1064,25 @@ def test_run_terminal_evidence_fails_closed_on_serialized_size_bound(
     detail = response.json()["detail"]
     assert detail["context"]["reason_code"] == "SIMULATION_RUN_TERMINAL_EVIDENCE_UNBOUNDED"
     assert detail["context"]["carrier_bytes"] > simulation_ops._TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT
+
+
+def test_run_terminal_evidence_fails_closed_on_unserializable_carrier(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    carrier = _terminalization_carrier(run_id)
+    carrier["raw_object"] = {"not_json_safe"}
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"localsim_historical_legacy_plan_terminalization_v1": carrier},
+    )
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["context"]["reason_code"] == "SIMULATION_RUN_TERMINAL_EVIDENCE_UNSERIALIZABLE"
 
 
 def test_invalid_filter_values_are_rejected(client: TestClient) -> None:
