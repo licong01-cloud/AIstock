@@ -356,19 +356,19 @@ def get_trading_day_defaults(
         with get_conn() as conn:
             with conn.cursor() as cur:
                 data_ready_dataset_dates: dict[str, date] = {}
-                data_ready_missing_datasets: list[str] = []
+                data_ready_unavailable_datasets: list[str] = []
                 effective_end = as_of
-                data_ready_latest_date, data_ready_dataset_dates, data_ready_missing_datasets = _resolve_defaults_data_ready_end(
+                data_ready_latest_date, data_ready_dataset_dates, data_ready_unavailable_datasets = _resolve_defaults_data_ready_end(
                     cur,
                     as_of=as_of,
                     require_minute_data=require_minute_data,
                 )
-                if data_ready_missing_datasets:
+                if data_ready_unavailable_datasets:
                     raise DataUnavailableError(
                         "paper v2 trading-day defaults require completed DB minute/day data",
                         context={
                             "as_of_date": as_of.isoformat(),
-                            "missing_datasets": data_ready_missing_datasets,
+                            "missing_datasets": data_ready_unavailable_datasets,
                             "available_dataset_dates": {
                                 key: value.isoformat()
                                 for key, value in data_ready_dataset_dates.items()
@@ -412,7 +412,7 @@ def get_trading_day_defaults(
             key: value.isoformat()
             for key, value in data_ready_dataset_dates.items()
         },
-        "data_ready_missing_datasets": data_ready_missing_datasets,
+        "data_ready_missing_datasets": data_ready_unavailable_datasets,
         "latest_trading_day": latest.isoformat(),
         "trading_days": [day.isoformat() for day in sorted(dates)],
         "replay_start_date": replay_start.isoformat(),
