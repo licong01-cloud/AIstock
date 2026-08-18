@@ -3220,6 +3220,11 @@ candidate中的development source identity仍严格截止`2025-03-31`，不得�
 `holdout_source`：沿用同一universe key、universe rule version、security identity manifest、provider absence manifest、PIT hierarchy、
 benchmark与feature formula version，但分别冻结holdout feature/state window和outcome-only tail的实际row/date/hash；任一规则或manifest与
 candidate不一致即preflight失败。它是同一数据合同的后续时间切片，不是新dataset、重新selection或development source覆盖。
+精确同源字段固定为P2-3C request中的`universe_key=shsz_st_pit_qe_dataset_qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2`、
+`universe_rule_version=st_pub_next_trade_restore_active_l_v1`、`benchmark_ts_code=000300.SH`、security/provider manifest path+SHA、
+`source_start=2022-01-01`与`circ_mv_history_start=2020-07-30`；`source_end`必须等于冻结的outcome tail末日，holdout feature formula SHA必须
+等于candidate已持久化的development feature formula SHA。request还必须逐一保存acceptance、acceptance failure、model、READY和两个child及其
+failure sibling的八个绝对repo-external输出identity；CLI实际路径必须与request逐项相等，禁止仅靠命令行换路径。
 parent在任何holdout业务读取前先闭合candidate、calendar、benchmark、security identity、provider absence、PIT hierarchy、feature formula、
 development/holdout/tail date-set与输出identity；preflight失败时`holdout_accessed=false`且不消费逻辑验收。两个child属于同一个
 `holdout_evaluation_id=canonical_sha256(contract_version,candidate_report_sha256,holdout_state_date_set_sha256)`，不是两次模型试验。
@@ -3245,6 +3250,9 @@ P2-4计划fit数严格为`0`。parent启动两个全新Python process；每个ch
 hash必须bitwise相同；数值allclose只允许定位差异，不能替代hash equality。Python/NumPy/SciPy/scikit-learn版本、float64 little-endian
 C-order、线程环境和有效threadpool count必须进入child receipt；不一致、非单线程或任一hash漂移均以
 `hmm_risk_p2_4_fresh_process_reproducibility_failed` fail closed。该复现是单一已冻结candidate的执行完整性，不是新的模型选择门禁。
+parent不得只验证“两份child彼此相等”：每份child的schema/contract/algorithm/producer、candidate SHA、holdout evaluation/source/date-set SHA、
+`fit_count=0`、`selection_performed=false`与DB/runtime/model/READY零副作用都必须逐项闭合到parent request；两份相同但偏离parent authority的
+self-hashed payload仍必须在任何writer前失败。child readback与candidate/request一样拒绝duplicate JSON key和NaN/Infinity。
 
 ##### C. C-011-P2-4-D3：holdout产品指标与通过阈值（USER_APPROVED_EXACT_CONTRACT，沿用既有D4值）
 
@@ -3262,6 +3270,8 @@ future excess return、average-rank Spearman、spread、sector risk label、warn
 5D/20D、market-regime-conditioned metric、confidence margin与历史family结果只作secondary diagnostics；不得补足primary、触发reselection或
 改变状态。任一identity、分母、coverage、non-finite、Newey-West variance或primary metric不可用均使用typed reason并判定
 `NOT_AVAILABLE`，不得写0、借用另一level/quarter或降低阈值。
+逐日Rank IC/spread在计算前必须证明state、score与对应horizon outcome的sector identity集合完全相等；禁止先取交集再把缺失sector静默移出
+横截面。10D sector risk path identity必须与10D outcome-eligible state identity闭合，缺失时risk metric typed unavailable而不是缩小micro分母。
 
 ##### D. C-011-P2-4-D4：coverage、representativeness与互斥三状态（USER_APPROVED_EXACT_CONTRACT，沿用既有D5）
 
@@ -3286,7 +3296,11 @@ schemas固定为：request=`hmm_risk_p2_4_holdout_request_v1`、child=`hmm_risk_
 `hmm_risk_market_conditioned_ridge_ready_v1`。所有路径必须绝对、repo-external、请求显式给出且collision-safe；禁止default/latest、覆盖开关或
 扫描任意artifact root选candidate。
 
-parent先验证两个child bitwise一致，再一次性写acceptance：
+parent先验证两个child bitwise一致并形成immutable acceptance core。为避免model/READY与最终acceptance互相引用形成循环，唯一写入顺序固定为：
+先写含`acceptance_core_sha256`且声明`activation_requires_matching_final_acceptance=true`的model；FULL_READY再写同样绑定core与model SHA的READY；
+最后一次性写包含实际model/READY SHA的final acceptance。随后必须从磁盘重新读取全部适用artifact并验证acceptance core、candidate、availability、
+model SHA和READY SHA的双向闭合；任一final acceptance缺失或bundle不闭合时，先前model/READY均不可消费，并写如实记录已发生side effect的typed
+failure sibling。`NOT_AVAILABLE`不经过model/READY步骤，只写final acceptance/failure。
 
 - `FULL_READY`：写一个canonical model与一个READY marker；
 - `COVERAGE_AVAILABLE`：写一个带明确availability state/coverage manifest的canonical model，`ready_write=false`且不写READY marker；
@@ -3318,11 +3332,13 @@ metric unavailable、coverage contract failed、representativeness failed、fres
 failure；unknown必须保留exception type/stage，不得压为`incomplete`。直接测试至少覆盖：
 
 - exact candidate/hash/flags与一次逻辑evaluation identity；preflight失败时holdout未访问；
+- request逐项绑定冻结source policy、feature formula与八个输出identity，CLI换路径在holdout读取前失败；
 - 0 fit、0 reselection、冻结preprocess/parameter与causal zero-start；禁止development carry、smoothing和future state input；
-- 两fresh process bitwise一致及各类identity/hash/线程漂移fail closed；
-- D3每个阈值边界、coverage/quarter/Newey-West/risk分母、typed unavailable与secondary不替代primary；
+- 两fresh process bitwise一致、单份child到parent authority闭合及各类identity/hash/线程漂移fail closed；
+- D3每个阈值边界、逐日identity集合相等、coverage/quarter/Newey-West/risk分母、typed unavailable与secondary不替代primary；
 - D4三状态互斥、canonical denominator、quintile/parent代表性、COVERAGE_AVAILABLE不写READY；
-- FULL_READY/COVERAGE_AVAILABLE/NOT_AVAILABLE三条writer、collision、readback、unknown failure与zero DB/runtime副作用。
+- FULL_READY/COVERAGE_AVAILABLE/NOT_AVAILABLE三条writer、final bundle双向闭合、collision、readback、unknown failure与zero DB/runtime副作用；
+  failure receipt必须分开记录`holdout_accessed`与`product_acceptance_performed`，不得用“已读取”冒充“已完成产品验收”。
 
 用户已批准上述精确合同并授权创建上述源码；实现PR仍须按changed files路由只运行hmm.risk直接计划。该授权不包括运行child、读取正式holdout、
 写model/READY或合入PR；PR合入与正式holdout执行分别授权。P2-4失败不得回流P2-3或自动开启新模型方向。
