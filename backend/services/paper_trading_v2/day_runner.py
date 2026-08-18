@@ -12,6 +12,10 @@ from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
 from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
+from backend.services.selection_center.canonical_pit_runtime import (
+    has_canonical_pit_runtime_profile,
+    require_canonical_pit_generation_current,
+)
 from backend.services.selection_center.runtime_profile import (
     parse_selection_runtime_profile,
     refresh_generated_runtime_profile_binding,
@@ -198,6 +202,7 @@ class PaperTradingDayRunner:
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
         minqmt_broker_factory: Callable[..., MiniQMTSimBackend] | None = None,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
@@ -217,6 +222,7 @@ class PaperTradingDayRunner:
         )
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
         self.minqmt_broker_factory = minqmt_broker_factory or MiniQMTSimBackend
+        self.pit_authority_resolver = pit_authority_resolver
 
     def run_day(
         self,
@@ -225,6 +231,7 @@ class PaperTradingDayRunner:
         trade_date: date,
         runtime_config: dict[str, Any] | None = None,
         fee_model: FeeModel | None = None,
+        inherit_existing_pit_lease: bool = False,
     ) -> PaperDayRunResult:
         portfolio = self.repository.get_portfolio(portfolio_id)
         if portfolio.broker_backend == "minqmt_sim":
@@ -276,10 +283,12 @@ class PaperTradingDayRunner:
         config = PaperTradingV2PortfolioService(
             package_repository=self.package_repository,
             repository=self.repository,
+            pit_authority_resolver=self.pit_authority_resolver,
         ).resolve_runtime_config_for_date(
             portfolio=portfolio,
             trade_date=trade_date,
             runtime_config=runtime_config or {},
+            inherit_existing_pit_lease=inherit_existing_pit_lease,
         )
         ensure_previous_trading_day_selection_cutoff(
             config,
@@ -298,6 +307,7 @@ class PaperTradingDayRunner:
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "day_runner"},
         )
         runtime_profile = parse_selection_runtime_profile(config)
+        self._require_current_pit(config, phase="before_run_create")
         self._reject_raw_execution_overrides(config)
         execution_policy_context = self._execution_policy_context_for_date(portfolio, trade_date)
         execution_policy_json = execution_policy_context["policy_json"]
@@ -523,6 +533,7 @@ class PaperTradingDayRunner:
                     existing_target_symbols=set(),
                 )
                 targets = overlay_risk_forced_exit_targets(targets, forced_exit_targets)
+            self._require_current_pit(config, phase="after_selection_before_target_persistence")
             self.repository.save_run_event(
                 run_id=run.run_id,
                 event_type="TARGETS_GENERATED",
@@ -586,6 +597,7 @@ class PaperTradingDayRunner:
                 )
                 account_snapshot = ledger.account_snapshot(prices=snapshot_prices, snapshot_time=snapshot_time)
                 position_list = list(ledger.positions.values())
+                self._require_current_pit(config, phase="before_no_rebalance_economic_write")
                 self.repository.save_positions(
                     run_id=run.run_id,
                     trade_date=trade_date,
@@ -634,8 +646,10 @@ class PaperTradingDayRunner:
             )
             require_day_features = False
             day_feature_excluded_intents: list[dict[str, Any]] = []
+            self._require_current_pit(config, phase="before_order_execution")
 
             for intent in intents:
+                self._require_current_pit(config, phase="before_each_order_persistence")
                 market_input = self.market_data_provider.load_symbol_input(
                     symbol=intent.symbol,
                     trade_date=trade_date,
@@ -676,6 +690,7 @@ class PaperTradingDayRunner:
                     market_context=market_input.market_context,
                     allow_partial_fill=bool(execution_algo_config.get("allow_partial_fill", True)),
                 )
+                self._require_current_pit(config, phase="after_order_execution_before_fill_persistence")
                 # T6.1 capture wiring: intended_price from OrderIntent.limit_price
                 # (None for MARKET orders — that's structurally accurate, not a gap),
                 # fill_market_context from the same dict that the execution engine
@@ -739,6 +754,7 @@ class PaperTradingDayRunner:
                 prices=snapshot_prices,
                 snapshot_time=max(bar_time for bar_time in [fill.trade_time for fill in fills]),
             )
+            self._require_current_pit(config, phase="before_final_economic_write")
             for entry in ledger.cash_entries:
                 self.repository.save_cash_entry(run.run_id, entry)
             position_list = list(ledger.positions.values())
@@ -791,6 +807,18 @@ class PaperTradingDayRunner:
             self.repository.update_run_status(run, RunStatus.FAILED, error=error)
             self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.FAILED)
             self.repository.save_run_event(run_id=run.run_id, event_type="RUN_FAILED", message=str(exc), context=error["context"])
+            raise
+
+    def _require_current_pit(self, runtime_config: dict[str, Any], *, phase: str) -> None:
+        if not has_canonical_pit_runtime_profile(runtime_config):
+            return
+        try:
+            require_canonical_pit_generation_current(
+                runtime_config,
+                authority_resolver=self.pit_authority_resolver,
+            )
+        except TradingCoreError as exc:
+            exc.context.setdefault("paper_pit_phase", phase)
             raise
 
     def _require_data_ready(

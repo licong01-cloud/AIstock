@@ -20,6 +20,12 @@ from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2R
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.scheduler import PaperTradingV2SessionScheduler
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
+from backend.services.selection_center.canonical_pit_runtime import (
+    CANONICAL_PIT_RUNTIME_LEASE_KEY,
+    CanonicalPitGenerationDriftError,
+    CanonicalPitRuntimeError,
+    migrate_runtime_config_to_canonical_pointer,
+)
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
@@ -31,7 +37,10 @@ from backend.services.trading_core.errors import (
     SessionSourceUnsupportedError,
 )
 from backend.services.trading_core.models import RunStatus
-from backend.tests.paper_trading_v2.test_day_runner import save_manifest_with_default_execution_policy
+from backend.tests.paper_trading_v2.test_day_runner import (
+    ActiveCanonicalPitResolver,
+    save_manifest_with_default_execution_policy,
+)
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -196,14 +205,24 @@ def test_replay_only_session_create_tick_and_progress() -> None:
         config_json={"runtime_profile": {"selection": {"top_k": 20}}},
         created_by="unit_test",
     )
+    canonical_version = portfolio_service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=version.profile_version_id,
+        created_by="unit_test",
+    )
     activation = portfolio_service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 2),
-        profile_version_id=version.profile_version_id,
+        profile_version_id=canonical_version.profile_version_id,
         activated_by="unit_test",
         reason="session replay runtime profile",
     )
-    service = PaperTradingSessionService(repository=paper_repo, package_repository=package_repo)
+    resolver = ActiveCanonicalPitResolver()
+    service = PaperTradingSessionService(
+        repository=paper_repo,
+        package_repository=package_repo,
+        pit_authority_resolver=resolver,
+    )
     session = service.create_session(
         portfolio_id=portfolio.portfolio_id,
         mode=PaperSessionMode.REPLAY_ONLY,
@@ -215,20 +234,98 @@ def test_replay_only_session_create_tick_and_progress() -> None:
 
     assert session.status == PaperSessionStatus.CREATED
     fake_replay = FakeReplayService()
-    progress = PaperTradingSessionRunner(
+    runner = PaperTradingSessionRunner(
         repository=paper_repo,
         replay_service=fake_replay,  # type: ignore[arg-type]
-    ).tick(session.session_id)
+        pit_authority_resolver=resolver,
+    )
+    progress = runner.tick(session.session_id)
 
     assert progress.session.status == PaperSessionStatus.SUCCEEDED
     assert progress.day_count == 2
     assert [day.actual_bar_count for day in paper_repo.list_session_days(session.session_id)] == [240, 241]
     assert fake_replay.calls[0]["rerun_policy"] == "reject_existing"
+    assert fake_replay.calls[0]["inherit_existing_pit_lease"] is True
     assert session.runtime_config["runtime_profile_activation"]["activation_id"] == activation.activation_id
-    assert session.runtime_config["runtime_profile_activation"]["config_sha256"] == version.config_sha256
+    assert session.runtime_config["runtime_profile_activation"]["config_sha256"] == canonical_version.config_sha256
+    assert session.runtime_config[CANONICAL_PIT_RUNTIME_LEASE_KEY]["activation_generation"] == 1
     assert fake_replay.calls[0]["runtime_config"]["runtime_profile"]["selection"]["top_k"] == 20
     event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
     assert event_types == ["SESSION_CREATED", "SESSION_REPLAY_STARTED", "SESSION_REPLAY_SUCCEEDED"]
+    resolver.binding = ActiveCanonicalPitResolver(generation=2).binding
+    assert runner.tick(session.session_id).session.status == PaperSessionStatus.SUCCEEDED
+    assert len(fake_replay.calls) == 1
+
+
+def test_session_tick_fails_before_replay_when_canonical_pit_generation_drifts() -> None:
+    package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+    portfolio_service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
+    _profile, legacy_version = portfolio_service.create_runtime_profile(
+        portfolio_id=portfolio.portfolio_id,
+        profile_name="canonical drift profile",
+        config_json={"runtime_profile": {"selection": {"top_k": 20}}},
+    )
+    canonical_version = portfolio_service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=legacy_version.profile_version_id,
+    )
+    portfolio_service.activate_runtime_config(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 2),
+        profile_version_id=canonical_version.profile_version_id,
+    )
+    resolver = ActiveCanonicalPitResolver(generation=1)
+    session = PaperTradingSessionService(
+        repository=paper_repo,
+        package_repository=package_repo,
+        pit_authority_resolver=resolver,
+    ).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.REPLAY_ONLY,
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+    fake_replay = FakeReplayService()
+    resolver.binding = ActiveCanonicalPitResolver(generation=2).binding
+
+    with pytest.raises(CanonicalPitGenerationDriftError):
+        PaperTradingSessionRunner(
+            repository=paper_repo,
+            replay_service=fake_replay,  # type: ignore[arg-type]
+            pit_authority_resolver=resolver,
+        ).tick(session.session_id)
+
+    failed = paper_repo.get_session(session.session_id)
+    assert failed.status == PaperSessionStatus.FAILED
+    assert failed.last_error and failed.last_error["error_code"] == "CANONICAL_PIT_GENERATION_DRIFT"
+    assert fake_replay.calls == []
+    assert paper_repo.list_session_events(session.session_id)[-1]["event_type"] == (
+        "SESSION_CANONICAL_PIT_GENERATION_DRIFT"
+    )
+
+
+def test_replay_session_admission_requires_lease_coverage_through_end_date() -> None:
+    package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+    pointer_config = migrate_runtime_config_to_canonical_pointer(
+        {"runtime_profile": {"selection": {"top_k": 20}}}
+    )
+
+    with pytest.raises(CanonicalPitRuntimeError, match="does not cover"):
+        PaperTradingSessionService(
+            repository=paper_repo,
+            package_repository=package_repo,
+            pit_authority_resolver=ActiveCanonicalPitResolver(),
+        ).create_session(
+            portfolio_id=portfolio.portfolio_id,
+            mode=PaperSessionMode.REPLAY_ONLY,
+            start_date=date(2026, 7, 31),
+            end_date=date(2026, 8, 1),
+            historical_data_source=MinuteDataSource.DB_HISTORICAL,
+            runtime_config=pointer_config,
+        )
+
+    assert paper_repo.sessions == {}
 
 
 def test_manual_tick_only_session_starts_paused_and_runs_only_when_allowed() -> None:
