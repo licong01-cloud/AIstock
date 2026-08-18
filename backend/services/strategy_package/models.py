@@ -1,4 +1,4 @@
-"""Strategy Package manifest v1 models."""
+"""Strategy Package manifest models."""
 
 from __future__ import annotations
 
@@ -7,7 +7,14 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SNAPSHOT_PREFIX,
+    canonical_rule_parameters_digest,
+)
 
 
 class SourceType(str, Enum):
@@ -274,10 +281,65 @@ class AssetCheck(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class StrategyPackageCanonicalPitBindingV2(BaseModel):
+    """Immutable training/re-certification identity for a canonical PIT package."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["strategy_package_canonical_pit_binding_v2"] = (
+        "strategy_package_canonical_pit_binding_v2"
+    )
+    source_usage_mode: Literal["formal_training"] = "formal_training"
+    authority_id: str = Field(min_length=1, max_length=160)
+    rule_version: str = Field(min_length=1, max_length=160)
+    rule_parameters_digest: str = Field(min_length=64, max_length=64)
+    release_id: str = Field(min_length=1, max_length=160)
+    release_cutoff: date
+    frozen_snapshot_digest: str = Field(min_length=64, max_length=64)
+    release_manifest_digest: str = Field(min_length=64, max_length=64)
+    qualification_method: Literal["RETRAINED", "REVALIDATED"]
+    qualification_evidence_digest: str = Field(min_length=64, max_length=64)
+
+    @property
+    def frozen_universe_key(self) -> str:
+        return f"{CANONICAL_PIT_SNAPSHOT_PREFIX}{self.release_id}"
+
+    @field_validator(
+        "rule_parameters_digest",
+        "frozen_snapshot_digest",
+        "release_manifest_digest",
+        "qualification_evidence_digest",
+    )
+    @classmethod
+    def _sha256(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+            raise ValueError("canonical PIT binding digest fields must be lowercase sha256")
+        return normalized
+
+    @field_validator("authority_id", "rule_version", "release_id")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("canonical PIT binding identity fields are required")
+        return normalized
+
+    @model_validator(mode="after")
+    def _canonical_authority(self) -> "StrategyPackageCanonicalPitBindingV2":
+        if self.authority_id != CANONICAL_PIT_AUTHORITY_ID:
+            raise ValueError("StrategyPackage v2 requires the canonical PIT authority")
+        if self.rule_version != CANONICAL_PIT_RULE_VERSION:
+            raise ValueError("StrategyPackage v2 requires the canonical PIT rule version")
+        if self.rule_parameters_digest != canonical_rule_parameters_digest():
+            raise ValueError("StrategyPackage v2 canonical PIT rule parameters digest is invalid")
+        return self
+
+
 class StrategyPackageManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    manifest_version: Literal["1.0", "alpha_core_v1"] = "alpha_core_v1"
+    manifest_version: Literal["1.0", "alpha_core_v1", "alpha_core_v2"] = "alpha_core_v1"
     package_id: str = Field(default_factory=lambda: f"pkg_{uuid4().hex}")
     package_name: str
     package_version: str = "1.0.0"
@@ -288,6 +350,7 @@ class StrategyPackageManifest(BaseModel):
     factor_set: list[FactorAsset]
     model_asset: ModelAsset | list[ModelAsset]
     runtime_assets: RuntimeAssetManifest | None = None
+    canonical_pit_binding: StrategyPackageCanonicalPitBindingV2 | None = None
     source_evidence: dict[str, Any] = Field(default_factory=dict)
     backtest_context: dict[str, Any] = Field(default_factory=dict)
     strategy_config: dict[str, Any] = Field(default_factory=dict)
@@ -303,11 +366,24 @@ class StrategyPackageManifest(BaseModel):
 
     @property
     def is_alpha_core_manifest(self) -> bool:
-        return self.manifest_version == "alpha_core_v1"
+        return self.manifest_version in {"alpha_core_v1", "alpha_core_v2"}
+
+    @property
+    def is_canonical_pit_v2_manifest(self) -> bool:
+        return self.manifest_version == "alpha_core_v2"
 
     @property
     def is_legacy_runtime_manifest(self) -> bool:
         return self.manifest_version == "1.0"
+
+    @model_serializer(mode="wrap")
+    def _serialize_compatible_manifest(self, handler: Any) -> dict[str, Any]:
+        payload = handler(self)
+        if self.canonical_pit_binding is None:
+            # Preserve the published v1 JSON identity while allowing v2
+            # manifests to carry their mandatory canonical PIT binding.
+            payload.pop("canonical_pit_binding", None)
+        return payload
 
     @model_validator(mode="after")
     def _validate_alpha_shape(self) -> "StrategyPackageManifest":
@@ -348,9 +424,13 @@ class StrategyPackageManifest(BaseModel):
             bound_fields = sorted(key for key, present in runtime_fields.items() if present)
             if bound_fields:
                 raise ValueError(
-                    "alpha_core_v1 manifest cannot bind platform runtime policy fields: "
+                    f"{self.manifest_version} manifest cannot bind platform runtime policy fields: "
                     + ", ".join(bound_fields)
                 )
+        if self.is_canonical_pit_v2_manifest and self.canonical_pit_binding is None:
+            raise ValueError("alpha_core_v2 manifest requires canonical_pit_binding")
+        if not self.is_canonical_pit_v2_manifest and self.canonical_pit_binding is not None:
+            raise ValueError("legacy StrategyPackage manifests cannot carry canonical_pit_binding")
         return self
 
 

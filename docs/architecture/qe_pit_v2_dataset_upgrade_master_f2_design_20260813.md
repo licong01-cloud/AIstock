@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：W0～W4-A源码已合入，W4-A已在重启后的生产进程完成identity与只读contract smoke；W4-B Paper runtime integration已提交并无冲突同步最新main，进入最终HEAD门禁与PR；真实v2 dataset candidate和生产激活均未授权
+- 状态：W0～W4-B源码已合入，W4-A/W4-B已在用户重启后的生产进程完成identity、OpenAPI与只读contract smoke；W5 StrategyPackage/Advisory已完成本地实现和模块矩阵，等待最终HEAD门禁与用户提交授权；W6、真实v2 dataset candidate和生产激活均未完成/未授权
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
@@ -752,7 +752,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-012 | §7.1；component validators | `backend/tests/dataset_release/test_candidate_validator.py`；`backend/tests/dataset_release/test_index_context.py` | design_ready_for_review | none |
 | F-013 | §6 P3-A/P8；W3-B/C QE/HMM/训练scope | `backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`；`backend/tests/hmm_data_source/test_isolation_constraints.py`；`backend/tests/test_qe_hmm_canonical_pit_integration.py` | w3b_merged_w3c_direct_tests_passed | none |
 | F-014 | §6 P3-B；W4-A Selection/Simulation runtime binding；W4-B `backend/services/paper_trading_v2/canonical_pit_control.py`及Paper profile/session/replay/day/live/readiness/router | `backend/tests/selection_center/test_canonical_pit_runtime.py`；`backend/tests/selection_center/test_risk_policy.py`；`backend/tests/simulation_runtime/test_strategy_package_selection_service.py`；`backend/tests/paper_trading_v2/test_canonical_pit_control.py`；`backend/tests/paper_trading_v2/test_runtime_profile.py`；`backend/tests/paper_trading_v2/test_session.py`；`backend/tests/paper_trading_v2/test_day_runner.py`；`backend/tests/paper_trading_v2/test_live_session.py` | w4a_merged_w4b_implementation_verified | none |
-| F-015 | §6 P3-C/P8；StrategyPackage/Advisory planned scope | planned `backend/tests/strategy_package/test_canonical_pit_compatibility.py` | design_ready_for_review | none |
+| F-015 | §6 P3-C/P8；`strategy_package/models.py`、`canonical_pit_compatibility.py`、`advisory_input_projection.py`；Advisory historical range requirement/catalog/decision mark与model-first feature source | `backend/tests/strategy_package/test_canonical_pit_compatibility.py`；`backend/tests/strategy_package/test_advisory_input_projection.py`；`backend/tests/advisory_historical_range/test_canonical_pit_package_requirements.py`；`backend/tests/advisory_historical_range/test_r3_decision_mark_provider.py`；`backend/tests/advisory_model_first/test_realtime_feature_source.py`；`backend/tests/advisory_model_first/test_model_inference.py` | w5_implementation_verified | none |
 | F-016 | §6 P5；W6/W7 source identity contract | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
 | F-017 | §6 P5/P6；W7/W8 path and Merkle contract | artifact: `tests/aistock_validation/pit_v2/historical_immutability_receipt.json` | design_ready_for_review | none |
 | F-018 | §6 P7；W8 audit plan | artifact: `tests/aistock_validation/pit_v2/candidate_audit_receipt.json` | design_ready_for_review | none |
@@ -778,7 +778,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | W1 Core/Registry源码 | `merged_4e1f667e` |
 | W2 Dataset Release源码 | `merged_589678f3` |
 | W3消费者源码 | `w3_source_ready_final_main_validation_passed` |
-| W4～W6消费者/集成源码 | `w4a_in_progress_w4b_w5_w6_pending` |
+| W4～W6消费者/集成源码 | `w4_merged_runtime_verified_w5_implementation_verified_w6_pending` |
 | 真实小样本 | `not_run_not_authorized` |
 | 真实全量candidate | `not_run_not_authorized` |
 | DEV DDL/DML | `not_revalidated_in_this_design_revision` |
@@ -845,3 +845,6 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-10A | W4-B admission与读写边界首轮复审 | session generation检查一度误落在锁竞争分支；replay一度无条件信任调用方lease；day/live final cash写入早于最终generation复核 | generation检查移入正常持锁tick入口且锁竞争不并发改session；replay默认外部实时冻结、仅session/catch-up显式inherit；order/fill/cash/position/snapshot写入前增加复核并补漂移零fill/零cash回归 | resolved |
 | Review-10B | W4-B相邻兼容与profile迁移复审 | Paper全矩阵发现3个旧测试仍直接激活legacy profile；控制面run status枚举规范化不足；运维迁移默认动作需直接证据 | 所有新activation先创建不可变canonical新版本并保留旧hash；inventory兼容字符串/Enum状态；router迁移默认`apply=false`且shadow只读委派增加直接测试 | resolved |
 | Review-10C | W4-B资源、证据与最终本地合入就绪复审 | inventory原先仅单次查询限1万，多portfolio聚合仍可能无界且截断后误报ready；shadow只有差异集合、缺span原因证据；有限replay只在start date校验lease coverage | inventory改为全局1万metadata硬上限且超限typed fail；shadow携带v1/v2 span和中立reason code且仍为SELECT-only/500 symbols；session admission校验end date coverage。最终W4-A/B相邻矩阵487 passed、0 failed、1 skipped、2 expected xfail；F2 30/30、guardrail 17文件0 finding、catalog/ownership 15 passed、Ruff/compile/diff均PASS | pass_pending_user_commit_authorization |
+| Review-11A | W5 manifest不可变性与持久化首轮 | 初版v2 builder沿用旧`package_id`，会被package主键和immutable manifest保护正确拒绝；仅换`package_version`不能形成可并存记录 | 强制新`package_id`和新`package_version`，新manifest冻结旧package id/version/hash迁移来源；内存仓库直接证明v1/v2共存且旧hash不变；legacy runtime manifest禁止静默转alpha-core v2 | resolved |
+| Review-11B | W5 schema双读与Advisory数据边界复审 | 历史provider/cache仍可能用缺字段默认旧key；Pydantic当前版本不支持`Field(exclude_if=...)`，会让旧projection序列化出现新null字段；decision mark与model-first feature source未传递包/Selection binding | provider和cache缺显式key时typed fail；legacy projection用wrap serializer保持旧JSON/hash，新v2 projection携带完整frozen binding；decision mark、historical source和model-first feature source分别使用包snapshot或已验证Selection rolling lease | resolved |
+| Review-11C | W5相邻兼容与模块级最终复审 | model-first测试替身缺少真实`SelectionRun.runtime_config`字段，首次全模块矩阵暴露8个同根测试失败；未发现生产实现回归 | 修正测试替身以匹配正式SelectionRun契约，补rolling lease传播直接测试；最终StrategyPackage、Advisory historical range与Advisory model-first矩阵1087项均获通过证据（同步最终main后的两轮矩阵各仅遇到1个Windows WinError 10055事件循环setup资源错误，两个受影响用例精确重跑均PASS）；F2 30/30、Ruff、compile、catalog、ownership及相对origin/main新增guardrail均PASS；不访问生产DB/数据集、不执行进程控制 | pass_final_head_gates |

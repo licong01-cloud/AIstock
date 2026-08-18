@@ -48,6 +48,11 @@ from backend.services.advisory_model_first.realtime_feature_source import (
 from backend.services.advisory_model_first.reranker_training import _coerce_numeric_feature_dtypes
 from backend.services.advisory_model_first.shared_feature_builder import build_advisory_feature_matrix
 from backend.services.advisory_program import AdvisoryProgramService
+from backend.services.selection_center.canonical_pit_runtime import (
+    has_canonical_pit_runtime_profile,
+    require_canonical_pit_generation_current,
+    require_canonical_pit_runtime_binding,
+)
 from backend.services.selection_center.models import SelectionRunStatus
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.trading_core.errors import DataUnavailableError
@@ -311,12 +316,21 @@ class AdvisoryModelShadowService:
             bundle=bundle,
             resolution=resolution,
         )
+        pit_universe_key: str | None = None
+        if has_canonical_pit_runtime_profile(selection_run.runtime_config):
+            runtime_lease = require_canonical_pit_runtime_binding(
+                selection_run.runtime_config,
+                trade_date=decision_date,
+            )
+            require_canonical_pit_generation_current(selection_run.runtime_config)
+            pit_universe_key = runtime_lease.universe_key
         realtime = self._feature_source.load(
             symbols=candidates["instrument"].tolist(),
             decision_as_of_trade_date=decision_date,
             target_trade_date=target_trade_date,
             continuation_cutoff=date.fromisoformat(str(bundle.manifest["continuation_cutoff"])),
             hmm_models=bundle.hmm_models,
+            **({"pit_universe_key": pit_universe_key} if pit_universe_key is not None else {}),
         )
         built = build_advisory_feature_matrix(
             candidates=candidates,

@@ -6,6 +6,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from backend.services.canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
 from backend.services.advisory_model_first import realtime_feature_source
 from backend.services.advisory_model_first.realtime_feature_source import (
     PostgresAdvisoryReviewSource,
@@ -75,6 +76,23 @@ def test_price_context_reads_decision_raw_price_and_visible_target_actions_only(
     assert price_query[1][2] == date(2026, 7, 20)
     dividend_query = next(call for call in cursor.calls if "FROM market.dividend" in call[0])
     assert dividend_query[1] == (date(2026, 7, 21), ["000001.SZ", "000002.SZ"])
+
+
+def test_price_context_uses_explicit_canonical_runtime_universe() -> None:
+    cursor = _PriceContextCursor()
+
+    PostgresRealtimeFeatureSource._price_range_contexts(
+        cursor,
+        symbols=("000001.SZ", "000002.SZ"),
+        decision_as_of_trade_date=date(2026, 7, 20),
+        target_trade_date=date(2026, 7, 21),
+        pit_universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+    )
+
+    state_query = next(call for call in cursor.calls if "stock_universe_pit_state" in call[0])
+    event_query = next(call for call in cursor.calls if "stock_universe_pit_events" in call[0])
+    assert state_query[1] == (CANONICAL_PIT_UNIVERSE_KEY,)
+    assert event_query[1][0] == CANONICAL_PIT_UNIVERSE_KEY
 
 
 def test_missing_dividend_refresh_is_candidate_visible_not_multiplier_one() -> None:
