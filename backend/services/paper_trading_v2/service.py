@@ -43,6 +43,14 @@ from backend.services.selection_center.runtime_profile import (
     normalize_selection_runtime_config,
     validate_runtime_profile_binding,
 )
+from backend.services.selection_center.canonical_pit_runtime import (
+    CANONICAL_PIT_POINTER_PROFILE_SCHEMA,
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
+    freeze_canonical_pit_runtime_binding,
+    has_canonical_pit_runtime_profile,
+    inherit_canonical_pit_runtime_binding,
+    validate_canonical_pit_runtime_profile,
+)
 from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
 )
@@ -69,6 +77,7 @@ from .models import (
     compute_runtime_config_sha256,
 )
 from .repository import PaperTradingV2Repository
+from .canonical_pit_control import plan_paper_runtime_profile_migration
 from .auto_run import (
     MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
     auto_run_live_source_for_broker,
@@ -106,6 +115,7 @@ RUNTIME_PROFILE_INPUT_KEYS = {
     "selection_artifact",
     "model",
     "metadata",
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
 }
 RUNTIME_PROFILE_VERSION_ALLOWED_KEYS = {
     "runtime_profile",
@@ -115,6 +125,7 @@ RUNTIME_PROFILE_VERSION_ALLOWED_KEYS = {
     "selection_artifact",
     "model",
     "metadata",
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
 }
 
 
@@ -141,11 +152,13 @@ class PaperTradingV2PortfolioService:
         validator: StrategyPackageValidator | None = None,
         runtime_release_service: StrategyRuntimeReleaseService | Any | None = None,
         asset_eligibility_service: Any | None = None,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or PaperTradingV2Repository()
         self.validator = validator or StrategyPackageValidator()
         self.runtime_release_service = runtime_release_service or StrategyRuntimeReleaseService()
+        self.pit_authority_resolver = pit_authority_resolver
         # Kept as a constructor compatibility seam for callers that still inject
         # the former runtime checker. StrategyPackage admission is completed at
         # the package entry boundary; portfolio creation must not revalidate it.
@@ -1294,6 +1307,55 @@ class PaperTradingV2PortfolioService:
     ) -> list[PaperRuntimeProfileVersion]:
         return self.repository.list_runtime_profile_versions(profile_id, limit=limit)
 
+    def plan_runtime_profile_canonical_pit_migration(
+        self,
+        *,
+        portfolio_id: str,
+        profile_version_id: str,
+    ) -> dict[str, Any]:
+        version = self.repository.get_runtime_profile_version(profile_version_id)
+        profile = self.repository.get_runtime_profile(version.profile_id)
+        if profile.portfolio_id != portfolio_id:
+            raise RuntimeConfigInvalidError(
+                "runtime profile version does not belong to portfolio",
+                context={
+                    "portfolio_id": portfolio_id,
+                    "profile_id": profile.profile_id,
+                    "profile_version_id": profile_version_id,
+                },
+            )
+        return plan_paper_runtime_profile_migration(version)
+
+    def migrate_runtime_profile_version_to_canonical_pit(
+        self,
+        *,
+        portfolio_id: str,
+        profile_version_id: str,
+        created_by: str | None = None,
+        reason: str | None = None,
+    ) -> PaperRuntimeProfileVersion:
+        plan = self.plan_runtime_profile_canonical_pit_migration(
+            portfolio_id=portfolio_id,
+            profile_version_id=profile_version_id,
+        )
+        if plan["action"] != "CREATE_NEW_CANONICAL_VERSION":
+            raise InvalidStateTransitionError(
+                "runtime profile version is already canonical; migration would be a duplicate",
+                context={
+                    "portfolio_id": portfolio_id,
+                    "profile_version_id": profile_version_id,
+                    "action": plan["action"],
+                },
+            )
+        source = self.repository.get_runtime_profile_version(profile_version_id)
+        return self.create_runtime_profile_version(
+            portfolio_id=portfolio_id,
+            profile_id=source.profile_id,
+            config_json=plan["target_config_json"],
+            created_by=created_by,
+            reason=reason or f"canonical PIT migration from {profile_version_id}",
+        )
+
     def activate_runtime_config(
         self,
         *,
@@ -1348,6 +1410,15 @@ class PaperTradingV2PortfolioService:
                     "profile_version_id": profile_version_id,
                     "validation_status": version.validation_status.value,
                     "validation_errors": version.validation_errors,
+                },
+            )
+        if validate_canonical_pit_runtime_profile(version.config_json) != CANONICAL_PIT_POINTER_PROFILE_SCHEMA:
+            raise RuntimeConfigInvalidError(
+                "new Paper runtime activations require a canonical PIT pointer profile version",
+                context={
+                    "portfolio_id": portfolio_id,
+                    "profile_version_id": profile_version_id,
+                    "required_profile_schema": CANONICAL_PIT_POINTER_PROFILE_SCHEMA,
                 },
             )
         normalize_runtime_config_with_backtest_contract(
@@ -1460,6 +1531,15 @@ class PaperTradingV2PortfolioService:
             )
         runtime_version = self.repository.get_runtime_profile_version(runtime_activation.profile_version_id)
         runtime_profile = self.repository.get_runtime_profile(runtime_version.profile_id)
+        if validate_canonical_pit_runtime_profile(runtime_version.config_json) != CANONICAL_PIT_POINTER_PROFILE_SCHEMA:
+            raise LiveApprovalRequiredError(
+                "live approval candidate requires a canonical PIT runtime profile version",
+                context={
+                    "portfolio_id": portfolio_id,
+                    "profile_version_id": runtime_version.profile_version_id,
+                    "required_profile_schema": CANONICAL_PIT_POINTER_PROFILE_SCHEMA,
+                },
+            )
         execution_activation = self.repository.get_active_execution_policy_activation(portfolio_id, trade_date)
         if execution_activation is None:
             raise LiveApprovalRequiredError(
@@ -1490,6 +1570,9 @@ class PaperTradingV2PortfolioService:
                 "trade_date": trade_date.isoformat(),
                 "runtime_config_activation_id": runtime_activation.activation_id,
                 "execution_policy_activation_id": execution_activation.activation_id,
+                CANONICAL_PIT_RUNTIME_PROFILE_KEY: runtime_version.config_json[
+                    CANONICAL_PIT_RUNTIME_PROFILE_KEY
+                ],
             },
             effective_from=trade_date,
             created_by=requested_by,
@@ -1679,6 +1762,7 @@ class PaperTradingV2PortfolioService:
         portfolio: PaperPortfolio,
         trade_date: date,
         runtime_config: dict[str, Any] | None,
+        inherit_existing_pit_lease: bool = False,
     ) -> dict[str, Any]:
         config = dict(runtime_config or {})
         runtime_variant = self._resolve_runtime_variant_for_portfolio(portfolio, config)
@@ -1696,7 +1780,11 @@ class PaperTradingV2PortfolioService:
                 normalized,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
-            return normalized
+            return self._bind_canonical_pit_runtime(
+                normalized,
+                trade_date=trade_date,
+                inherit_existing_pit_lease=inherit_existing_pit_lease,
+            )
         if config.get("runtime_profile_activation"):
             config = self._with_platform_runtime_defaults(portfolio, config)
             config = attach_activation_runtime_profile_binding(
@@ -1712,7 +1800,11 @@ class PaperTradingV2PortfolioService:
                 normalized,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
-            return normalized
+            return self._bind_canonical_pit_runtime(
+                normalized,
+                trade_date=trade_date,
+                inherit_existing_pit_lease=inherit_existing_pit_lease,
+            )
         activation = self.repository.get_active_runtime_config_activation(portfolio.portfolio_id, trade_date)
         if activation is None:
             config = self._with_platform_runtime_defaults(portfolio, config)
@@ -1726,7 +1818,11 @@ class PaperTradingV2PortfolioService:
                 normalized,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
-            return normalized
+            return self._bind_canonical_pit_runtime(
+                normalized,
+                trade_date=trade_date,
+                inherit_existing_pit_lease=inherit_existing_pit_lease,
+            )
         version = self.repository.get_runtime_profile_version(activation.profile_version_id)
         profile = self.repository.get_runtime_profile(version.profile_id)
         if profile.portfolio_id != portfolio.portfolio_id:
@@ -1766,7 +1862,33 @@ class PaperTradingV2PortfolioService:
             normalized,
             context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
         )
-        return normalized
+        return self._bind_canonical_pit_runtime(
+            normalized,
+            trade_date=trade_date,
+            inherit_existing_pit_lease=inherit_existing_pit_lease,
+        )
+
+    def _bind_canonical_pit_runtime(
+        self,
+        runtime_config: dict[str, Any],
+        *,
+        trade_date: date,
+        inherit_existing_pit_lease: bool,
+    ) -> dict[str, Any]:
+        if not has_canonical_pit_runtime_profile(runtime_config):
+            return runtime_config
+        if inherit_existing_pit_lease:
+            inherited, _lease = inherit_canonical_pit_runtime_binding(
+                runtime_config,
+                trade_date=trade_date,
+            )
+            return inherited
+        frozen, _lease = freeze_canonical_pit_runtime_binding(
+            runtime_config,
+            trade_date=trade_date,
+            authority_resolver=self.pit_authority_resolver,
+        )
+        return frozen
 
     def _resolve_runtime_variant_for_portfolio(self, portfolio: PaperPortfolio, config: dict[str, Any]) -> Any | None:
         raw_id = config.get("runtime_variant_id")

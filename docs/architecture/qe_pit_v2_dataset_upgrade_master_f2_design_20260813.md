@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：W0～W3源码已合入，W3-D已在最终main完成统一身份验证；W4-A Selection runtime binding切片正在独立worktree实现，W4-B Paper持久化/session接入尚未开始；真实v2 dataset candidate和生产激活均未授权
+- 状态：W0～W4-A源码已合入，W4-A已在重启后的生产进程完成identity与只读contract smoke；W4-B Paper runtime integration实现与本地多轮审核已完成、待用户授权提交；真实v2 dataset candidate和生产激活均未授权
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
@@ -414,6 +414,9 @@ W4采用两个不可冒充完整交付的短切片：
   Paper持久化、DayRunner、订单或tradability语义。
 - **W4-B Paper Runtime Integration**：在W4-A合入后让新的Paper runtime profile version显式携带pointer profile，Paper
   session/day run继承Selection lease并在读写边界检查generation；实现shadow、旧profile库存/迁移和activation readiness。
+  `session.py`是session admission的实际所有者，`replay.py`是session lease进入day-runner的唯一显式继承边界；二者均纳入
+  W4-B精确写范围，不能以`paper_v2_session` JSON标志推断可信调用方。外部直接replay默认重新解析实时pointer，只有已冻结
+  session调用链显式传递inherit参数；day/live runner在run、order/fill/cash/position/snapshot写入边界复核generation。
 
 W4-A通过只代表Selection/Simulation enablement，不代表Paper、完整W4、candidate或activation完成。
 
@@ -748,7 +751,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-011 | §6 P5、§7.1；minute source/overlay | `backend/tests/dataset_release/test_minute_overlay.py` | design_ready_for_review | none |
 | F-012 | §7.1；component validators | `backend/tests/dataset_release/test_candidate_validator.py`；`backend/tests/dataset_release/test_index_context.py` | design_ready_for_review | none |
 | F-013 | §6 P3-A/P8；W3-B/C QE/HMM/训练scope | `backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`；`backend/tests/hmm_data_source/test_isolation_constraints.py`；`backend/tests/test_qe_hmm_canonical_pit_integration.py` | w3b_merged_w3c_direct_tests_passed | none |
-| F-014 | §6 P3-B；W4-A `canonical_pit_runtime.py`、`runtime_profile.py`、`risk_policy.py`、Simulation selection；W4-B Paper planned scope | `backend/tests/selection_center/test_canonical_pit_runtime.py`；`backend/tests/selection_center/test_risk_policy.py`；`backend/tests/simulation_runtime/test_strategy_package_selection_service.py`；planned W4-B `backend/tests/paper_trading_v2/test_runtime_profile.py` | design_ready_for_review | none |
+| F-014 | §6 P3-B；W4-A Selection/Simulation runtime binding；W4-B `backend/services/paper_trading_v2/canonical_pit_control.py`及Paper profile/session/replay/day/live/readiness/router | `backend/tests/selection_center/test_canonical_pit_runtime.py`；`backend/tests/selection_center/test_risk_policy.py`；`backend/tests/simulation_runtime/test_strategy_package_selection_service.py`；`backend/tests/paper_trading_v2/test_canonical_pit_control.py`；`backend/tests/paper_trading_v2/test_runtime_profile.py`；`backend/tests/paper_trading_v2/test_session.py`；`backend/tests/paper_trading_v2/test_day_runner.py`；`backend/tests/paper_trading_v2/test_live_session.py` | w4a_merged_w4b_implementation_verified | none |
 | F-015 | §6 P3-C/P8；StrategyPackage/Advisory planned scope | planned `backend/tests/strategy_package/test_canonical_pit_compatibility.py` | design_ready_for_review | none |
 | F-016 | §6 P5；W6/W7 source identity contract | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
 | F-017 | §6 P5/P6；W7/W8 path and Merkle contract | artifact: `tests/aistock_validation/pit_v2/historical_immutability_receipt.json` | design_ready_for_review | none |
@@ -839,3 +842,6 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-9A | W4-A Selection runtime binding实现与复审 | 首轮允许外部请求携带格式正确但未与实时pointer比对的lease，且Selection计算完成后未在落证前复核generation；master F-014一度使用validator不支持的partial状态 | 初始请求lease必须与resolver实时身份完全一致；下游继承使用显式边界；落证前二次generation/source/envelope/coverage核验并typed fail；F-014恢复设计态且在正文明确W4-A不得冒充完整W4。Selection/Simulation/Paper-profile/StrategyPackage相邻矩阵152 passed；F2 30/30、L0 blocking=0、catalog 7、registry 8、ownership 9/9、Ruff/compile/diff均PASS | w4a_pass_pending_user_commit_authorization |
 | Review-9B | W4-A authority/schema安全复审 | lease parser曾允许字符串/浮点generation隐式转整数；下游继承通过admission布尔开关绕过pointer复核；显式profile为null及hash计算先移除非法lease会弱化fail-closed边界 | generation与identity改为严格canonical JSON类型；拆分命名明确的inherit API且admission始终实时复核；null/混合profile拒绝；profile hash排除临时lease前先验证完整envelope；同generation下source/envelope/state/coverage任一漂移均typed拒绝 | resolved |
 | Review-9C | W4-A证据与相邻调用链最终复审 | 普通DSE v1仅保存稳定profile hash，未独立投影本次Selection使用的authority generation | 将完整`canonical_pit_authority` lease加入DSE v1 payload并纳入artifact hash；DSE v2仍由完整effective config chain携带同一lease。最终相邻矩阵163 passed；F2 30/30、L0 skill findings=0/repository baseline=1/blocking=0、catalog 7、registry 8/14、ownership 9/9、Ruff/compile/diff均PASS | w4a_pass_pending_user_commit_authorization |
+| Review-10A | W4-B admission与读写边界首轮复审 | session generation检查一度误落在锁竞争分支；replay一度无条件信任调用方lease；day/live final cash写入早于最终generation复核 | generation检查移入正常持锁tick入口且锁竞争不并发改session；replay默认外部实时冻结、仅session/catch-up显式inherit；order/fill/cash/position/snapshot写入前增加复核并补漂移零fill/零cash回归 | resolved |
+| Review-10B | W4-B相邻兼容与profile迁移复审 | Paper全矩阵发现3个旧测试仍直接激活legacy profile；控制面run status枚举规范化不足；运维迁移默认动作需直接证据 | 所有新activation先创建不可变canonical新版本并保留旧hash；inventory兼容字符串/Enum状态；router迁移默认`apply=false`且shadow只读委派增加直接测试 | resolved |
+| Review-10C | W4-B资源、证据与最终本地合入就绪复审 | inventory原先仅单次查询限1万，多portfolio聚合仍可能无界且截断后误报ready；shadow只有差异集合、缺span原因证据；有限replay只在start date校验lease coverage | inventory改为全局1万metadata硬上限且超限typed fail；shadow携带v1/v2 span和中立reason code且仍为SELECT-only/500 symbols；session admission校验end date coverage。最终W4-A/B相邻矩阵487 passed、0 failed、1 skipped、2 expected xfail；F2 30/30、guardrail 17文件0 finding、catalog/ownership 15 passed、Ruff/compile/diff均PASS | pass_pending_user_commit_authorization |

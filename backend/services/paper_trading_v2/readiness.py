@@ -10,6 +10,10 @@ from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner, 
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
 from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
+from backend.services.selection_center.canonical_pit_runtime import (
+    has_canonical_pit_runtime_profile,
+    require_canonical_pit_generation_current,
+)
 from backend.services.selection_center.runtime_profile import (
     parse_selection_runtime_profile,
     refresh_generated_runtime_profile_binding,
@@ -69,6 +73,7 @@ class PaperTradingReadinessService:
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
         minqmt_broker_factory: Callable[..., MiniQMTSimBackend] | None = None,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
@@ -85,6 +90,7 @@ class PaperTradingReadinessService:
         )
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
         self.minqmt_broker_factory = minqmt_broker_factory or MiniQMTSimBackend
+        self.pit_authority_resolver = pit_authority_resolver
 
     def check_day(
         self,
@@ -119,6 +125,7 @@ class PaperTradingReadinessService:
         config = PaperTradingV2PortfolioService(
             package_repository=self.package_repository,
             repository=self.repository,
+            pit_authority_resolver=self.pit_authority_resolver,
         ).resolve_runtime_config_for_date(
             portfolio=portfolio,
             trade_date=trade_date,
@@ -141,6 +148,7 @@ class PaperTradingReadinessService:
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "readiness"},
         )
         runtime_profile = parse_selection_runtime_profile(config)
+        self._require_current_pit(config)
         PaperTradingDayRunner._reject_raw_execution_overrides(config)
         execution_policy_context = self._execution_policy_context_for_date(portfolio, trade_date)
         execution_policy_json = execution_policy_context["policy_json"]
@@ -250,6 +258,7 @@ class PaperTradingReadinessService:
             tradability_filter=self.tradability_filter,
             refresh_audit=self.refresh_audit,
             selection_artifact_service=self.selection_artifact_service,
+            pit_authority_resolver=self.pit_authority_resolver,
         )
         artifact_runner._ensure_authoritative_selection_artifact(
             manifest=manifest,
@@ -394,6 +403,7 @@ class PaperTradingReadinessService:
                 )
             )
 
+        self._require_current_pit(config)
         return PaperDayReadinessResult(
             portfolio_id=portfolio_id,
             trade_date=trade_date,
@@ -407,6 +417,13 @@ class PaperTradingReadinessService:
             checked_symbols=checked_symbols,
             runtime_config_keys=sorted(str(key) for key in config),
         )
+
+    def _require_current_pit(self, runtime_config: dict[str, Any]) -> None:
+        if has_canonical_pit_runtime_profile(runtime_config):
+            require_canonical_pit_generation_current(
+                runtime_config,
+                authority_resolver=self.pit_authority_resolver,
+            )
 
     @staticmethod
     def _require_runtime_top_k(runtime_profile: Any, manifest: Any) -> int:

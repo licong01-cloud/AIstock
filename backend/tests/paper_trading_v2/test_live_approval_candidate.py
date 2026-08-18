@@ -76,10 +76,15 @@ def test_paper_v2_live_approval_candidate_requires_runtime_and_execution_activat
         created_by="unit_test",
         reason="runtime profile for live approval",
     )
+    canonical_version = service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=version.profile_version_id,
+        created_by="unit_test",
+    )
     service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=TRADE_DATE,
-        profile_version_id=version.profile_version_id,
+        profile_version_id=canonical_version.profile_version_id,
         activated_by="unit_test",
         reason="activate runtime before live approval",
     )
@@ -110,10 +115,15 @@ def test_paper_v2_live_approval_candidate_binds_immutable_release_hashes() -> No
         created_by="unit_test",
         reason="runtime profile for live approval",
     )
+    canonical_version = service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=version.profile_version_id,
+        created_by="unit_test",
+    )
     runtime_activation = service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=TRADE_DATE,
-        profile_version_id=version.profile_version_id,
+        profile_version_id=canonical_version.profile_version_id,
         activated_by="unit_test",
         reason="activate runtime before live approval",
     )
@@ -140,8 +150,8 @@ def test_paper_v2_live_approval_candidate_binds_immutable_release_hashes() -> No
     assert approval.manifest_sha256 == manifest.manifest_sha256
     assert approval.alpha_core_sha256 == derive_locked_core_hash(manifest)
     assert approval.runtime_profile_id == profile.profile_id
-    assert approval.runtime_profile_version_id == version.profile_version_id
-    assert approval.runtime_profile_sha256 == version.config_sha256
+    assert approval.runtime_profile_version_id == canonical_version.profile_version_id
+    assert approval.runtime_profile_sha256 == canonical_version.config_sha256
     assert approval.execution_policy_id == execution_activation.policy_id
     assert approval.execution_policy_sha256 == execution_activation.policy_sha256
     assert approval.runtime_release_sha256

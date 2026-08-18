@@ -270,15 +270,19 @@
     "W4": {
       "depends_on": ["W2_merged"],
       "owner": "Selection/Paper/Simulation",
-      "status": "w4a_implementation_review_passed_w4b_pending",
-      "active_slice": {
+      "status": "w4a_merged_runtime_verified_w4b_in_progress",
+      "completed_slice_w4a": {
         "id": "W4-A",
         "branch": "feature/qe-pit-v2-w4a-runtime-binding-20260818",
         "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w4a-runtime-binding-20260818",
         "base_head": "a7b91792a4ee630a7d18c01a3c03f6f0bda77bc0",
         "latest_reviewed_origin_main": "0f7e41c7cae613ab5cb5205975495f875332fa58",
         "origin_main_changed_file_overlap": [],
-        "status": "implementation_review_passed_pending_user_commit_authorization",
+        "status": "merged_runtime_verified",
+        "pr": "https://github.com/licong01-cloud/AIstock/pull/3596",
+        "merge_commit": "38ade7137a65a9386dafc5c0fe6a276e227548ae",
+        "post_restart_runtime_identity": "38ade7137a65a9386dafc5c0fe6a276e227548ae",
+        "post_restart_smoke": "backend health/runtime identity ready; canonical PIT and risk direct smoke 24 passed in production Python environment",
         "scope": "selection canonical authority directive, immutable generation lease, risk-policy binding, and simulation selection admission",
         "allowed_write_files": [
           "backend/services/selection_center/canonical_pit_runtime.py",
@@ -333,6 +337,79 @@
           "activation",
           "process_control"
         ]
+      },
+      "active_slice": {
+        "id": "W4-B",
+        "branch": "feature/qe-pit-v2-w4b-paper-runtime-20260818",
+        "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w4b-paper-runtime-20260818",
+        "base_head": "8c29ed5e956c24d49370c4f54f70b95b23aa1d5b",
+        "status": "implementation_review_passed_pending_user_commit_authorization",
+        "scope": "Paper runtime profile migration, session/day-run lease inheritance and drift checks, read-only shadow comparison, and activation readiness inventory",
+        "allowed_write_files": [
+          "backend/services/paper_trading_v2/canonical_pit_control.py",
+          "backend/services/paper_trading_v2/service.py",
+          "backend/services/paper_trading_v2/session.py",
+          "backend/services/paper_trading_v2/replay.py",
+          "backend/services/paper_trading_v2/day_runner.py",
+          "backend/services/paper_trading_v2/live_session.py",
+          "backend/services/paper_trading_v2/readiness.py",
+          "backend/routers/paper_trading_v2.py",
+          "backend/tests/paper_trading_v2/test_canonical_pit_control.py",
+          "backend/tests/paper_trading_v2/test_runtime_profile.py",
+          "backend/tests/paper_trading_v2/test_session.py",
+          "backend/tests/paper_trading_v2/test_day_runner.py",
+          "backend/tests/paper_trading_v2/test_live_session.py",
+          "backend/tests/paper_trading_v2/test_live_approval_candidate.py",
+          "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+          "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "tests/aistock_validation/catalog/file_ownership.yaml",
+          "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+        ],
+        "forbidden": [
+          "database_ddl_or_dml",
+          "production_activation",
+          "process_control",
+          "dataset_export_or_mutation",
+          "orderability_or_execution_semantic_change",
+          "in_place_legacy_profile_rewrite",
+          "strategy_package_or_advisory_source_change"
+        ],
+        "actual_write_files": [
+          "backend/services/paper_trading_v2/canonical_pit_control.py",
+          "backend/services/paper_trading_v2/service.py",
+          "backend/services/paper_trading_v2/session.py",
+          "backend/services/paper_trading_v2/replay.py",
+          "backend/services/paper_trading_v2/day_runner.py",
+          "backend/services/paper_trading_v2/live_session.py",
+          "backend/services/paper_trading_v2/readiness.py",
+          "backend/routers/paper_trading_v2.py",
+          "backend/tests/paper_trading_v2/test_canonical_pit_control.py",
+          "backend/tests/paper_trading_v2/test_runtime_profile.py",
+          "backend/tests/paper_trading_v2/test_session.py",
+          "backend/tests/paper_trading_v2/test_day_runner.py",
+          "backend/tests/paper_trading_v2/test_live_session.py",
+          "backend/tests/paper_trading_v2/test_live_approval_candidate.py",
+          "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+          "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+        ],
+        "validation": {
+          "direct_and_adjacent_matrix": "487 passed, 0 failed, 1 skipped, 2 expected xfail",
+          "f2": "30/30 warnings=0",
+          "ruff_compile_diff": "pass; only Git line-ending advisory",
+          "guardrail": "changed-only files=17 findings=0 blocking=0",
+          "catalog_and_ownership_tests": "15 passed; catalog integrity script findings=0",
+          "scope_readback": "17/17 actual files within allowed scope; ownership catalog unchanged because existing paper_v2 wildcard maps all source/test files",
+          "client_gate": "feature ready, blocking=0, warnings=0, restart_recommended=false",
+          "runtime_contract": "backend impact; target_ids=[backend-main]; restart remains separate user-owned post-merge action",
+          "origin_main_drift": "behind 2 close-sync commits; only changed path is BUG-898 metadata and exact W4-B overlap is zero; dirty worktree intentionally not merged before commit authorization"
+        },
+        "review_rounds": {
+          "admission_and_trust_boundary": "resolved; normal tick owns generation check, external replay re-resolves live pointer, only frozen session/catch-up explicitly inherits",
+          "economic_write_boundary": "resolved; day/live order fill cash position and snapshot checkpoints fail typed before persistence; direct drift tests prove zero fill/cash",
+          "resource_and_shadow_boundary": "resolved; shadow max 500 and SELECT-only evidence; inventory has one 10000-row global metadata ceiling and fails typed instead of truncating or growing unbounded",
+          "legacy_immutability_and_activation": "resolved; legacy versions remain readable/immutable, migration always creates a new version, and new activation/live candidate requires canonical pointer profile"
+        }
       },
       "reserved_existing_files": [
         "backend/services/selection_center/runtime_profile.py",
