@@ -42,6 +42,12 @@
       "actor": "codex",
       "note": "Fresh Python process imported tracked source, rewrote a canary window to 2024-07-01..2026-06-29 in both authoritative YAML paths, and exited 0.",
       "timestamp": "2026-08-18T03:29:53Z"
+    },
+    {
+      "action": "final_head_validated",
+      "actor": "codex",
+      "note": "After safe-sync with origin/main, final HEAD 7243849339c325fb654575b6463e0d84964500ed passed focused tests, L0, ruff, diff-check, and fresh-process window smoke.",
+      "timestamp": "2026-08-18T03:42:18Z"
     }
   ],
   "evidence_uris": [
@@ -94,7 +100,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Python process imported tracked multi-alpha source, rewrote both Qlib OOS config paths from canary dates to 2024-07-01..2026-06-29, printed fresh-process-window-contract=passed, and exited 0."
+      "Fresh Python process imported tracked multi-alpha source, rewrote both Qlib OOS config paths from canary dates to 2024-07-01..2026-06-29, printed fresh-process-window-contract=passed, and exited 0.",
+      "Final HEAD 7243849339c325fb654575b6463e0d84964500ed fresh Python process repeated the exact tracked-source window-contract smoke and exited 0."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -165,7 +172,8 @@
     "focused post-review pytest nodeids -> 4 passed",
     "ruff check and python -m py_compile -> passed",
     "git diff --check -> passed",
-    "fresh-process window contract smoke -> passed"
+    "fresh-process window contract smoke -> passed",
+    "final HEAD 7243849339c325fb654575b6463e0d84964500ed: focused pytest 4 passed; validation_module_registry_l0 8 passed; ruff/diff-check/fresh-process passed"
   ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
