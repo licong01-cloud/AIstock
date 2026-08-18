@@ -58,6 +58,7 @@ from backend.services.trading_core.errors import (
 from backend.services.simulation_runtime.models import ExecutionPathNotCanonicalError
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import (
+    ActiveCanonicalPitResolver,
     FakeCalendar,
     FakeSuspendLookup,
     make_paper_enabled_manifest,
@@ -1320,10 +1321,15 @@ def test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile(
         config_json=runtime_config,
         created_by="unit_test",
     )
+    canonical_version = profile_service.migrate_runtime_profile_version_to_canonical_pit(
+        portfolio_id=portfolio.portfolio_id,
+        profile_version_id=version.profile_version_id,
+        created_by="unit_test",
+    )
     activation = profile_service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=TRADE_DATE,
-        profile_version_id=version.profile_version_id,
+        profile_version_id=canonical_version.profile_version_id,
         activated_by="unit_test",
         reason="MiniQMT readiness runtime profile",
     )
@@ -1337,6 +1343,7 @@ def test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile(
         refresh_audit=NoopRefreshAudit(),
         risk_policy_service=risk_policy,
         minqmt_broker_factory=_portfolio_backend_factory(FakeQMTClient(connected=True)),
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
     ).check_day(
         portfolio_id=portfolio.portfolio_id,
         trade_date=TRADE_DATE,
@@ -1344,7 +1351,9 @@ def test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile(
     )
 
     assert "runtime_profile_activation" in readiness.runtime_config_keys
-    assert paper_repo.runtime_config_activations[activation.activation_id].profile_version_id == version.profile_version_id
+    assert paper_repo.runtime_config_activations[activation.activation_id].profile_version_id == (
+        canonical_version.profile_version_id
+    )
     assert risk_policy.profile_seen is not None
     assert risk_policy.profile_seen.enabled is True
     selection_check = next(check for check in readiness.checks if check.check_name == "selection_runtime")

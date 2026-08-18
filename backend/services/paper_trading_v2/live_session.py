@@ -17,6 +17,10 @@ from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
 from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
+from backend.services.selection_center.canonical_pit_runtime import (
+    has_canonical_pit_runtime_profile,
+    require_canonical_pit_generation_current,
+)
 from backend.services.selection_center.runtime_profile import (
     parse_selection_runtime_profile,
     refresh_generated_runtime_profile_binding,
@@ -108,6 +112,7 @@ class PaperTradingLiveMinuteExecutor:
         replay_service: PaperTradingHistoricalReplay | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
         minqmt_broker_factory: Callable[..., Any] | None = None,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.package_repository = package_repository
@@ -122,6 +127,7 @@ class PaperTradingLiveMinuteExecutor:
         self.tradability_filter = tradability_filter or TradabilityFilter()
         self.refresh_audit = refresh_audit or DataRefreshAuditRepository()
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
+        self.pit_authority_resolver = pit_authority_resolver
         self.day_helper = PaperTradingDayRunner(
             repository=self.repository,
             calendar_provider=self.calendar_provider,
@@ -137,6 +143,7 @@ class PaperTradingLiveMinuteExecutor:
             refresh_audit=self.refresh_audit,
             risk_policy_service=self.risk_policy_service,
             minqmt_broker_factory=minqmt_broker_factory,
+            pit_authority_resolver=self.pit_authority_resolver,
         )
         self.replay_service = replay_service or PaperTradingHistoricalReplay(
             repository=self.repository,
@@ -146,6 +153,7 @@ class PaperTradingLiveMinuteExecutor:
         )
 
     def tick(self, session: PaperTradingSession, *, as_of_time: datetime | None = None) -> PaperSessionProgress:
+        self._require_current_pit(session.runtime_config)
         now = as_of_time or datetime.now(LIVE_SESSION_TZ)
         if session.mode == PaperSessionMode.CATCHUP_THEN_LIVE:
             session = self._run_historical_catchup(session, as_of_time=now)
@@ -192,6 +200,7 @@ class PaperTradingLiveMinuteExecutor:
             (item for item in self.repository.list_session_days(session.session_id) if item.trade_date == trade_date),
             None,
         )
+        self._require_current_pit(session.runtime_config)
         self.repository.save_session_day(
             PaperSessionDay(
                 session_id=session.session_id,
@@ -350,6 +359,7 @@ class PaperTradingLiveMinuteExecutor:
                     rerun_policy=str(opts.get("rerun_policy") or "reject_existing"),
                     confirm_reset=bool(opts.get("confirm_reset", False)),
                     confirm_text=opts.get("confirm_text"),
+                    inherit_existing_pit_lease=True,
                 )
                 for day in result.day_results:
                     self.repository.save_session_day(
@@ -763,6 +773,7 @@ class PaperTradingLiveMinuteExecutor:
                     },
                 )
             raise
+        self._require_current_pit(session.runtime_config)
         self.repository.save_session_day(
             PaperSessionDay(
                 session_id=session.session_id,
@@ -1198,6 +1209,7 @@ class PaperTradingLiveMinuteExecutor:
         trade_date: date,
         as_of_time: datetime,
     ) -> PaperRun:
+        self._require_current_pit(session.runtime_config)
         portfolio = self.repository.get_portfolio(session.portfolio_id)
         if portfolio.status not in {PortfolioStatus.READY, PortfolioStatus.RUNNING}:
             raise InvalidStateTransitionError(
@@ -1372,6 +1384,7 @@ class PaperTradingLiveMinuteExecutor:
                 target_positions=targets,
             )
         )
+        self._require_current_pit(config)
         run = PaperRun(
             portfolio_id=portfolio.portfolio_id,
             trade_date=trade_date,
@@ -1471,6 +1484,7 @@ class PaperTradingLiveMinuteExecutor:
                 nav=latest_cash + market_value,
                 snapshot_time=as_of_time,
             )
+            self._require_current_pit(config)
             self.repository.save_positions(
                 run_id=run.run_id,
                 trade_date=trade_date,
@@ -1529,7 +1543,9 @@ class PaperTradingLiveMinuteExecutor:
                 started_at=session.started_at or datetime.now(UTC),
             )
             return succeeded
+        self._require_current_pit(config)
         for intent in intents:
+            self._require_current_pit(config)
             order = self.oms.create_order(intent)
             self.repository.save_order(run.run_id, order)
             self.repository.save_order_execution_state(
@@ -1690,6 +1706,7 @@ class PaperTradingLiveMinuteExecutor:
         *,
         as_of_time: datetime,
     ) -> PaperSessionProgress:
+        self._require_current_pit(run.runtime_config)
         portfolio = self.repository.get_portfolio(session.portfolio_id)
         policy_json = run.runtime_config["validated_execution_policy"]["policy_json"]
         capability = require_execution_algo_supports_mode(policy_json, mode="LIVE_ONLY", package_id=portfolio.package_id)
@@ -1779,6 +1796,7 @@ class PaperTradingLiveMinuteExecutor:
                 algo_config=algo_config,
                 market_context=market_context,
             )
+            self._require_current_pit(run.runtime_config)
             updated_state = self._preserve_live_causality_metadata(state, updated_state)
             # T6.1 capture wiring: intended_price from Order.limit_price
             # (inherited from the original OrderIntent; None for MARKET orders).
@@ -1832,6 +1850,7 @@ class PaperTradingLiveMinuteExecutor:
                 if ledger.positions
                 else {}
             )
+            self._require_current_pit(run.runtime_config)
             for entry in ledger.cash_entries:
                 self.repository.save_cash_entry(run.run_id, entry)
             if new_fill_count:
@@ -1892,6 +1911,7 @@ class PaperTradingLiveMinuteExecutor:
         *,
         as_of_time: datetime,
     ) -> PaperSessionProgress:
+        self._require_current_pit(run.runtime_config)
         if run.status != RunStatus.RUNNING:
             return self._progress(session.session_id)
         fills = self.repository.list_fills_for_run(run.run_id)
@@ -1932,6 +1952,7 @@ class PaperTradingLiveMinuteExecutor:
             nav=latest_cash + sum(position.quantity * prices[position.symbol] for position in latest_positions.values()),
             snapshot_time=as_of_time,
         )
+        self._require_current_pit(run.runtime_config)
         self.repository.save_daily_snapshot(
             run_id=run.run_id,
             trade_date=run.trade_date,
@@ -1969,6 +1990,13 @@ class PaperTradingLiveMinuteExecutor:
             },
         )
         return self._progress(session.session_id)
+
+    def _require_current_pit(self, runtime_config: dict[str, Any]) -> None:
+        if has_canonical_pit_runtime_profile(runtime_config):
+            require_canonical_pit_generation_current(
+                runtime_config,
+                authority_resolver=self.pit_authority_resolver,
+            )
 
     def _save_session_event_once(
         self,
@@ -2161,6 +2189,7 @@ class PaperTradingLiveMinuteExecutor:
             live_data_source=session.live_data_source,
             known_prices={},
         )
+        self._require_current_pit(run.runtime_config)
         self.repository.save_positions(
             run_id=run.run_id,
             trade_date=run.trade_date,
