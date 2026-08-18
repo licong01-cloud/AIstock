@@ -29,13 +29,50 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260818-226644de57ab",
       "timestamp": "2026-08-18T04:11:49.270623Z"
+    },
+    {
+      "action": "root_cause_confirmed",
+      "actor": "codex",
+      "note": "dispatch treated every unchanged waiting_capacity retry as completed work: it claimed the queued attempt, emitted claim/status evidence, and self-woke again instead of performing a bounded read-only capacity observation.",
+      "timestamp": "2026-08-18T05:53:55Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Waiting attempts now use snapshot-fenced dispatch plus node-coalesced read-only capacity observation; unchanged full capacity performs zero source DML/events, real same-node release clears the cooldown immediately, and deferred nodes do not block other dispatch work.",
+      "timestamp": "2026-08-18T05:53:55Z"
+    },
+    {
+      "action": "related_matrix_validated",
+      "actor": "codex",
+      "note": "Final related multi_alpha matrix passed 240 tests with 13 environment skips; required validation_module_registry_l0 and qe_read_backend plans also passed.",
+      "timestamp": "2026-08-18T05:53:55Z"
+    },
+    {
+      "action": "fresh_process_validated",
+      "actor": "codex",
+      "note": "A fresh Python process imported the tracked orchestrator and verified capacity cooldown plus same-node release behavior without backend process control.",
+      "timestamp": "2026-08-18T05:53:55Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "multi-alpha-run://macb_idem_512dce37bdd1e0096eed1615438d41e35e67966d"
+  ],
+  "expected": "A queued sibling may record one initial waiting_capacity transition, then unchanged full-node checks must be read-only, event-free, node-coalesced, and bounded to no more than once per minute; a real same-node capacity release must wake the sibling immediately without weakening strict capacity, fencing, idempotency, restart recovery, or other-node throughput.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/tests/multi_alpha/test_durable_capacity.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+      "backend/tests/multi_alpha/test_durable_repository.py",
+      "tests/aistock_validation/bugs/20260818_BUG-1126-qe-multi-alpha-waiting-capacity-child-rewrites-claim-and-status-events-e.json"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -61,20 +98,30 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Read multi-alpha run macb_idem_512dce37bdd1e0096eed1615438d41e35e67966d events: 274 claimed/waiting_capacity plus 274 status/waiting_capacity rows were written while node_parallelism=1 kept the sibling queued.",
   "required_verification": [
     "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process imported tracked durable_orchestrator source, verified node capacity cooldown suppresses another probe, verified same-node release clears the cooldown, printed fresh-process-capacity-contract=passed, and exited 0."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -127,6 +174,15 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/multi_alpha -q --disable-warnings -> 240 passed, 13 skipped",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership files=14 mapped=14",
+    "rtk nox -s qe_read_backend -> 34 passed",
+    "focused waiting-capacity, restart, dispatch-batch, repository, and capacity observation tests -> passed",
+    "ruff check and python -m py_compile -> passed",
+    "git diff --check -> passed",
+    "fresh-process capacity cooldown/release contract smoke -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
