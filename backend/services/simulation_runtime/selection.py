@@ -23,6 +23,13 @@ from backend.services.advisory_phase1.stage_trace import (
     TraceCaptureState,
 )
 from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
+from backend.services.selection_center.canonical_pit_runtime import (
+    CANONICAL_PIT_RUNTIME_LEASE_KEY,
+    freeze_canonical_pit_runtime_binding,
+    has_canonical_pit_runtime_profile,
+    require_canonical_pit_generation_current,
+    require_canonical_pit_runtime_binding,
+)
 from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion, SelectionMode
 from backend.services.selection_center.package_health import SelectionPackageHealthService
 from backend.services.selection_center.prospective_evidence import (
@@ -204,10 +211,7 @@ class DailySelectionSignalService:
                     )
                     if (
                         artifact.status.value == "SUCCEEDED"
-                        and (
-                            artifact.scores_json
-                            or StrategyPackageRuntime._is_natural_raw_empty_artifact(artifact)
-                        )
+                        and (artifact.scores_json or StrategyPackageRuntime._is_natural_raw_empty_artifact(artifact))
                         and metadata.get("source_type") == expected_source_type
                         and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
                     ):
@@ -223,6 +227,7 @@ class DailySelectionSignalService:
             include_reference_price=bool(artifact_config.get("include_reference_price", True)),
             cutoff_date=cutoff_date,
         )
+
 
 class StrategyPackageSelectionService:
     """Broker-neutral StrategyPackage selection entry shared by all simulators."""
@@ -242,6 +247,7 @@ class StrategyPackageSelectionService:
         signal_service: DailySelectionSignalService | None = None,
         phase1_trace_capture_service: Phase1TraceCaptureService | Any | None = None,
         selection_computation: StrategyPackageSelectionComputation | Any | None = None,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.runtime = runtime or StrategyPackageRuntime()
@@ -265,6 +271,7 @@ class StrategyPackageSelectionService:
         )
         self.phase1_trace_capture_service = phase1_trace_capture_service or Phase1TraceCaptureService()
         self.selection_computation = selection_computation or StrategyPackageSelectionComputation()
+        self.pit_authority_resolver = pit_authority_resolver
 
     def run_selection(
         self,
@@ -304,6 +311,12 @@ class StrategyPackageSelectionService:
             )
         else:
             raw_config = attach_default_runtime_profile_binding(raw_config)
+        if has_canonical_pit_runtime_profile(raw_config):
+            raw_config, _pit_runtime_lease = freeze_canonical_pit_runtime_binding(
+                raw_config,
+                trade_date=trade_date,
+                authority_resolver=self.pit_authority_resolver,
+            )
         config = normalize_selection_runtime_config(raw_config)
         validate_runtime_profile_binding(
             config,
@@ -318,7 +331,9 @@ class StrategyPackageSelectionService:
             require_trade_enabled=not is_non_trading_runtime_config(config),
         )
         self._validate_request_shape(package_ids=package_ids, mode=mode)
-        weights = package_weights_from_runtime_config(config, package_ids) if mode == SelectionMode.WEIGHTED_FUSION else None
+        weights = (
+            package_weights_from_runtime_config(config, package_ids) if mode == SelectionMode.WEIGHTED_FUSION else None
+        )
         records_by_id, package_configs, package_health = self._prepare_package_runtime_configs(
             package_ids=package_ids,
             config=config,
@@ -358,9 +373,7 @@ class StrategyPackageSelectionService:
             artifact = signal_trace.score_artifact
             artifact_metadata = getattr(artifact, "metadata", None)
             artifact_input_context = (
-                artifact_metadata.get("artifact_input_context")
-                if isinstance(artifact_metadata, dict)
-                else None
+                artifact_metadata.get("artifact_input_context") if isinstance(artifact_metadata, dict) else None
             )
             prepared_signals[package_id] = PreparedPackageSignalV1(
                 package_id=manifest.package_id,
@@ -436,6 +449,11 @@ class StrategyPackageSelectionService:
         manifest_sha = dict(computation.manifest_sha256_by_package)
         stage_trace_by_package = dict(computation.stage_trace_by_package)
         candidate_outcome_by_package = dict(computation.candidate_outcome_by_package)
+        if has_canonical_pit_runtime_profile(config):
+            require_canonical_pit_generation_current(
+                config,
+                authority_resolver=self.pit_authority_resolver,
+            )
 
         evidence_by_package, capture_receipt = self._build_operational_evidence_by_package(
             package_ids=package_ids,
@@ -531,9 +549,7 @@ class StrategyPackageSelectionService:
                     state=TraceCaptureState.CAPTURE_FAILED,
                     reason_codes=(REASON_TRACE_CAPTURE_FAILED,),
                 )
-        reason_codes = tuple(
-            sorted({reason for result in results.values() for reason in result.reason_codes})
-        )
+        reason_codes = tuple(sorted({reason for result in results.values() for reason in result.reason_codes}))
         return Phase1TraceCaptureReceipt(
             requested=self.phase1_trace_capture_service.enabled,
             results_by_package=results,
@@ -569,7 +585,9 @@ class StrategyPackageSelectionService:
     def release_selection_runtime_config(runtime_release: StrategyRuntimeRelease) -> dict[str, Any]:
         """Return the broker-neutral selection config persisted with a runtime release."""
 
-        release_config = runtime_release.release_config_json if isinstance(runtime_release.release_config_json, dict) else {}
+        release_config = (
+            runtime_release.release_config_json if isinstance(runtime_release.release_config_json, dict) else {}
+        )
         metadata = release_config.get("metadata") if isinstance(release_config.get("metadata"), dict) else {}
         candidate = StrategyPackageSelectionService._first_release_selection_config(
             (
@@ -583,7 +601,10 @@ class StrategyPackageSelectionService:
                 (
                     ("release_config_json.selection_artifact_config", release_config.get("selection_artifact_config")),
                     ("release_config_json.selection_artifact", release_config.get("selection_artifact")),
-                    ("release_config_json.metadata.selection_artifact_config", metadata.get("selection_artifact_config")),
+                    (
+                        "release_config_json.metadata.selection_artifact_config",
+                        metadata.get("selection_artifact_config"),
+                    ),
                     ("release_config_json.metadata.selection_artifact", metadata.get("selection_artifact")),
                 ),
                 runtime_release=runtime_release,
@@ -670,7 +691,7 @@ class StrategyPackageSelectionService:
             raise RuntimeConfigInvalidError(
                 "StrategyRuntimeRelease can only bind selection for its own single StrategyPackage",
                 context={"release_package_id": runtime_release.package_id, "package_ids": package_ids},
-                )
+            )
         release_selection_config = StrategyPackageSelectionService.release_selection_runtime_config(runtime_release)
         config = StrategyPackageSelectionService._merge_selection_runtime_config(
             release_selection_config,
@@ -720,7 +741,10 @@ class StrategyPackageSelectionService:
             raise RuntimeConfigInvalidError("selection run package_ids must be unique")
         if mode == SelectionMode.SINGLE_PACKAGE and len(package_ids) != 1:
             raise RuntimeConfigInvalidError("single package selection requires exactly one package")
-        if mode in {SelectionMode.INTERSECTION, SelectionMode.UNION, SelectionMode.WEIGHTED_FUSION} and len(package_ids) < 2:
+        if (
+            mode in {SelectionMode.INTERSECTION, SelectionMode.UNION, SelectionMode.WEIGHTED_FUSION}
+            and len(package_ids) < 2
+        ):
             raise RuntimeConfigInvalidError("package aggregation requires at least two packages")
 
     def _require_data_ready(self, *, trade_date: date, runtime_config: dict[str, Any]) -> None:
@@ -914,7 +938,10 @@ class StrategyPackageSelectionService:
         if configured is None:
             raise RuntimeConfigInvalidError(
                 "selection runtime_profile.selection.top_k is required; StrategyPackage manifest cannot provide runtime top_k",
-                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+                context={
+                    "package_id": manifest.package_id,
+                    "manifest_version": getattr(manifest, "manifest_version", None),
+                },
             )
         try:
             top_k = int(configured)
@@ -956,8 +983,12 @@ class StrategyPackageSelectionService:
                 "pit_mode": "NONE",
                 "trade_date": trade_date.isoformat(),
                 "cutoff_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else None,
-                "score_trade_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else trade_date.isoformat(),
-                "reference_price_trade_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else trade_date.isoformat(),
+                "score_trade_date": explicit_cutoff_date.isoformat()
+                if explicit_cutoff_date
+                else trade_date.isoformat(),
+                "reference_price_trade_date": explicit_cutoff_date.isoformat()
+                if explicit_cutoff_date
+                else trade_date.isoformat(),
             }
         effective_trade_date = self._selection_effective_trade_date(
             trade_date=trade_date,
@@ -1044,9 +1075,13 @@ class StrategyPackageSelectionService:
                 artifact_config=artifact,
             ):
                 raw_mode = cutoff_policy
-        if raw_mode is None and artifact.get("cutoff_date") and StrategyPackageSelectionService.is_fixed_cutoff_replay_config(
-            config,
-            artifact_config=artifact,
+        if (
+            raw_mode is None
+            and artifact.get("cutoff_date")
+            and StrategyPackageSelectionService.is_fixed_cutoff_replay_config(
+                config,
+                artifact_config=artifact,
+            )
         ):
             raw_mode = "PREVIOUS_TRADING_DAY_CLOSE"
         if raw_mode is None:
@@ -1303,17 +1338,23 @@ class StrategyPackageSelectionService:
     ) -> DailySelectionEvidence:
         binding = self._runtime_profile_binding_for_evidence(runtime_config, package_id=package_id)
         cutoff_date = self._evidence_cutoff_date(runtime_config, trade_date=trade_date)
-        release_id = runtime_release.release_id if runtime_release else self._runtime_release_config(runtime_config).get("release_id")
-        release_hash = runtime_release.release_hash if runtime_release else self._runtime_release_config(runtime_config).get("release_hash")
+        release_id = (
+            runtime_release.release_id
+            if runtime_release
+            else self._runtime_release_config(runtime_config).get("release_id")
+        )
+        release_hash = (
+            runtime_release.release_hash
+            if runtime_release
+            else self._runtime_release_config(runtime_config).get("release_hash")
+        )
         runtime_profile_version_id = (
             runtime_release.runtime_profile_version_id
             if runtime_release
             else str(binding.get("profile_version_id") or "")
         )
         runtime_profile_hash = (
-            runtime_release.runtime_profile_sha256
-            if runtime_release
-            else str(binding.get("config_sha256") or "")
+            runtime_release.runtime_profile_sha256 if runtime_release else str(binding.get("config_sha256") or "")
         )
         payload = {
             "schema_version": "daily_selection_evidence_v1",
@@ -1334,6 +1375,11 @@ class StrategyPackageSelectionService:
             "selected_candidates": [self._candidate_payload(item) for item in selected],
             "excluded_candidates": [item.model_dump(mode="json") for item in excluded],
         }
+        if CANONICAL_PIT_RUNTIME_LEASE_KEY in runtime_config:
+            payload[CANONICAL_PIT_RUNTIME_LEASE_KEY] = require_canonical_pit_runtime_binding(
+                runtime_config,
+                trade_date=trade_date,
+            ).as_dict()
         assert_selection_only_payload_boundary(payload, context={"package_id": package_id})
         artifact_hash = canonical_json_sha256(payload)
         return DailySelectionEvidence(
@@ -1424,7 +1470,9 @@ class StrategyPackageSelectionService:
                 package_id: evidence.artifact_hash for package_id, evidence in evidence_by_package.items()
             },
             "evidence_schema_version_by_package": {
-                package_id: str((evidence.evidence_payload_json or {}).get("schema_version") or "daily_selection_evidence_v1")
+                package_id: str(
+                    (evidence.evidence_payload_json or {}).get("schema_version") or "daily_selection_evidence_v1"
+                )
                 for package_id, evidence in evidence_by_package.items()
             },
             "evidence_capture_status": capture_receipt.status.value,
