@@ -109,7 +109,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Python process imported tracked durable_orchestrator source, verified node capacity cooldown suppresses another probe, verified same-node release clears the cooldown, printed fresh-process-capacity-contract=passed, and exited 0."
+      "Fresh Python process imported tracked durable_orchestrator source, verified node capacity cooldown suppresses another probe, verified same-node release clears the cooldown, printed fresh-process-capacity-contract=passed, and exited 0.",
+      "fresh Python process imported tracked durable_orchestrator and verified capacity cooldown plus same-node release -> passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -134,6 +135,15 @@
     "fingerprint": "226644de57ab2d3c942f0f89",
     "source_event_id": "FE-20260818-226644de57ab"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/multi_alpha -q --disable-warnings -> 240 passed, 13 skipped",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership files=14 mapped=14",
+    "rtk nox -s qe_read_backend -> 34 passed",
+    "focused waiting-capacity, restart, dispatch-batch, repository, and capacity observation tests -> passed",
+    "ruff check and python -m py_compile -> passed",
+    "git diff --check -> passed",
+    "fresh-process capacity cooldown/release contract smoke -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -174,15 +184,6 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
-  "validation_evidence": [
-    "rtk pytest backend/tests/multi_alpha -q --disable-warnings -> 240 passed, 13 skipped",
-    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership files=14 mapped=14",
-    "rtk nox -s qe_read_backend -> 34 passed",
-    "focused waiting-capacity, restart, dispatch-batch, repository, and capacity observation tests -> passed",
-    "ruff check and python -m py_compile -> passed",
-    "git diff --check -> passed",
-    "fresh-process capacity cooldown/release contract smoke -> passed"
-  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
