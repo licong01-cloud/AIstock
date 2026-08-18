@@ -142,7 +142,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> fresh process passed"
+      "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> fresh process passed",
+      "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> fresh process 14 passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
