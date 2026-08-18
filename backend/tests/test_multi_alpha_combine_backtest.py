@@ -226,6 +226,17 @@ def _runtime_template(tmp_path: Path) -> Path:
                 "class": "ScoreWeightedTopkStrategyV2",
                 "kwargs": {"topk": 25, "n_drop": 2},
             },
+            "backtest": {
+                "start_time": "2026-03-30",
+                "end_time": "2026-04-28",
+            },
+        },
+        "task": {
+            "dataset": {
+                "kwargs": {
+                    "segments": {"test": ["2026-03-30", "2026-04-28"]},
+                }
+            }
         },
     }
     (template / "conf.yaml").write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
@@ -686,6 +697,44 @@ def test_initial_cash_override_inserts_missing_backtest_account(tmp_path: Path) 
 
     updated = yaml.safe_load((workspace / "conf.yaml").read_text(encoding="utf-8"))
     assert updated["port_analysis_config"]["backtest"]["account"] == 100_000_000
+
+
+def test_oos_window_override_updates_backtest_and_dataset_test_segment(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    conf = {
+        "port_analysis_config": {
+            "strategy": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {"topk": 25, "n_drop": 2},
+            },
+            "backtest": {
+                "start_time": "2026-03-30",
+                "end_time": "2026-04-28",
+            },
+        },
+        "task": {
+            "dataset": {
+                "kwargs": {
+                    "segments": {"test": ["2026-03-30", "2026-04-28"]},
+                }
+            }
+        },
+    }
+    (workspace / "conf.yaml").write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
+
+    apply_pred_backtest_overrides(
+        workspace=workspace,
+        backtest_config={"oos_start": "2024-07-01", "oos_end": "2026-06-29"},
+    )
+
+    updated = yaml.safe_load((workspace / "conf.yaml").read_text(encoding="utf-8"))
+    assert updated["port_analysis_config"]["backtest"]["start_time"] == "2024-07-01"
+    assert updated["port_analysis_config"]["backtest"]["end_time"] == "2026-06-29"
+    assert updated["task"]["dataset"]["kwargs"]["segments"]["test"] == [
+        "2024-07-01",
+        "2026-06-29",
+    ]
 
 
 def test_shell_executor_command_path_applies_topk_and_strategy_overrides(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
