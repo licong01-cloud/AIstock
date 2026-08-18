@@ -343,7 +343,9 @@
         "branch": "feature/qe-pit-v2-w4b-paper-runtime-20260818",
         "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w4b-paper-runtime-20260818",
         "base_head": "8c29ed5e956c24d49370c4f54f70b95b23aa1d5b",
-        "status": "implementation_review_passed_pending_user_commit_authorization",
+        "status": "source_committed_main_synced_ready_for_final_head_gate",
+        "implementation_commit": "d2969cba598992412d634c02d094fca6afa367cf",
+        "main_sync_head": "8c5d149ef06c46b835ad964902291cb2c5b07344",
         "scope": "Paper runtime profile migration, session/day-run lease inheritance and drift checks, read-only shadow comparison, and activation readiness inventory",
         "allowed_write_files": [
           "backend/services/paper_trading_v2/canonical_pit_control.py",
@@ -402,7 +404,7 @@
           "scope_readback": "17/17 actual files within allowed scope; ownership catalog unchanged because existing paper_v2 wildcard maps all source/test files",
           "client_gate": "feature ready, blocking=0, warnings=0, restart_recommended=false",
           "runtime_contract": "backend impact; target_ids=[backend-main]; restart remains separate user-owned post-merge action",
-          "origin_main_drift": "behind 2 close-sync commits; only changed path is BUG-898 metadata and exact W4-B overlap is zero; dirty worktree intentionally not merged before commit authorization"
+          "origin_main_drift": "merged origin/main@522d669b without conflict after exact overlap=0; only upstream changed path was BUG-898 metadata"
         },
         "review_rounds": {
           "admission_and_trust_boundary": "resolved; normal tick owns generation check, external replay re-resolves live pointer, only frozen session/catch-up explicitly inherits",

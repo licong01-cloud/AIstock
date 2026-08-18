@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：W0～W4-A源码已合入，W4-A已在重启后的生产进程完成identity与只读contract smoke；W4-B Paper runtime integration实现与本地多轮审核已完成、待用户授权提交；真实v2 dataset candidate和生产激活均未授权
+- 状态：W0～W4-A源码已合入，W4-A已在重启后的生产进程完成identity与只读contract smoke；W4-B Paper runtime integration已提交并无冲突同步最新main，进入最终HEAD门禁与PR；真实v2 dataset candidate和生产激活均未授权
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
