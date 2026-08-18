@@ -1,6 +1,10 @@
 {
   "actual": "A durable multi-alpha run requested OOS 2024-07-01..2026-06-29 but qlib_results_enhanced.json covered only 2026-03-30..2026-04-28 because the reused minute TWAP parity runtime template retained canary dates. The parent run reported succeeded. Fix must make the durable request OOS window authoritative in materialized conf.yaml and result validation, reject any result/date mismatch fail-closed, preserve frozen prediction and file-only data-plane contracts, and add regression tests. Runtime backend-main BUG; no backend process control, DDL/DML, dependency install, or protected workspace mutation.",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/combine_backtest.py",
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
     "tests/aistock_validation/bugs/20260818_BUG-1124-qe-multi-alpha-twap-request-window-silently-overridden-by-canary-templat.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
