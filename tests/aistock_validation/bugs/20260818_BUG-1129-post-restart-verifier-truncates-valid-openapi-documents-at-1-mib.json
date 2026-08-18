@@ -1,74 +1,112 @@
 {
-  "actual": "The approved offline-only file backend/services/hmm_risk/market_relative_ridge_holdout.py is owned by hmm.risk and executes only through scripts/hmm_risk/run_market_relative_ridge_holdout.py, but changed-file runtime inference returns runtime_impact=unknown with target backend-main. The exact new offline file must classify as runtime_impact=none while ordinary backend/services/hmm_risk files remain fail-closed; add exact-path catalog coverage and regression tests without broad glob downgrades.",
+  "actual": "response.read(1024 * 1024) silently returns a truncated prefix, and semantic JSON validation reports an invalid document.",
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
-    "tests/aistock_validation/bugs/20260818_BUG-1125-offline-p2-4-hmm-holdout-service-is-misclassified-as-backend-runtime.json",
+    "tests/aistock_validation/bugs/20260818_BUG-1129-post-restart-verifier-truncates-valid-openapi-documents-at-1-mib.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1125",
-  "closed_at": "2026-08-18T08:08:25Z",
+  "bug_id": "BUG-1129",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-18T03:43:00.870384Z",
-  "description": "The approved offline-only file backend/services/hmm_risk/market_relative_ridge_holdout.py is owned by hmm.risk and executes only through scripts/hmm_risk/run_market_relative_ridge_holdout.py, but changed-file runtime inference returns runtime_impact=unknown with target backend-main. The exact new offline file must classify as runtime_impact=none while ordinary backend/services/hmm_risk files remain fail-closed; add exact-path catalog coverage and regression tests without broad glob downgrades.",
+  "created_at": "2026-08-18T08:09:33.619567Z",
+  "description": "response.read(1024 * 1024) silently returns a truncated prefix, and semantic JSON validation reports an invalid document.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260818-b2455d5308ab",
-      "timestamp": "2026-08-18T03:43:00.870367Z"
+      "note": "Promoted from IC-20260818-f8cd5e537bfc",
+      "timestamp": "2026-08-18T08:09:33.619550Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "tmp/issue_workflow/BUG-1123/post-restart-verify.json"
+  ],
+  "expected": "Read the complete response under an explicit safety bound; accept valid OpenAPI JSON larger than 1 MiB; fail loudly when the explicit bound is exceeded.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py",
-      "tests/aistock_validation/bugs/20260818_BUG-1125-offline-p2-4-hmm-holdout-service-is-misclassified-as-backend-runtime.json",
-      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
     ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.center",
+        "validation.runner",
+        "validation.module_quality",
+        "tests.backend",
+        "validation.coverage"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py",
-      "tests/aistock_validation/bugs/20260818_BUG-1125-offline-p2-4-hmm-holdout-service-is-misclassified-as-backend-runtime.json",
-      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
     ]
   },
-  "first_seen_at": "2026-08-18T03:43:00.870384Z",
+  "first_seen_at": "2026-08-18T08:09:33.619567Z",
   "fix_branch": null,
-  "fix_commit": "0726e1f7b6f4b31d9252c634b8ddf6a44fad679d",
-  "fixed_at": "2026-08-18T08:08:25Z",
-  "github_issue_number": 3591,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3591",
-  "last_seen_at": "2026-08-18T03:43:00.870384Z",
-  "module": "validation",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3601,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3601",
+  "last_seen_at": "2026-08-18T08:09:33.619567Z",
+  "module": "scripts",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3592",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1123 --target backend-main --expected-identity c0a89782e50faf942066dacc195844b82d78a104 --output-format full-json",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "guardrail_changed_files"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -76,8 +114,6 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -85,31 +121,21 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "open",
   "suspected_modules": [
-    "validation"
+    "scripts"
   ],
-  "title": "Offline P2-4 HMM holdout service is misclassified as backend runtime",
+  "title": "post-restart verifier truncates valid OpenAPI documents at 1 MiB",
   "trigger_condition": {
-    "fingerprint": "b2455d5308ab6ba9ba3bdf37",
-    "source_event_id": "FE-20260818-b2455d5308ab"
+    "fingerprint": "f8cd5e537bfc1281018ce064",
+    "source_event_id": "FE-20260818-f8cd5e537bfc"
   },
-  "validation_evidence": [
-    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py::test_bug_1125_offline_hmm_holdout_runtime_contract_is_none_and_exact -q -p no:cacheprovider -> 1 passed",
-    "rtk nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
-    "rtk nox -s guardrail_changed_files -> passed, blocking=0"
-  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center"
-      ],
-      "plans": [
-        "validation_center_backend"
-      ],
-      "required": true,
+      "modules": [],
+      "plans": [],
+      "required": false,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -139,14 +165,15 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "guardrail_changed_files"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
-    "batch_candidate": true,
+    "batch_candidate": false,
     "cleanup_fast_candidate": false,
     "compact_success_output": true,
     "docs_only_merge_with_related_code": true,
@@ -154,22 +181,15 @@
     "recommendations": [
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
-      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
-      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
       "budget": "standard",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center"
-        ],
-        "plans": [
-          "validation_center_backend"
-        ],
-        "required": true,
+        "modules": [],
+        "plans": [],
+        "required": false,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
@@ -199,11 +219,11 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "guardrail_changed_files"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  }
 }

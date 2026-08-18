@@ -2272,6 +2272,9 @@ def _payload_schema_evidence(body: bytes) -> dict[str, Any]:
     return {"json": True, "kind": _json_payload_kind(payload)}
 
 
+_READ_ONLY_HTTP_PROBE_MAX_BYTES = 8 * 1024 * 1024
+
+
 def _read_only_http_probe(
     name: str,
     url: str,
@@ -2305,8 +2308,8 @@ def _read_only_http_probe(
     request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/plain,*/*"})
     try:
         with _open_read_only_url(request, timeout_seconds=timeout_seconds) as response:
-            body = response.read(1024 * 1024)
             status_code = int(getattr(response, "status", 200))
+            body = response.read(_READ_ONLY_HTTP_PROBE_MAX_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return {
             "name": name,
@@ -2317,6 +2320,26 @@ def _read_only_http_probe(
             "payload_schema": {"json": False, "kind": "none"},
         }
     transport_ok = 200 <= status_code < 400
+    if len(body) > _READ_ONLY_HTTP_PROBE_MAX_BYTES:
+        reason = (
+            "probe response exceeds maximum allowed size: "
+            f">{_READ_ONLY_HTTP_PROBE_MAX_BYTES} bytes"
+        )
+        return {
+            "name": name,
+            "url": url,
+            "status": "failed",
+            "status_code": status_code,
+            "error": reason,
+            "transport": {
+                "status_code": status_code,
+                "ok": transport_ok,
+                "error": None if transport_ok else f"unexpected HTTP status code: {status_code}",
+            },
+            "payload_schema": {"json": False, "kind": "none"},
+            "response_bytes": len(body),
+            "response_limit_bytes": _READ_ONLY_HTTP_PROBE_MAX_BYTES,
+        }
     return {
         "name": name,
         "url": url,
