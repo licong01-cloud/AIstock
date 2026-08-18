@@ -101,7 +101,8 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python process imported tracked multi-alpha source, rewrote both Qlib OOS config paths from canary dates to 2024-07-01..2026-06-29, printed fresh-process-window-contract=passed, and exited 0.",
-      "Final HEAD 7243849339c325fb654575b6463e0d84964500ed fresh Python process repeated the exact tracked-source window-contract smoke and exited 0."
+      "Final HEAD 7243849339c325fb654575b6463e0d84964500ed fresh Python process repeated the exact tracked-source window-contract smoke and exited 0.",
+      "Final code HEAD 7243849339c325fb654575b6463e0d84964500ed imported tracked multi-alpha source in a fresh Python process and rewrote both Qlib OOS config paths to 2024-07-01..2026-06-29; exit 0."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -126,6 +127,14 @@
     "fingerprint": "c2573a2f8746a9d56143d2b5",
     "source_event_id": "FE-20260818-c2573a2f8746"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/test_multi_alpha_combine_backtest.py backend/tests/multi_alpha/test_durable_execution_adapter.py -q -p no:cacheprovider -> 83 passed",
+    "focused post-review pytest nodeids -> 4 passed",
+    "ruff check and python -m py_compile -> passed",
+    "git diff --check -> passed",
+    "fresh-process window contract smoke -> passed",
+    "final HEAD 7243849339c325fb654575b6463e0d84964500ed: focused pytest 4 passed; validation_module_registry_l0 8 passed; ruff/diff-check/fresh-process passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -167,14 +176,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_evidence": [
-    "rtk pytest backend/tests/test_multi_alpha_combine_backtest.py backend/tests/multi_alpha/test_durable_execution_adapter.py -q -p no:cacheprovider -> 83 passed",
-    "focused post-review pytest nodeids -> 4 passed",
-    "ruff check and python -m py_compile -> passed",
-    "git diff --check -> passed",
-    "fresh-process window contract smoke -> passed",
-    "final HEAD 7243849339c325fb654575b6463e0d84964500ed: focused pytest 4 passed; validation_module_registry_l0 8 passed; ruff/diff-check/fresh-process passed"
-  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
