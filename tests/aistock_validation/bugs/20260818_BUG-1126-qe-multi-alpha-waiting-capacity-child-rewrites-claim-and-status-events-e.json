@@ -1,6 +1,14 @@
 {
   "actual": "Regression after verified BUG-996/BUG-1023: durable run macb_idem_512dce37bdd1e0096eed1615438d41e35e67966d completed two sequential WSL children in about 7 minutes but wrote 583 events. 274 were claimed/waiting_capacity and 274 were status/waiting_capacity (548 rows, about 94%). While one child held node_parallelism=1, the queued sibling was reclaimed and persisted roughly every 0.8 seconds. Fix must preserve strict capacity=1 and immediate wake on real capacity release, but unchanged waiting-capacity state must not emit repeated claim/status events or DB DML; use bounded state-aware retry/throttle, retain fencing/idempotency/restart recovery, and add multi-child regression tests. Refs prior BUG-996 and BUG-1023 as incomplete path coverage. Runtime backend-main BUG; no backend process control, DDL/DML, dependency install, event cleanup, or experiment mutation.",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/services/multi_alpha/durable_orchestrator.py",
+    "backend/services/multi_alpha/durable_repository.py",
+    "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/services/quantevolver/qe_execution_reservation.py",
+    "backend/tests/multi_alpha/test_durable_capacity.py",
+    "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+    "backend/tests/multi_alpha/test_durable_repository.py",
     "tests/aistock_validation/bugs/20260818_BUG-1126-qe-multi-alpha-waiting-capacity-child-rewrites-claim-and-status-events-e.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
