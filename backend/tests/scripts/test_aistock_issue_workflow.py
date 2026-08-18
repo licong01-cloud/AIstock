@@ -2254,8 +2254,8 @@ class _StubProbeResponse:
     def __exit__(self, *args: Any) -> None:
         return None
 
-    def read(self, _limit: int) -> bytes:
-        return self.body
+    def read(self, limit: int) -> bytes:
+        return self.body[:limit]
 
 
 def _install_stub_probes(
@@ -3160,6 +3160,57 @@ def test_read_only_probe_rejects_non_catalog_origin_without_network_call(
 
     assert result["status"] == "blocked"
     assert "not catalog-allowed" in result["error"]
+
+
+def test_read_only_probe_accepts_complete_json_larger_than_one_mib(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = json.dumps({"openapi": "3.1.0", "padding": "x" * (1024 * 1024)}).encode()
+    assert 1024 * 1024 < len(body) < workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES
+
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *args, **kwargs: _StubProbeResponse(body),
+    )
+
+    result = workflow._read_only_http_probe(
+        "business_smoke_ref",
+        "http://127.0.0.1:8001/openapi.json",
+        allowed_origins=["http://127.0.0.1:8001"],
+    )
+
+    assert result["status"] == "passed"
+    assert result["payload_schema"] == {"json": True, "kind": "object"}
+    assert result["response_bytes"] == len(body)
+    assert result["response_sha256"] == workflow.hashlib.sha256(body).hexdigest()
+    assert result["_response_body"] == body.decode()
+
+
+def test_read_only_probe_fails_loudly_when_response_exceeds_explicit_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = b"x" * (workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES + 1)
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *args, **kwargs: _StubProbeResponse(body),
+    )
+
+    result = workflow._read_only_http_probe(
+        "business_smoke_ref",
+        "http://127.0.0.1:8001/openapi.json",
+        allowed_origins=["http://127.0.0.1:8001"],
+    )
+
+    assert result["status"] == "failed"
+    assert result["transport"] == {"status_code": 200, "ok": True, "error": None}
+    assert result["payload_schema"] == {"json": False, "kind": "none"}
+    assert result["response_bytes"] == workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES + 1
+    assert result["response_limit_bytes"] == workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES
+    assert "exceeds maximum allowed size" in result["error"]
+    assert "response_sha256" not in result
+    assert "_response_body" not in result
 
 
 def test_close_sync_runtime_bug_requires_passed_post_restart_receipt(
