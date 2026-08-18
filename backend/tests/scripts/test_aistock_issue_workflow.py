@@ -2545,16 +2545,48 @@ def _prepare_bug992_original_scenario(root: Path, monkeypatch: pytest.MonkeyPatc
     return _write_json(root / "bug-992.json", record)
 
 
-def test_post_restart_verify_reproduces_bug992_failed_retryable_scenario_as_blocked(
+def _bug992_terminal_evidence_body(
+    *,
+    status: str = "FAILED_TERMINAL",
+    reason_code: str = "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+    previous_status: str = "FAILED_RETRYABLE",
+    terminal_status: str = "FAILED_TERMINAL",
+    carrier_schema: str = "localsim_historical_legacy_plan_terminalization_v1",
+    carriers: list[dict[str, Any]] | None = None,
+) -> bytes:
+    if carriers is None:
+        carriers = [
+            {
+                "schema_version": carrier_schema,
+                "reason_code": reason_code,
+                "run_id": "simrun_7bf1e0c1b6b7d055",
+                "previous_status": previous_status,
+                "terminal_status": terminal_status,
+                "authoritative_state_count": 492,
+            }
+        ]
+    return json.dumps(
+        {
+            "ok": True,
+            "schema_version": "simulation_run_terminal_evidence_v1",
+            "read_only": True,
+            "run": {
+                "run_id": "simrun_7bf1e0c1b6b7d055",
+                "status": status,
+                "terminal_evidence": carriers,
+            },
+        }
+    ).encode()
+
+
+def test_post_restart_verify_reproduces_bug992_pending_terminalization_as_blocked(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _prepare_bug992_original_scenario(
         isolated_workflow_root,
         monkeypatch,
-        smoke_body=json.dumps(
-            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "FAILED_RETRYABLE"}}
-        ).encode(),
+        smoke_body=_bug992_terminal_evidence_body(status="FAILED_RETRYABLE", carriers=[]),
     )
 
     payload = workflow.build_post_restart_verify(
@@ -2569,23 +2601,23 @@ def test_post_restart_verify_reproduces_bug992_failed_retryable_scenario_as_bloc
     assert payload["workflow_gate"] == "blocked"
     assert payload["post_restart_effective_gate"] == "failed"
     smoke = _smoke_probe(payload)
-    assert smoke["url"] == _BUSINESS_SMOKE_RUN_URL
+    assert smoke["url"].endswith("/runs/simrun_7bf1e0c1b6b7d055/terminal-evidence")
     assert smoke["status"] == "failed"
     assert smoke["transport"]["status_code"] == 200
+    assert smoke["semantic"]["contract_id"] == "run_terminal_evidence"
     assert smoke["semantic"]["verdict"] == "failed"
     assert "FAILED_RETRYABLE" in smoke["semantic"]["reason"]
+    assert "expected terminal status" in smoke["semantic"]["reason"]
 
 
-def test_post_restart_verify_bug992_contract_verifies_after_run_reaches_success(
+def test_post_restart_verify_bug992_contract_verifies_declared_expected_terminal_failure(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _prepare_bug992_original_scenario(
         isolated_workflow_root,
         monkeypatch,
-        smoke_body=json.dumps(
-            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "SUCCEEDED"}}
-        ).encode(),
+        smoke_body=_bug992_terminal_evidence_body(),
     )
 
     payload = workflow.build_post_restart_verify(
@@ -2598,7 +2630,536 @@ def test_post_restart_verify_bug992_contract_verifies_after_run_reaches_success(
 
     assert payload["workflow_gate"] == "verified"
     assert payload["runtime_identity_match"] is True
-    assert _smoke_probe(payload)["semantic"]["verdict"] == "passed"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "run_terminal_evidence"
+    assert smoke["semantic"]["verdict"] == "passed"
+    matched = smoke["semantic"]["facts"]["matched_evidence"]
+    assert matched == {
+        "schema_version": "localsim_historical_legacy_plan_terminalization_v1",
+        "reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+        "previous_status": "FAILED_RETRYABLE",
+        "terminal_status": "FAILED_TERMINAL",
+    }
+    record = json.loads((Path(workflow.__file__).resolve().parent.parent / _BUG992_RECORD_REF).read_text(encoding="utf-8"))
+    declared = record["runtime_contract"]["expected_terminal_outcome"]
+    assert payload["expected_terminal_outcome"] == declared
+    assert payload["expected_terminal_outcome_digest"] == workflow._expectation_outcome_digest(declared)
+    assert smoke["semantic"]["expectation"] == declared
+    assert smoke["semantic"]["expectation_digest"] == payload["expected_terminal_outcome_digest"]
+    receipt = json.loads((isolated_workflow_root / payload["receipt_path"]).read_text(encoding="utf-8"))
+    assert receipt["expected_terminal_outcome"] == declared
+    assert receipt["expected_terminal_outcome_digest"] == payload["expected_terminal_outcome_digest"]
+
+
+def test_post_restart_verify_bug992_contract_blocks_terminal_status_mismatch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _prepare_bug992_original_scenario(
+        isolated_workflow_root,
+        monkeypatch,
+        smoke_body=_bug992_terminal_evidence_body(status="SUCCEEDED", carriers=[]),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=_BUG992_EXPECTED_IDENTITY,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "expected terminal status" in smoke["semantic"]["reason"]
+    assert "SUCCEEDED" in smoke["semantic"]["reason"]
+
+
+_TERMINAL_EVIDENCE_SMOKE_URL = (
+    "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_example/terminal-evidence"
+)
+
+
+def _example_expectation(**overrides: Any) -> dict[str, Any]:
+    expectation = {
+        "schema_version": "aistock_expected_terminal_outcome_v1",
+        "contract_id": "run_terminal_evidence",
+        "expected_status": "FAILED_TERMINAL",
+        "expected_previous_status": "FAILED_RETRYABLE",
+        "expected_reason_code": "EXAMPLE_TERMINAL_REASON",
+        "expected_evidence_schema": "example_terminalization_v1",
+        "expected_run_id": "simrun_example",
+    }
+    expectation.update(overrides)
+    return expectation
+
+
+def _expectation_runtime_issue(
+    root: Path,
+    *,
+    smoke_url: str = _TERMINAL_EVIDENCE_SMOKE_URL,
+    expectation: dict[str, Any] | None = None,
+) -> Path:
+    _write_runtime_catalog(root)
+    record = _runtime_bug(root)
+    record["runtime_contract"]["business_smoke_ref"] = smoke_url
+    if expectation is not None:
+        record["runtime_contract"]["expected_terminal_outcome"] = expectation
+    return _write_json(root / "runtime-bug.json", record)
+
+
+def _terminal_evidence_smoke_body(
+    *,
+    status: str,
+    reason_code: str = "EXAMPLE_TERMINAL_REASON",
+    previous_status: str = "FAILED_RETRYABLE",
+    terminal_status: str = "FAILED_TERMINAL",
+    carrier_schema: str = "example_terminalization_v1",
+    carriers: list[dict[str, Any]] | None = None,
+    schema_version: str = "simulation_run_terminal_evidence_v1",
+) -> bytes:
+    if carriers is None:
+        carriers = [
+            {
+                "schema_version": carrier_schema,
+                "reason_code": reason_code,
+                "run_id": "simrun_example",
+                "previous_status": previous_status,
+                "terminal_status": terminal_status,
+            }
+        ]
+    return json.dumps(
+        {
+            "ok": True,
+            "schema_version": schema_version,
+            "read_only": True,
+            "run": {
+                "run_id": "simrun_example",
+                "status": status,
+                "terminal_evidence": carriers,
+            },
+        }
+    ).encode()
+
+
+def _run_smoke_verify(issue: Path, *, expected_identity: str = "merge-abc123") -> dict[str, Any]:
+    return workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=expected_identity,
+        timeout_seconds=3.0,
+    )
+
+
+def test_post_restart_verify_terminal_evidence_default_failed_terminal_stays_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_TERMINAL"),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["expected_terminal_outcome"] is None
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "run_terminal_evidence"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "failure status" in smoke["semantic"]["reason"]
+    assert "FAILED_TERMINAL" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_terminal_evidence_default_failed_retryable_stays_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_RETRYABLE", carriers=[]),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED_RETRYABLE" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_terminal_evidence_default_success_verified(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="SUCCEEDED", carriers=[]),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "run_terminal_evidence"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["expectation"] is None
+    assert smoke["semantic"]["expectation_digest"] is None
+
+
+def test_post_restart_verify_terminal_evidence_default_scans_all_status_fields(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "schema_version": "simulation_run_terminal_evidence_v1",
+                "read_only": True,
+                "run": {
+                    "run_id": "simrun_example",
+                    "status": "COMPLETED",
+                    "verdict": "FAILED",
+                    "terminal_evidence": [],
+                },
+            }
+        ).encode(),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "failure status" in smoke["semantic"]["reason"]
+    assert "run.verdict=FAILED" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expectation_blocks_run_id_mismatch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    smoke_body = json.loads(_terminal_evidence_smoke_body(status="FAILED_TERMINAL"))
+    smoke_body["run"]["run_id"] = "simrun_UNRELATED_OLD_RUN"
+    _install_stub_probes(monkeypatch, smoke_body=json.dumps(smoke_body).encode())
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "expected terminal outcome subject" in smoke["semantic"]["reason"]
+    assert "simrun_UNRELATED_OLD_RUN" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_full_match_verified(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    declared = _example_expectation()
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=declared)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_TERMINAL"),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["blocking"] == []
+    assert payload["expected_terminal_outcome"] == declared
+    assert payload["expected_terminal_outcome_digest"] == workflow._expectation_outcome_digest(declared)
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["expectation"] == declared
+    assert smoke["semantic"]["expectation_digest"] == payload["expected_terminal_outcome_digest"]
+    assert smoke["semantic"]["facts"]["matched_evidence"]["reason_code"] == "EXAMPLE_TERMINAL_REASON"
+    receipt = json.loads((isolated_workflow_root / payload["receipt_path"]).read_text(encoding="utf-8"))
+    assert receipt["expected_terminal_outcome"] == declared
+    assert receipt["expected_terminal_outcome_digest"] == payload["expected_terminal_outcome_digest"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_status_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED", terminal_status="FAILED"),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "expected terminal status" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_does_not_exempt_failed_retryable(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_RETRYABLE", carriers=[]),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED_RETRYABLE" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_reason_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(
+            status="FAILED_TERMINAL",
+            reason_code="SOME_OTHER_REASON",
+        ),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "reason code" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_carrier_absent_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_TERMINAL", carriers=[]),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "carrier is absent" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_carrier_schema_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(
+            status="FAILED_TERMINAL",
+            carrier_schema="some_other_terminalization_v1",
+        ),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "carrier is absent" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_previous_status_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(
+            status="FAILED_TERMINAL",
+            previous_status="SUCCEEDED",
+        ),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "previous status" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_carrier_terminal_status_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(
+            status="FAILED_TERMINAL",
+            terminal_status="FAILED_RETRYABLE",
+        ),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "terminal status" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_payload_schema_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_example", "status": "FAILED_TERMINAL"}}
+        ).encode(),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "schema mismatch" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expectation_targeting_non_capable_contract_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_RUN_URL,
+        expectation=_example_expectation(),
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "FAILED_TERMINAL"}}
+        ).encode(),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    assert any(
+        "does not match the business_smoke_ref probe contract" in item for item in payload["blocking"]
+    )
+
+
+def test_build_runtime_contract_rejects_invalid_expectation_declarations(
+    isolated_workflow_root: Path,
+) -> None:
+    cases = [
+        (
+            _example_expectation(expected_status="SUCCEEDED"),
+            "must be a declared failure-class",
+        ),
+        (
+            _example_expectation(expected_previous_status="INTRADAY_RUNNING"),
+            "expected_previous_status must be a known terminal",
+        ),
+        (
+            _example_expectation(contract_id="run_terminal_success"),
+            "not expectation-capable",
+        ),
+        (
+            _example_expectation(expected_reason_code="lower_case_reason"),
+            "upper snake-case",
+        ),
+        (
+            _example_expectation(expected_evidence_schema="UPPER_SCHEMA_V1"),
+            "lower snake-case",
+        ),
+        (
+            {**_example_expectation(), "unexpected_field": True},
+            "unknown fields",
+        ),
+        (
+            {**_example_expectation(), "schema_version": "some_other_schema_v1"},
+            "schema_version must be",
+        ),
+        (
+            "not-a-dict",
+            "must be an object",
+        ),
+        (
+            {key: value for key, value in _example_expectation().items() if key != "expected_run_id"},
+            "expected_run_id must be a non-empty run id",
+        ),
+        (
+            _example_expectation(expected_run_id="bad run id"),
+            "expected_run_id must be a non-empty run id",
+        ),
+    ]
+    for expectation, expected_error in cases:
+        _write_runtime_catalog(isolated_workflow_root)
+        record = _runtime_bug(isolated_workflow_root)
+        record["runtime_contract"]["business_smoke_ref"] = _TERMINAL_EVIDENCE_SMOKE_URL
+        record["runtime_contract"]["expected_terminal_outcome"] = expectation
+        contract = workflow.build_runtime_contract(
+            record=record,
+            changed_files=record["allowed_write_scope"],
+            root=isolated_workflow_root,
+        )
+        assert contract["pre_pr_ready"] is False
+        assert any(expected_error in item for item in contract["blocking"]), (
+            expected_error,
+            contract["blocking"],
+        )
+
+
+def test_build_runtime_contract_blocks_expectation_run_id_url_mismatch(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"]["business_smoke_ref"] = (
+        "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_other_run/terminal-evidence"
+    )
+    record["runtime_contract"]["expected_terminal_outcome"] = _example_expectation()
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=record["allowed_write_scope"],
+        root=isolated_workflow_root,
+    )
+    assert contract["pre_pr_ready"] is False
+    assert any(
+        "expected_run_id does not match the business_smoke_ref subject run" in item
+        for item in contract["blocking"]
+    ), contract["blocking"]
+
+
+def test_expectation_outcome_digest_is_anchored_to_canonical_serialization() -> None:
+    assert workflow._expectation_outcome_digest(_example_expectation()) == (
+        "03a641da9e029d31d68acfc0080808b3f8f8fc4c7d86b73e0fe207e9fa3c7bd5"
+    )
+    assert workflow._expectation_outcome_digest(None) is None
 
 
 def test_post_restart_verify_verifies_openapi_document_smoke(
@@ -3396,6 +3957,419 @@ def test_close_sync_rejects_receipt_with_tampered_business_smoke_semantic(
         "probe evidence digest mismatch" in item
         for item in payload["post_restart_receipt_errors"]
     )
+
+
+def _expectation_runtime_bug(root: Path) -> dict[str, Any]:
+    record = _runtime_bug(root)
+    record["runtime_contract"]["business_smoke_ref"] = _TERMINAL_EVIDENCE_SMOKE_URL
+    record["runtime_contract"]["expected_terminal_outcome"] = _example_expectation()
+    return record
+
+
+def _passed_expectation_receipt(
+    root: Path,
+    record: dict[str, Any],
+    *,
+    expected_identity: str,
+) -> dict[str, Any]:
+    receipt = _passed_runtime_receipt(root, record, expected_identity=expected_identity)
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=record["allowed_write_scope"],
+        root=root,
+    )
+    expectation = contract["expected_terminal_outcome"]
+    expectation_digest = workflow._expectation_outcome_digest(expectation)
+    for probe in receipt["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"] = {
+                "schema_version": workflow.BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": "run_terminal_evidence",
+                "verdict": "passed",
+                "reason": None,
+                "facts": {
+                    "statuses": {"run.status": "FAILED_TERMINAL"},
+                    "matched_evidence": {
+                        "schema_version": "example_terminalization_v1",
+                        "reason_code": "EXAMPLE_TERMINAL_REASON",
+                        "previous_status": "FAILED_RETRYABLE",
+                        "terminal_status": "FAILED_TERMINAL",
+                    },
+                },
+                "response_sha256": "sha-business_smoke_ref",
+                "expectation": expectation,
+                "expectation_digest": expectation_digest,
+            }
+    receipt["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt["expected_terminal_outcome"] = expectation
+    receipt["expected_terminal_outcome_digest"] = expectation_digest
+    receipt["contract_digest"] = workflow._runtime_contract_digest(contract)
+    receipt["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt["probes"])
+    return receipt
+
+
+def _close_sync_plan_with_receipt(issue: Path, receipt: Path) -> dict[str, Any]:
+    return workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+
+def test_close_sync_accepts_receipt_with_matching_expected_terminal_outcome(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "post-restart-verify.json",
+        _passed_expectation_receipt(isolated_workflow_root, issue_payload, expected_identity="merge-abc123"),
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["post_restart_effective_gate"] == "passed"
+
+
+def test_close_sync_rejects_legacy_receipt_missing_expected_terminal_outcome(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    receipt_payload.pop("expected_terminal_outcome", None)
+    receipt_payload.pop("expected_terminal_outcome_digest", None)
+    for probe in receipt_payload["probes"]:
+        if isinstance(probe.get("semantic"), dict):
+            probe["semantic"].pop("expectation", None)
+            probe["semantic"].pop("expectation_digest", None)
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "legacy-expectation.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "expected terminal outcome does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+    assert any(
+        "expected terminal outcome digest mismatch" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+    assert any(
+        "semantic verdict expectation does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_expectation_when_contract_declares_none(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    stray = _example_expectation()
+    receipt_payload["expected_terminal_outcome"] = stray
+    receipt_payload["expected_terminal_outcome_digest"] = workflow._expectation_outcome_digest(stray)
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["expectation"] = stray
+            probe["semantic"]["expectation_digest"] = workflow._expectation_outcome_digest(stray)
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "stray-expectation.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "carries an expected terminal outcome but the current runtime contract declares none" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+    assert any(
+        "carries an expectation the current runtime contract does not declare" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_stray_top_level_expectation_digest_without_declaration(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    receipt_payload["expected_terminal_outcome_digest"] = "e" * 64
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "stray-top-level-digest.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "carries an expected terminal outcome digest but the current runtime contract declares none" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_mismatched_expected_terminal_outcome(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    drifted = _example_expectation(expected_reason_code="DRIFTED_REASON_CODE")
+    receipt_payload["expected_terminal_outcome"] = drifted
+    receipt_payload["expected_terminal_outcome_digest"] = workflow._expectation_outcome_digest(drifted)
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "mismatched-expectation.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "expected terminal outcome does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_tampered_expectation_digest(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    receipt_payload["expected_terminal_outcome_digest"] = "0" * 64
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "tampered-expectation-digest.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "expected terminal outcome digest mismatch" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_semantic_expectation_mismatch(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    drifted = _example_expectation(expected_status="FAILED")
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["expectation"] = drifted
+            probe["semantic"]["expectation_digest"] = workflow._expectation_outcome_digest(drifted)
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "semantic-expectation-mismatch.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "semantic verdict expectation does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_contract_digest_drift_after_expectation_change(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "post-restart-verify.json",
+        _passed_expectation_receipt(isolated_workflow_root, issue_payload, expected_identity="merge-abc123"),
+    )
+    issue_payload["runtime_contract"]["expected_terminal_outcome"] = _example_expectation(
+        expected_reason_code="RENAMED_REASON_CODE"
+    )
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "contract digest mismatch" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_tampered_top_level_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    tampered_semantic = dict(receipt_payload["business_smoke_semantic"])
+    tampered_semantic["expectation"] = _example_expectation(expected_reason_code="FORGED_REASON")
+    receipt_payload["business_smoke_semantic"] = tampered_semantic
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "tampered-top-level-semantic.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "top-level business-smoke semantic does not match probe evidence" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_passed_receipt_with_stripped_top_level_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    del receipt_payload["business_smoke_semantic"]
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "stripped-top-level-semantic.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "top-level business-smoke semantic does not match probe evidence" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_semantic_expectation_digest_mismatch(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["expectation_digest"] = "0" * 64
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "semantic-expectation-digest.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "semantic verdict expectation digest does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_stray_semantic_expectation_digest_without_declaration(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["expectation_digest"] = "f" * 64
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "stray-expectation-digest.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "carries an expectation digest the current runtime contract does not declare" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_validate_run_terminal_evidence_rejects_success_class_expectation_defense_in_depth() -> None:
+    verdict, reason, _facts = workflow._validate_run_terminal_evidence(
+        {
+            "ok": True,
+            "schema_version": "simulation_run_terminal_evidence_v1",
+            "run": {"run_id": "simrun_example", "status": "SUCCEEDED", "terminal_evidence": []},
+        },
+        expectation=_example_expectation(expected_status="SUCCEEDED"),
+    )
+
+    assert verdict == "failed"
+    assert "not failure-class" in reason
 
 
 def test_close_sync_rejects_non_backend_runtime_contract_conflicts(

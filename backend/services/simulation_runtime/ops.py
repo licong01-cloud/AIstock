@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import Counter
 from datetime import UTC, date, datetime
 from typing import Any, Callable, Mapping
@@ -37,6 +38,10 @@ TERMINAL_RUN_STATUSES = frozenset(
     }
 )
 MINIQMT_DURABLE_HEALTH_STALE_CADENCE_MULTIPLIER = 2
+SIMULATION_RUN_TERMINAL_EVIDENCE_SCHEMA = "simulation_run_terminal_evidence_v1"
+_TERMINAL_EVIDENCE_CARRIER_LIMIT = 8
+_TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT = 16384
+_TERMINAL_EVIDENCE_SCHEMA_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 
 
 def _required_scheduler_status_mapping(status: dict[str, Any], key: str) -> dict[str, Any]:
@@ -1490,6 +1495,88 @@ class SimulationRuntimeOpsService:
         else:
             payload["selection_evidence"] = None
         return payload
+
+    def get_run_terminal_evidence(self, run_id: str) -> dict[str, Any]:
+        """Bounded read-only projection of typed terminal-evidence carriers.
+
+        Terminalization writers persist typed evidence carriers in the run
+        payload under a top-level key equal to the carrier ``schema_version``
+        with a non-empty string ``reason_code``. This projection exposes only
+        those typed carriers (never the whole run payload) so post-restart
+        verifiers can prove an exact expected terminal outcome — status,
+        previous status, reason code and carrier schema — without any write
+        side effect. The projection is fail-closed: more than
+        ``_TERMINAL_EVIDENCE_CARRIER_LIMIT`` carriers or a serialized carrier
+        section larger than ``_TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT`` raises
+        instead of truncating.
+        """
+        run = self.repository.get_simulation_daily_run(run_id)
+        carriers: list[dict[str, Any]] = []
+        for key, value in run.run_payload_json.items():
+            if not isinstance(value, dict):
+                continue
+            if not _TERMINAL_EVIDENCE_SCHEMA_KEY_RE.fullmatch(str(key)):
+                continue
+            if value.get("schema_version") != key:
+                continue
+            reason_code = value.get("reason_code")
+            if not isinstance(reason_code, str) or not reason_code.strip():
+                continue
+            carriers.append(dict(value))
+        carriers.sort(key=lambda item: str(item.get("schema_version") or ""))
+        if len(carriers) > _TERMINAL_EVIDENCE_CARRIER_LIMIT:
+            raise DataUnavailableError(
+                "simulation run terminal evidence exceeds the carrier count bound",
+                context={
+                    "reason_code": "SIMULATION_RUN_TERMINAL_EVIDENCE_UNBOUNDED",
+                    "stage": "RUN_TERMINAL_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "carrier_count": len(carriers),
+                    "carrier_limit": _TERMINAL_EVIDENCE_CARRIER_LIMIT,
+                },
+            )
+        try:
+            encoded = json.dumps(
+                carriers,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise DataUnavailableError(
+                "simulation run terminal evidence is not JSON serializable",
+                context={
+                    "reason_code": "SIMULATION_RUN_TERMINAL_EVIDENCE_UNSERIALIZABLE",
+                    "stage": "RUN_TERMINAL_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "error_type": exc.__class__.__name__,
+                },
+            ) from exc
+        if len(encoded) > _TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT:
+            raise DataUnavailableError(
+                "simulation run terminal evidence exceeds the serialized size bound",
+                context={
+                    "reason_code": "SIMULATION_RUN_TERMINAL_EVIDENCE_UNBOUNDED",
+                    "stage": "RUN_TERMINAL_EVIDENCE_PROJECTION",
+                    "run_id": run.run_id,
+                    "carrier_bytes": len(encoded),
+                    "carrier_bytes_limit": _TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT,
+                },
+            )
+        return {
+            "schema_version": SIMULATION_RUN_TERMINAL_EVIDENCE_SCHEMA,
+            "read_only": True,
+            "run": {
+                "run_id": run.run_id,
+                "trade_date": run.trade_date.isoformat(),
+                "strategy_id": run.strategy_id,
+                "broker_backend": run.broker_backend.value,
+                "status": run.status.value,
+                "last_stage": str(run.run_payload_json.get("last_stage") or run.status.value),
+                "terminal_evidence": carriers,
+            },
+        }
 
     def get_execution_plan_detail(self, plan_id: str) -> dict[str, Any]:
         plan = self.repository.get_execution_plan(plan_id)

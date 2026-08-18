@@ -55,6 +55,12 @@
       "actor": "claude",
       "note": "2026-08-18 post-PR adversarial review round on PR #3586: six findings (all MINOR/NIT), all fixed. 1) TWAP-only assert now distinguishes unreadable/unknown policy shapes (LOCALSIM_EXECUTION_PLAN_POLICY_MISSING_OR_MALFORMED, typed fail loud) from verified retired non-TWAP algos (LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED, terminalizable), so a corrupt plan can never be misclassified as retired. 2) terminal-carrier skip hoisted before retry-attempt claim so terminalized runs no longer cost claim/clear writes on every scheduler tick. 3) carrier field broker_called renamed to historical_broker_called and pinned True in tests; blueprint wording corrected (operation-level side-effect flags are all false; the historical fact is recorded separately). 4) result dict gains cross_day_terminalization=True for parity with sibling paths. 5) retry-control disposal is now pinned non-vacuously with a seeded pre-fix backoff entry. 6) new coverage: 7 malformed-shape unit cases, inline TWAP payload shape, and an end-to-end malformed-lineage fail-loud test.",
       "timestamp": "2026-08-18T02:30:00Z"
+    },
+    {
+      "action": "declare_expected_terminal_outcome",
+      "actor": "claude",
+      "note": "2026-08-18 BUG-1130: declare the exact expected terminal outcome for run simrun_7bf1e0c1b6b7d055 and move business_smoke_ref to the bounded read-only terminal-evidence projection so the post-restart verifier can prove status=FAILED_TERMINAL, previous_status=FAILED_RETRYABLE, reason LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED and carrier localsim_historical_legacy_plan_terminalization_v1 instead of failing closed on every FAILED_TERMINAL. 2026-08-19 review round 3: expectation gains expected_run_id=simrun_7bf1e0c1b6b7d055 so the declaration binds the exact subject run.",
+      "timestamp": "2026-08-18T10:05:00Z"
     }
   ],
   "evidence_uris": [
@@ -157,7 +163,16 @@
   "root_cause": "The first authority repair assumed a run has one plan identity for its full economic receipt history. In the observed production lifecycle, side-effect-free LocalSIM plan rebuild and subsequent cash-fit legitimately produced predecessor and successor plans in one run: generations 1..3 plus 246 predecessor states remain auditable, while generation 4 plus 246 successor states are current. The closure rejected the valid predecessor history before selecting generation 4. Separately, historical active-generation recovery only admitted FAILED_TERMINAL, so a FAILED_RETRYABLE current generation could never be driven to terminal closure even after authority readback succeeded. Third layer (2026-08-18): both durable plans were created before the F-122 TWAP-only retirement and carry V25_1_SMALL_CAP. Once the merged lineage closure succeeds, historical recovery reaches _load_existing_plan_context, whose TWAP-only assert raises the permanent typed rejection LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED; _run_recovery_item_isolated has no permanent-failure classification, so it recorded the rejection as a transient retry failure with exponential backoff and the run stayed FAILED_RETRYABLE/BLOCKED forever.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055/terminal-evidence",
+    "expected_terminal_outcome": {
+      "contract_id": "run_terminal_evidence",
+      "expected_evidence_schema": "localsim_historical_legacy_plan_terminalization_v1",
+      "expected_previous_status": "FAILED_RETRYABLE",
+      "expected_reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+      "expected_run_id": "simrun_7bf1e0c1b6b7d055",
+      "expected_status": "FAILED_TERMINAL",
+      "schema_version": "aistock_expected_terminal_outcome_v1"
+    },
     "fresh_process_evidence": [
       "BUG-992 continuation: python -m nox -s simulation_core_l2 -> 480 passed, 1 explicitly gated DEV PostgreSQL skip in a fresh Python process",
       "BUG-992 continuation: AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 253 passed with disposable DEV PostgreSQL authority/readback coverage",
