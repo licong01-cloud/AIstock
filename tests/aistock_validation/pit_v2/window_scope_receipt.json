@@ -270,6 +270,70 @@
     "W4": {
       "depends_on": ["W2_merged"],
       "owner": "Selection/Paper/Simulation",
+      "status": "w4a_implementation_review_passed_w4b_pending",
+      "active_slice": {
+        "id": "W4-A",
+        "branch": "feature/qe-pit-v2-w4a-runtime-binding-20260818",
+        "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w4a-runtime-binding-20260818",
+        "base_head": "a7b91792a4ee630a7d18c01a3c03f6f0bda77bc0",
+        "latest_reviewed_origin_main": "0f7e41c7cae613ab5cb5205975495f875332fa58",
+        "origin_main_changed_file_overlap": [],
+        "status": "implementation_review_passed_pending_user_commit_authorization",
+        "scope": "selection canonical authority directive, immutable generation lease, risk-policy binding, and simulation selection admission",
+        "allowed_write_files": [
+          "backend/services/selection_center/canonical_pit_runtime.py",
+          "backend/services/selection_center/runtime_profile.py",
+          "backend/services/selection_center/risk_policy.py",
+          "backend/services/simulation_runtime/selection.py",
+          "backend/tests/selection_center/test_canonical_pit_runtime.py",
+          "backend/tests/selection_center/test_risk_policy.py",
+          "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+          "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "tests/aistock_validation/catalog/file_ownership.yaml",
+          "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+        ],
+        "actual_write_files": [
+          "backend/services/selection_center/canonical_pit_runtime.py",
+          "backend/services/selection_center/runtime_profile.py",
+          "backend/services/selection_center/risk_policy.py",
+          "backend/services/simulation_runtime/selection.py",
+          "backend/tests/selection_center/test_canonical_pit_runtime.py",
+          "backend/tests/selection_center/test_risk_policy.py",
+          "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+          "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+        ],
+        "validation": {
+          "direct_and_adjacent_matrix": "163 passed",
+          "f2": "30/30 warnings=0",
+          "ruff_compile_diff": "pass",
+          "l0": "skill findings=0; repository findings=1 baseline, blocking=0",
+          "catalog_integrity": "7 passed; findings=0",
+          "module_registry": "8 passed; 14/14 mapped",
+          "ownership": "9/9 changed files mapped; outside_scope=0"
+        },
+        "review_rounds": {
+          "authority_schema": "resolved; strict JSON identity, explicit inherit boundary, null/mixed profile rejection, pre-hash lease validation",
+          "evidence_integration": "resolved; DSE v1 projects the full canonical authority lease and binds it into artifact_hash; DSE v2 effective config chain already carries the lease",
+          "final_adjacent_regression": "163 passed"
+        },
+        "design_compliance": {
+          "no_simplified_completion": "pass; W4-A is explicitly not complete W4",
+          "no_silent_fallback": "pass; forged identity and generation drift fail typed",
+          "no_business_semantic_drift": "pass; PIT membership remains separate from orderable_now",
+          "no_private_gate": "pass; no new approval or production gate"
+        },
+        "forbidden": [
+          "paper_persistence_or_day_runner",
+          "strategy_package_or_advisory",
+          "orderability_semantic_change",
+          "in_place_legacy_profile_rewrite",
+          "database_write",
+          "dataset_export_or_mutation",
+          "activation",
+          "process_control"
+        ]
+      },
       "reserved_existing_files": [
         "backend/services/selection_center/runtime_profile.py",
         "backend/services/selection_center/risk_policy.py",

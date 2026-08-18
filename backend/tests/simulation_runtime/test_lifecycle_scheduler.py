@@ -10,7 +10,7 @@ from types import MappingProxyType
 from datetime import UTC, date, datetime, time as wall_time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -10013,10 +10013,13 @@ def test_scheduler_historical_recovery_backoff_uses_stable_identity_and_failure_
     assert second_entry["next_retry_at"] == (started_at + timedelta(minutes=9)).astimezone(UTC).isoformat()
     assert second_entry["last_error"]["context"]["as_of_time"] == (started_at + timedelta(minutes=2)).isoformat()
     changed_authority = repo.get_simulation_daily_run(run.run_id).model_copy(update={"binding_hash": "f" * 64})
-    assert scheduler._simulation_retry_source_fingerprint(  # noqa: SLF001
-        run=changed_authority,
-        retry_key="RECOVERY:STALE_LOCALSIM_FAILED_RUN_RECOVERY",
-    ) != second_entry["source_fingerprint"]
+    assert (
+        scheduler._simulation_retry_source_fingerprint(  # noqa: SLF001
+            run=changed_authority,
+            retry_key="RECOVERY:STALE_LOCALSIM_FAILED_RUN_RECOVERY",
+        )
+        != second_entry["source_fingerprint"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -10066,6 +10069,450 @@ def test_scheduler_historical_failed_localsim_rejects_identity_and_failure_carri
     assert results[0]["status"] == "RECOVERY_FAILED"
     assert results[0]["error"]["context"]["reason_code"] == reason_code
     assert repo.get_simulation_daily_run(run.run_id).status == SimulationDailyRunStatus.FAILED_RETRYABLE
+
+
+def _legacy_v25_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a plan payload whose execution policy is the retired V25_1_SMALL_CAP algorithm."""
+
+    mutated = deepcopy(payload)
+    policy_container = dict(mutated["execution_policy"])
+    policy_payload = dict(policy_container["payload"])
+    policy_json = dict(policy_payload["policy_json"])
+    policy_json["algo_code"] = "V25_1_SMALL_CAP"
+    policy_payload["policy_json"] = policy_json
+    policy_container["payload"] = policy_payload
+    mutated["execution_policy"] = policy_container
+    return mutated
+
+
+def _malformed_missing_policy_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a plan payload whose execution policy container is missing entirely."""
+
+    mutated = deepcopy(payload)
+    mutated.pop("execution_policy", None)
+    return mutated
+
+
+def _localsim_legacy_plan_failed_run_fixture(
+    *,
+    failed_status: SimulationDailyRunStatus,
+    intent_count: int = 246,
+    package_id: str = "pkg_scheduler",
+    release_metadata: dict[str, Any] | None = None,
+    policy_payload_transform: Callable[[dict[str, Any]], dict[str, Any]] = _legacy_v25_plan_payload,
+) -> tuple[
+    InMemorySimulationRuntimeRepository,
+    SimulationDailyRun,
+    SimulationReleaseBinding,
+    InMemoryPaperTradingV2Repository,
+]:
+    """Build the production-equivalent BUG-992 2026-08-06 scenario from real scheduler ticks.
+
+    A hash-closed, generation-continuous, one-way predecessor->current plan replacement
+    with 246 frozen intents and 492 durable states (generation 1 predecessor + generation 2
+    current), where BOTH durable plans carry the retired V25_1_SMALL_CAP execution policy
+    exactly like the production run simrun_7bf1e0c1b6b7d055. ``policy_payload_transform``
+    rewrites both lineage plan payloads hash-consistently, so alternate policy shapes
+    (for example a missing execution_policy container) can be exercised end to end.
+    """
+
+    release, local_binding, _, repo = _release_and_bindings(
+        qmt_only=False,
+        package_id=package_id,
+        release_metadata=release_metadata,
+    )
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    candidates = [
+        SelectionCandidate(
+            symbol=(f"{600000 + index:06d}.SH" if index % 2 == 0 else f"{300001 + index:06d}.SZ"),
+            score=0.99 - index * 0.0001,
+            rank=index + 1,
+            target_quantity=100,
+            target_weight=0.001,
+            reference_price=10.0,
+            reason="daily_strategy_buy_or_retain",
+        )
+        for index in range(intent_count)
+    ]
+    context = replace(
+        _local_sim_realtime_context_with_real_broker(
+            portfolio_id="portfolio_localsim_historical_failed_legacy_plan",
+            release=release,
+            paper_repository=paper_repo,
+            cash=10_000_000,
+            positions={},
+        ),
+        top_k=intent_count,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=candidates),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    assert submitted.results[0].run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    run = repo.get_simulation_daily_run(planned.results[0].run.run_id)
+    predecessor_plan = repo.get_execution_plan(run.execution_plan_id)
+    assert len(predecessor_plan.intents) == intent_count
+    predecessor_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    assert len(predecessor_states) == intent_count
+    predecessor_receipt = max(
+        _local_sim_economic_receipt_map(run.run_payload_json).values(),
+        key=lambda item: item.generation,
+    )
+
+    legacy_payload = policy_payload_transform(predecessor_plan.plan_payload_json)
+    legacy_hash = canonical_json_sha256(legacy_payload)
+    legacy_plan_id = f"plan_{legacy_hash[:16]}"
+    original_predecessor = predecessor_plan
+    predecessor_plan = predecessor_plan.model_copy(
+        update={
+            "plan_id": legacy_plan_id,
+            "plan_payload_json": legacy_payload,
+            "plan_hash": legacy_hash,
+        }
+    )
+    del repo.execution_plans[original_predecessor.plan_id]
+    repo.execution_plan_hash_index.pop(original_predecessor.plan_hash, None)
+    repo.execution_plans[predecessor_plan.plan_id] = predecessor_plan
+    repo.execution_plan_hash_index[predecessor_plan.plan_hash] = predecessor_plan.plan_id
+    predecessor_states = tuple(
+        LocalSimExecutionStateV1.model_validate(
+            {
+                **state.model_dump(mode="json"),
+                "state_id": "",
+                "plan_id": predecessor_plan.plan_id,
+                "state_hash": "",
+            }
+        )
+        for state in predecessor_states
+    )
+    predecessor_facts = deepcopy(predecessor_receipt.economic_facts)
+    predecessor_facts["plan_id"] = predecessor_plan.plan_id
+    predecessor_facts["state_hashes"] = {state.state_id: state.state_hash for state in predecessor_states}
+    predecessor_receipt = _rebuilt_local_sim_receipt(
+        predecessor_receipt,
+        plan_id=predecessor_plan.plan_id,
+        economic_facts=predecessor_facts,
+    )
+    successor_plan = SimulationLifecycleScheduler._copy_localsim_plan_with_intents(  # noqa: SLF001
+        plan=predecessor_plan,
+        intents=list(reversed(predecessor_plan.intents)),
+        cash_fit_payload={
+            "schema_version": "localsim_capital_dependency_v1",
+            "status": "SELL_FIRST_DEPENDENCY_ORDERED",
+            "reason": "localsim_sell_first_durable_dependent_buy",
+            "initial_cash": 10_000_000.0,
+            "original_intent_count": len(predecessor_plan.intents),
+            "prepared_intent_count": len(predecessor_plan.intents),
+            "sell_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.SELL),
+            "buy_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "dependent_buy_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "capital_waiting_owner": "LocalSimExecutionStateV1",
+        },
+    )
+    transformed_successor_payload = policy_payload_transform(successor_plan.plan_payload_json)
+    if transformed_successor_payload != successor_plan.plan_payload_json:
+        transformed_successor_hash = canonical_json_sha256(transformed_successor_payload)
+        successor_plan = successor_plan.model_copy(
+            update={
+                "plan_id": f"plan_{transformed_successor_hash[:16]}",
+                "plan_payload_json": transformed_successor_payload,
+                "plan_hash": transformed_successor_hash,
+            }
+        )
+    repo.save_execution_plan(successor_plan)
+    successor_states = tuple(
+        LocalSimExecutionStateV1.model_validate(
+            {
+                **state.model_dump(mode="json"),
+                "state_id": "",
+                "plan_id": successor_plan.plan_id,
+                "algo_instance_id": f"successor_{state.algo_instance_id}",
+                "order_id": f"successor_{state.order_id}",
+                "idempotency_key": f"successor_{state.idempotency_key}",
+                "state_hash": "",
+            }
+        )
+        for state in predecessor_states
+    )
+    successor_facts = deepcopy(predecessor_receipt.economic_facts)
+    successor_facts["plan_id"] = successor_plan.plan_id
+    successor_facts["state_hashes"] = {state.state_id: state.state_hash for state in successor_states}
+    successor_receipt = LocalSimEconomicReceiptV1(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id=successor_plan.plan_id,
+        generation=predecessor_receipt.generation + 1,
+        economic_facts=successor_facts,
+    )
+    outbox = _local_sim_projection_outbox(run.run_payload_json)
+    successor_outbox = _rebuilt_local_sim_outbox(
+        outbox,
+        plan_id=successor_plan.plan_id,
+        generation=successor_receipt.generation,
+    )
+    repo.update_simulation_daily_run(
+        run.run_id,
+        status=failed_status,
+        execution_plan=successor_plan,
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                state.state_id: state.model_dump(mode="json") for state in (*predecessor_states, *successor_states)
+            },
+            "local_sim_economic_receipts_v1": {
+                predecessor_receipt.receipt_id: predecessor_receipt.model_dump(mode="json"),
+                successor_receipt.receipt_id: successor_receipt.model_dump(mode="json"),
+            },
+            "local_sim_economic_generation": successor_receipt.generation,
+            "local_sim_projection_outbox_v1": successor_outbox.model_dump(mode="json"),
+            "rebuilt_after_side_effect_free_failure": True,
+            "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
+            "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
+            "rebuilt_execution_plan_id": successor_plan.plan_id,
+            "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
+            "last_stage": failed_status.value,
+        },
+    )
+    assert len(repo.list_local_sim_execution_states(run.run_id)) == 2 * intent_count
+    assert len(repo.list_local_sim_execution_states(run.run_id, authoritative=True)) == intent_count
+    return repo, repo.get_simulation_daily_run(run.run_id), local_binding, paper_repo
+
+
+@pytest.mark.parametrize(
+    "failed_status",
+    [SimulationDailyRunStatus.FAILED_RETRYABLE, SimulationDailyRunStatus.FAILED_TERMINAL],
+)
+def test_scheduler_historical_failed_localsim_legacy_plan_terminalizes_without_v25_execution(
+    failed_status: SimulationDailyRunStatus,
+) -> None:
+    repo, run, _, paper_repo = _localsim_legacy_plan_failed_run_fixture(failed_status=failed_status)
+    successor_plan = repo.get_execution_plan(run.execution_plan_id)
+    predecessor_plan_id = run.run_payload_json["rebuilt_from_execution_plan_id"]
+    order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run.run_id)}
+    fill_ids = {str(fill["fill_id"]) for fill in paper_repo.list_fills_for_run(run.run_id)}
+    cash_entry_count = len(paper_repo.cash_entries.get(run.run_id, []))
+    state_snapshot = deepcopy(run.run_payload_json["local_sim_execution_states_v1"])
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+
+    # Seed the exact pre-fix production condition: a recorded recovery-backoff failure
+    # entry for the stale-run recovery stage, so terminalization must also dispose of it.
+    recovery_retry_key = "RECOVERY:STALE_LOCALSIM_FAILED_RUN_RECOVERY"
+    scheduler._record_simulation_retry_failure(  # noqa: SLF001
+        run=run,
+        retry_key=recovery_retry_key,
+        failure_stage="STALE_LOCALSIM_FAILED_RUN_RECOVERY",
+        exc=RuntimeConfigInvalidError(
+            "pre-fix permanent policy rejection",
+            context={"reason_code": "LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED"},
+        ),
+        as_of_time=datetime(2026, 5, 21, 9, 40),
+        source_fingerprint=scheduler._simulation_retry_source_fingerprint(  # noqa: SLF001
+            run=run,
+            retry_key=recovery_retry_key,
+        ),
+    )
+    seeded = repo.get_simulation_daily_run(run.run_id)
+    assert recovery_retry_key in seeded.run_payload_json["simulation_scheduler_retry_control_v1"]["entries"]
+
+    results = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
+        trade_date=TRADE_DATE + timedelta(days=1),
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 22, 10, 0),
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result["run_id"] == run.run_id
+    assert result["previous_status"] == failed_status.value
+    assert result["status"] == SimulationDailyRunStatus.FAILED_TERMINAL.value
+    assert result["reason_code"] == "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED"
+    assert result["historical_failed_legacy_plan_terminalization"] is True
+    assert result["cross_day_terminalization"] is True
+    assert result["durable_minute_loop_advanced"] is False
+    assert result["legacy_execution_restored"] is False
+
+    latest = repo.get_simulation_daily_run(run.run_id)
+    assert latest.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    evidence = latest.run_payload_json["localsim_historical_legacy_plan_terminalization_v1"]
+    assert evidence["schema_version"] == "localsim_historical_legacy_plan_terminalization_v1"
+    assert evidence["reason_code"] == "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED"
+    assert evidence["plan_id"] == successor_plan.plan_id
+    assert evidence["plan_algo_code"] == "V25_1_SMALL_CAP"
+    assert evidence["required_algo_code"] == "TWAP"
+    assert evidence["retired_policy_reason_code"] == "LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED"
+    assert evidence["previous_status"] == failed_status.value
+    assert evidence["terminal_status"] == SimulationDailyRunStatus.FAILED_TERMINAL.value
+    assert evidence["authoritative_state_count"] == 246
+    assert evidence["active_state_count"] == 246
+    assert len(evidence["authoritative_state_set_sha256"]) == 64
+    # The run executed real generations through the local broker before it failed; the
+    # carrier records that historical fact under a name that cannot be misread as a
+    # side effect of this terminalization.
+    assert evidence["historical_broker_called"] is True
+    assert evidence["parent_resubmitted"] is False
+    assert evidence["broker_replayed"] is False
+    assert evidence["predecessor_projection_replayed"] is False
+    assert evidence["durable_minute_loop_advanced"] is False
+    assert evidence["legacy_execution_restored"] is False
+    assert evidence["fallback_used"] is False
+    assert evidence["runtime_context_loaded"] is False
+    assert evidence["market_data_loaded"] is False
+
+    # The retired plan must never reach a runtime context, market data or the minute loop:
+    # the scheduler above was constructed without any context provider, so any attempt to
+    # load one would have raised instead of terminalizing.
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run.run_id)} == order_ids
+    assert {str(fill["fill_id"]) for fill in paper_repo.list_fills_for_run(run.run_id)} == fill_ids
+    assert len(paper_repo.cash_entries.get(run.run_id, [])) == cash_entry_count
+    assert latest.run_payload_json["local_sim_execution_states_v1"] == state_snapshot
+    assert latest.run_payload_json["rebuilt_from_execution_plan_id"] == predecessor_plan_id
+    # The seeded pre-fix backoff entry must be disposed of by the successful recovery,
+    # exactly like the production run's recorded failure entries. Clearing the last
+    # entry drops the control key entirely.
+    retry_control = latest.run_payload_json.get("simulation_scheduler_retry_control_v1")
+    assert retry_control is None or recovery_retry_key not in retry_control.get("entries", {})
+
+    # The terminal carrier is idempotent: later scheduler cadence skips the run without
+    # rewriting evidence or re-driving anything. The hoisted skip must also bypass the
+    # retry-attempt claim entirely, so a terminalized run costs no claim/clear writes.
+    claim_calls: list[dict[str, Any]] = []
+    original_claim = repo.claim_simulation_retry_attempt
+
+    def counting_claim(**kwargs: Any) -> Any:
+        claim_calls.append(kwargs)
+        return original_claim(**kwargs)
+
+    repo.claim_simulation_retry_attempt = counting_claim  # type: ignore[method-assign]
+    repeated = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
+        trade_date=TRADE_DATE + timedelta(days=2),
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 23, 10, 0),
+    )
+    assert claim_calls == []
+    assert all(item.get("run_id") != run.run_id for item in repeated)
+    reloaded = repo.get_simulation_daily_run(run.run_id)
+    assert reloaded.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert reloaded.run_payload_json["localsim_historical_legacy_plan_terminalization_v1"] == evidence
+
+
+def test_scheduler_historical_failed_localsim_legacy_plan_malformed_carrier_fails_loud() -> None:
+    repo, run, _, paper_repo = _localsim_legacy_plan_failed_run_fixture(
+        failed_status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+    )
+    order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run.run_id)}
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={"localsim_historical_legacy_plan_terminalization_v1": "malformed"},
+    )
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+
+    results = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
+        trade_date=TRADE_DATE + timedelta(days=1),
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 22, 10, 0),
+    )
+
+    assert len(results) == 1
+    assert results[0]["status"] == "RECOVERY_FAILED"
+    assert results[0]["error"]["context"]["reason_code"] == ("LOCALSIM_HISTORICAL_RECOVERY_FAILURE_CARRIER_INVALID")
+    assert results[0]["error"]["context"]["field"] == ("localsim_historical_legacy_plan_terminalization_v1")
+    latest = repo.get_simulation_daily_run(run.run_id)
+    assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run.run_id)} == order_ids
+
+
+def test_scheduler_historical_failed_localsim_non_legacy_policy_error_stays_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, run, _, _ = _localsim_legacy_plan_failed_run_fixture(
+        failed_status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+    )
+
+    def raise_other_policy_error(*, binding: Any, plan: Any) -> None:
+        raise RuntimeConfigInvalidError(
+            "unit test non-legacy policy rejection",
+            context={"reason_code": "UNIT_TEST_OTHER_POLICY_INVALID", "plan_id": plan.plan_id},
+        )
+
+    monkeypatch.setattr(
+        SimulationLifecycleScheduler,
+        "_assert_local_sim_plan_uses_twap",
+        staticmethod(raise_other_policy_error),
+    )
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+
+    results = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
+        trade_date=TRADE_DATE + timedelta(days=1),
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 22, 10, 0),
+    )
+
+    assert len(results) == 1
+    assert results[0]["status"] == "RECOVERY_FAILED"
+    assert results[0]["error"]["context"]["reason_code"] == "UNIT_TEST_OTHER_POLICY_INVALID"
+    latest = repo.get_simulation_daily_run(run.run_id)
+    assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert "localsim_historical_legacy_plan_terminalization_v1" not in latest.run_payload_json
+
+
+def test_scheduler_historical_failed_localsim_malformed_plan_policy_stays_typed_fail_loud() -> None:
+    """An unreadable policy payload is an unknown shape, not a verified retired legacy plan.
+
+    The whole lineage (predecessor and current plan) carries no execution_policy
+    container at all. The recovery must not terminalize it under the retired-policy
+    reason: the typed malformed-policy error propagates, the run keeps its failed
+    status, no carrier is written and no durable fact is touched.
+    """
+
+    repo, run, _, paper_repo = _localsim_legacy_plan_failed_run_fixture(
+        failed_status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        policy_payload_transform=_malformed_missing_policy_plan_payload,
+    )
+    order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run.run_id)}
+    state_snapshot = deepcopy(run.run_payload_json["local_sim_execution_states_v1"])
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+
+    results = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
+        trade_date=TRADE_DATE + timedelta(days=1),
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 22, 10, 0),
+    )
+
+    assert len(results) == 1
+    assert results[0]["run_id"] == run.run_id
+    assert results[0]["status"] == "RECOVERY_FAILED"
+    assert results[0]["error"]["context"]["reason_code"] == ("LOCALSIM_EXECUTION_PLAN_POLICY_MISSING_OR_MALFORMED")
+    latest = repo.get_simulation_daily_run(run.run_id)
+    assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert "localsim_historical_legacy_plan_terminalization_v1" not in latest.run_payload_json
+    assert latest.run_payload_json["local_sim_execution_states_v1"] == state_snapshot
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run.run_id)} == order_ids
 
 
 @pytest.mark.parametrize(
@@ -10951,6 +11398,289 @@ def test_localsim_economic_readback_uses_committed_independent_dev_postgres_conn
                 )
                 for identity_label, query, identity_value in disposable_rows:
                     cursor.execute(query, (identity_value,))
+                    assert cursor.fetchone()[0] == 0, f"cleanup left disposable DEV row for {identity_label}"
+        finally:
+            cleanup_readback.rollback()
+            cleanup_readback.close()
+
+
+def test_localsim_legacy_plan_terminalization_commits_across_independent_dev_postgres_connections() -> None:
+    if os.getenv("AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB") != "1":
+        pytest.skip("set AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 for disposable DEV PostgreSQL rows")
+    from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
+
+    nonce = uuid4().hex
+    source_repo, run, binding, _ = _localsim_legacy_plan_failed_run_fixture(
+        failed_status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        package_id=f"pkg_scheduler_{nonce}",
+        release_metadata={"dev_db_nonce": nonce},
+    )
+    release = source_repo.releases[run.release_id]
+    evidence = source_repo.daily_selection_evidences[run.selection_evidence_id or ""]
+    successor_plan = source_repo.execution_plans[run.execution_plan_id or ""]
+    predecessor_plan = source_repo.execution_plans[run.run_payload_json["rebuilt_from_execution_plan_id"]]
+    dsn = _dev_dsn()
+    writer_connections: list[Any] = []
+    readback_connections: list[Any] = []
+    writer_pids: list[int] = []
+    readback_pids: list[int] = []
+
+    def connection_factory(connections: list[Any], pids: list[int]):
+        @contextmanager
+        def factory():
+            connection = psycopg2.connect(**dsn, connect_timeout=5)
+            connections.append(connection)
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_backend_pid()")
+                pids.append(int(cursor.fetchone()[0]))
+            try:
+                yield connection
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+        return factory
+
+    writer = SimulationRuntimeRepository(conn_factory=connection_factory(writer_connections, writer_pids))
+    readback = SimulationRuntimeRepository(conn_factory=connection_factory(readback_connections, readback_pids))
+
+    try:
+        package_connection = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with package_connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO strategy_pkg.package (
+                        package_id, package_name, package_version, source_type, source_id,
+                        package_status, manifest_json, manifest_sha256
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        release.package_id,
+                        "BUG-992 disposable DEV package",
+                        "1.0.0",
+                        "candidate_strategy_package",
+                        f"bug992_{nonce}",
+                        "ACTIVE",
+                        psycopg2.extras.Json({"schema_version": "strategy_package_manifest_v1"}),
+                        release.manifest_sha256,
+                    ),
+                )
+            package_connection.commit()
+        finally:
+            package_connection.close()
+        writer.save_strategy_runtime_release(release)
+        binding_connection = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with binding_connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO paper_v2.simulation_release_binding (
+                        binding_id, strategy_id, release_id, release_hash, package_id,
+                        manifest_sha256, broker_backend, broker_account_id, capital_allocation,
+                        strategy_name, order_remark_prefix, effective_from, effective_to,
+                        approval_state, binding_config_json, binding_hash, created_by,
+                        created_reason, created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        binding.binding_id,
+                        binding.strategy_id,
+                        binding.release_id,
+                        binding.release_hash,
+                        binding.package_id,
+                        binding.manifest_sha256,
+                        binding.broker_backend.value,
+                        binding.broker_account_id,
+                        binding.capital_allocation,
+                        binding.strategy_name,
+                        binding.order_remark_prefix,
+                        binding.effective_from,
+                        binding.effective_to,
+                        binding.approval_state.value,
+                        psycopg2.extras.Json(binding.binding_config_json),
+                        binding.binding_hash,
+                        binding.created_by,
+                        binding.created_reason,
+                        binding.created_at,
+                        binding.updated_at,
+                    ),
+                )
+            binding_connection.commit()
+        finally:
+            binding_connection.close()
+        writer.save_daily_selection_evidence(evidence)
+        writer.save_execution_plan(predecessor_plan)
+        writer.save_execution_plan(successor_plan)
+        run_connection = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with run_connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO paper_v2.simulation_daily_run (
+                        run_id, trade_date, strategy_id, broker_backend, package_id,
+                        manifest_sha256, release_id, release_hash, binding_id, binding_hash,
+                        selection_evidence_id, selection_artifact_hash, execution_plan_id,
+                        execution_plan_hash, status, run_payload_json, created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        run.run_id,
+                        run.trade_date,
+                        run.strategy_id,
+                        run.broker_backend.value,
+                        run.package_id,
+                        run.manifest_sha256,
+                        run.release_id,
+                        run.release_hash,
+                        run.binding_id,
+                        run.binding_hash,
+                        run.selection_evidence_id,
+                        run.selection_artifact_hash,
+                        run.execution_plan_id,
+                        run.execution_plan_hash,
+                        run.status.value,
+                        psycopg2.extras.Json(run.run_payload_json),
+                        run.created_at,
+                        run.updated_at,
+                    ),
+                )
+            run_connection.commit()
+        finally:
+            run_connection.close()
+        persisted_before = readback.get_simulation_daily_run(run.run_id)
+        assert persisted_before.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+        assert persisted_before.execution_plan_id == successor_plan.plan_id
+
+        stage = SimulationLifecycleScheduler(repository=writer)
+        results = stage._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
+            trade_date=run.trade_date + timedelta(days=1),
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            strategy_id=run.strategy_id,
+            limit=10,
+            as_of_time=datetime(2026, 5, 22, 10, 0, tzinfo=UTC),
+        )
+
+        assert [item["run_id"] for item in results] == [run.run_id]
+        result = results[0]
+        assert result["previous_status"] == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+        assert result["status"] == SimulationDailyRunStatus.FAILED_TERMINAL.value
+        assert result["reason_code"] == "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED"
+        assert result["historical_failed_legacy_plan_terminalization"] is True
+        assert result["cross_day_terminalization"] is True
+        assert result["durable_minute_loop_advanced"] is False
+        assert result["legacy_execution_restored"] is False
+
+        persisted = readback.get_simulation_daily_run(run.run_id)
+        assert persisted.status == SimulationDailyRunStatus.FAILED_TERMINAL
+        terminalization = persisted.run_payload_json["localsim_historical_legacy_plan_terminalization_v1"]
+        assert terminalization["schema_version"] == "localsim_historical_legacy_plan_terminalization_v1"
+        assert terminalization["reason_code"] == "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED"
+        assert terminalization["plan_id"] == successor_plan.plan_id
+        assert terminalization["plan_algo_code"] == "V25_1_SMALL_CAP"
+        assert terminalization["required_algo_code"] == "TWAP"
+        assert terminalization["retired_policy_reason_code"] == ("LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED")
+        assert terminalization["terminal_status"] == SimulationDailyRunStatus.FAILED_TERMINAL.value
+        assert terminalization["authoritative_state_count"] == 246
+        assert terminalization["active_state_count"] == 246
+        assert len(terminalization["authoritative_state_set_sha256"]) == 64
+        assert terminalization["historical_broker_called"] is True
+        assert terminalization["parent_resubmitted"] is False
+        assert terminalization["broker_replayed"] is False
+        assert terminalization["predecessor_projection_replayed"] is False
+        assert terminalization["durable_minute_loop_advanced"] is False
+        assert terminalization["legacy_execution_restored"] is False
+        assert terminalization["fallback_used"] is False
+        assert terminalization["runtime_context_loaded"] is False
+        assert terminalization["market_data_loaded"] is False
+        assert (
+            persisted.run_payload_json["local_sim_execution_states_v1"]
+            == (run.run_payload_json["local_sim_execution_states_v1"])
+        )
+        assert persisted.run_payload_json["rebuilt_from_execution_plan_id"] == predecessor_plan.plan_id
+        retry_control = persisted.run_payload_json.get("simulation_scheduler_retry_control_v1")
+        assert retry_control in (
+            None,
+            {"schema_version": "simulation_scheduler_retry_control_v1", "entries": {}},
+        )
+        assert writer_pids and readback_pids
+        assert set(writer_pids).isdisjoint(readback_pids)
+    finally:
+        cleanup = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with cleanup.cursor() as cursor:
+                cursor.execute("DELETE FROM paper_v2.simulation_daily_run WHERE run_id = %s", (run.run_id,))
+                cursor.execute(
+                    "DELETE FROM paper_v2.execution_plan WHERE plan_id IN (%s, %s)",
+                    (predecessor_plan.plan_id, successor_plan.plan_id),
+                )
+                cursor.execute(
+                    "DELETE FROM selection.daily_selection_evidence WHERE evidence_id = %s",
+                    (evidence.evidence_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM paper_v2.simulation_release_binding WHERE binding_id = %s",
+                    (binding.binding_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM strategy_pkg.strategy_runtime_release WHERE release_id = %s",
+                    (release.release_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM strategy_pkg.package WHERE package_id = %s",
+                    (release.package_id,),
+                )
+            cleanup.commit()
+        finally:
+            cleanup.close()
+            for connection in [*writer_connections, *readback_connections]:
+                connection.close()
+
+        cleanup_readback = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with cleanup_readback.cursor() as cursor:
+                disposable_rows = (
+                    (
+                        "strategy_pkg.package.package_id",
+                        "SELECT count(*) FROM strategy_pkg.package WHERE package_id = %s",
+                        release.package_id,
+                    ),
+                    (
+                        "strategy_pkg.strategy_runtime_release.release_id",
+                        "SELECT count(*) FROM strategy_pkg.strategy_runtime_release WHERE release_id = %s",
+                        release.release_id,
+                    ),
+                    (
+                        "paper_v2.simulation_release_binding.binding_id",
+                        "SELECT count(*) FROM paper_v2.simulation_release_binding WHERE binding_id = %s",
+                        binding.binding_id,
+                    ),
+                    (
+                        "selection.daily_selection_evidence.evidence_id",
+                        "SELECT count(*) FROM selection.daily_selection_evidence WHERE evidence_id = %s",
+                        evidence.evidence_id,
+                    ),
+                    (
+                        "paper_v2.execution_plan.plan_id",
+                        "SELECT count(*) FROM paper_v2.execution_plan WHERE plan_id IN (%s, %s)",
+                        (predecessor_plan.plan_id, successor_plan.plan_id),
+                    ),
+                    (
+                        "paper_v2.simulation_daily_run.run_id",
+                        "SELECT count(*) FROM paper_v2.simulation_daily_run WHERE run_id = %s",
+                        run.run_id,
+                    ),
+                )
+                for identity_label, query, identity_value in disposable_rows:
+                    params = identity_value if isinstance(identity_value, tuple) else (identity_value,)
+                    cursor.execute(query, params)
                     assert cursor.fetchone()[0] == 0, f"cleanup left disposable DEV row for {identity_label}"
         finally:
             cleanup_readback.rollback()
@@ -17459,6 +18189,53 @@ def test_existing_localsim_v25_plan_is_rejected_before_runtime_context_loading()
     assert exc_info.value.context["plan_algo_code"] == "V25_1_SMALL_CAP"
     assert exc_info.value.context["broker_call_attempted"] is False
     assert exc_info.value.context["fallback_used"] is False
+
+
+@pytest.mark.parametrize(
+    "plan_payload_json",
+    [
+        {},
+        {"execution_policy": "not-an-object"},
+        {"execution_policy": {"payload": "not-an-object"}},
+        {"execution_policy": {"payload": {"policy_json": "not-an-object"}}},
+        {"execution_policy": {"payload": {"policy_json": {}}}},
+        {"execution_policy": {"payload": {"policy_json": {"algo_code": "  "}}}},
+        {"execution_policy": {"payload": {}}},
+    ],
+)
+def test_existing_localsim_plan_with_unreadable_policy_is_fail_loud_not_retired(
+    plan_payload_json: dict[str, Any],
+) -> None:
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    malformed_plan = SimpleNamespace(
+        plan_id="plan_malformed_localsim_policy",
+        execution_policy_version_id=None,
+        plan_payload_json=plan_payload_json,
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        ProductionSimulationLifecycleScheduler._assert_local_sim_plan_uses_twap(
+            binding=binding,
+            plan=malformed_plan,
+        )
+
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_EXECUTION_PLAN_POLICY_MISSING_OR_MALFORMED"
+    assert exc_info.value.context["plan_algo_code"] is None
+    assert exc_info.value.context["broker_call_attempted"] is False
+    assert exc_info.value.context["fallback_used"] is False
+
+
+def test_existing_localsim_plan_with_inline_twap_policy_payload_is_accepted() -> None:
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    inline_plan = SimpleNamespace(
+        plan_id="plan_inline_twap_localsim_policy",
+        execution_policy_version_id="exec_policy_twap",
+        plan_payload_json={"execution_policy": {"payload": {"algo_code": "TWAP", "algo_config": {}}}},
+    )
+
+    ProductionSimulationLifecycleScheduler._assert_local_sim_plan_uses_twap(binding=binding, plan=inline_plan)
 
 
 def test_scheduler_rejects_stale_selection_evidence_for_new_trade_date():
