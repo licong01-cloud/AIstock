@@ -76,6 +76,7 @@ def _candidate_report() -> dict[str, object]:
         "planned_fit_count": 36,
         "candidate_attempt_index": 3,
         "request_identity_sha256": subject.EXPECTED_DEVELOPMENT_REQUEST_SHA256,
+        "feature_formula_sha256": "4" * 64,
         "components": components,
         "component_receipt_sha256s": [item["receipt_sha256"] for item in components],
         "holdout_accessed": False,
@@ -92,9 +93,36 @@ def _write_json(path: Path, value: dict[str, object]) -> None:
     path.write_bytes(subject.canonical_json_bytes(value) + b"\n")
 
 
-def _request(candidate_hash: str) -> dict[str, object]:
+def _artifact_outputs(root: Path) -> dict[str, str]:
+    acceptance = (root / "acceptance.json").resolve()
+    child_1 = (root / "children" / "p2_4_holdout_child_1.json").resolve()
+    child_2 = (root / "children" / "p2_4_holdout_child_2.json").resolve()
+    return {
+        "acceptance_output": str(acceptance),
+        "acceptance_failure_output": str(acceptance.with_name("acceptance.failure.json")),
+        "model_output": str((root / "model.json").resolve()),
+        "ready_output": str((root / "ready.json").resolve()),
+        "child_1_output": str(child_1),
+        "child_1_failure_output": str(child_1.with_name("p2_4_holdout_child_1.failure.json")),
+        "child_2_output": str(child_2),
+        "child_2_failure_output": str(child_2.with_name("p2_4_holdout_child_2.failure.json")),
+    }
+
+
+def _request(candidate_hash: str, *, artifact_root: Path | None = None) -> dict[str, object]:
     holdout = {
-        "source": {"source_start": "2022-01-04", "source_end": "2026-04-30", "universe_key": "u"},
+        "source": {
+            "source_start": subject.EXPECTED_SOURCE_START,
+            "source_end": "2026-04-30",
+            "circ_mv_history_start": subject.EXPECTED_CIRC_MV_HISTORY_START,
+            "universe_key": subject.EXPECTED_UNIVERSE_KEY,
+            "universe_rule_version": subject.EXPECTED_UNIVERSE_RULE_VERSION,
+            "benchmark_ts_code": subject.EXPECTED_BENCHMARK_TS_CODE,
+            "security_identity_manifest_path": subject.EXPECTED_SECURITY_IDENTITY_MANIFEST_PATH,
+            "security_identity_manifest_sha256": subject.EXPECTED_SECURITY_IDENTITY_MANIFEST_SHA256,
+            "provider_absence_manifest_path": subject.EXPECTED_PROVIDER_ABSENCE_MANIFEST_PATH,
+            "provider_absence_manifest_sha256": subject.EXPECTED_PROVIDER_ABSENCE_MANIFEST_SHA256,
+        },
         "state_start": subject.HOLDOUT_START.isoformat(),
         "state_end": subject.HOLDOUT_END.isoformat(),
         "state_trading_day_count": subject.HOLDOUT_TRADING_DAYS,
@@ -125,6 +153,7 @@ def _request(candidate_hash: str) -> dict[str, object]:
         "development_request_sha256": subject.EXPECTED_DEVELOPMENT_REQUEST_SHA256,
         "holdout_evaluation_id": evaluation,
         "holdout_source": holdout,
+        "artifact_outputs": _artifact_outputs(artifact_root or Path("F:/AIstock_artifacts/p2_4_test")),
     }
     return {**body, "request_sha256": subject.canonical_sha256(body)}
 
@@ -139,18 +168,47 @@ def _frozen(report: dict[str, object]) -> subject.FrozenCandidate:
     )
 
 
-def _child(index: int, *, status: str = "FULL_READY", payload_marker: str = "same") -> dict[str, object]:
-    payload = {
-        "candidate_report_sha256": "a" * 64,
+def _closure_request(*, candidate_hash: str = "a" * 64) -> dict[str, object]:
+    return {
+        "candidate_report_sha256": candidate_hash,
         "holdout_evaluation_id": "b" * 64,
-        "holdout_source_sha256": "c" * 64,
-        "state_date_set_sha256": "d" * 64,
-        "outcome_tail_date_set_sha256": "e" * 64,
-        "market_receipt": {"marker": payload_marker},
-        "levels": {"L1": {"metrics": {"level": "L1"}}, "L2": {"metrics": {"level": "L2"}}},
-        "quintiles": {},
+        "holdout_source": {
+            "state_date_set_sha256": "d" * 64,
+            "outcome_tail_date_set_sha256": "e" * 64,
+            "feature_formula_sha256": "4" * 64,
+        },
+    }
+
+
+def _child(
+    index: int,
+    *,
+    status: str = "FULL_READY",
+    payload_marker: str = "same",
+    request: dict[str, object] | None = None,
+) -> dict[str, object]:
+    authority = request or _closure_request()
+    holdout_source = authority["holdout_source"]
+    assert isinstance(holdout_source, dict)
+    product_passed = status != "NOT_AVAILABLE"
+    level_payloads = {
+        level: {
+            "state": _receipt({"level": level, "kind": "state"}),
+            "metrics": _receipt({"level": level, "product_metrics_passed": product_passed}),
+        }
+        for level in ("L1", "L2")
+    }
+    payload = {
+        "candidate_report_sha256": authority["candidate_report_sha256"],
+        "holdout_evaluation_id": authority["holdout_evaluation_id"],
+        "holdout_source_sha256": subject.canonical_sha256(holdout_source),
+        "state_date_set_sha256": holdout_source["state_date_set_sha256"],
+        "outcome_tail_date_set_sha256": holdout_source["outcome_tail_date_set_sha256"],
+        "market_receipt": _receipt({"marker": payload_marker}),
+        "levels": level_payloads,
+        "quintiles": _receipt({"kind": "quintiles"}),
         "hierarchy_sha256": "f" * 64,
-        "coverage": {"status": status},
+        "coverage": _receipt({"status": status, "product_metrics_passed": product_passed}),
         "runtime_versions": {},
         "fit_count": 0,
         "selection_performed": False,
@@ -275,10 +333,26 @@ def _evaluation_fixture() -> tuple[dict[str, object], subject.FrozenCandidate, d
             "preprocess_sha256": subject.canonical_sha256(level_preprocess.payload()),
             "fit": _receipt(fit_body),
         }
-    candidate_report = {"report_sha256": "c" * 64}
+    candidate_report = {
+        "report_sha256": "c" * 64,
+        "feature_formula_sha256": subject.canonical_sha256(
+            {"L1": inputs["feature_definition"], "L2": inputs["l2_feature_definition"]}
+        ),
+    }
     candidate = subject.FrozenCandidate(report=candidate_report, market=market, levels=levels)
     holdout_source = {
-        "source": {"source_start": "2022-01-04", "source_end": tail[-1].isoformat(), "universe_key": "u"},
+        "source": {
+            "source_start": subject.EXPECTED_SOURCE_START,
+            "source_end": tail[-1].isoformat(),
+            "circ_mv_history_start": subject.EXPECTED_CIRC_MV_HISTORY_START,
+            "universe_key": subject.EXPECTED_UNIVERSE_KEY,
+            "universe_rule_version": subject.EXPECTED_UNIVERSE_RULE_VERSION,
+            "benchmark_ts_code": subject.EXPECTED_BENCHMARK_TS_CODE,
+            "security_identity_manifest_path": subject.EXPECTED_SECURITY_IDENTITY_MANIFEST_PATH,
+            "security_identity_manifest_sha256": subject.EXPECTED_SECURITY_IDENTITY_MANIFEST_SHA256,
+            "provider_absence_manifest_path": subject.EXPECTED_PROVIDER_ABSENCE_MANIFEST_PATH,
+            "provider_absence_manifest_sha256": subject.EXPECTED_PROVIDER_ABSENCE_MANIFEST_SHA256,
+        },
         "state_start": subject.HOLDOUT_START.isoformat(),
         "state_end": subject.HOLDOUT_END.isoformat(),
         "state_trading_day_count": subject.HOLDOUT_TRADING_DAYS,
@@ -311,6 +385,7 @@ def _evaluation_fixture() -> tuple[dict[str, object], subject.FrozenCandidate, d
         "development_request_sha256": subject.EXPECTED_DEVELOPMENT_REQUEST_SHA256,
         "holdout_evaluation_id": evaluation,
         "holdout_source": holdout_source,
+        "artifact_outputs": _artifact_outputs(Path("F:/AIstock_artifacts/p2_4_evaluation_test")),
     }
     request = {**request_body, "request_sha256": subject.canonical_sha256(request_body)}
     return inputs, candidate, request
@@ -358,6 +433,16 @@ def test_json_reader_rejects_duplicate_keys_and_non_finite_constants(tmp_path: P
     assert captured.value.stage == "preflight"
 
 
+def test_child_readback_rejects_duplicate_keys_canonically(tmp_path: Path) -> None:
+    path = tmp_path / "child.json"
+    path.write_text('{"schema_version":"a","schema_version":"b"}', encoding="utf-8")
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        cli._read_child(path)
+
+    assert captured.value.reason_code == subject.REASON_REPRODUCIBILITY
+
+
 def test_request_cannot_change_candidate_or_reuse_development_source() -> None:
     report = _candidate_report()
     candidate = _frozen(report)
@@ -369,6 +454,45 @@ def test_request_cannot_change_candidate_or_reuse_development_source() -> None:
 
     assert captured.value.reason_code == subject.REASON_REQUEST
     assert captured.value.stage == "preflight"
+
+
+def test_request_binds_frozen_source_policy_and_every_artifact_path(tmp_path: Path) -> None:
+    report = _candidate_report()
+    candidate = _frozen(report)
+    request = _request(str(report["report_sha256"]), artifact_root=tmp_path / "artifacts")
+
+    subject.validate_static_request(request, candidate)
+    outputs = request["artifact_outputs"]
+    assert isinstance(outputs, dict)
+    subject.validate_output_identity(
+        request,
+        acceptance_output=Path(outputs["acceptance_output"]),
+        model_output=Path(outputs["model_output"]),
+        ready_output=Path(outputs["ready_output"]),
+        child_1_output=Path(outputs["child_1_output"]),
+        child_2_output=Path(outputs["child_2_output"]),
+        repository_root=tmp_path / "repository",
+    )
+
+    drifted = copy.deepcopy(request)
+    drifted["holdout_source"]["source"]["universe_rule_version"] = "drift"
+    drifted_body = {key: value for key, value in drifted.items() if key != "request_sha256"}
+    drifted["request_sha256"] = subject.canonical_sha256(drifted_body)
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.validate_static_request(drifted, candidate)
+    assert captured.value.reason_code == subject.REASON_REQUEST
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.validate_output_identity(
+            request,
+            acceptance_output=Path(outputs["acceptance_output"]).with_name("other.json"),
+            model_output=Path(outputs["model_output"]),
+            ready_output=Path(outputs["ready_output"]),
+            child_1_output=Path(outputs["child_1_output"]),
+            child_2_output=Path(outputs["child_2_output"]),
+            repository_root=tmp_path / "repository",
+        )
+    assert captured.value.reason_code == subject.REASON_REQUEST
 
 
 def test_child_evaluator_runs_zero_fit_full_l1_l2_path_with_frozen_parameters(
@@ -398,6 +522,18 @@ def test_child_evaluator_runs_zero_fit_full_l1_l2_path_with_frozen_parameters(
     assert payload["selection_performed"] is False
     assert payload["levels"]["L1"]["state"]["state_receipt"]["state_row_count"] == 31 * 242
     assert payload["levels"]["L2"]["state"]["state_receipt"]["state_row_count"] == 131 * 242
+    coverage = payload["coverage"]
+    assert coverage["receipt_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in coverage.items() if key != "receipt_sha256"}
+    )
+    evidence = coverage["evidence"]
+    assert len(evidence["daily"]) == 242
+    assert len(evidence["l1_sector"]) == 31
+    assert len(evidence["l2_sector"]) == 131
+    assert len(evidence["size_quintiles"]) == 5
+    assert len(evidence["liquidity_quintiles"]) == 5
+    assert len(evidence["parents"]) == 31
+    assert evidence["l2_sector_sha256"] == subject.canonical_sha256(evidence["l2_sector"])
     assert report["model_write"] is False
     assert report["ready_write"] is False
 
@@ -442,6 +578,33 @@ def test_product_gate_does_not_fill_unavailable_or_borrow_other_level() -> None:
     )
 
 
+def test_product_metrics_rejects_identity_intersection_shrinkage() -> None:
+    day = subject.HOLDOUT_START
+    codes = [f"L2-{index}" for index in range(5)]
+    scores = {(code, day): float(index) for index, code in enumerate(codes)}
+    states = {(code, day): ("trending" if index >= 3 else "fading") for index, code in enumerate(codes)}
+    outcomes = {
+        horizon: {(code, day): float(index) / 100.0 for index, code in enumerate(codes[:-1])}
+        for horizon in subject.HORIZONS
+    }
+
+    metrics = subject.product_metrics(
+        scores,
+        states,
+        {day: "risk_on"},
+        outcomes,
+        {(code, day): False for code in codes[:-1]},
+        (day,),
+        level="L2",
+    )
+
+    ten_day = metrics["daily_metrics"]["10"]
+    assert ten_day["daily_rank_ic"] == []
+    assert ten_day["daily_spread"] == []
+    assert {row["metric"] for row in ten_day["unavailable"]} == {"rank_ic", "spread"}
+    assert all("identity_mismatch" in row for row in ten_day["unavailable"])
+
+
 def test_risk_path_uses_minimum_forward_excess_not_terminal_return() -> None:
     start = date(2025, 4, 1)
     calendar = tuple(start + timedelta(days=index) for index in range(11))
@@ -481,7 +644,7 @@ def test_warning_does_not_invent_first_day_entry_but_allows_risk_off_context() -
 def test_parent_closure_preserves_three_mutually_exclusive_states(
     status: str, model_write: bool, ready_write: bool
 ) -> None:
-    request = {"holdout_evaluation_id": "b" * 64}
+    request = _closure_request()
     draft = subject.close_children(
         _child(1, status=status), _child(2, status=status), request=request, producer_commit="a" * 40
     )
@@ -503,11 +666,30 @@ def test_parent_rejects_fresh_process_payload_drift_before_any_writer() -> None:
         subject.close_children(
             _child(1),
             _child(2, payload_marker="drift"),
-            request={"holdout_evaluation_id": "b" * 64},
+            request=_closure_request(),
             producer_commit="a" * 40,
         )
 
     assert captured.value.reason_code == subject.REASON_REPRODUCIBILITY
+
+
+def test_parent_rejects_two_self_hashed_children_that_drift_from_request_authority() -> None:
+    request = _closure_request()
+    first = _child(1, request=request)
+    second = _child(2, request=request)
+    for child in (first, second):
+        payload = child["reproducibility_payload"]
+        assert isinstance(payload, dict)
+        payload["candidate_report_sha256"] = "9" * 64
+        child["reproducibility_payload_sha256"] = subject.canonical_sha256(payload)
+        child_body = {key: value for key, value in child.items() if key != "report_sha256"}
+        child["report_sha256"] = subject.canonical_sha256(child_body)
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.close_children(first, second, request=request, producer_commit="a" * 40)
+
+    assert captured.value.reason_code == subject.REASON_REPRODUCIBILITY
+    assert "parent authority" in str(captured.value)
 
 
 def test_model_and_ready_writer_cannot_promote_coverage_or_not_available() -> None:
@@ -516,7 +698,7 @@ def test_model_and_ready_writer_cannot_promote_coverage_or_not_available() -> No
     coverage = subject.close_children(
         _child(1, status="COVERAGE_AVAILABLE"),
         _child(2, status="COVERAGE_AVAILABLE"),
-        request={"holdout_evaluation_id": "b" * 64},
+        request=_closure_request(),
         producer_commit="a" * 40,
     )
     model = subject.model_artifact(coverage, candidate)
@@ -536,13 +718,22 @@ def test_model_and_ready_writer_cannot_promote_coverage_or_not_available() -> No
     }
     assert "unavailable_items" not in model["levels"]["L1"]
     assert "target" not in model["levels"]["L2"]
+    assert model["source_identity"]["hierarchy_sha256"] == "f" * 64
+    assert model["state_projection"] == {
+        "method": "daily_cross_section_top_bottom_fraction",
+        "state_fraction": subject.STATE_FRACTION,
+        "minimum_extreme_count": subject.MINIMUM_EXTREME_COUNT,
+        "tie_tolerance": subject.STATE_TIE_TOLERANCE,
+        "semantic_order": ["fading", "neutral", "trending"],
+        "missing_policy": "typed_unavailable_no_neutral_fill",
+    }
     with pytest.raises(subject.HoldoutAcceptanceError):
         subject.ready_artifact(coverage, model)
 
     not_available = subject.close_children(
         _child(1, status="NOT_AVAILABLE"),
         _child(2, status="NOT_AVAILABLE"),
-        request={"holdout_evaluation_id": "b" * 64},
+        request=_closure_request(),
         producer_commit="a" * 40,
     )
     with pytest.raises(subject.HoldoutAcceptanceError):
@@ -553,7 +744,7 @@ def test_acceptance_cannot_claim_required_artifacts_before_durable_writes() -> N
     full = subject.close_children(
         _child(1, status="FULL_READY"),
         _child(2, status="FULL_READY"),
-        request={"holdout_evaluation_id": "b" * 64},
+        request=_closure_request(),
         producer_commit="a" * 40,
     )
 
@@ -565,12 +756,43 @@ def test_acceptance_cannot_claim_required_artifacts_before_durable_writes() -> N
     assert captured.value.reason_code == subject.REASON_READBACK
 
 
+def test_final_bundle_readback_closes_acceptance_model_and_ready() -> None:
+    report = _candidate_report()
+    candidate = _frozen(report)
+    request = _closure_request(candidate_hash=str(report["report_sha256"]))
+    draft = subject.close_children(
+        _child(1, request=request),
+        _child(2, request=request),
+        request=request,
+        producer_commit="a" * 40,
+    )
+    model = subject.model_artifact(draft, candidate)
+    ready = subject.ready_artifact(draft, model)
+    acceptance = subject.finalize_acceptance(
+        draft,
+        model_sha256=str(model["model_sha256"]),
+        ready_sha256=str(ready["ready_sha256"]),
+    )
+
+    receipt = subject.validate_artifact_bundle(acceptance, model=model, ready=ready)
+    assert receipt["bundle_valid"] is True
+
+    drifted = copy.deepcopy(ready)
+    drifted["model_sha256"] = "9" * 64
+    drifted_body = {key: value for key, value in drifted.items() if key != "ready_sha256"}
+    drifted["ready_sha256"] = subject.canonical_sha256(drifted_body)
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.validate_artifact_bundle(acceptance, model=model, ready=drifted)
+    assert captured.value.reason_code == subject.REASON_READBACK
+
+
 def test_failure_after_model_write_reports_actual_partial_side_effect() -> None:
     receipt = subject.failure_receipt(
         request={"holdout_evaluation_id": "b" * 64},
         producer_commit="a" * 40,
         error=subject.HoldoutAcceptanceError(subject.REASON_READBACK, "ready failed", stage="writer"),
         holdout_accessed=True,
+        product_acceptance_performed=False,
         model_sha256="1" * 64,
     )
 
@@ -578,6 +800,7 @@ def test_failure_after_model_write_reports_actual_partial_side_effect() -> None:
     assert receipt["model_write"] is True
     assert receipt["model_sha256"] == "1" * 64
     assert receipt["ready_write"] is False
+    assert receipt["product_acceptance_performed"] is False
 
 
 def test_write_once_is_external_collision_safe_and_canonical(tmp_path: Path) -> None:
@@ -643,3 +866,86 @@ def test_cli_invalid_candidate_stops_before_database_loader(tmp_path: Path, monk
     assert failure["holdout_accessed"] is False
     assert failure["fit_count"] == 0
     assert failure["model_write"] is False
+
+
+def test_cli_output_drift_stops_before_holdout_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact_root = tmp_path / "artifacts"
+    report = _candidate_report()
+    request = _request(str(report["report_sha256"]), artifact_root=artifact_root)
+    request_path = tmp_path / "request.json"
+    candidate_path = tmp_path / "candidate.json"
+    _write_json(request_path, request)
+    _write_json(candidate_path, report)
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: _frozen(report))
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", lambda *args, **kwargs: pytest.fail("DB loader called"))
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+
+    result = cli.main(
+        [
+            "--request",
+            str(request_path),
+            "--candidate",
+            str(candidate_path),
+            "--output",
+            str(artifact_root / "drifted_acceptance.json"),
+            "--model-output",
+            str(artifact_root / "model.json"),
+            "--ready-output",
+            str(artifact_root / "ready.json"),
+            "--child-dir",
+            str(artifact_root / "children"),
+            "--db-env-prefix",
+            "P2_4_TEST",
+        ]
+    )
+
+    assert result == 1
+    failure = json.loads((artifact_root / "drifted_acceptance.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_reason_code"] == subject.REASON_REQUEST
+    assert failure["holdout_accessed"] is False
+    assert failure["product_acceptance_performed"] is False
+
+
+def test_child_loader_failure_records_holdout_access_without_claiming_acceptance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    report = _candidate_report()
+    request = _request(str(report["report_sha256"]), artifact_root=artifact_root)
+    request_path = tmp_path / "request.json"
+    candidate_path = tmp_path / "candidate.json"
+    _write_json(request_path, request)
+    _write_json(candidate_path, report)
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: _frozen(report))
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+
+    def fail_loader(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("load")
+
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_loader)
+
+    result = cli.main(
+        [
+            "--request",
+            str(request_path),
+            "--candidate",
+            str(candidate_path),
+            "--output",
+            str(artifact_root / "acceptance.json"),
+            "--model-output",
+            str(artifact_root / "model.json"),
+            "--ready-output",
+            str(artifact_root / "ready.json"),
+            "--child-dir",
+            str(artifact_root / "children"),
+            "--db-env-prefix",
+            "P2_4_TEST",
+            "--child-index",
+            "1",
+        ]
+    )
+
+    assert result == 1
+    failure = json.loads((artifact_root / "children" / "p2_4_holdout_child_1.failure.json").read_text(encoding="utf-8"))
+    assert failure["holdout_accessed"] is True
+    assert failure["product_acceptance_performed"] is False

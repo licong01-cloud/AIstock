@@ -40,12 +40,15 @@ from backend.services.hmm_risk.market_relative_jump_spike import (
 )
 from backend.services.hmm_risk.market_relative_ridge_candidate import (
     LEVEL_SPECS,
+    MINIMUM_EXTREME_COUNT,
     P2_3C_FEATURES,
     P2_3C_FIXED_JUMP_PENALTY,
     P2_3C_MARKET_COMPONENT_SCHEMA_VERSION,
     P2_3C_REPORT_SCHEMA_VERSION,
     P2_3C_COMPONENT_SCHEMA_VERSION,
     RidgeFit,
+    STATE_FRACTION,
+    STATE_TIE_TOLERANCE,
     _condition_component,
     predict_scores,
     project_daily_states,
@@ -63,6 +66,15 @@ READY_SCHEMA_VERSION = "hmm_risk_market_conditioned_ridge_ready_v1"
 EXPECTED_CANDIDATE_SHA256 = "792d4f6ac6b313961eaf5017a0a3ea4a3ebf96ab8364f4ff8518c182a68d17e3"
 EXPECTED_CANDIDATE_PRODUCER = "8ca1b98db922489f91814b5d51aae1ab9c59fbd0"
 EXPECTED_DEVELOPMENT_REQUEST_SHA256 = "4807125d24a9c01596f923122079c6d70dd48ff39522d3755c6ab0ad09ec6336"
+EXPECTED_UNIVERSE_KEY = "shsz_st_pit_qe_dataset_qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2"
+EXPECTED_UNIVERSE_RULE_VERSION = "st_pub_next_trade_restore_active_l_v1"
+EXPECTED_SECURITY_IDENTITY_MANIFEST_PATH = "backend/services/hmm_risk/manifests/security_source_identity_v1.json"
+EXPECTED_SECURITY_IDENTITY_MANIFEST_SHA256 = "24e0070fd97e00e5021eafc295426144b5b2eb3f7d76d4828aab18fe6d21358f"
+EXPECTED_PROVIDER_ABSENCE_MANIFEST_PATH = "backend/services/hmm_risk/manifests/provider_absence_v1.json"
+EXPECTED_PROVIDER_ABSENCE_MANIFEST_SHA256 = "717b899cbc5cebfa41f9ffe9d4fe32055f033bc93d1712d5da6a983a6a93e886"
+EXPECTED_SOURCE_START = "2022-01-01"
+EXPECTED_CIRC_MV_HISTORY_START = "2020-07-30"
+EXPECTED_BENCHMARK_TS_CODE = "000300.SH"
 OUTCOME_TAIL_TRADING_DAYS = 20
 HORIZONS = (5, 10, 20)
 PRIMARY_HORIZON = 10
@@ -168,6 +180,10 @@ def load_request(path: Path) -> dict[str, Any]:
     return _load_json(path, reason=REASON_REQUEST, label="P2-4 request")
 
 
+def load_written_artifact(path: Path, *, label: str, reason: str = REASON_READBACK) -> dict[str, Any]:
+    return _load_json(path, reason=reason, label=label)
+
+
 def _component(report: Mapping[str, Any], *, component: str, phase: str) -> dict[str, Any]:
     matches = [
         item
@@ -269,6 +285,42 @@ def validate_static_request(request: Mapping[str, Any], candidate: FrozenCandida
     source = holdout.get("source")
     if not isinstance(source, dict) or source == candidate.report.get("request_identity", {}).get("source"):
         raise _fail(REASON_REQUEST, "holdout source must be explicit and separate from development", stage="preflight")
+    expected_source_policy = {
+        "source_start": EXPECTED_SOURCE_START,
+        "source_end": holdout.get("outcome_tail_end"),
+        "circ_mv_history_start": EXPECTED_CIRC_MV_HISTORY_START,
+        "universe_key": EXPECTED_UNIVERSE_KEY,
+        "universe_rule_version": EXPECTED_UNIVERSE_RULE_VERSION,
+        "benchmark_ts_code": EXPECTED_BENCHMARK_TS_CODE,
+        "security_identity_manifest_path": EXPECTED_SECURITY_IDENTITY_MANIFEST_PATH,
+        "security_identity_manifest_sha256": EXPECTED_SECURITY_IDENTITY_MANIFEST_SHA256,
+        "provider_absence_manifest_path": EXPECTED_PROVIDER_ABSENCE_MANIFEST_PATH,
+        "provider_absence_manifest_sha256": EXPECTED_PROVIDER_ABSENCE_MANIFEST_SHA256,
+    }
+    if any(source.get(key) != value for key, value in expected_source_policy.items()):
+        raise _fail(
+            REASON_REQUEST, "holdout source policy differs from the frozen development authority", stage="preflight"
+        )
+    if holdout.get("feature_formula_sha256") != candidate.report.get("feature_formula_sha256"):
+        raise _fail(REASON_REQUEST, "holdout feature formula differs from the frozen candidate", stage="preflight")
+    outputs = request.get("artifact_outputs")
+    output_fields = (
+        "acceptance_output",
+        "acceptance_failure_output",
+        "model_output",
+        "ready_output",
+        "child_1_output",
+        "child_1_failure_output",
+        "child_2_output",
+        "child_2_failure_output",
+    )
+    if not isinstance(outputs, dict) or set(outputs) != set(output_fields):
+        raise _fail(REASON_REQUEST, "artifact output identities are incomplete", stage="preflight")
+    output_paths = [Path(str(outputs[field])) for field in output_fields]
+    if any(not path.is_absolute() for path in output_paths) or len({str(path) for path in output_paths}) != len(
+        output_paths
+    ):
+        raise _fail(REASON_REQUEST, "artifact output identities must be absolute and unique", stage="preflight")
     evaluation_body = {
         "contract_version": CONTRACT_VERSION,
         "candidate_report_sha256": candidate.report["report_sha256"],
@@ -722,6 +774,24 @@ def product_metrics(
         unavailable: list[dict[str, Any]] = []
         horizon_outcomes = outcomes[horizon]
         for day in state_dates:
+            state_codes = {code for code, state_day in states if state_day == day}
+            score_codes = {code for code, score_day in scores if score_day == day}
+            outcome_codes = {code for code, outcome_day in horizon_outcomes if outcome_day == day}
+            if state_codes != score_codes or state_codes != outcome_codes:
+                unavailable.extend(
+                    {
+                        "trade_date": day.isoformat(),
+                        "metric": metric,
+                        "reason_code": REASON_METRIC,
+                        "identity_mismatch": {
+                            "state_count": len(state_codes),
+                            "score_count": len(score_codes),
+                            "outcome_count": len(outcome_codes),
+                        },
+                    }
+                    for metric in ("rank_ic", "spread")
+                )
+                continue
             observations = sorted(
                 (code, signal[label], float(horizon_outcomes[(code, day)]), label)
                 for (code, state_day), label in states.items()
@@ -770,13 +840,23 @@ def product_metrics(
     risk_predictions: list[bool] = []
     risk_rows: list[list[Any]] = []
     ten_day = outcomes[PRIMARY_HORIZON]
-    for key in sorted(set(risk_outcome_by_identity) & set(states), key=lambda item: (item[1], item[0])):
-        actual = bool(risk_outcome_by_identity[key])
-        predicted = bool(warnings.get(key, False))
-        risk_outcomes.append(actual)
-        risk_predictions.append(predicted)
-        risk_rows.append([key[1].isoformat(), key[0], actual, predicted])
-    risk = risk_metrics(risk_outcomes, risk_predictions)
+    expected_risk_identities = set(ten_day) & set(states)
+    actual_risk_identities = set(risk_outcome_by_identity)
+    if expected_risk_identities != actual_risk_identities:
+        risk = {
+            "metric_valid": False,
+            "reason_code": REASON_METRIC,
+            "expected_identity_count": len(expected_risk_identities),
+            "actual_identity_count": len(actual_risk_identities),
+        }
+    else:
+        for key in sorted(expected_risk_identities, key=lambda item: (item[1], item[0])):
+            actual = bool(risk_outcome_by_identity[key])
+            predicted = bool(warnings.get(key, False))
+            risk_outcomes.append(actual)
+            risk_predictions.append(predicted)
+            risk_rows.append([key[1].isoformat(), key[0], actual, predicted])
+        risk = risk_metrics(risk_outcomes, risk_predictions)
     by_sector: list[dict[str, Any]] = []
     for code in sorted({str(item[1]) for item in risk_rows}):
         rows = [item for item in risk_rows if item[1] == code]
@@ -890,6 +970,96 @@ def _quintile_rows(inputs: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _coverage_evidence(
+    *,
+    state_dates: Sequence[date],
+    l1_codes: Sequence[str],
+    l2_codes: Sequence[str],
+    l1_available: set[tuple[str, date]],
+    l2_available: set[tuple[str, date]],
+    hierarchy: Mapping[str, str],
+    size_quintiles: Mapping[str, int],
+    liquidity_quintiles: Mapping[str, int],
+) -> dict[str, Any]:
+    dates = tuple(state_dates)
+
+    def sector_rows(codes: Sequence[str], available: set[tuple[str, date]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "sector_code": code,
+                "available_date_count": (count := sum((code, day) in available for day in dates)),
+                "date_denominator": len(dates),
+                "availability_ratio": count / len(dates),
+                "minimum_passed": count / len(dates) >= 0.80,
+            }
+            for code in codes
+        ]
+
+    def quintile_rows(groups: Mapping[str, int]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for group in range(5):
+            members = [code for code in l2_codes if groups.get(code) == group]
+            denominator = len(members) * len(dates)
+            numerator = sum((code, day) in l2_available for code in members for day in dates)
+            rows.append(
+                {
+                    "quintile": group,
+                    "member_count": len(members),
+                    "available_sector_date_count": numerator,
+                    "sector_date_denominator": denominator,
+                    "availability_ratio": numerator / denominator if denominator else None,
+                    "minimum_passed": bool(denominator) and numerator / denominator >= 0.80,
+                }
+            )
+        return rows
+
+    daily = [
+        {
+            "trade_date": day.isoformat(),
+            "l1_available_count": sum((code, day) in l1_available for code in l1_codes),
+            "l1_denominator": len(l1_codes),
+            "l2_available_count": sum((code, day) in l2_available for code in l2_codes),
+            "l2_denominator": len(l2_codes),
+        }
+        for day in dates
+    ]
+    for row in daily:
+        row["coverage_available_date"] = row["l1_available_count"] >= 28 and row["l2_available_count"] >= 118
+    l1_sector = sector_rows(l1_codes, l1_available)
+    l2_sector = sector_rows(l2_codes, l2_available)
+    size = quintile_rows(size_quintiles)
+    liquidity = quintile_rows(liquidity_quintiles)
+    parents: list[dict[str, Any]] = []
+    for parent in l1_codes:
+        children = [code for code in l2_codes if hierarchy.get(code) == parent]
+        covered = sum(any((child, day) in l2_available for child in children) for day in dates)
+        parents.append(
+            {
+                "l1_code": parent,
+                "child_count": len(children),
+                "covered_date_count": covered,
+                "date_denominator": len(dates),
+                "coverage_ratio": covered / len(dates),
+                "minimum_passed": bool(children) and covered / len(dates) >= 0.90,
+            }
+        )
+    body = {
+        "daily": daily,
+        "daily_sha256": canonical_sha256(daily),
+        "l1_sector": l1_sector,
+        "l1_sector_sha256": canonical_sha256(l1_sector),
+        "l2_sector": l2_sector,
+        "l2_sector_sha256": canonical_sha256(l2_sector),
+        "size_quintiles": size,
+        "size_quintiles_sha256": canonical_sha256(size),
+        "liquidity_quintiles": liquidity,
+        "liquidity_quintiles_sha256": canonical_sha256(liquidity),
+        "parents": parents,
+        "parents_sha256": canonical_sha256(parents),
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def evaluate_child(
     inputs: Mapping[str, Any],
     request: Mapping[str, Any],
@@ -962,8 +1132,25 @@ def evaluate_child(
         liquidity_quintiles=quintiles["groups"]["liquidity"],
         product_metrics_passed=product_passed,
     )
+    coverage_evidence = _coverage_evidence(
+        state_dates=state_dates,
+        l1_codes=codes["L1"],
+        l2_codes=codes["L2"],
+        l1_available=available["L1"],
+        l2_available=available["L2"],
+        hierarchy=hierarchy,
+        size_quintiles=quintiles["groups"]["size"],
+        liquidity_quintiles=quintiles["groups"]["liquidity"],
+    )
+    coverage_body = {key: value for key, value in coverage.items() if key != "receipt_sha256"}
+    coverage_body["evidence"] = coverage_evidence
     if coverage.get("status") == "NOT_AVAILABLE":
-        coverage = {**coverage, "reason_code": REASON_COVERAGE}
+        source_reason = coverage.get("reason_code")
+        reason = (
+            REASON_REPRESENTATIVENESS if source_reason == "hmm_risk_jump_representativeness_failed" else REASON_COVERAGE
+        )
+        coverage_body = {**coverage_body, "reason_code": reason, "source_reason_code": source_reason}
+    coverage = {**coverage_body, "receipt_sha256": canonical_sha256(coverage_body)}
     runtime = runtime_versions()
     reproducibility_payload = {
         "candidate_report_sha256": candidate.report["report_sha256"],
@@ -1037,12 +1224,127 @@ def runtime_versions() -> dict[str, Any]:
 def close_children(
     first: Mapping[str, Any], second: Mapping[str, Any], *, request: Mapping[str, Any], producer_commit: str
 ) -> dict[str, Any]:
+    expected_top_level = {
+        "schema_version",
+        "contract_version",
+        "algorithm_version",
+        "status",
+        "process_index",
+        "producer_commit",
+        "holdout_accessed",
+        "product_acceptance_performed",
+        "reproducibility_payload",
+        "reproducibility_payload_sha256",
+        "model_write",
+        "ready_write",
+        "report_sha256",
+    }
+    expected_payload_keys = {
+        "candidate_report_sha256",
+        "holdout_evaluation_id",
+        "holdout_source_sha256",
+        "state_date_set_sha256",
+        "outcome_tail_date_set_sha256",
+        "market_receipt",
+        "levels",
+        "quintiles",
+        "hierarchy_sha256",
+        "coverage",
+        "runtime_versions",
+        "fit_count",
+        "selection_performed",
+        "database_write",
+        "runtime_action",
+    }
     for index, value in enumerate((first, second), start=1):
-        if value.get("schema_version") != CHILD_SCHEMA_VERSION or value.get("process_index") != index:
+        if (
+            set(value) != expected_top_level
+            or value.get("schema_version") != CHILD_SCHEMA_VERSION
+            or value.get("contract_version") != CONTRACT_VERSION
+            or value.get("algorithm_version") != ALGORITHM_VERSION
+            or value.get("status") != "child_complete"
+            or value.get("process_index") != index
+            or value.get("producer_commit") != producer_commit
+            or value.get("holdout_accessed") is not True
+            or value.get("product_acceptance_performed") is not True
+            or value.get("model_write") is not False
+            or value.get("ready_write") is not False
+        ):
             raise _fail(REASON_REPRODUCIBILITY, "child identity is invalid", stage="parent_closure")
         report_hash = _require_sha256(value.get("report_sha256"), "child.report_sha256", reason=REASON_REPRODUCIBILITY)
         if canonical_sha256({key: item for key, item in value.items() if key != "report_sha256"}) != report_hash:
             raise _fail(REASON_REPRODUCIBILITY, "child report hash is invalid", stage="parent_closure")
+        payload = value.get("reproducibility_payload")
+        payload_hash = _require_sha256(
+            value.get("reproducibility_payload_sha256"),
+            "child.reproducibility_payload_sha256",
+            reason=REASON_REPRODUCIBILITY,
+        )
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != expected_payload_keys
+            or canonical_sha256(payload) != payload_hash
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "child payload hash is invalid", stage="parent_closure")
+        expected_payload = {
+            "candidate_report_sha256": request.get("candidate_report_sha256"),
+            "holdout_evaluation_id": request.get("holdout_evaluation_id"),
+            "holdout_source_sha256": canonical_sha256(request.get("holdout_source")),
+            "state_date_set_sha256": request.get("holdout_source", {}).get("state_date_set_sha256"),
+            "outcome_tail_date_set_sha256": request.get("holdout_source", {}).get("outcome_tail_date_set_sha256"),
+            "fit_count": 0,
+            "selection_performed": False,
+            "database_write": False,
+            "runtime_action": False,
+        }
+        if any(payload.get(key) != expected for key, expected in expected_payload.items()):
+            raise _fail(
+                REASON_REPRODUCIBILITY,
+                "child payload does not close over the parent authority",
+                stage="parent_closure",
+            )
+        coverage = payload.get("coverage")
+        levels = payload.get("levels")
+        nested_receipts = [payload.get("market_receipt"), payload.get("quintiles"), coverage]
+        if isinstance(levels, dict):
+            nested_receipts.extend(
+                item
+                for level in ("L1", "L2")
+                for item in (
+                    levels.get(level, {}).get("state") if isinstance(levels.get(level), dict) else None,
+                    levels.get(level, {}).get("metrics") if isinstance(levels.get(level), dict) else None,
+                )
+            )
+        for receipt in nested_receipts:
+            if not isinstance(receipt, dict):
+                raise _fail(REASON_REPRODUCIBILITY, "child nested receipt is missing", stage="parent_closure")
+            receipt_hash = _require_sha256(
+                receipt.get("receipt_sha256"), "child nested receipt SHA-256", reason=REASON_REPRODUCIBILITY
+            )
+            if (
+                canonical_sha256({key: value for key, value in receipt.items() if key != "receipt_sha256"})
+                != receipt_hash
+            ):
+                raise _fail(REASON_REPRODUCIBILITY, "child nested receipt hash is invalid", stage="parent_closure")
+        if not isinstance(coverage, dict) or coverage.get("status") not in {
+            "FULL_READY",
+            "COVERAGE_AVAILABLE",
+            "NOT_AVAILABLE",
+        }:
+            raise _fail(REASON_REPRODUCIBILITY, "child coverage state is invalid", stage="parent_closure")
+        metrics_passed = bool(
+            isinstance(levels, dict)
+            and all(
+                isinstance(levels.get(level), dict)
+                and isinstance(levels[level].get("metrics"), dict)
+                and levels[level]["metrics"].get("product_metrics_passed") is True
+                for level in ("L1", "L2")
+            )
+        )
+        if coverage.get("product_metrics_passed") is not metrics_passed or (
+            coverage.get("status") in {"FULL_READY", "COVERAGE_AVAILABLE"} and not metrics_passed
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "child coverage and product metrics conflict", stage="parent_closure")
     payload_hash = str(first.get("reproducibility_payload_sha256") or "")
     if payload_hash != second.get("reproducibility_payload_sha256") or first.get(
         "reproducibility_payload"
@@ -1061,6 +1363,12 @@ def close_children(
         "producer_commit": producer_commit,
         "candidate_report_sha256": payload["candidate_report_sha256"],
         "holdout_evaluation_id": request["holdout_evaluation_id"],
+        "holdout_source_sha256": payload["holdout_source_sha256"],
+        "state_date_set_sha256": payload["state_date_set_sha256"],
+        "outcome_tail_date_set_sha256": payload["outcome_tail_date_set_sha256"],
+        "feature_formula_sha256": request["holdout_source"]["feature_formula_sha256"],
+        "hierarchy_sha256": payload["hierarchy_sha256"],
+        "quintiles_sha256": payload["quintiles"]["receipt_sha256"],
         "child_report_sha256s": [first["report_sha256"], second["report_sha256"]],
         "reproducibility_payload_sha256": payload_hash,
         "metrics": {level: payload["levels"][level]["metrics"] for level in ("L1", "L2")},
@@ -1118,8 +1426,25 @@ def model_artifact(acceptance: Mapping[str, Any], candidate: FrozenCandidate) ->
         "acceptance_core_sha256": acceptance["acceptance_core_sha256"],
         "activation_requires_matching_final_acceptance": True,
         "availability_state": acceptance["status"],
+        "source_identity": {
+            "holdout_evaluation_id": acceptance["holdout_evaluation_id"],
+            "holdout_source_sha256": acceptance["holdout_source_sha256"],
+            "state_date_set_sha256": acceptance["state_date_set_sha256"],
+            "outcome_tail_date_set_sha256": acceptance["outcome_tail_date_set_sha256"],
+            "feature_formula_sha256": acceptance["feature_formula_sha256"],
+            "hierarchy_sha256": acceptance["hierarchy_sha256"],
+            "quintiles_sha256": acceptance["quintiles_sha256"],
+        },
         "market": compact_market,
         "levels": compact_levels,
+        "state_projection": {
+            "method": "daily_cross_section_top_bottom_fraction",
+            "state_fraction": STATE_FRACTION,
+            "minimum_extreme_count": MINIMUM_EXTREME_COUNT,
+            "tie_tolerance": STATE_TIE_TOLERANCE,
+            "semantic_order": ["fading", "neutral", "trending"],
+            "missing_policy": "typed_unavailable_no_neutral_fill",
+        },
         "coverage": acceptance["coverage"],
         "ready": acceptance["status"] == "FULL_READY",
         "database_write": False,
@@ -1172,6 +1497,86 @@ def finalize_acceptance(
     return {**body, "report_sha256": canonical_sha256(body)}
 
 
+def validate_artifact_bundle(
+    acceptance: Mapping[str, Any],
+    *,
+    model: Mapping[str, Any] | None,
+    ready: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Revalidate the final acceptance/model/READY mutual closure after durable readback."""
+
+    report_hash = _require_sha256(acceptance.get("report_sha256"), "acceptance.report_sha256", reason=REASON_READBACK)
+    if canonical_sha256({key: value for key, value in acceptance.items() if key != "report_sha256"}) != report_hash:
+        raise _fail(REASON_READBACK, "final acceptance hash is invalid", stage="writer")
+    status = str(acceptance.get("status") or "")
+    model_required = status in {"FULL_READY", "COVERAGE_AVAILABLE"}
+    ready_required = status == "FULL_READY"
+    if (
+        acceptance.get("schema_version") != ACCEPTANCE_SCHEMA_VERSION
+        or acceptance.get("contract_version") != CONTRACT_VERSION
+        or acceptance.get("algorithm_version") != ALGORITHM_VERSION
+        or status not in {"FULL_READY", "COVERAGE_AVAILABLE", "NOT_AVAILABLE"}
+        or acceptance.get("finalized") is not True
+        or acceptance.get("model_write") is not model_required
+        or acceptance.get("ready_write") is not ready_required
+        or (model is not None) is not model_required
+        or (ready is not None) is not ready_required
+    ):
+        raise _fail(REASON_READBACK, "artifact bundle state is incomplete", stage="writer")
+    if model is not None:
+        model_hash = _require_sha256(model.get("model_sha256"), "model.model_sha256", reason=REASON_READBACK)
+        expected_source_identity = {
+            key: acceptance.get(key)
+            for key in (
+                "holdout_evaluation_id",
+                "holdout_source_sha256",
+                "state_date_set_sha256",
+                "outcome_tail_date_set_sha256",
+                "feature_formula_sha256",
+                "hierarchy_sha256",
+                "quintiles_sha256",
+            )
+        }
+        if (
+            canonical_sha256({key: value for key, value in model.items() if key != "model_sha256"}) != model_hash
+            or model.get("schema_version") != MODEL_SCHEMA_VERSION
+            or model.get("algorithm_version") != ALGORITHM_VERSION
+            or acceptance.get("model_sha256") != model_hash
+            or model.get("acceptance_core_sha256") != acceptance.get("acceptance_core_sha256")
+            or model.get("candidate_report_sha256") != acceptance.get("candidate_report_sha256")
+            or model.get("availability_state") != status
+            or model.get("ready") is not ready_required
+            or model.get("activation_requires_matching_final_acceptance") is not True
+            or model.get("source_identity") != expected_source_identity
+            or model.get("database_write") is not False
+            or model.get("runtime_action") is not False
+        ):
+            raise _fail(REASON_READBACK, "model does not close over final acceptance", stage="writer")
+    if ready is not None:
+        ready_hash = _require_sha256(ready.get("ready_sha256"), "ready.ready_sha256", reason=REASON_READBACK)
+        if (
+            canonical_sha256({key: value for key, value in ready.items() if key != "ready_sha256"}) != ready_hash
+            or ready.get("schema_version") != READY_SCHEMA_VERSION
+            or ready.get("algorithm_version") != ALGORITHM_VERSION
+            or acceptance.get("ready_sha256") != ready_hash
+            or ready.get("acceptance_core_sha256") != acceptance.get("acceptance_core_sha256")
+            or ready.get("model_sha256") != acceptance.get("model_sha256")
+            or ready.get("ready") is not True
+            or ready.get("activation_requires_matching_final_acceptance") is not True
+            or ready.get("scope") != "offline_model_ready_for_p2_5_only"
+            or ready.get("runtime_activated") is not False
+        ):
+            raise _fail(REASON_READBACK, "READY marker does not close over final acceptance", stage="writer")
+    body = {
+        "acceptance_report_sha256": report_hash,
+        "model_sha256": acceptance.get("model_sha256"),
+        "ready_sha256": acceptance.get("ready_sha256"),
+        "status": status,
+        "bundle_valid": True,
+    }
+    return {**body, "bundle_sha256": canonical_sha256(body)}
+
+
 def _external(path: Path, repository_root: Path) -> Path:
     resolved = path.resolve()
     root = repository_root.resolve()
@@ -1185,6 +1590,37 @@ def preflight_output(path: Path, *, repository_root: Path) -> Path:
     if output.exists():
         raise _fail(REASON_COLLISION, "artifact output already exists", stage="preflight")
     return output
+
+
+def validate_output_identity(
+    request: Mapping[str, Any],
+    *,
+    acceptance_output: Path,
+    model_output: Path,
+    ready_output: Path,
+    child_1_output: Path,
+    child_2_output: Path,
+    repository_root: Path,
+) -> dict[str, str]:
+    actual = {
+        "acceptance_output": str(_external(acceptance_output, repository_root)),
+        "acceptance_failure_output": str(
+            _external(acceptance_output.with_name(f"{acceptance_output.stem}.failure.json"), repository_root)
+        ),
+        "model_output": str(_external(model_output, repository_root)),
+        "ready_output": str(_external(ready_output, repository_root)),
+        "child_1_output": str(_external(child_1_output, repository_root)),
+        "child_1_failure_output": str(
+            _external(child_1_output.with_name(f"{child_1_output.stem}.failure.json"), repository_root)
+        ),
+        "child_2_output": str(_external(child_2_output, repository_root)),
+        "child_2_failure_output": str(
+            _external(child_2_output.with_name(f"{child_2_output.stem}.failure.json"), repository_root)
+        ),
+    }
+    if request.get("artifact_outputs") != actual:
+        raise _fail(REASON_REQUEST, "CLI output paths differ from the canonical request", stage="preflight")
+    return actual
 
 
 def write_once(path: Path, value: Mapping[str, Any], *, repository_root: Path) -> Path:
@@ -1217,7 +1653,8 @@ def failure_receipt(
     request: Mapping[str, Any],
     producer_commit: str,
     error: Exception,
-    holdout_accessed: bool,
+    holdout_accessed: bool | None,
+    product_acceptance_performed: bool | None = False,
     model_sha256: str | None = None,
     ready_sha256: str | None = None,
 ) -> dict[str, Any]:
@@ -1240,7 +1677,7 @@ def failure_receipt(
         "failure_stage": stage,
         "failure_evidence": evidence,
         "holdout_accessed": holdout_accessed,
-        "product_acceptance_performed": holdout_accessed,
+        "product_acceptance_performed": product_acceptance_performed,
         "fit_count": 0,
         "selection_performed": False,
         "model_write": model_sha256 is not None,

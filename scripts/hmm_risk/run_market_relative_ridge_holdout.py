@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 import sys
@@ -22,13 +21,16 @@ from backend.services.hmm_risk.market_relative_ridge_holdout import (  # noqa: E
     finalize_acceptance,
     load_frozen_candidate,
     load_request,
+    load_written_artifact,
     model_artifact,
     preflight_output,
     ready_artifact,
+    validate_artifact_bundle,
+    validate_output_identity,
     validate_static_request,
     write_once,
 )
-from backend.services.hmm_risk.state_model_set import canonical_json_bytes  # noqa: E402
+from backend.services.hmm_risk.state_model_set import canonical_json_bytes, canonical_sha256  # noqa: E402
 from scripts.hmm_risk.prepare_state_model_set import _load_l1_source_inputs  # noqa: E402
 
 
@@ -68,40 +70,63 @@ def _loader_request(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _read_child(path: Path) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+    return load_written_artifact(
+        path,
+        label="P2-4 child receipt",
+        reason="hmm_risk_p2_4_fresh_process_reproducibility_failed",
+    )
+
+
+def _read_child_failure(path: Path) -> dict[str, Any]:
+    value = load_written_artifact(path, label="P2-4 child failure receipt")
+    report_hash = str(value.get("report_sha256") or "")
+    if canonical_sha256({key: item for key, item in value.items() if key != "report_sha256"}) != report_hash:
         raise HoldoutAcceptanceError(
-            "hmm_risk_p2_4_fresh_process_reproducibility_failed",
-            "child receipt cannot be read",
-            stage="parent_closure",
-            evidence={"path": str(path), "exception_type": type(exc).__name__},
-        ) from exc
-    if not isinstance(value, dict):
-        raise HoldoutAcceptanceError(
-            "hmm_risk_p2_4_fresh_process_reproducibility_failed",
-            "child receipt must be an object",
-            stage="parent_closure",
+            "hmm_risk_p2_4_readback_mismatch",
+            "child failure receipt hash is invalid",
+            stage="fresh_process",
         )
     return value
+
+
+def _validate_cli_outputs(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, str]:
+    return validate_output_identity(
+        request,
+        acceptance_output=args.output.resolve(),
+        model_output=args.model_output.resolve(),
+        ready_output=args.ready_output.resolve(),
+        child_1_output=_child_path(args.child_dir, 1),
+        child_2_output=_child_path(args.child_dir, 2),
+        repository_root=ROOT,
+    )
+
+
+def _merge_observed_flag(current: bool | None, observed: Any) -> bool | None:
+    if current is True or observed is True:
+        return True
+    if current is None or observed is None:
+        return None
+    return False
 
 
 def _child(args: argparse.Namespace) -> int:
     request: dict[str, Any] = {}
     producer = "unknown"
     holdout_accessed = False
+    product_acceptance_performed = False
     output = _child_path(args.child_dir, int(args.child_index))
     try:
         request = load_request(args.request.resolve())
         candidate = load_frozen_candidate(args.candidate.resolve())
         validate_static_request(request, candidate)
+        _validate_cli_outputs(args, request)
         producer = _producer_commit()
+        holdout_accessed = True
         inputs = _load_l1_source_inputs(
             _loader_request(request),
             db_prefix=str(args.db_env_prefix),
             c010_formal=True,
         )
-        holdout_accessed = True
         report = evaluate_child(
             inputs,
             request,
@@ -109,6 +134,7 @@ def _child(args: argparse.Namespace) -> int:
             process_index=int(args.child_index),
             producer_commit=producer,
         )
+        product_acceptance_performed = True
         write_once(output, report, repository_root=ROOT)
         sys.stdout.buffer.write(canonical_json_bytes({"status": report["status"], "output": str(output)}) + b"\n")
         return 0
@@ -118,6 +144,7 @@ def _child(args: argparse.Namespace) -> int:
             producer_commit=producer,
             error=exc,
             holdout_accessed=holdout_accessed,
+            product_acceptance_performed=product_acceptance_performed,
         )
         try:
             write_once(_failure_path(output), failure, repository_root=ROOT)
@@ -134,22 +161,16 @@ def _parent(args: argparse.Namespace) -> int:
     request: dict[str, Any] = {}
     producer = "unknown"
     holdout_accessed = False
+    product_acceptance_performed = False
     model_sha256: str | None = None
     ready_sha256: str | None = None
     try:
         request = load_request(args.request.resolve())
         candidate = load_frozen_candidate(args.candidate.resolve())
         validate_static_request(request, candidate)
+        expected_outputs = _validate_cli_outputs(args, request)
         producer = _producer_commit()
-        outputs = [args.output.resolve(), args.model_output.resolve(), args.ready_output.resolve()]
-        outputs.extend(_child_path(args.child_dir, index) for index in (1, 2))
-        outputs.extend(_failure_path(path) for path in list(outputs))
-        if len(set(outputs)) != len(outputs):
-            raise HoldoutAcceptanceError(
-                "hmm_risk_p2_4_output_collision",
-                "P2-4 output identities collide",
-                stage="preflight",
-            )
+        outputs = [Path(value) for value in expected_outputs.values()]
         for path in outputs:
             preflight_output(path, repository_root=ROOT)
         environment = os.environ.copy()
@@ -189,7 +210,12 @@ def _parent(args: argparse.Namespace) -> int:
                 text=True,
             )
             if completed.returncode != 0:
-                holdout_accessed = True
+                child_failure_path = _failure_path(_child_path(args.child_dir, index))
+                child_failure = _read_child_failure(child_failure_path)
+                holdout_accessed = _merge_observed_flag(holdout_accessed, child_failure.get("holdout_accessed"))
+                product_acceptance_performed = _merge_observed_flag(
+                    product_acceptance_performed, child_failure.get("product_acceptance_performed")
+                )
                 raise HoldoutAcceptanceError(
                     "hmm_risk_p2_4_fresh_process_reproducibility_failed",
                     "P2-4 child process failed",
@@ -197,13 +223,19 @@ def _parent(args: argparse.Namespace) -> int:
                     evidence={
                         "process_index": index,
                         "returncode": completed.returncode,
-                        "failure_receipt": str(_failure_path(_child_path(args.child_dir, index))),
+                        "failure_receipt": str(child_failure_path),
+                        "child_failure_reason_code": child_failure.get("failure_reason_code"),
                     },
                 )
+            holdout_accessed = True
+            product_acceptance_performed = True
         holdout_accessed = True
         first = _read_child(_child_path(args.child_dir, 1))
         second = _read_child(_child_path(args.child_dir, 2))
         draft = close_children(first, second, request=request, producer_commit=producer)
+        product_acceptance_performed = True
+        model: dict[str, Any] | None = None
+        ready: dict[str, Any] | None = None
         if draft["status"] in {"FULL_READY", "COVERAGE_AVAILABLE"}:
             model = model_artifact(draft, candidate)
             write_once(args.model_output, model, repository_root=ROOT)
@@ -214,6 +246,14 @@ def _parent(args: argparse.Namespace) -> int:
                 ready_sha256 = str(ready["ready_sha256"])
         acceptance = finalize_acceptance(draft, model_sha256=model_sha256, ready_sha256=ready_sha256)
         write_once(args.output, acceptance, repository_root=ROOT)
+        acceptance_readback = load_written_artifact(args.output, label="P2-4 final acceptance")
+        model_readback = (
+            load_written_artifact(args.model_output, label="P2-4 canonical model") if model is not None else None
+        )
+        ready_readback = (
+            load_written_artifact(args.ready_output, label="P2-4 READY marker") if ready is not None else None
+        )
+        validate_artifact_bundle(acceptance_readback, model=model_readback, ready=ready_readback)
         sys.stdout.buffer.write(
             canonical_json_bytes({"status": acceptance["status"], "output": str(args.output.resolve())}) + b"\n"
         )
@@ -224,6 +264,7 @@ def _parent(args: argparse.Namespace) -> int:
             producer_commit=producer,
             error=exc,
             holdout_accessed=holdout_accessed,
+            product_acceptance_performed=product_acceptance_performed,
             model_sha256=model_sha256,
             ready_sha256=ready_sha256,
         )
