@@ -540,5 +540,99 @@ def test_plain_bulk_add_records_current_category_snapshots(monkeypatch):
     }
 
 
+class _EntryPriceSnapshot:
+    def __init__(self, *, row=None, row_error: Exception | None = None) -> None:
+        self.empty = False
+        self.index = {"000001.SZ"}
+        self.loc = self
+        self._row = row
+        self._row_error = row_error
+
+    def __getitem__(self, ts_code):
+        assert ts_code == "000001.SZ"
+        if self._row_error is not None:
+            raise self._row_error
+        return self._row
+
+
+class _EntryPriceCursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+    def execute(self, sql, params):
+        assert "market.kline_daily_raw" in sql
+        assert params == ["000001.SZ"]
+
+    def fetchall(self):
+        return [("000001.SZ", 12340)]
+
+
+class _EntryPriceConn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+    def cursor(self):
+        return _EntryPriceCursor()
+
+
+def test_entry_price_bulk_logs_tdx_failure_and_keeps_xtquant_fallback(monkeypatch, caplog):
+    monkeypatch.setattr(
+        watchlist_service.data_source_manager,
+        "_convert_from_ts_code",
+        lambda code: code.split(".", 1)[0],
+    )
+
+    def raise_tdx_failure(_base):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(watchlist_service.data_source_manager, "get_realtime_quotes", raise_tdx_failure)
+    monkeypatch.setattr(
+        watchlist_service.xtquant_adapter,
+        "fetch_realtime_snapshot_xt",
+        lambda *_args, **_kwargs: _EntryPriceSnapshot(row={"close": 12.5}),
+    )
+    caplog.set_level("WARNING", logger="aistock.watchlist")
+
+    result = watchlist_service._get_entry_price_bulk(["000001.SZ"])
+
+    assert result == {"000001.SZ": 12.5}
+    assert "TDX realtime quote lookups failed for watchlist entry prices" in caplog.text
+    assert "failure_count=1" in caplog.text
+    assert "('000001', 'RuntimeError')" in caplog.text
+    assert "provider unavailable" not in caplog.text
+
+
+def test_entry_price_bulk_logs_xtquant_row_failure_and_keeps_db_fallback(monkeypatch, caplog):
+    from backend.db import pg_pool
+
+    monkeypatch.setattr(
+        watchlist_service.data_source_manager,
+        "_convert_from_ts_code",
+        lambda code: code.split(".", 1)[0],
+    )
+    monkeypatch.setattr(watchlist_service.data_source_manager, "get_realtime_quotes", lambda _base: {})
+    monkeypatch.setattr(
+        watchlist_service.xtquant_adapter,
+        "fetch_realtime_snapshot_xt",
+        lambda *_args, **_kwargs: _EntryPriceSnapshot(row_error=KeyError("malformed provider row")),
+    )
+    monkeypatch.setattr(pg_pool, "get_conn", lambda: _EntryPriceConn())
+    caplog.set_level("WARNING", logger="aistock.watchlist")
+
+    result = watchlist_service._get_entry_price_bulk(["000001.SZ"])
+
+    assert result == {"000001.SZ": 12.34}
+    assert "xtquant snapshot rows failed for watchlist entry prices" in caplog.text
+    assert "failure_count=1" in caplog.text
+    assert "('000001.SZ', 'KeyError')" in caplog.text
+    assert "malformed provider row" not in caplog.text
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

@@ -20,7 +20,7 @@ from backend.services.analysis_service import get_realtime_quote
 from backend.services.paper_trading_v2.market_data import PRICE_UNIT_DIVISOR
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.selection_center.models import SelectionCandidate
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 ConnFactory = Callable[[], Iterator[Any]]
 QuoteFetcher = Callable[[str], StockQuote]
@@ -199,8 +199,14 @@ class SelectionResultEnrichmentService:
             if raw:
                 try:
                     return date.fromisoformat(str(raw))
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    raise RuntimeConfigInvalidError(
+                        "invalid point_in_time_context reference_price_trade_date",
+                        context={
+                            "reference_price_trade_date": raw,
+                            "allowed_format": "YYYY-MM-DD",
+                        },
+                    ) from exc
         return fallback
 
 

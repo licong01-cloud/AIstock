@@ -137,9 +137,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/selection_center/test_result_enrichment.py backend/tests/test_watchlist_category_entry_tracking.py::test_entry_price_bulk_logs_tdx_failure_and_keeps_xtquant_fallback backend/tests/test_watchlist_category_entry_tracking.py::test_entry_price_bulk_logs_xtquant_row_failure_and_keeps_db_fallback -q -p no:cacheprovider -> fresh process 7 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

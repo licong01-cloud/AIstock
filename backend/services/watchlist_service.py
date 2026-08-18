@@ -649,20 +649,29 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
             if isinstance(q, dict) and q.get("source") == "tdx":
                 p = q.get("price")
                 if isinstance(p, (int, float)) and float(p) > 0:
-                    return base, float(p)
-        except Exception:
-            pass
-        return base, None
+                    return base, float(p), None
+        except Exception as exc:
+            return base, None, type(exc).__name__
+        return base, None, None
 
     if remaining_base_codes:
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_results = list(executor.map(_fetch_single_tdx, remaining_base_codes))
-            for base, p in future_results:
+            tdx_failures = []
+            for base, p, error_type in future_results:
+                if error_type is not None:
+                    tdx_failures.append((base, error_type))
                 if p is not None:
                     ts_code = code_to_ts[base]
                     results[ts_code] = p
                     if base in remaining_base_codes:
                         remaining_base_codes.remove(base)
+            if tdx_failures:
+                logger.warning(
+                    "TDX realtime quote lookups failed for watchlist entry prices: failure_count=%s examples=%s",
+                    len(tdx_failures),
+                    tdx_failures[:10],
+                )
 
     if not remaining_base_codes:
         return results
@@ -670,6 +679,7 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
     # 2) xtquant/miniQMT 批量兜底
     remaining_ts_codes = [code_to_ts[b] for b in remaining_base_codes]
     try:
+        xtquant_row_failures = []
         snap = xtquant_adapter.fetch_realtime_snapshot_xt(remaining_ts_codes, fields=["close"], freq="1d")
         if snap is not None and not snap.empty:
             for ts_code in remaining_ts_codes:
@@ -678,8 +688,14 @@ def _get_entry_price_bulk(ts_codes: List[str]) -> Dict[str, float]:
                         p2 = snap.loc[ts_code].get("close")
                         if isinstance(p2, (int, float)) and float(p2) > 0:
                             results[ts_code] = float(p2)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    xtquant_row_failures.append((ts_code, type(exc).__name__))
+        if xtquant_row_failures:
+            logger.warning(
+                "xtquant snapshot rows failed for watchlist entry prices: failure_count=%s examples=%s",
+                len(xtquant_row_failures),
+                xtquant_row_failures[:10],
+            )
     except Exception as exc:
         logger.warning(f"xtquant 批量行情获取失败: {exc}")
 
