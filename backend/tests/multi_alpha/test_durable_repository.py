@@ -195,6 +195,100 @@ def test_remote_observation_is_read_only_until_exact_snapshot_claim() -> None:
     assert "attempt.attempt_id = %s" in claim_sql
 
 
+def test_waiting_capacity_dispatch_observation_and_claim_do_not_repeat_event() -> None:
+    observed = {
+        "attempt_id": "macba_waiting_capacity",
+        "child_id": "macbc_waiting_capacity",
+        "run_id": "macb_waiting_capacity",
+        "status": "queued",
+        "phase": "waiting_capacity",
+        "row_version": 9,
+    }
+    claimed = {
+        **observed,
+        "owner_id": "worker",
+        "fencing_token": 3,
+        "row_version": 10,
+        "run_status": "running",
+    }
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT attempt.*", one=observed),
+            Step(
+                contains="UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt",
+                one=claimed,
+            ),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    assert repository.observe_next_dispatchable_attempt() == observed
+    assert repository.claim_observed_dispatch_attempt(
+        observed["attempt_id"],
+        expected_row_version=9,
+        owner_id="worker",
+        lease_seconds=600,
+    ) == claimed
+
+    observe_sql, claim_sql = (item[0] for item in provider.cursor.executions)
+    assert "UPDATE " not in observe_sql and "INSERT " not in observe_sql
+    assert "attempt.row_version = %s" in claim_sql
+    assert "attempt.attempt_id = %s" in claim_sql
+    assert len(provider.cursor.executions) == 2
+    assert not provider.cursor.steps
+
+
+def test_repeated_waiting_capacity_transition_releases_lease_without_event() -> None:
+    current = {
+        "attempt_id": "macba_waiting_race",
+        "child_id": "macbc_waiting_race",
+        "status": "queued",
+        "phase": "waiting_capacity",
+        "owner_id": "worker",
+        "fencing_token": 4,
+        "row_version": 12,
+        "lease_valid": True,
+    }
+    updated = {
+        **current,
+        "owner_id": None,
+        "row_version": 13,
+        "lease_expires_at": None,
+    }
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT *, (", one=current),
+            Step(
+                contains="SET phase = 'waiting_capacity'",
+                one=updated,
+            ),
+            Step(
+                contains="SELECT run_id FROM strategy_pkg.multi_alpha_combine_backtest_child",
+                one={"run_id": "macb_waiting_race"},
+            ),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    result = repository.record_attempt_waiting_capacity_in_transaction(
+        provider.cursor,
+        attempt_id=current["attempt_id"],
+        token=OwnershipToken(
+            owner_id="worker",
+            fencing_token=4,
+            row_version=12,
+        ),
+        node_id="wsl2-5080",
+        active_count=1,
+        node_capacity=1,
+    )
+
+    assert result == updated
+    assert len(provider.cursor.executions) == 3
+    assert not any("INSERT INTO" in sql for sql, _params in provider.cursor.executions)
+    assert not provider.cursor.steps
+
+
 def test_pre_p0_2_remote_observe_and_snapshot_claim_use_only_baseline_columns() -> None:
     baseline_attempt = {
         "attempt_id": "macba_pre_p0",

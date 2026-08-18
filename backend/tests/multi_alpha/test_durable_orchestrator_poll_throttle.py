@@ -535,6 +535,7 @@ def _orchestrator(
     adapter: _InspectAdapter,
     *,
     remote_poll_seconds: int = 60,
+    monotonic: Any | None = None,
 ) -> DurableMultiAlphaOrchestrator:
     return DurableMultiAlphaOrchestrator(
         repository=repository,  # type: ignore[arg-type]
@@ -552,7 +553,7 @@ def _orchestrator(
             remote_poll_seconds=remote_poll_seconds,
         ),
         owner_id="worker",
-        monotonic=lambda: repository.now,
+        monotonic=monotonic or (lambda: repository.now),
     )
 
 
@@ -886,3 +887,243 @@ def test_event_cursor_read_compatibility_survives_event_gaps() -> None:
     # Throttle suppressed all unchanged-state events; cursor reads are no-ops.
     assert repository.events == []
     assert adapter.inspect_calls == 1
+
+
+class _CapacityWaitRepository:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.attempt = {
+            "attempt_id": "macba_capacity",
+            "child_id": "macbc_capacity",
+            "run_id": "macb_capacity",
+            "attempt_no": 1,
+            "status": "queued",
+            "phase": "queued",
+            "node_id": "wsl2-5080",
+            "owner_id": None,
+            "fencing_token": 0,
+            "row_version": 1,
+            "lease_expires_at": None,
+        }
+        self.run = {
+            "id": "macb_capacity",
+            "status": "running",
+            "node_parallelism_json": {"wsl2-5080": 1},
+        }
+        self.child = {
+            "child_id": "macbc_capacity",
+            "run_id": "macb_capacity",
+            "status": "queued",
+        }
+        self.observations = 0
+        self.claims = 0
+        self.heartbeats = 0
+        self.events: list[str] = []
+
+    def observe_next_dispatchable_attempt(
+        self,
+        *,
+        p0_2_schema_ready: bool = True,
+        excluded_attempt_ids: Sequence[str] = (),
+    ) -> Mapping[str, Any] | None:
+        self.observations += 1
+        if self.attempt["attempt_id"] in excluded_attempt_ids:
+            return None
+        if self.attempt["owner_id"] is not None:
+            return None
+        return dict(self.attempt)
+
+    def claim_observed_dispatch_attempt(
+        self,
+        attempt_id: str,
+        *,
+        p0_2_schema_ready: bool = True,
+        expected_row_version: int,
+        owner_id: str,
+        lease_seconds: int,
+    ) -> Mapping[str, Any] | None:
+        if (
+            attempt_id != self.attempt["attempt_id"]
+            or expected_row_version != self.attempt["row_version"]
+        ):
+            return None
+        self.claims += 1
+        self.attempt["owner_id"] = owner_id
+        self.attempt["fencing_token"] += 1
+        self.attempt["row_version"] += 1
+        self.attempt["lease_expires_at"] = 600.0
+        if self.attempt["phase"] != "waiting_capacity":
+            self.events.append("claimed")
+        return dict(self.attempt)
+
+    def heartbeat_attempt(
+        self,
+        attempt_id: str,
+        *,
+        token: OwnershipToken,
+        lease_seconds: int,
+    ) -> Mapping[str, Any]:
+        self.heartbeats += 1
+        self.attempt["row_version"] += 1
+        return dict(self.attempt)
+
+    def get_child(self, child_id: str) -> Mapping[str, Any] | None:
+        return dict(self.child) if child_id == self.child["child_id"] else None
+
+    def get_run(self, run_id: str) -> Mapping[str, Any] | None:
+        return dict(self.run) if run_id == self.run["id"] else None
+
+    def get_attempt(self, attempt_id: str) -> Mapping[str, Any] | None:
+        return (
+            dict(self.attempt)
+            if attempt_id == self.attempt["attempt_id"]
+            else None
+        )
+
+
+class _CapacityWaitAdapter:
+    def __init__(self, repository: _CapacityWaitRepository) -> None:
+        self.repository = repository
+        self.capacity_available = False
+        self.capacity_reads = 0
+        self.submits = 0
+
+    def request_from_run(self, _run: Mapping[str, Any]) -> Any:
+        return SimpleNamespace(backtest_config={"node_id": "wsl2-5080"})
+
+    def prepare_submission_intent(self, **_kwargs: Any) -> DurableSubmissionIntent:
+        return DurableSubmissionIntent(
+            run_id="macb_capacity",
+            child_id="macbc_capacity",
+            attempt_id="macba_capacity",
+            attempt_no=1,
+            node_id="wsl2-5080",
+            qe_task_id="qe_capacity",
+            qe_loop_id="Loop1",
+            submission_intent_hash="a" * 64,
+        )
+
+    def observe_submission_capacity(self, **_kwargs: Any) -> Any:
+        self.capacity_reads += 1
+        return SimpleNamespace(available=self.capacity_available)
+
+    def load_published_artifacts(self, **_kwargs: Any) -> DurablePublishedArtifacts:
+        return DurablePublishedArtifacts(
+            workspace=SimpleNamespace(),  # type: ignore[arg-type]
+            prediction_path=SimpleNamespace(),  # type: ignore[arg-type]
+            artifact_manifest_path=SimpleNamespace(),  # type: ignore[arg-type]
+            artifact_manifest={},
+        )
+
+    async def submit(self, **_kwargs: Any) -> Any:
+        self.submits += 1
+        if not self.capacity_available:
+            self.repository.attempt["phase"] = "waiting_capacity"
+            self.repository.attempt["owner_id"] = None
+            self.repository.attempt["lease_expires_at"] = None
+            self.repository.attempt["row_version"] += 1
+            if "waiting_capacity" not in self.repository.events:
+                self.repository.events.append("waiting_capacity")
+            return SimpleNamespace(waiting_capacity=True)
+        return SimpleNamespace(
+            waiting_capacity=False,
+            remote_status="reserved_not_started",
+            detail={},
+            source_claim=None,
+        )
+
+
+def test_waiting_capacity_120_cycles_use_read_only_probe_and_wake_on_release() -> None:
+    repository = _CapacityWaitRepository()
+    adapter = _CapacityWaitAdapter(repository)
+    clock = [0.0]
+    orchestrator = _orchestrator(
+        repository,  # type: ignore[arg-type]
+        adapter,  # type: ignore[arg-type]
+        remote_poll_seconds=60,
+        monotonic=lambda: clock[0],
+    )
+
+    # The first admission attempt records the real transition once.
+    assert asyncio.run(orchestrator.dispatch_pass_once()) is False
+    assert repository.events == ["claimed", "waiting_capacity"]
+    assert repository.claims == 1
+
+    # 120 scheduler calls at the historical 0.8s cadence perform at most one
+    # read-only capacity observation per minute and zero additional source DML.
+    for _ in range(120):
+        clock[0] += 0.8
+        assert asyncio.run(orchestrator.dispatch_pass_once()) is False
+    assert repository.claims == 1
+    assert repository.heartbeats == 1
+    assert repository.events == ["claimed", "waiting_capacity"]
+    assert adapter.capacity_reads == 1
+
+    # A real terminal reservation transition releases the node-specific local
+    # cooldown, so the sibling is admitted immediately without waiting 60s.
+    adapter.capacity_available = True
+    orchestrator._release_capacity_waits_for_node("wsl2-5080")
+
+    async def applied(**_kwargs: Any) -> None:
+        return None
+
+    orchestrator._apply_remote_status = applied  # type: ignore[method-assign]
+    assert asyncio.run(orchestrator.dispatch_pass_once()) is True
+    assert repository.claims == 2
+    assert adapter.submits == 2
+    assert repository.events == ["claimed", "waiting_capacity"]
+
+
+def test_restart_waiting_capacity_probe_is_read_only_when_node_still_full() -> None:
+    repository = _CapacityWaitRepository()
+    repository.attempt["phase"] = "waiting_capacity"
+    adapter = _CapacityWaitAdapter(repository)
+    orchestrator = _orchestrator(
+        repository,  # type: ignore[arg-type]
+        adapter,  # type: ignore[arg-type]
+        remote_poll_seconds=60,
+    )
+
+    assert asyncio.run(orchestrator.dispatch_pass_once()) is False
+    assert adapter.capacity_reads == 1
+    assert repository.claims == 0
+    assert repository.heartbeats == 0
+    assert repository.events == []
+
+
+def test_dispatch_batch_skips_deferred_node_without_counting_fake_progress() -> None:
+    repository = _CapacityWaitRepository()
+    adapter = _CapacityWaitAdapter(repository)
+    orchestrator = _orchestrator(
+        repository,  # type: ignore[arg-type]
+        adapter,  # type: ignore[arg-type]
+    )
+    orchestrator._config = DurableOrchestratorConfig(
+        lease_seconds=600,
+        heartbeat_seconds=60,
+        items_per_pass=3,
+        archive_batch_size=3,
+        remote_poll_seconds=60,
+    )
+    calls: list[tuple[str, ...]] = []
+
+    async def pass_once(*, excluded_attempt_ids: Sequence[str] = ()) -> bool:
+        calls.append(tuple(excluded_attempt_ids))
+        if len(calls) == 1:
+            orchestrator._last_deferred_attempt_id = "macba_waiting_node_a"
+            return False
+        if len(calls) == 2:
+            orchestrator._last_deferred_attempt_id = None
+            orchestrator._last_claimed_attempt_id = "macba_ready_node_b"
+            return True
+        orchestrator._last_deferred_attempt_id = None
+        return False
+
+    orchestrator.dispatch_pass_once = pass_once  # type: ignore[method-assign]
+
+    assert asyncio.run(orchestrator._run_dispatch_pass()) == 1
+    assert calls == [
+        (),
+        ("macba_waiting_node_a",),
+        ("macba_waiting_node_a", "macba_ready_node_b"),
+    ]

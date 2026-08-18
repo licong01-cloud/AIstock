@@ -2577,6 +2577,11 @@ class MultiAlphaDurableRepository:
             )
         row = dict(updated)
         run_id = self._run_id_for_child(cur, str(row["child_id"]))
+        if str(current.get("phase") or "") == "waiting_capacity":
+            # A capacity race may still lose after the read-only preflight.
+            # Release the fenced lease, but do not duplicate the unchanged
+            # waiting evidence.
+            return row
         self._insert_event(
             cur,
             run_id=run_id,
@@ -2861,6 +2866,134 @@ class MultiAlphaDurableRepository:
                         "fencing_token": row["fencing_token"],
                         "row_version": row["row_version"],
                         "lease_seconds": lease_seconds,
+                    },
+                )
+                return row
+
+    def observe_next_dispatchable_attempt(
+        self,
+        *,
+        p0_2_schema_ready: bool = True,
+        excluded_attempt_ids: Sequence[str] = (),
+    ) -> dict[str, Any] | None:
+        """Read one queued dispatch candidate without lease, event, or DML."""
+
+        execution_predicate = (
+            "AND attempt.execution_kind = 'remote_execution'"
+            if p0_2_schema_ready
+            else ""
+        )
+        return self._fetch_one(
+            f"""
+            SELECT attempt.*, child.run_id, run.status AS run_status
+            FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+            JOIN strategy_pkg.multi_alpha_combine_backtest_child AS child
+              ON child.child_id = attempt.child_id
+            JOIN strategy_pkg.multi_alpha_combine_backtest_run AS run
+              ON run.id = child.run_id
+            WHERE attempt.status = 'queued'
+              {execution_predicate}
+              AND run.status IN ('preparing', 'running')
+              AND run.task_id IS NOT NULL
+              AND run.request_hash IS NOT NULL
+              AND NOT (attempt.attempt_id = ANY(%s))
+              AND (
+                  attempt.owner_id IS NULL
+                  OR attempt.lease_expires_at IS NULL
+                  OR attempt.lease_expires_at < clock_timestamp()
+              )
+            ORDER BY attempt.queued_at, attempt.attempt_id
+            LIMIT 1
+            """,
+            (list(excluded_attempt_ids),),
+        )
+
+    def claim_observed_dispatch_attempt(
+        self,
+        attempt_id: str,
+        *,
+        p0_2_schema_ready: bool = True,
+        expected_row_version: int,
+        owner_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        """Acquire exactly one previously observed queued dispatch candidate."""
+
+        self._validate_claim_inputs(
+            owner_id=owner_id,
+            lease_seconds=lease_seconds,
+            statuses=("queued",),
+            allowed=ATTEMPT_STATUSES,
+        )
+        execution_predicate = (
+            "AND attempt.execution_kind = 'remote_execution'"
+            if p0_2_schema_ready
+            else ""
+        )
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    WITH candidate AS (
+                        SELECT attempt.attempt_id, child.run_id, run.status AS run_status
+                        FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                        JOIN strategy_pkg.multi_alpha_combine_backtest_child AS child
+                          ON child.child_id = attempt.child_id
+                        JOIN strategy_pkg.multi_alpha_combine_backtest_run AS run
+                          ON run.id = child.run_id
+                        WHERE attempt.attempt_id = %s
+                          AND attempt.row_version = %s
+                          AND attempt.status = 'queued'
+                          {execution_predicate}
+                          AND run.status IN ('preparing', 'running')
+                          AND run.task_id IS NOT NULL
+                          AND run.request_hash IS NOT NULL
+                          AND (
+                              attempt.owner_id IS NULL
+                              OR attempt.lease_expires_at IS NULL
+                              OR attempt.lease_expires_at < clock_timestamp()
+                          )
+                        FOR UPDATE OF attempt SKIP LOCKED
+                    )
+                    UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                    SET owner_id = %s,
+                        fencing_token = attempt.fencing_token + 1,
+                        lease_expires_at = clock_timestamp() + (%s * INTERVAL '1 second'),
+                        heartbeat_at = clock_timestamp(),
+                        row_version = attempt.row_version + 1,
+                        updated_at = NOW()
+                    FROM candidate
+                    WHERE attempt.attempt_id = candidate.attempt_id
+                    RETURNING attempt.*, candidate.run_id, candidate.run_status
+                    """,
+                    (
+                        attempt_id,
+                        int(expected_row_version),
+                        owner_id,
+                        lease_seconds,
+                    ),
+                )
+                claimed = cur.fetchone()
+                if not claimed:
+                    return None
+                row = dict(claimed)
+                if str(row.get("phase") or "") == "waiting_capacity":
+                    return row
+                self._insert_event(
+                    cur,
+                    run_id=str(row["run_id"]),
+                    child_id=str(row["child_id"]),
+                    attempt_id=str(row["attempt_id"]),
+                    event_type="claimed",
+                    phase=str(row.get("phase") or "claim"),
+                    payload={
+                        "owner_id": owner_id,
+                        "fencing_token": row["fencing_token"],
+                        "row_version": row["row_version"],
+                        "lease_seconds": lease_seconds,
+                        "node_id": row.get("node_id"),
+                        "claim_kind": "dispatch",
+                        "run_status": row.get("run_status"),
                     },
                 )
                 return row
