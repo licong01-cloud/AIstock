@@ -10,7 +10,7 @@ from types import MappingProxyType
 from datetime import UTC, date, datetime, time as wall_time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -10085,12 +10085,21 @@ def _legacy_v25_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return mutated
 
 
+def _malformed_missing_policy_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a plan payload whose execution policy container is missing entirely."""
+
+    mutated = deepcopy(payload)
+    mutated.pop("execution_policy", None)
+    return mutated
+
+
 def _localsim_legacy_plan_failed_run_fixture(
     *,
     failed_status: SimulationDailyRunStatus,
     intent_count: int = 246,
     package_id: str = "pkg_scheduler",
     release_metadata: dict[str, Any] | None = None,
+    policy_payload_transform: Callable[[dict[str, Any]], dict[str, Any]] = _legacy_v25_plan_payload,
 ) -> tuple[
     InMemorySimulationRuntimeRepository,
     SimulationDailyRun,
@@ -10102,7 +10111,9 @@ def _localsim_legacy_plan_failed_run_fixture(
     A hash-closed, generation-continuous, one-way predecessor->current plan replacement
     with 246 frozen intents and 492 durable states (generation 1 predecessor + generation 2
     current), where BOTH durable plans carry the retired V25_1_SMALL_CAP execution policy
-    exactly like the production run simrun_7bf1e0c1b6b7d055.
+    exactly like the production run simrun_7bf1e0c1b6b7d055. ``policy_payload_transform``
+    rewrites both lineage plan payloads hash-consistently, so alternate policy shapes
+    (for example a missing execution_policy container) can be exercised end to end.
     """
 
     release, local_binding, _, repo = _release_and_bindings(
@@ -10164,7 +10175,7 @@ def _localsim_legacy_plan_failed_run_fixture(
         key=lambda item: item.generation,
     )
 
-    legacy_payload = _legacy_v25_plan_payload(predecessor_plan.plan_payload_json)
+    legacy_payload = policy_payload_transform(predecessor_plan.plan_payload_json)
     legacy_hash = canonical_json_sha256(legacy_payload)
     legacy_plan_id = f"plan_{legacy_hash[:16]}"
     original_predecessor = predecessor_plan
@@ -10214,6 +10225,16 @@ def _localsim_legacy_plan_failed_run_fixture(
             "capital_waiting_owner": "LocalSimExecutionStateV1",
         },
     )
+    transformed_successor_payload = policy_payload_transform(successor_plan.plan_payload_json)
+    if transformed_successor_payload != successor_plan.plan_payload_json:
+        transformed_successor_hash = canonical_json_sha256(transformed_successor_payload)
+        successor_plan = successor_plan.model_copy(
+            update={
+                "plan_id": f"plan_{transformed_successor_hash[:16]}",
+                "plan_payload_json": transformed_successor_payload,
+                "plan_hash": transformed_successor_hash,
+            }
+        )
     repo.save_execution_plan(successor_plan)
     successor_states = tuple(
         LocalSimExecutionStateV1.model_validate(
@@ -10289,6 +10310,26 @@ def test_scheduler_historical_failed_localsim_legacy_plan_terminalizes_without_v
     state_snapshot = deepcopy(run.run_payload_json["local_sim_execution_states_v1"])
     scheduler = SimulationLifecycleScheduler(repository=repo)
 
+    # Seed the exact pre-fix production condition: a recorded recovery-backoff failure
+    # entry for the stale-run recovery stage, so terminalization must also dispose of it.
+    recovery_retry_key = "RECOVERY:STALE_LOCALSIM_FAILED_RUN_RECOVERY"
+    scheduler._record_simulation_retry_failure(  # noqa: SLF001
+        run=run,
+        retry_key=recovery_retry_key,
+        failure_stage="STALE_LOCALSIM_FAILED_RUN_RECOVERY",
+        exc=RuntimeConfigInvalidError(
+            "pre-fix permanent policy rejection",
+            context={"reason_code": "LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED"},
+        ),
+        as_of_time=datetime(2026, 5, 21, 9, 40),
+        source_fingerprint=scheduler._simulation_retry_source_fingerprint(  # noqa: SLF001
+            run=run,
+            retry_key=recovery_retry_key,
+        ),
+    )
+    seeded = repo.get_simulation_daily_run(run.run_id)
+    assert recovery_retry_key in seeded.run_payload_json["simulation_scheduler_retry_control_v1"]["entries"]
+
     results = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
         trade_date=TRADE_DATE + timedelta(days=1),
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
@@ -10304,6 +10345,7 @@ def test_scheduler_historical_failed_localsim_legacy_plan_terminalizes_without_v
     assert result["status"] == SimulationDailyRunStatus.FAILED_TERMINAL.value
     assert result["reason_code"] == "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED"
     assert result["historical_failed_legacy_plan_terminalization"] is True
+    assert result["cross_day_terminalization"] is True
     assert result["durable_minute_loop_advanced"] is False
     assert result["legacy_execution_restored"] is False
 
@@ -10321,6 +10363,10 @@ def test_scheduler_historical_failed_localsim_legacy_plan_terminalizes_without_v
     assert evidence["authoritative_state_count"] == 246
     assert evidence["active_state_count"] == 246
     assert len(evidence["authoritative_state_set_sha256"]) == 64
+    # The run executed real generations through the local broker before it failed; the
+    # carrier records that historical fact under a name that cannot be misread as a
+    # side effect of this terminalization.
+    assert evidence["historical_broker_called"] is True
     assert evidence["parent_resubmitted"] is False
     assert evidence["broker_replayed"] is False
     assert evidence["predecessor_projection_replayed"] is False
@@ -10338,11 +10384,11 @@ def test_scheduler_historical_failed_localsim_legacy_plan_terminalizes_without_v
     assert len(paper_repo.cash_entries.get(run.run_id, [])) == cash_entry_count
     assert latest.run_payload_json["local_sim_execution_states_v1"] == state_snapshot
     assert latest.run_payload_json["rebuilt_from_execution_plan_id"] == predecessor_plan_id
+    # The seeded pre-fix backoff entry must be disposed of by the successful recovery,
+    # exactly like the production run's recorded failure entries. Clearing the last
+    # entry drops the control key entirely.
     retry_control = latest.run_payload_json.get("simulation_scheduler_retry_control_v1")
-    assert retry_control in (
-        None,
-        {"schema_version": "simulation_scheduler_retry_control_v1", "entries": {}},
-    )
+    assert retry_control is None or recovery_retry_key not in retry_control.get("entries", {})
 
     # The terminal carrier is idempotent: later scheduler cadence skips the run without
     # rewriting evidence or re-driving anything.
@@ -10421,6 +10467,42 @@ def test_scheduler_historical_failed_localsim_non_legacy_policy_error_stays_retr
     latest = repo.get_simulation_daily_run(run.run_id)
     assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
     assert "localsim_historical_legacy_plan_terminalization_v1" not in latest.run_payload_json
+
+
+def test_scheduler_historical_failed_localsim_malformed_plan_policy_stays_typed_fail_loud() -> None:
+    """An unreadable policy payload is an unknown shape, not a verified retired legacy plan.
+
+    The whole lineage (predecessor and current plan) carries no execution_policy
+    container at all. The recovery must not terminalize it under the retired-policy
+    reason: the typed malformed-policy error propagates, the run keeps its failed
+    status, no carrier is written and no durable fact is touched.
+    """
+
+    repo, run, _, paper_repo = _localsim_legacy_plan_failed_run_fixture(
+        failed_status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        policy_payload_transform=_malformed_missing_policy_plan_payload,
+    )
+    order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run.run_id)}
+    state_snapshot = deepcopy(run.run_payload_json["local_sim_execution_states_v1"])
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+
+    results = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
+        trade_date=TRADE_DATE + timedelta(days=1),
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 22, 10, 0),
+    )
+
+    assert len(results) == 1
+    assert results[0]["run_id"] == run.run_id
+    assert results[0]["status"] == "RECOVERY_FAILED"
+    assert results[0]["error"]["context"]["reason_code"] == ("LOCALSIM_EXECUTION_PLAN_POLICY_MISSING_OR_MALFORMED")
+    latest = repo.get_simulation_daily_run(run.run_id)
+    assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert "localsim_historical_legacy_plan_terminalization_v1" not in latest.run_payload_json
+    assert latest.run_payload_json["local_sim_execution_states_v1"] == state_snapshot
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run.run_id)} == order_ids
 
 
 @pytest.mark.parametrize(
@@ -11482,6 +11564,7 @@ def test_localsim_legacy_plan_terminalization_commits_across_independent_dev_pos
         assert result["status"] == SimulationDailyRunStatus.FAILED_TERMINAL.value
         assert result["reason_code"] == "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED"
         assert result["historical_failed_legacy_plan_terminalization"] is True
+        assert result["cross_day_terminalization"] is True
         assert result["durable_minute_loop_advanced"] is False
         assert result["legacy_execution_restored"] is False
 
@@ -11498,6 +11581,7 @@ def test_localsim_legacy_plan_terminalization_commits_across_independent_dev_pos
         assert terminalization["authoritative_state_count"] == 246
         assert terminalization["active_state_count"] == 246
         assert len(terminalization["authoritative_state_set_sha256"]) == 64
+        assert terminalization["historical_broker_called"] is True
         assert terminalization["parent_resubmitted"] is False
         assert terminalization["broker_replayed"] is False
         assert terminalization["predecessor_projection_replayed"] is False
@@ -18095,6 +18179,53 @@ def test_existing_localsim_v25_plan_is_rejected_before_runtime_context_loading()
     assert exc_info.value.context["plan_algo_code"] == "V25_1_SMALL_CAP"
     assert exc_info.value.context["broker_call_attempted"] is False
     assert exc_info.value.context["fallback_used"] is False
+
+
+@pytest.mark.parametrize(
+    "plan_payload_json",
+    [
+        {},
+        {"execution_policy": "not-an-object"},
+        {"execution_policy": {"payload": "not-an-object"}},
+        {"execution_policy": {"payload": {"policy_json": "not-an-object"}}},
+        {"execution_policy": {"payload": {"policy_json": {}}}},
+        {"execution_policy": {"payload": {"policy_json": {"algo_code": "  "}}}},
+        {"execution_policy": {"payload": {}}},
+    ],
+)
+def test_existing_localsim_plan_with_unreadable_policy_is_fail_loud_not_retired(
+    plan_payload_json: dict[str, Any],
+) -> None:
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    malformed_plan = SimpleNamespace(
+        plan_id="plan_malformed_localsim_policy",
+        execution_policy_version_id=None,
+        plan_payload_json=plan_payload_json,
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        ProductionSimulationLifecycleScheduler._assert_local_sim_plan_uses_twap(
+            binding=binding,
+            plan=malformed_plan,
+        )
+
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_EXECUTION_PLAN_POLICY_MISSING_OR_MALFORMED"
+    assert exc_info.value.context["plan_algo_code"] is None
+    assert exc_info.value.context["broker_call_attempted"] is False
+    assert exc_info.value.context["fallback_used"] is False
+
+
+def test_existing_localsim_plan_with_inline_twap_policy_payload_is_accepted() -> None:
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    inline_plan = SimpleNamespace(
+        plan_id="plan_inline_twap_localsim_policy",
+        execution_policy_version_id="exec_policy_twap",
+        plan_payload_json={"execution_policy": {"payload": {"algo_code": "TWAP", "algo_config": {}}}},
+    )
+
+    ProductionSimulationLifecycleScheduler._assert_local_sim_plan_uses_twap(binding=binding, plan=inline_plan)
 
 
 def test_scheduler_rejects_stale_selection_evidence_for_new_trade_date():

@@ -49,6 +49,12 @@
       "actor": "claude",
       "note": "2026-08-18 production read-only diagnosis: merged PR #3422 authority closure now passes, but the run's current plan plan_4e346c75b6a5f0e5 carries the retired V25_1_SMALL_CAP execution policy, so the F-122 TWAP-only assert typed-rejects it and the recovery loop retried the permanent rejection forever. Continuation terminalizes such retired-plan historical runs as FAILED_TERMINAL with typed evidence and zero side effects; same BUG/Issue, no production row modification.",
       "timestamp": "2026-08-17T18:19:29Z"
+    },
+    {
+      "action": "adversarial_review_fix_round",
+      "actor": "claude",
+      "note": "2026-08-18 post-PR adversarial review round on PR #3586: six findings (all MINOR/NIT), all fixed. 1) TWAP-only assert now distinguishes unreadable/unknown policy shapes (LOCALSIM_EXECUTION_PLAN_POLICY_MISSING_OR_MALFORMED, typed fail loud) from verified retired non-TWAP algos (LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED, terminalizable), so a corrupt plan can never be misclassified as retired. 2) terminal-carrier skip hoisted before retry-attempt claim so terminalized runs no longer cost claim/clear writes on every scheduler tick. 3) carrier field broker_called renamed to historical_broker_called and pinned True in tests; blueprint wording corrected (operation-level side-effect flags are all false; the historical fact is recorded separately). 4) result dict gains cross_day_terminalization=True for parity with sibling paths. 5) retry-control disposal is now pinned non-vacuously with a seeded pre-fix backoff entry. 6) new coverage: 7 malformed-shape unit cases, inline TWAP payload shape, and an end-to-end malformed-lineage fail-loud test.",
+      "timestamp": "2026-08-18T02:30:00Z"
     }
   ],
   "evidence_uris": [
@@ -234,7 +240,9 @@
     "2026-08-18 backend/tests/simulation_runtime/test_lifecycle_scheduler.py with DEV PostgreSQL enabled -> 307 passed",
     "2026-08-18 python -m nox -s simulation_core_l2 -> 605 passed, 2 skipped",
     "2026-08-18 python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped; python -m nox -s l0 -> blocking=0",
-    "2026-08-18 changed-file Ruff check/format, py_compile and git diff --check -> passed"
+    "2026-08-18 changed-file Ruff check/format, py_compile and git diff --check -> passed",
+    "2026-08-18 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k \"legacy_plan or unreadable_policy or inline_twap or v25_plan_is_rejected or malformed_plan_policy\" (DEV enabled) -> 14 passed",
+    "2026-08-18 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py (DEV enabled) -> 316 passed"
   ],
   "validation_receipts": [
     "validation-receipt: id=68c8daf0a1b7d9fe commit=8fb4aa7c234a8dcbb4faceb0a0d7b8688e277825 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`passed: 466 tests, 1 explicitly gated DEV PostgreSQL skip`",

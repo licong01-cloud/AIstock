@@ -167,6 +167,17 @@ _SIMULATION_RETRY_BASE_DELAY_SECONDS = 60
 _SIMULATION_RETRY_MAX_DELAY_SECONDS = 3600
 _SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS = 600
 _MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT = 100
+# Historical LocalSIM recovery carriers that permanently close a stale failed run. A run
+# carrying any of these (as a dict) is already terminally resolved: the stale-run sweep
+# must skip it before claiming a retry attempt so the terminalized run does not cost
+# claim/clear writes on every scheduler tick. Present-but-non-dict carriers are NOT
+# skipped here; the isolated path keeps raising the typed invalid-carrier error.
+_HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS = (
+    "local_sim_projection_readback_failure",
+    "local_sim_projection_terminal_failure",
+    "local_sim_projection_readback_terminal_failure",
+    "localsim_historical_legacy_plan_terminalization_v1",
+)
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
 _POST_CLOSE_RECONCILE_TIME = time(15, 0)
@@ -6761,6 +6772,16 @@ class SimulationLifecycleScheduler:
                 status=failed_status,
                 limit=limit,
             ):
+                # A run already closed by a terminal recovery carrier is a permanent
+                # no-op for this sweep; skip it before claiming a retry attempt so the
+                # claim/clear write pair is not paid on every scheduler tick. Carriers
+                # present but not dict-shaped fall through so the isolated path keeps
+                # failing loud with the typed invalid-carrier error.
+                if any(
+                    isinstance(run.run_payload_json.get(carrier_field), dict)
+                    for carrier_field in _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS
+                ):
+                    continue
                 terminalized_run = self._run_recovery_item_isolated(
                     stage="STALE_LOCALSIM_FAILED_RUN_RECOVERY",
                     run=run,
@@ -6802,12 +6823,7 @@ class SimulationLifecycleScheduler:
             ) from exc
         if outbox.status != LocalSimProjectionOutboxStatus.PROJECTED:
             return None
-        for carrier_field in (
-            "local_sim_projection_readback_failure",
-            "local_sim_projection_terminal_failure",
-            "local_sim_projection_readback_terminal_failure",
-            "localsim_historical_legacy_plan_terminalization_v1",
-        ):
+        for carrier_field in _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS:
             if carrier_field not in run.run_payload_json:
                 continue
             if not isinstance(run.run_payload_json[carrier_field], dict):
@@ -7168,7 +7184,7 @@ class SimulationLifecycleScheduler:
                     for state in sorted(states, key=lambda item: item.state_id)
                 ]
             ),
-            "broker_called": bool(run.run_payload_json.get("broker_called")),
+            "historical_broker_called": bool(run.run_payload_json.get("broker_called")),
             "parent_resubmitted": False,
             "broker_replayed": False,
             "predecessor_projection_replayed": False,
@@ -7199,6 +7215,7 @@ class SimulationLifecycleScheduler:
             "reason": "localsim_historical_failed_run_legacy_plan_retired",
             "reason_code": evidence["reason_code"],
             "historical_failed_legacy_plan_terminalization": True,
+            "cross_day_terminalization": True,
             "scheduler_trade_date": scheduler_trade_date.isoformat(),
             "durable_minute_loop_advanced": False,
             "legacy_execution_restored": False,
@@ -8506,13 +8523,46 @@ class SimulationLifecycleScheduler:
     ) -> None:
         if binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM:
             return
-        policy_container = plan.plan_payload_json.get("execution_policy")
-        payload = policy_container.get("payload") if isinstance(policy_container, dict) else None
-        policy_json = payload.get("policy_json") if isinstance(payload, dict) else None
-        if not isinstance(policy_json, dict):
-            policy_json = payload if isinstance(payload, dict) else {}
-        algo_code = str(policy_json.get("algo_code") or "").strip().upper()
         plan_policy_id = str(plan.execution_policy_version_id or "").strip()
+
+        def malformed(detail: str) -> RuntimeConfigInvalidError:
+            # A plan whose policy payload cannot even be read is an unknown shape, not a
+            # verified retired legacy policy; it must stay typed fail loud and must never
+            # be classified as (or terminalized under) the retired-policy reason.
+            return RuntimeConfigInvalidError(
+                "LocalSIM existing execution plan policy payload is missing or malformed",
+                context={
+                    "reason_code": "LOCALSIM_EXECUTION_PLAN_POLICY_MISSING_OR_MALFORMED",
+                    "binding_id": binding.binding_id,
+                    "plan_id": plan.plan_id,
+                    "plan_execution_policy_version_id": plan_policy_id or None,
+                    "plan_algo_code": None,
+                    "required_algo_code": "TWAP",
+                    "malformed_detail": detail,
+                    "broker_call_attempted": False,
+                    "fallback_used": False,
+                    "required_action": (
+                        "inspect or lawfully rebuild the frozen execution plan; its execution "
+                        "policy payload is missing or malformed"
+                    ),
+                },
+            )
+
+        policy_container = plan.plan_payload_json.get("execution_policy")
+        if not isinstance(policy_container, dict):
+            raise malformed("execution_policy container is missing or not an object")
+        payload = policy_container.get("payload")
+        if not isinstance(payload, dict):
+            raise malformed("execution_policy payload is missing or not an object")
+        policy_json = payload.get("policy_json")
+        if policy_json is None:
+            # Legacy inline shape: the payload itself carries the policy fields.
+            policy_json = payload
+        elif not isinstance(policy_json, dict):
+            raise malformed("execution_policy policy_json is present but not an object")
+        algo_code = str(policy_json.get("algo_code") or "").strip().upper()
+        if not algo_code:
+            raise malformed("execution_policy algo_code is missing or blank")
         if algo_code == "TWAP":
             return
         raise RuntimeConfigInvalidError(
