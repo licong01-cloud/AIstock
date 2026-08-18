@@ -8,6 +8,7 @@ display-only realtime quotes.
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from typing import Any, Callable, Iterable, Iterator
 from zoneinfo import ZoneInfo
@@ -27,6 +28,7 @@ QuoteFetcher = Callable[[str], StockQuote]
 
 DISPLAY_COMPONENT_KEY = "selection_result_display"
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
+logger = logging.getLogger(__name__)
 
 
 class SelectionResultEnrichmentService:
@@ -179,14 +181,15 @@ class SelectionResultEnrichmentService:
                     )
                     rows = cur.fetchall()
         except Exception as exc:
-            raise DataUnavailableError(
-                "historical selection entry price rows are unavailable",
-                context={
-                    "trade_date": trade_date.isoformat(),
-                    "symbol_count": len(clean),
-                    "source": "market.kline_daily_raw",
-                },
-            ) from exc
+            logger.warning(
+                "historical selection entry price query failed; using persisted candidate reference prices: "
+                "trade_date=%s symbol_count=%s source=%s error_type=%s",
+                trade_date.isoformat(),
+                len(clean),
+                "market.kline_daily_raw",
+                type(exc).__name__,
+            )
+            return {}
         result: dict[str, dict[str, float]] = {}
         for row in rows:
             symbol = str(row.get("ts_code") or "").strip()

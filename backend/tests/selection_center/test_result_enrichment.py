@@ -114,7 +114,7 @@ def test_historical_selection_rejects_invalid_pit_reference_date_before_query() 
     assert cursor.executed == []
 
 
-def test_historical_selection_fails_closed_when_pit_price_query_fails() -> None:
+def test_historical_selection_audits_pit_query_failure_before_reference_price_fallback(caplog) -> None:
     def raise_connection_failure():
         raise RuntimeError("database unavailable")
 
@@ -125,19 +125,22 @@ def test_historical_selection_fails_closed_when_pit_price_query_fails() -> None:
         today_provider=lambda: date(2026, 5, 25),
     )
 
-    with pytest.raises(DataUnavailableError, match="historical selection entry price rows") as exc_info:
-        service.enrich_candidates(
-            [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
-            trade_date=date(2026, 5, 13),
-            runtime_config={"point_in_time_context": {"reference_price_trade_date": "2026-05-12"}},
-        )
+    caplog.set_level("WARNING", logger="backend.services.selection_center.result_enrichment")
 
-    assert exc_info.value.context == {
-        "trade_date": "2026-05-12",
-        "symbol_count": 1,
-        "source": "market.kline_daily_raw",
-    }
-    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    enriched = service.enrich_candidates(
+        [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
+        trade_date=date(2026, 5, 13),
+        runtime_config={"point_in_time_context": {"reference_price_trade_date": "2026-05-12"}},
+    )
+
+    candidate = enriched[0]
+    assert candidate.selection_entry_price == pytest.approx(99.0)
+    assert candidate.selection_entry_price_source == "selection_candidate.reference_price"
+    assert "historical selection entry price query failed" in caplog.text
+    assert "trade_date=2026-05-12" in caplog.text
+    assert "symbol_count=1" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "database unavailable" not in caplog.text
 
 
 def test_current_day_selection_entry_price_uses_tdx_quote_and_display_fields_persist() -> None:
