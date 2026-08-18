@@ -1,0 +1,192 @@
+{
+  "actual": "The required watchlist_backend lane failed on PR #2834 and recurred on PR #3587 because the GitHub Actions PostgreSQL service is blank and the job invokes nox directly without bootstrapping app.watchlist_categories, app.watchlist_items, or app.watchlist_item_categories. PR #3587 reported 2 failed and 4 errors after 80 tests passed, so the missing disposable schema masks the changed Advisory code result. Repair must bootstrap only the disposable CI database through an explicit test-only environment contract, must not run DDL against developer or production databases, and must keep the watchlist tests fail-loud when schema initialization fails.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "backend/tests/watchlist/bootstrap_disposable_schema.py",
+    "backend/tests/watchlist/test_bootstrap_disposable_schema.py",
+    "tests/aistock_validation/bugs/20260728_BUG-898-watchlist-backend-ci-runs-against-an-uninitialized-disposable-postgresql.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-898",
+  "closed_at": null,
+  "closure_requirements": [
+    "Bootstrap the repository-owned Watchlist schema only for the watchlist_backend job's disposable PostgreSQL service.",
+    "Keep schema initialization fail-loud and avoid any DDL path for other CI sessions, developer databases, or production databases.",
+    "Run workflow smoke, YAML parsing, L0, module ownership, and the GitHub watchlist_backend lane.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-28T16:34:18.417354Z",
+  "description": "The required watchlist_backend lane selected by PR #2834 fails reproducibly on two attempts because the GitHub Actions PostgreSQL service is blank and the job invokes nox directly without bootstrapping app.watchlist_categories, app.watchlist_items, or app.watchlist_item_categories. The lane therefore reports 2 failed and 4 errors before exercising the changed Advisory code. Repair must bootstrap only the disposable CI database through an explicit test-only environment contract, must not run DDL against developer or production databases, and must keep the watchlist tests fail-loud when schema initialization fails.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260728-90f6014a0239",
+      "timestamp": "2026-07-28T16:34:18.417350Z"
+    },
+    {
+      "action": "observe_recurrence",
+      "actor": "codex",
+      "note": "PR #3587 watchlist_backend again failed on the blank disposable PostgreSQL schema; migrate only the necessary bootstrap semantics from stale conflicting PR #2842 onto latest main.",
+      "timestamp": "2026-08-18T02:23:02.353174Z"
+    }
+  ],
+  "evidence_uris": [
+    "github-actions://runs/30354115585/attempts/1-2/jobs/watchlist_backend",
+    "github-actions://runs/32091458362/jobs/95574474142"
+  ],
+  "expected": "The required watchlist_backend CI lane must initialize its own disposable service database before pytest and then execute Watchlist behavior tests instead of failing on missing tables.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-07-28T16:34:18.417354Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2841,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2841",
+  "last_seen_at": "2026-08-18T02:23:02.353174Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run view 30354115585 --attempt 2 --log-failed",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "watchlist_backend CI runs against an uninitialized disposable PostgreSQL schema",
+  "trigger_condition": {
+    "fingerprint": "90f6014a02396ac006ffddf0",
+    "source_event_id": "FE-20260728-90f6014a0239"
+  },
+  "verification_budget": {
+    "budget": "deep",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "45-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "deep",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "45-60%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
