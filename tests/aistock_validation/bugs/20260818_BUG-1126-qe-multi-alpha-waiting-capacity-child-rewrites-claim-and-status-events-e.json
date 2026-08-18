@@ -8,6 +8,7 @@
     "backend/services/quantevolver/qe_execution_reservation.py",
     "backend/tests/multi_alpha/test_durable_capacity.py",
     "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+    "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
     "backend/tests/multi_alpha/test_durable_repository.py",
     "tests/aistock_validation/bugs/20260818_BUG-1126-qe-multi-alpha-waiting-capacity-child-rewrites-claim-and-status-events-e.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
