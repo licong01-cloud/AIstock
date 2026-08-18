@@ -293,6 +293,122 @@ def _policy(plan: ExecutionPlan) -> tuple[str, str, str, dict[str, Any]]:
     return algo_code, policy_id, policy_sha256, dict(config)
 
 
+def _price_limit_rule_authority_error_v1(
+    message: str,
+    *,
+    decision_id: str,
+    intent_id: str,
+    path: str,
+) -> MiniQMTKernelProductCompositionError:
+    return MiniQMTKernelProductCompositionError(
+        "MINIQMT_K6_PRODUCT_PRICE_LIMIT_RULE_AUTHORITY_INVALID",
+        message,
+        context={"decision_id": decision_id, "intent_id": intent_id, "path": path},
+    )
+
+
+def _canonical_rule_decimal_string_v1(value: Decimal, *, decision_id: str, intent_id: str, path: str) -> str:
+    """Return the exact canonical decimal text for one finite external number."""
+
+    if not value.is_finite():
+        raise _price_limit_rule_authority_error_v1(
+            "trading-rule price limit authority contains a non-finite number",
+            decision_id=decision_id,
+            intent_id=intent_id,
+            path=path,
+        )
+    sign = "-" if value < 0 else ""
+    return sign + canonical_decimal_string_v1(abs(value), field_name=path)
+
+
+def _canonical_rule_json_value_v1(value: Any, *, decision_id: str, intent_id: str, path: str) -> Any:
+    """Project repository-owned external JSON into the K1 canonical contract carrier.
+
+    This is the single boundary where a binary float frozen inside an immutable
+    trading-rule decision converts to exact canonical decimal text before the
+    contract projection enters the K1 canonical hash authority.  ``str`` of a
+    finite double is its shortest round-trip decimal representation, so equal
+    economic values share one hash and distinct values never collide.  Scalar
+    JSON values pass through unchanged; every foreign carrier fails closed.
+    """
+
+    if value is None or type(value) in {str, bool, int}:
+        return value
+    if type(value) is float:
+        return _canonical_rule_decimal_string_v1(
+            Decimal(str(value)),
+            decision_id=decision_id,
+            intent_id=intent_id,
+            path=path,
+        )
+    if isinstance(value, Decimal):
+        return _canonical_rule_decimal_string_v1(
+            value,
+            decision_id=decision_id,
+            intent_id=intent_id,
+            path=path,
+        )
+    if type(value) is list:
+        return [
+            _canonical_rule_json_value_v1(
+                item,
+                decision_id=decision_id,
+                intent_id=intent_id,
+                path=f"{path}[{index}]",
+            )
+            for index, item in enumerate(value)
+        ]
+    if type(value) is dict:
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if type(key) is not str:
+                raise _price_limit_rule_authority_error_v1(
+                    "trading-rule price limit authority must contain only string object keys",
+                    decision_id=decision_id,
+                    intent_id=intent_id,
+                    path=path,
+                )
+            normalized[key] = _canonical_rule_json_value_v1(
+                item,
+                decision_id=decision_id,
+                intent_id=intent_id,
+                path=f"{path}.{key}",
+            )
+        return normalized
+    raise _price_limit_rule_authority_error_v1(
+        "trading-rule price limit authority contains a foreign value carrier",
+        decision_id=decision_id,
+        intent_id=intent_id,
+        path=f"{path} ({type(value).__name__})",
+    )
+
+
+def _canonical_price_limit_rule_v1(rule: Any, *, decision_id: str, intent_id: str) -> dict[str, Any]:
+    if type(rule) is not dict:
+        raise MiniQMTKernelProductCompositionError(
+            "MINIQMT_K6_PRODUCT_PRICE_LIMIT_RULE_AUTHORITY_INVALID",
+            "trading-rule price limit authority must be an exact JSON object",
+            context={
+                "decision_id": decision_id,
+                "intent_id": intent_id,
+                "carrier_type": type(rule).__name__,
+            },
+        )
+    normalized = _canonical_rule_json_value_v1(
+        rule,
+        decision_id=decision_id,
+        intent_id=intent_id,
+        path="price_limit_rule",
+    )
+    if type(normalized) is not dict:
+        raise MiniQMTKernelProductCompositionError(
+            "MINIQMT_K6_PRODUCT_PRICE_LIMIT_RULE_AUTHORITY_INVALID",
+            "trading-rule price limit authority must project to an exact JSON object",
+            context={"decision_id": decision_id, "intent_id": intent_id},
+        )
+    return normalized
+
+
 class SimulationK6DPlanAuthorityReader:
     def __init__(
         self,
@@ -463,7 +579,11 @@ class SimulationK6DPlanAuthorityReader:
                 "volume_increment": lot["increment"],
                 "trading_rule_decision_id": decision.decision_id,
                 "trading_rule_decision_sha256": decision.decision_hash,
-                "price_limit_rule": decision.price_limit_rule,
+                "price_limit_rule": _canonical_price_limit_rule_v1(
+                    decision.price_limit_rule,
+                    decision_id=decision.decision_id,
+                    intent_id=intent.intent_id,
+                ),
             }
             hashes = {
                 KernelProjectionTypeV1.CONTRACT: hash_hex_v1("miniqmt_contract_projection_v1", contract),

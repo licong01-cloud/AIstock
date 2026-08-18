@@ -2059,6 +2059,205 @@ def test_plan_authority_reader_keeps_non_emitted_reject_as_planning_subject() ->
     }
 
 
+def _production_frozen_price_limit_rule() -> dict:
+    """Real-run 2026-08-18 frozen pre-trade quote evidence (binary floats)."""
+    return {
+        "pre_trade_tradability": {
+            "source": "MINIQMT_REALTIME.broker_quote",
+            "symbol": "000779.SZ",
+            "trade_date": "2026-08-18",
+            "is_tradable": True,
+            "reason_code": "OK",
+            "quote_evidence": {
+                "schema_version": "pre_trade_quote_tradability_evidence_v1",
+                "symbol": "000779.SZ",
+                "quote_source": "MINIQMT_REALTIME.broker_quote",
+                "quote_present": True,
+                "quote_timestamp": "2026-08-18T09:20:09",
+                "quote_age_seconds": 7.560314,
+                "quote_max_age_seconds": 300.0,
+                "last_price": 10.99,
+                "pre_close": 10.63,
+                "open": None,
+                "high": None,
+                "low": None,
+                "total_hand": 0.0,
+                "amount": 0.0,
+                "bid_price_1": 10.99,
+                "bid_volume_1": 4997.0,
+                "ask_price_1": 10.99,
+                "ask_volume_1": 4997.0,
+                "ohl_zero": True,
+                "turnover_zero": True,
+                "book_empty": False,
+                "no_tradable_market": False,
+                "limit_pct": 0.1,
+                "limit_up": 11.69,
+                "limit_down": 9.57,
+                "quote_price_basis": "yuan",
+                "is_st": False,
+                "st_status_source": "market.stock_st",
+                "at_limit_up": False,
+                "at_limit_down": False,
+                "blocked_sides": [],
+                "requested_side": None,
+                "side_block_reason_code": None,
+                "limit_state_reason_code": None,
+            },
+            "suspend_status": {
+                "source": "market.suspend_d",
+                "is_suspended": False,
+                "suspend_type": None,
+                "suspend_timing": None,
+            },
+            "schema_version": "pre_trade_tradability_status_v1",
+        }
+    }
+
+
+def _read_authority_with_price_limit_rule(rule: dict):
+    plan, binding, session, repository, accounts, runtime_id = _plan_reader_facts()
+    plan.trading_rule_decisions[0].price_limit_rule = rule
+    reader = SimulationK6DPlanAuthorityReader(
+        simulation_repository=repository,
+        account_repository=accounts,
+        gateway_catalog=build_k6d_gateway_catalog_v1(),
+        session_authority=session,
+        logical_time_utc=datetime(2026, 7, 27, 1, 30, tzinfo=UTC),
+    )
+    authority = reader.read_plan_authority_v1(
+        runtime_id=runtime_id,
+        binding_id=binding.binding_id,
+        execution_plan_id=plan.plan_id,
+    )
+    return authority, plan
+
+
+def test_plan_authority_reader_canonicalizes_real_run_binary_float_price_limit_rule() -> None:
+    authority, _plan = _read_authority_with_price_limit_rule(_production_frozen_price_limit_rule())
+
+    request = authority.ordered_creation_requests[0]
+    contract = thaw_json_v1(request.contract_projection)
+    evidence = contract["price_limit_rule"]["pre_trade_tradability"]["quote_evidence"]
+    assert evidence["limit_up"] == "11.69"
+    assert evidence["limit_down"] == "9.57"
+    assert evidence["pre_close"] == "10.63"
+    assert evidence["last_price"] == "10.99"
+    assert evidence["limit_pct"] == "0.1"
+    assert evidence["bid_price_1"] == "10.99"
+    assert evidence["ask_price_1"] == "10.99"
+    assert evidence["bid_volume_1"] == "4997"
+    assert evidence["ask_volume_1"] == "4997"
+    assert evidence["amount"] == "0"
+    assert evidence["total_hand"] == "0"
+    assert evidence["quote_age_seconds"] == "7.560314"
+    assert evidence["quote_max_age_seconds"] == "300"
+    assert evidence["open"] is None
+    assert evidence["blocked_sides"] == []
+    assert evidence["requested_side"] is None
+    assert evidence["quote_present"] is True
+    assert contract["price_limit_rule"]["pre_trade_tradability"]["is_tradable"] is True
+    assert contract["price_limit_rule"]["pre_trade_tradability"]["suspend_status"] == {
+        "source": "market.suspend_d",
+        "is_suspended": False,
+        "suspend_type": None,
+        "suspend_timing": None,
+    }
+    assert request.contract_projection_sha256 == hash_hex_v1("miniqmt_contract_projection_v1", contract)
+
+    second_authority, _again = _read_authority_with_price_limit_rule(_production_frozen_price_limit_rule())
+    second = second_authority.ordered_creation_requests[0]
+    assert second.contract_projection_sha256 == request.contract_projection_sha256
+    assert thaw_json_v1(second.contract_projection) == contract
+
+
+def test_plan_authority_reader_normalizes_equivalent_decimal_representations() -> None:
+    authority, _plan = _read_authority_with_price_limit_rule(
+        {"limit_up": 11.0, "samples": [1.50, -0.0, 10.630, 7, True, None], "note": "plain"}
+    )
+    contract = thaw_json_v1(authority.ordered_creation_requests[0].contract_projection)
+    assert contract["price_limit_rule"]["limit_up"] == "11"
+    assert contract["price_limit_rule"]["samples"] == ["1.5", "0", "10.63", 7, True, None]
+    assert contract["price_limit_rule"]["note"] == "plain"
+
+    float_authority, _f = _read_authority_with_price_limit_rule({"ratio": 0.1})
+    decimal_authority, _d = _read_authority_with_price_limit_rule({"ratio": Decimal("0.10")})
+    float_contract = thaw_json_v1(float_authority.ordered_creation_requests[0].contract_projection)
+    decimal_contract = thaw_json_v1(decimal_authority.ordered_creation_requests[0].contract_projection)
+    assert float_contract["price_limit_rule"] == {"ratio": "0.1"}
+    assert decimal_contract["price_limit_rule"] == {"ratio": "0.1"}
+    assert (
+        float_authority.ordered_creation_requests[0].contract_projection_sha256
+        == decimal_authority.ordered_creation_requests[0].contract_projection_sha256
+    )
+
+    negative_authority, _n = _read_authority_with_price_limit_rule({"offset": -0.5})
+    negative_contract = thaw_json_v1(negative_authority.ordered_creation_requests[0].contract_projection)
+    assert negative_contract["price_limit_rule"] == {"offset": "-0.5"}
+
+    lower_authority, _l = _read_authority_with_price_limit_rule({"limit_up": 11.69})
+    higher_authority, _h = _read_authority_with_price_limit_rule({"limit_up": 11.691})
+    assert (
+        lower_authority.ordered_creation_requests[0].contract_projection_sha256
+        != higher_authority.ordered_creation_requests[0].contract_projection_sha256
+    )
+
+
+def test_plan_authority_reader_rejects_non_finite_and_foreign_rule_carriers_fail_closed() -> None:
+    for bad_value in (
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        {"nested": [float("nan")]},
+        {"tuple": (1, 2)},
+        {"set": {1, 2}},
+        {"opaque": object()},
+        {1: "non-string-key"},
+    ):
+        rule = bad_value if isinstance(bad_value, dict) else {"limit_up": bad_value}
+        with pytest.raises(MiniQMTKernelProductCompositionError) as failure:
+            _read_authority_with_price_limit_rule(rule)
+        assert failure.value.reason_code == "MINIQMT_K6_PRODUCT_PRICE_LIMIT_RULE_AUTHORITY_INVALID"
+        assert failure.value.context["broker_called"] is False
+
+
+def test_plan_authority_reader_keeps_legal_reject_partition_with_float_rules() -> None:
+    plan, binding, session, repository, accounts, runtime_id = _plan_reader_facts()
+    plan.trading_rule_decisions[0].price_limit_rule = _production_frozen_price_limit_rule()
+    plan.trading_rule_decisions.append(
+        SimpleNamespace(
+            decision_id="decision_rejected_float_subject",
+            symbol="600001.SH",
+            side=OrderSide.SELL,
+            market_board="MAIN_BOARD",
+            requested_quantity=100,
+            legal_quantity=0,
+            decision="REJECT",
+            lot_rule={"min_quantity": 100, "increment": 100},
+            price_limit_rule={"pre_trade_tradability": {"is_tradable": False, "last_price": 9.99}},
+            decision_hash="f" * 64,
+        )
+    )
+    reader = SimulationK6DPlanAuthorityReader(
+        simulation_repository=repository,
+        account_repository=accounts,
+        gateway_catalog=build_k6d_gateway_catalog_v1(),
+        session_authority=session,
+        logical_time_utc=datetime(2026, 7, 27, 1, 30, tzinfo=UTC),
+    )
+
+    authority = reader.read_plan_authority_v1(
+        runtime_id=runtime_id,
+        binding_id=binding.binding_id,
+        execution_plan_id=plan.plan_id,
+    )
+
+    assert [request.parent_intent_id for request in authority.ordered_creation_requests] == [
+        "intent_plan_reader"
+    ]
+    assert len(plan.trading_rule_decisions) == 2
+
+
 def test_product_committed_source_reader_requires_strict_route_event_and_receipt() -> None:
     event = _coordinator_event("runtime_source_reader")
     receipt = _coordinator_receipt(event)
