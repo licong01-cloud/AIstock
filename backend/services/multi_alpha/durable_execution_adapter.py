@@ -66,6 +66,7 @@ from backend.services.quantevolver.qe_workspace_client import (
     QEWorkspaceFileNotFound,
 )
 from backend.services.quantevolver.qe_execution_reservation import (
+    QEExecutionCapacityObservation,
     make_qe_execution_reservation_id,
 )
 
@@ -1273,6 +1274,28 @@ class QEWorkspacePredBacktestAdapter:
             "execution_environment_snapshot_id": snapshot_id,
             "execution_environment_manifest_sha256": manifest_hash,
         }
+
+    def observe_submission_capacity(
+        self,
+        *,
+        run: Mapping[str, Any],
+        intent: DurableSubmissionIntent,
+    ) -> QEExecutionCapacityObservation:
+        """Read capacity for an already-waiting attempt without source DML."""
+
+        node_parallelism = json_mapping(
+            run.get("node_parallelism_json"),
+            field_name="node_parallelism_json",
+        )
+        return self._submission_coordinator.observe_capacity(
+            node_id=intent.node_id,
+            requested_node_capacity=node_parallelism.get(intent.node_id),
+            source_kind="multi_alpha_durable_attempt",
+            source_execution_id=intent.attempt_id,
+            qe_task_id=intent.qe_task_id,
+            qe_loop_id=intent.qe_loop_id,
+            submission_intent_hash=intent.submission_intent_hash,
+        )
 
     async def submit(
         self,

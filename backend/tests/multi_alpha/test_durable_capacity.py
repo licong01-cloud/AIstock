@@ -213,6 +213,54 @@ def test_conditional_source_claim_loses_stale_row_version_without_update() -> No
     assert not provider.cursor.steps
 
 
+def test_capacity_observation_on_full_node_is_select_only() -> None:
+    spec = _spec("attempt-capacity-observe")
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT node_id FROM infra.compute_nodes", one={"node_id": spec.node_id}),
+            Step(
+                contains="WHERE source_kind = %s AND source_execution_id = %s",
+                one=None,
+            ),
+            Step(contains="SELECT COUNT(*) AS active_count", one={"active_count": 1}),
+        ]
+    )
+    repository = QEExecutionReservationRepository(connection_provider=provider)
+
+    observed = repository.observe_execution_capacity(spec, node_capacity=1)
+
+    assert observed.available is False
+    assert observed.duplicate_replay is False
+    assert observed.active_count == observed.node_capacity == 1
+    assert len(provider.cursor.executions) == 3
+    assert all(sql.startswith("SELECT ") for sql, _params in provider.cursor.executions)
+    assert all("FOR UPDATE" not in sql for sql, _params in provider.cursor.executions)
+    assert provider.commits == 1
+    assert not provider.cursor.steps
+
+
+def test_capacity_observation_preserves_existing_source_duplicate_replay() -> None:
+    spec = _spec("attempt-capacity-duplicate")
+    existing = _reservation_row(spec, status="running")
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT node_id FROM infra.compute_nodes", one={"node_id": spec.node_id}),
+            Step(
+                contains="WHERE source_kind = %s AND source_execution_id = %s",
+                one=existing,
+            ),
+            Step(contains="SELECT COUNT(*) AS active_count", one={"active_count": 1}),
+        ]
+    )
+    repository = QEExecutionReservationRepository(connection_provider=provider)
+
+    observed = repository.observe_execution_capacity(spec, node_capacity=1)
+
+    assert observed.available is True
+    assert observed.duplicate_replay is True
+    assert observed.reservation == existing
+
+
 def test_unchanged_capacity_wait_receipts_100x_execute_zero_updates() -> None:
     class ExistingWaitCursor:
         def __init__(self) -> None:

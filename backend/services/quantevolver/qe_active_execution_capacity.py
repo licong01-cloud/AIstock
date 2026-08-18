@@ -21,6 +21,7 @@ from backend.services.qe_archive.models import normalize_json
 from .qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     CapacityWaitRecorder,
+    QEExecutionCapacityObservation,
     QEExecutionReservationAcquireResult,
     QEExecutionReservationRepository,
     QEExecutionReservationSpec,
@@ -1002,6 +1003,48 @@ class QEWorkspaceSubmissionCoordinator:
     ) -> None:
         self._repository = reservation_repository or QEExecutionReservationRepository()
         self._capacity_service = capacity_service or QEActiveExecutionCapacityService()
+
+    def observe_capacity(
+        self,
+        *,
+        node_id: str,
+        requested_node_capacity: int | None,
+        source_kind: str,
+        source_execution_id: str,
+        qe_task_id: str,
+        qe_loop_id: str,
+        submission_intent_hash: str,
+    ) -> QEExecutionCapacityObservation:
+        """Return a read-only admission snapshot for a durable waiting source."""
+
+        capacity = self._capacity_service.resolve_node_capacity(
+            node_id,
+            requested_node_capacity,
+        )
+        spec = QEExecutionReservationSpec(
+            node_id=self._capacity_service.canonical_node_id(node_id),
+            source_kind=source_kind,
+            source_execution_id=source_execution_id,
+            qe_task_id=qe_task_id,
+            qe_loop_id=qe_loop_id,
+            submission_intent_hash=submission_intent_hash,
+        )
+        observation = self._repository.observe_execution_capacity(
+            spec,
+            node_capacity=capacity,
+        )
+        if (
+            self._capacity_service.queue_only_diagnostics(spec.node_id)
+            and not observation.duplicate_replay
+        ):
+            return QEExecutionCapacityObservation(
+                available=False,
+                duplicate_replay=False,
+                active_count=observation.active_count,
+                node_capacity=observation.node_capacity,
+                reservation=None,
+            )
+        return observation
 
     async def submit(
         self,
