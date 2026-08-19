@@ -478,12 +478,12 @@
       ],
       "source_ready_receipt": {
         "schema_version": "pit_v2_w6_source_ready_receipt_v1",
-        "source_commit": "99551391f0e1ab8e3d1f4d63212f9a593949f3f7",
-        "baseline_origin_main": "8bd31797a3ebb18991be179b04998e5b56043fbb",
+        "source_commit": "c60f438b52df229579e6910d01bc9d911eff9c23",
+        "baseline_origin_main": "8b4dfa5b2427a10d2b6b912314686a32e14cc241",
         "baseline_user_ancestor": "1e4aef4f",
         "consumer_inventory_unknown_count": 0,
         "fallback_scan_count": 0,
-        "direct_tests": "7 passed",
+        "direct_tests": "10 passed",
         "f2": "30/30 pass",
         "compileall": "pass",
         "git_diff_check": "pass",
@@ -498,7 +498,7 @@
           "QE_experiment_run": "not_performed",
           "runtime_real_data_evidence": "not_run_not_authorized"
         },
-        "receipt_binding_note": "Bound to immutable implementation source freeze commit 99551391f0e1ab8e3d1f4d63212f9a593949f3f7; the metadata-only scope receipt update is not included in source_commit to avoid self-referential hashing."
+        "receipt_binding_note": "Bound to immutable implementation source freeze commit c60f438b52df229579e6910d01bc9d911eff9c23; the metadata-only scope receipt update is not included in source_commit to avoid self-referential hashing."
       },
       "additional_shared_file_rule": "requires explicit handoff from W1-W5 and W6 single-writer registration before edit",
       "forbidden": ["production_or_full_candidate", "activation", "unscoped_shared_core_edit"]
@@ -509,7 +509,7 @@
   },
   "consumer_inventory": {
     "schema_version": "canonical_pit_consumer_inventory_v1",
-    "source_commit": "99551391f0e1ab8e3d1f4d63212f9a593949f3f7",
+    "source_commit": "c60f438b52df229579e6910d01bc9d911eff9c23",
     "classification_values": ["canonical_v2_formal", "canonical_v2_frozen_candidate", "canonical_v2_rolling_runtime", "legacy_reproduction_only", "test_fixture", "migration_tool", "unknown"],
     "consumers": [
       {"consumer_id": "qe_formal_training", "class": "canonical_v2_formal", "path": "backend/services/quantevolver/qe_dataset_contract.py"},
@@ -534,9 +534,9 @@
       "backend/services/quantevolver/qe_dataset_contract.py": "e370720805155559f4e0b2103b01c86fde6cd296ffe79eb382e04964083c7983",
       "backend/services/hmm_evolution/universe.py": "a04274909c7948ece33ec6bec7a3a024b1549c2b7d86c19212568302ae8a4735",
       "backend/services/selection_center/canonical_pit_runtime.py": "0e5956d0afdaa5496b59da852e0a792afa83117582fafb28e40fd5b07c9d3060",
-      "backend/services/canonical_pit_inference_boundary.py": "f6374b5b064f6fde3881ee73be34913be294516f79477e04a550b378cab56104",
-      "backend/inference_engine.py": "1f3e60045a0c8237cbcd2bbed567fb325e8f3b8b2e6c027ea023b1ad19cda890",
-      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py": "01a55f6ccff68042bd52f369f706baf1b87c67f3966b529c517e78dde3601741",
+      "backend/services/canonical_pit_inference_boundary.py": "b14dab920081a399e150e8814315f3d9068dd9c397c7e556d95e10333f8e7b9e",
+      "backend/inference_engine.py": "4b244880a00dab55dd6207ede5fa537b9ac52b7ce8052cf0ac824bdb30cd2510",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py": "c10fcc1bf67299cfaa574fd64713f3241d3ce138612becdc65b4ec572123a894",
       "backend/services/dataset_release/pit.py": "09a85279099c2b4279762c6b139ac794e4c0155b9678a209e7e5bcd1add2ea9c",
       "backend/services/canonical_equity_pit.py": "16963de5e17e40f2c7064ad053f3297bddaa41156766fb1a6ea107a2f4656373"
     }
