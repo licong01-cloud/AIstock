@@ -1,6 +1,9 @@
 {
   "actual": "The merged P2-4 CLI requires a fully hashed hmm_risk_p2_4_holdout_request_v1 before parent preflight, but no tracked builder or command can generate it from the frozen source authority. The only current workaround is an out-of-band full holdout source read followed by hand-built JSON, which bypasses D1 output identity closure, logical holdout access accounting, collision safety, and typed failure receipts. Add the minimal controlled request-preparation path using the existing canonical source loader/serializer, persist exact repo-external outputs and failure state, preserve zero fit/selection/DB/runtime semantics, and prove the formal parent consumes the generated request without changing D1-D6.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+    "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+    "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
     "tests/aistock_validation/bugs/20260819_BUG-1135-p2-4-formal-holdout-lacks-controlled-request-preparation-authority.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -25,8 +28,16 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
+    "added_files": [
+      "tests/aistock_validation/bugs/20260819_BUG-1135-p2-4-formal-holdout-lacks-controlled-request-preparation-authority.json"
+    ],
+    "changed_files": [
+      "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+      "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260819_BUG-1135-p2-4-formal-holdout-lacks-controlled-request-preparation-authority.json"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +47,13 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+      "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260819_BUG-1135-p2-4-formal-holdout-lacks-controlled-request-preparation-authority.json"
+    ]
   },
   "first_seen_at": "2026-08-19T05:12:03.103090Z",
   "fix_branch": null,

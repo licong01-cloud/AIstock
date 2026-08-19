@@ -97,6 +97,21 @@ REASON_READBACK = "hmm_risk_p2_4_readback_mismatch"
 REASON_UNEXPECTED = "hmm_risk_p2_4_unknown_execution_failure"
 
 
+def expected_holdout_source(*, outcome_tail_end: date) -> dict[str, Any]:
+    return {
+        "source_start": EXPECTED_SOURCE_START,
+        "source_end": outcome_tail_end.isoformat(),
+        "circ_mv_history_start": EXPECTED_CIRC_MV_HISTORY_START,
+        "universe_key": EXPECTED_UNIVERSE_KEY,
+        "universe_rule_version": EXPECTED_UNIVERSE_RULE_VERSION,
+        "benchmark_ts_code": EXPECTED_BENCHMARK_TS_CODE,
+        "security_identity_manifest_path": EXPECTED_SECURITY_IDENTITY_MANIFEST_PATH,
+        "security_identity_manifest_sha256": EXPECTED_SECURITY_IDENTITY_MANIFEST_SHA256,
+        "provider_absence_manifest_path": EXPECTED_PROVIDER_ABSENCE_MANIFEST_PATH,
+        "provider_absence_manifest_sha256": EXPECTED_PROVIDER_ABSENCE_MANIFEST_SHA256,
+    }
+
+
 class HoldoutAcceptanceError(RuntimeError):
     """Typed fail-closed P2-4 error."""
 
@@ -404,7 +419,7 @@ def _ridge_fit(component: Mapping[str, Any]) -> RidgeFit:
     return result
 
 
-def _dates(inputs: Mapping[str, Any], request: Mapping[str, Any]) -> tuple[tuple[date, ...], tuple[date, ...]]:
+def _holdout_dates(inputs: Mapping[str, Any]) -> tuple[tuple[date, ...], tuple[date, ...]]:
     calendar = tuple(inputs.get("trading_dates") or ())
     if not calendar or any(type(day) is not date for day in calendar) or calendar != tuple(sorted(set(calendar))):
         raise _fail(REASON_SOURCE, "holdout calendar is invalid", stage="source_preflight")
@@ -414,10 +429,16 @@ def _dates(inputs: Mapping[str, Any], request: Mapping[str, Any]) -> tuple[tuple
         raise _fail(REASON_SOURCE, "holdout state date set is invalid", stage="source_preflight")
     tail_start = positions[HOLDOUT_END] + 1
     tail = calendar[tail_start : tail_start + OUTCOME_TAIL_TRADING_DAYS]
+    if len(tail) != OUTCOME_TAIL_TRADING_DAYS:
+        raise _fail(REASON_SOURCE, "holdout outcome-tail date set is invalid", stage="source_preflight")
+    return state, tail
+
+
+def _dates(inputs: Mapping[str, Any], request: Mapping[str, Any]) -> tuple[tuple[date, ...], tuple[date, ...]]:
+    state, tail = _holdout_dates(inputs)
     holdout = request["holdout_source"]
     if (
-        len(tail) != OUTCOME_TAIL_TRADING_DAYS
-        or canonical_sha256([day.isoformat() for day in state]) != holdout["state_date_set_sha256"]
+        canonical_sha256([day.isoformat() for day in state]) != holdout["state_date_set_sha256"]
         or canonical_sha256([day.isoformat() for day in tail]) != holdout["outcome_tail_date_set_sha256"]
         or holdout.get("outcome_tail_end") != tail[-1].isoformat()
     ):
@@ -450,6 +471,92 @@ def validate_loaded_source(
             REASON_SOURCE, "loaded holdout source identity drifted", stage="source_preflight", evidence={"drift": drift}
         )
     return _dates(inputs, request)
+
+
+def build_holdout_request(
+    inputs: Mapping[str, Any],
+    candidate: FrozenCandidate,
+    *,
+    source: Mapping[str, Any],
+    artifact_outputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Freeze the exact P2-4 source and output identities before evaluation."""
+
+    state_dates, tail_dates = _holdout_dates(inputs)
+    source_payload = dict(source)
+    if source_payload.get("source_end") != tail_dates[-1].isoformat():
+        raise _fail(
+            REASON_SOURCE,
+            "holdout source end does not equal the frozen outcome-tail end",
+            stage="source_preflight",
+        )
+    required_mappings = {
+        "dataset_manifest": inputs.get("dataset_manifest"),
+        "mapping_manifest": inputs.get("mapping_manifest"),
+        "feature_definition": inputs.get("feature_definition"),
+        "l2_feature_definition": inputs.get("l2_feature_definition"),
+        "security_identity_manifest": inputs.get("security_identity_manifest"),
+        "provider_absence_manifest": inputs.get("provider_absence_manifest"),
+        "constituents": inputs.get("constituents"),
+    }
+    invalid_components = sorted(
+        name for name, value in required_mappings.items() if not isinstance(value, Mapping) or not value
+    )
+    dataset_manifest = required_mappings["dataset_manifest"]
+    if (
+        invalid_components
+        or not isinstance(dataset_manifest, Mapping)
+        or not isinstance(dataset_manifest.get("calendar_benchmark"), Mapping)
+    ):
+        raise _fail(
+            REASON_SOURCE,
+            "holdout request source components are missing or invalid",
+            stage="source_preflight",
+            evidence={"invalid_components": invalid_components},
+        )
+    holdout_source = {
+        "source": source_payload,
+        "state_start": HOLDOUT_START.isoformat(),
+        "state_end": HOLDOUT_END.isoformat(),
+        "state_trading_day_count": HOLDOUT_TRADING_DAYS,
+        "outcome_tail_end": tail_dates[-1].isoformat(),
+        "outcome_tail_trading_day_count": OUTCOME_TAIL_TRADING_DAYS,
+        "dataset_manifest_sha256": canonical_sha256(dataset_manifest),
+        "mapping_manifest_sha256": canonical_sha256(required_mappings["mapping_manifest"]),
+        "calendar_manifest_sha256": canonical_sha256(dataset_manifest["calendar_benchmark"]),
+        "feature_formula_sha256": canonical_sha256(
+            {
+                "L1": required_mappings["feature_definition"],
+                "L2": required_mappings["l2_feature_definition"],
+            }
+        ),
+        "security_identity_manifest_sha256": canonical_sha256(required_mappings["security_identity_manifest"]),
+        "provider_absence_manifest_sha256": canonical_sha256(required_mappings["provider_absence_manifest"]),
+        "constituents_sha256": canonical_sha256(required_mappings["constituents"]),
+        "state_date_set_sha256": canonical_sha256([day.isoformat() for day in state_dates]),
+        "outcome_tail_date_set_sha256": canonical_sha256([day.isoformat() for day in tail_dates]),
+    }
+    evaluation_id = canonical_sha256(
+        {
+            "contract_version": CONTRACT_VERSION,
+            "candidate_report_sha256": candidate.report["report_sha256"],
+            "holdout_state_date_set_sha256": holdout_source["state_date_set_sha256"],
+        }
+    )
+    body = {
+        "schema_version": REQUEST_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "candidate_report_sha256": candidate.report["report_sha256"],
+        "candidate_producer_commit": EXPECTED_CANDIDATE_PRODUCER,
+        "development_request_sha256": EXPECTED_DEVELOPMENT_REQUEST_SHA256,
+        "holdout_evaluation_id": evaluation_id,
+        "holdout_source": holdout_source,
+        "artifact_outputs": dict(artifact_outputs),
+    }
+    request = {**body, "request_sha256": canonical_sha256(body)}
+    validate_static_request(request, candidate)
+    validate_loaded_source(inputs, request)
+    return request
 
 
 def _market_states(
