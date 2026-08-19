@@ -467,6 +467,40 @@
         "tests/aistock_validation/pit_v2/window_scope_receipt.json",
         "tests/aistock_validation/pit_v2/source_freeze_receipt.json"
       ],
+      "actual_write_files": [
+        "backend/inference_engine.py",
+        "backend/services/canonical_pit_inference_boundary.py",
+        "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+        "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+        "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+        "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+        "tests/aistock_validation/pit_v2/consumer_inventory.json",
+        "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+      ],
+      "source_ready_receipt": {
+        "schema_version": "pit_v2_w6_source_ready_receipt_v1",
+        "source_commit": "2000f18e",
+        "baseline_origin_main": "8bd31797a3ebb18991be179b04998e5b56043fbb",
+        "baseline_user_ancestor": "1e4aef4f",
+        "consumer_inventory_unknown_count": 0,
+        "fallback_scan_count": 0,
+        "direct_tests": "7 passed",
+        "f2": "30/30 pass",
+        "compileall": "pass",
+        "git_diff_check": "pass",
+        "ruff": "not_available_in_validation_environment",
+        "production_gates": {
+          "production_ddl_gate": "noop",
+          "production_dml_gate": "noop",
+          "dataset_candidate_write": "not_performed",
+          "production_activation": "not_performed",
+          "authority_pointer_change": "none",
+          "backend_restart": "not_performed",
+          "QE_experiment_run": "not_performed",
+          "runtime_real_data_evidence": "not_run_not_authorized"
+        },
+        "receipt_binding_note": "Bound to immutable implementation source freeze commit 2000f18e; the metadata-only scope receipt update is not included in source_commit to avoid self-referential hashing."
+      },
       "additional_shared_file_rule": "requires explicit handoff from W1-W5 and W6 single-writer registration before edit",
       "forbidden": ["production_or_full_candidate", "activation", "unscoped_shared_core_edit"]
     },
