@@ -5,6 +5,7 @@
     "backend/infra/qmt_client.py",
     "backend/infra/realtime_quote_subscriber.py",
     "backend/execution_algos/adaptive_is/contracts.py",
+    "backend/tests/dataset_release/test_wsl_python310_datetime_compat.py",
     "tests/aistock_validation/bugs/20260819_BUG-1134-wsl-live-inference-fails-on-python-3-10-datetime-utc-import-in-dataset-r.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
