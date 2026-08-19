@@ -35,6 +35,12 @@ from .data_service.preprocessor import (
 )
 from .data_service.moneyflow_contract import MONEYFLOW_FIELD_MAP
 from .services.factor_validator import FactorValidator
+from .services.canonical_pit_inference_boundary import (
+    CanonicalPitInferenceBoundaryError,
+    InferencePitIdentity,
+    InferencePitMode,
+    resolve_inference_pit_identity,
+)
 from .services.strategy_package.workspace_policy import (
     ensure_not_forbidden_worker_workspace_path,
     is_under_allowed_artifact_root,
@@ -730,37 +736,36 @@ class InferenceEngine:
         trade_date: datetime | None = None,
         *,
         ensure: bool = True,
+        pit_identity: InferencePitIdentity,
     ) -> list[str]:
-        """Use the platform ST PIT universe for live/latest-data inference."""
+        """Resolve a detached frozen pool or an explicit rolling PIT lease."""
         effective_date = (trade_date or datetime.now()).date()
-        try:
-            from .services.stock_universe_pit_service import StockUniversePitService
+        if pit_identity.mode is InferencePitMode.FROZEN_CANDIDATE:
+            if not pit_identity.universe_codes:
+                raise CanonicalPitInferenceBoundaryError(
+                    "frozen inference has no detached universe; online PIT completion is forbidden"
+                )
+            return list(pit_identity.universe_codes)
+        from .services.stock_universe_pit_service import StockUniversePitService
 
-            universe = StockUniversePitService().get_eligible_codes(trade_date=effective_date, ensure=ensure)
-            stock_count = len(universe)
-            logger.info(
-                "stock universe resolved from platform ST PIT: "
-                f"trade_date={effective_date}, count={stock_count}"
+        service = StockUniversePitService()
+        if pit_identity.mode is InferencePitMode.ROLLING_RUNTIME:
+            universe = service.get_eligible_codes(
+                trade_date=effective_date,
+                universe_key=pit_identity.binding.universe_key,
+                ensure=False,
+                authority_binding=pit_identity.binding,
+                consumer="inference_engine",
             )
-            if stock_count <= 0 and _strict_inference_enabled():
-                raise ValueError(f"strict inference ST PIT universe is empty for {effective_date}")
-            return universe
-        except Exception as e:
-            if _strict_inference_enabled():
-                raise ValueError(f"strict inference ST PIT universe query failed: {e}") from e
-            logger.error(f"ST PIT universe query failed, falling back to legacy active SH/SZ universe: {e}")
-
-        sql = """
-            SELECT ts_code FROM market.stock_basic
-            WHERE (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
-              AND list_status = 'L'
-            ORDER BY ts_code
-        """
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql)
-                rows = cur.fetchall() or []
-        return [str(r[0]) for r in rows if r and r[0]]
+        else:
+            universe = service.get_eligible_codes(
+                trade_date=effective_date,
+                universe_key=pit_identity.binding.universe_key,
+                ensure=ensure,
+            )
+        if not universe:
+            raise CanonicalPitInferenceBoundaryError(f"explicit PIT identity resolved an empty universe for {effective_date}")
+        return universe
     def _compute_alpha158_last_day_only(self, df_history: pd.DataFrame, col_list: List[str]) -> pd.DataFrame:
         """优化版本：只计算最后一天的 Alpha158 因子值，大幅降低内存占用
         
@@ -1307,6 +1312,7 @@ class InferenceEngine:
         allow_external_market_fallback: bool = True,
         use_selection_data_cache: bool = True,
         diagnostic_output_path: Optional[str] = None,
+        pit_identity: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         try:
             return self._run_inference_impl(
@@ -1324,6 +1330,7 @@ class InferenceEngine:
                 allow_external_market_fallback=allow_external_market_fallback,
                 use_selection_data_cache=use_selection_data_cache,
                 diagnostic_output_path=diagnostic_output_path,
+                pit_identity=pit_identity,
             )
         except Exception as e:
             import traceback
@@ -1348,6 +1355,7 @@ class InferenceEngine:
         allow_external_market_fallback: bool = True,
         use_selection_data_cache: bool = True,
         diagnostic_output_path: Optional[str] = None,
+        pit_identity: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """执行完整的推理流程
         
@@ -1393,6 +1401,15 @@ class InferenceEngine:
             if not manifest:
                 raise ValueError(f"未找到本地任务资产 manifest: {task_id}")
             task_dir = self.assets_root / task_id
+
+        try:
+            resolved_pit_identity = resolve_inference_pit_identity(
+                pit_identity,
+                manifest=manifest,
+                version_tag=version_tag,
+            )
+        except CanonicalPitInferenceBoundaryError:
+            raise
 
         primary = manifest.get("primary_assets", {})
         
@@ -1456,7 +1473,11 @@ class InferenceEngine:
         model, model_kind, inner_model, num_features_expected = load_model_from_pkl(model_file)
         
         # 4. 获取数据（支持内存缓存，同一交易日多次选股复用）
-        universe = self._get_default_universe_excluding_st(actual_date, ensure=universe_ensure)
+        universe = self._get_default_universe_excluding_st(
+            actual_date,
+            ensure=universe_ensure,
+            pit_identity=resolved_pit_identity,
+        )
 
         # 4.1 检查因子所需的数据窗口
         # factor_order 已在步骤2中通过 _infer_expected_features 获取
@@ -1971,12 +1992,20 @@ class InferenceEngine:
             "source_read_receipts": [
                 {
                     "source_role": "pit_universe",
-                    "dataset_id": "market.stock_universe_pit",
+                    "dataset_id": f"market.stock_universe_pit:{resolved_pit_identity.binding.universe_key}",
                     "partition_ref": actual_date.date().isoformat(),
-                    "query_template_id": "StockUniversePitService.get_eligible_codes",
-                    "query_template_version": "v1",
+                    "query_template_id": (
+                        "InferenceEngine.detached_frozen_universe"
+                        if resolved_pit_identity.mode is InferencePitMode.FROZEN_CANDIDATE
+                        else "StockUniversePitService.get_eligible_codes"
+                    ),
+                    "query_template_version": "canonical_pit_v2",
                     "parameter_hash": _inference_receipt_sha256(
-                        {"trade_date": actual_date.date().isoformat(), "ensure": universe_ensure}
+                        {
+                            "trade_date": actual_date.date().isoformat(),
+                            "ensure": universe_ensure,
+                            "pit_identity": resolved_pit_identity.as_dict(),
+                        }
                     ),
                     "row_count": int(len(universe)),
                     "content_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
@@ -2043,7 +2072,8 @@ class InferenceEngine:
                 "requested_trade_date": requested_trade_date.date().isoformat(),
                 "effective_trade_date": actual_date.date().isoformat(),
                 "score_trade_date": actual_date.date().isoformat(),
-                "pit_mode": "stock_universe_pit_v1",
+                "pit_mode": resolved_pit_identity.receipt_mode,
+                "pit_identity": resolved_pit_identity.as_dict(),
                 "calendar_version": "market.trading_calendar.v1",
                 "calendar_identity_hash": calendar_identity_hash,
                 "calendar_hash": calendar_hash,
