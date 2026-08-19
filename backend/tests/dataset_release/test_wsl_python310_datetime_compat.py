@@ -36,8 +36,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 
-# Modules whose ``from datetime import UTC`` broke the WSL Python 3.10 import
-# closure and were fixed by BUG-1134 with ``UTC = timezone.utc``.
+# Modules fixed by BUG-1134 with ``UTC = timezone.utc``. Only
+# ``control_store`` is in the import-time closure of the WSL entry script
+# (and is the module named in the production traceback). The other three are
+# adjacent MiniQMT execution-path modules whose identical ``from datetime
+# import UTC`` was found by the closure audit; they load lazily (not during
+# the WSL inference run) and were hardened with the same zero-drift alias.
+# They are guarded at file level below, independent of closure membership.
 FIXED_MODULES = (
     "backend.services.dataset_release.control_store",
     "backend.infra.qmt_client",
@@ -45,7 +50,7 @@ FIXED_MODULES = (
     "backend.execution_algos.adaptive_is.contracts",
 )
 
-# Remaining links of the production failure import chain:
+# Chain modules that must be reachable in the import-time closure:
 # scripts/strategy_package_live_inference.py -> advisory_input_projection ->
 # canonical_pit_compatibility -> qe_dataset_contract ->
 # canonical_pit_dataset_consumer -> dataset_release.cas_store -> control_store.
@@ -55,6 +60,7 @@ CHAIN_MODULES = (
     "backend.services.quantevolver.qe_dataset_contract",
     "backend.services.canonical_pit_dataset_consumer",
     "backend.services.dataset_release.cas_store",
+    "backend.services.dataset_release.control_store",
 )
 
 # Symbols that only exist on Python 3.11+ and therefore must never appear in
@@ -69,8 +75,35 @@ _FORBIDDEN_MODULES = {"tomllib"}
 _FORBIDDEN_NAMES = {"ExceptionGroup", "BaseExceptionGroup"}
 
 
+def _parse_module(path: Path) -> ast.Module:
+    # utf-8-sig strips a leading BOM, which the real importer (PEP 263)
+    # accepts but ast.parse rejects.
+    return ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+
+
 def _module_path(module: str) -> Path:
     return ROOT / (module.replace(".", "/") + ".py")
+
+
+def _expand_with_package_inits(paths: list[Path]) -> list[Path]:
+    """Add every ancestor package ``__init__.py`` of each resolved module.
+
+    Importing ``a.b.c`` executes the ``__init__.py`` of ``a`` and ``a.b``
+    first; those files can themselves raise ImportError under Python 3.10
+    and their own imports pull in further modules, so they must be closure
+    members for the scan to follow them.
+    """
+
+    expanded: list[Path] = []
+    for path in paths:
+        expanded.append(path)
+        directory = path.parent
+        while directory != ROOT and ROOT in directory.parents:
+            package_init = directory / "__init__.py"
+            if package_init.is_file():
+                expanded.append(package_init)
+            directory = directory.parent
+    return expanded
 
 
 def _add_module_candidates(base: Path, names: list[str], resolved: list[Path]) -> None:
@@ -87,12 +120,72 @@ def _add_module_candidates(base: Path, names: list[str], resolved: list[Path]) -
             resolved.append(package_init)
 
 
-def _resolve_imports(path: Path) -> list[Path]:
-    """Resolve the local imports of one module to file paths."""
+def _iter_closure_imports(tree: ast.Module) -> list[ast.Import | ast.ImportFrom]:
+    """Import statements reachable when the module is imported or used.
 
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    Follows module-level control flow (try/except, if/else, loops) but skips
+    ``if TYPE_CHECKING:`` branches (never executed at runtime). Imports
+    nested in function/class bodies are lazy and normally irrelevant to
+    import-time failures like BUG-1134 — EXCEPT when the module defines a
+    PEP 562 module-level ``__getattr__``: such a module has explicitly opted
+    into lazy attribute loading, and any attribute access executes those
+    function bodies (e.g. ``backend/execution_algos/__init__.py`` loading its
+    registry), so their imports are closure-reachable too.
+    """
+
+    def _is_type_checking_test(test: ast.expr) -> bool:
+        if isinstance(test, ast.Name):
+            return test.id == "TYPE_CHECKING"
+        return (
+            isinstance(test, ast.Attribute)
+            and test.attr == "TYPE_CHECKING"
+            and isinstance(test.value, ast.Name)
+            and test.value.id == "typing"
+        )
+
+    found: list[ast.Import | ast.ImportFrom] = []
+    has_module_getattr = any(
+        isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and statement.name == "__getattr__"
+        for statement in tree.body
+    )
+
+    def visit_statements(statements: list[ast.stmt]) -> None:
+        for statement in statements:
+            if isinstance(statement, (ast.Import, ast.ImportFrom)):
+                found.append(statement)
+            elif isinstance(statement, ast.If):
+                if _is_type_checking_test(statement.test):
+                    visit_statements(statement.orelse)
+                else:
+                    visit_statements(statement.body)
+                    visit_statements(statement.orelse)
+            elif isinstance(statement, (ast.Try, ast.While, ast.For)):
+                visit_statements(statement.body)
+                visit_statements(statement.orelse)
+                if isinstance(statement, ast.Try):
+                    for handler in statement.handlers:
+                        visit_statements(handler.body)
+                    visit_statements(statement.finalbody)
+            elif isinstance(statement, (ast.With, ast.AsyncWith)):
+                visit_statements(statement.body)
+            elif has_module_getattr and isinstance(
+                statement, (ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                for node in ast.walk(statement):
+                    if isinstance(node, (ast.Import, ast.ImportFrom)):
+                        found.append(node)
+
+    visit_statements(tree.body)
+    return found
+
+
+def _resolve_imports(path: Path) -> list[Path]:
+    """Resolve the import-time (top-level) local imports of one module."""
+
+    tree = _parse_module(path)
     resolved: list[Path] = []
-    for node in ast.walk(tree):
+    for node in _iter_closure_imports(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 parts = alias.name.split(".")
@@ -115,7 +208,7 @@ def _resolve_imports(path: Path) -> list[Path]:
             elif node.module:
                 base = ROOT.joinpath(*node.module.split("."))
                 _add_module_candidates(base, [alias.name for alias in node.names], resolved)
-    return resolved
+    return _expand_with_package_inits(resolved)
 
 
 def _live_inference_closure() -> set[Path]:
@@ -140,7 +233,7 @@ def _live_inference_closure() -> set[Path]:
 
 
 def _py311_only_violations(path: Path) -> list[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = _parse_module(path)
     violations: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -179,6 +272,12 @@ def test_fixed_modules_have_no_python311_only_symbols() -> None:
 def test_live_inference_closure_has_no_python311_only_symbols() -> None:
     closure = _live_inference_closure()
     assert closure, "closure computation returned no files"
+    # Guard against a silently vacuous closure: the computation must reach
+    # every module on the known production failure chain, otherwise the scan
+    # below protects nothing.
+    expected = {_module_path(module) for module in CHAIN_MODULES}
+    missing = sorted(str(path.relative_to(ROOT)) for path in expected - closure)
+    assert not missing, f"closure does not reach known chain modules: {missing}"
     failures: dict[str, list[str]] = {}
     for path in sorted(closure):
         found = _py311_only_violations(path)
