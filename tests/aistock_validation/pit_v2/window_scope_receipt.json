@@ -478,7 +478,7 @@
       ],
       "source_ready_receipt": {
         "schema_version": "pit_v2_w6_source_ready_receipt_v1",
-        "source_commit": "89aebfb702cddff2771a7623f06dfbd1ef2115c8",
+        "source_commit": "99551391f0e1ab8e3d1f4d63212f9a593949f3f7",
         "baseline_origin_main": "8bd31797a3ebb18991be179b04998e5b56043fbb",
         "baseline_user_ancestor": "1e4aef4f",
         "consumer_inventory_unknown_count": 0,
@@ -498,7 +498,7 @@
           "QE_experiment_run": "not_performed",
           "runtime_real_data_evidence": "not_run_not_authorized"
         },
-        "receipt_binding_note": "Bound to immutable implementation source freeze commit 89aebfb702cddff2771a7623f06dfbd1ef2115c8; the metadata-only scope receipt update is not included in source_commit to avoid self-referential hashing."
+        "receipt_binding_note": "Bound to immutable implementation source freeze commit 99551391f0e1ab8e3d1f4d63212f9a593949f3f7; the metadata-only scope receipt update is not included in source_commit to avoid self-referential hashing."
       },
       "additional_shared_file_rule": "requires explicit handoff from W1-W5 and W6 single-writer registration before edit",
       "forbidden": ["production_or_full_candidate", "activation", "unscoped_shared_core_edit"]
@@ -509,7 +509,7 @@
   },
   "consumer_inventory": {
     "schema_version": "canonical_pit_consumer_inventory_v1",
-    "source_commit": "89aebfb702cddff2771a7623f06dfbd1ef2115c8",
+    "source_commit": "99551391f0e1ab8e3d1f4d63212f9a593949f3f7",
     "classification_values": ["canonical_v2_formal", "canonical_v2_frozen_candidate", "canonical_v2_rolling_runtime", "legacy_reproduction_only", "test_fixture", "migration_tool", "unknown"],
     "consumers": [
       {"consumer_id": "qe_formal_training", "class": "canonical_v2_formal", "path": "backend/services/quantevolver/qe_dataset_contract.py"},
