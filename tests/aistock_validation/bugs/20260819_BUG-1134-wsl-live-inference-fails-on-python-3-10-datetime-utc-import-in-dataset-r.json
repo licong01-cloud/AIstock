@@ -148,7 +148,8 @@
     "fresh_process_evidence": [
       "WSL Ubuntu rdagent-gpu Python 3.10.19: cd /mnt/f/Dev/AIstock_worktrees/BUG-1134-wsl-live-inference-fails-on-python-3-10-datetime-20260819 && /home/lc999/miniconda3/envs/rdagent-gpu/bin/python -c 'import backend.services.dataset_release.control_store' -> OK, UTC is timezone.utc",
       "WSL rdagent-gpu Python 3.10.19: /home/lc999/miniconda3/envs/rdagent-gpu/bin/python scripts/strategy_package_live_inference.py --help -> exit 0 (production ImportError gone)",
-      "WSL rdagent-gpu Python 3.10.19: import backend.infra.qmt_client, backend.infra.realtime_quote_subscriber, backend.execution_algos.adaptive_is.contracts -> OK"
+      "WSL rdagent-gpu Python 3.10.19: import backend.infra.qmt_client, backend.infra.realtime_quote_subscriber, backend.execution_algos.adaptive_is.contracts -> OK",
+      "WSL rdagent-gpu Python 3.10.19: /home/lc999/miniconda3/envs/rdagent-gpu/bin/python scripts/strategy_package_live_inference.py --help -> exit 0 (production ImportError gone); sys.modules dump shows 111 repo modules all loaded under 3.10"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
