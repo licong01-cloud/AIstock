@@ -7,6 +7,7 @@ state or silently downgrades a v2 request to v1.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -210,9 +211,7 @@ def _date(value: Any, field: str) -> date:
 
 
 def _codes_digest(codes: tuple[str, ...]) -> str:
-    import hashlib
-
-    return hashlib.sha256("\n".join(codes).encode("utf-8")).hexdigest()
+    return hashlib.sha256(repr(codes).encode("utf-8")).hexdigest()
 
 
 __all__ = [

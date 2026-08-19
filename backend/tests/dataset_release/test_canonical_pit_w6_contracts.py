@@ -131,8 +131,8 @@ def test_activation_rejects_a_sealed_fixture_envelope() -> None:
 
 
 def test_consumer_inventory_has_unknown_zero_and_required_classes() -> None:
-    path = Path(__file__).parents[3] / "tests" / "aistock_validation" / "pit_v2" / "consumer_inventory.json"
-    inventory = json.loads(path.read_text(encoding="utf-8"))
+    path = Path(__file__).parents[3] / "tests" / "aistock_validation" / "pit_v2" / "window_scope_receipt.json"
+    inventory = json.loads(path.read_text(encoding="utf-8"))["consumer_inventory"]
     assert inventory["schema_version"] == "canonical_pit_consumer_inventory_v1"
     assert inventory["unknown_count"] == 0
     assert inventory["classification_counts"]["unknown"] == 0

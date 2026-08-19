@@ -474,7 +474,6 @@
         "backend/services/dataset_release/canonical_pit_w8_attestation.py",
         "backend/services/dataset_release/canonical_pit_activation_envelope.py",
         "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
-        "tests/aistock_validation/pit_v2/consumer_inventory.json",
         "tests/aistock_validation/pit_v2/window_scope_receipt.json"
       ],
       "source_ready_receipt": {
@@ -507,6 +506,38 @@
     "W7": {"owner": "Candidate Build", "write_boundary": "new candidate root plus control catalog and candidate-local CAS only", "forbidden": ["source_code", "production_db", "historical_candidate_overwrite"]},
     "W8": {"owner": "Independent Validation", "write_boundary": "validation receipts only", "forbidden": ["dataset_mutation", "candidate_mutation", "activation"]},
     "W9": {"owner": "Activation/Aftercare", "write_boundary": "separately authorized exact migration distribution activation receipts", "forbidden": ["source_change_after_w8", "inferred_restart", "inferred_cleanup"]}
+  },
+  "consumer_inventory": {
+    "schema_version": "canonical_pit_consumer_inventory_v1",
+    "source_commit": "2000f18e",
+    "classification_values": ["canonical_v2_formal", "canonical_v2_frozen_candidate", "canonical_v2_rolling_runtime", "legacy_reproduction_only", "test_fixture", "migration_tool", "unknown"],
+    "consumers": [
+      {"consumer_id": "qe_formal_training", "class": "canonical_v2_formal", "path": "backend/services/quantevolver/qe_dataset_contract.py"},
+      {"consumer_id": "qe_backtest_prediction", "class": "canonical_v2_formal", "path": "backend/services/quantevolver/qe_dataset_contract.py"},
+      {"consumer_id": "hmm_training_prediction", "class": "canonical_v2_frozen_candidate", "path": "backend/services/hmm_evolution/universe.py"},
+      {"consumer_id": "selection_center", "class": "canonical_v2_rolling_runtime", "path": "backend/services/selection_center/canonical_pit_runtime.py"},
+      {"consumer_id": "simulation", "class": "canonical_v2_rolling_runtime", "path": "backend/services/simulation_runtime"},
+      {"consumer_id": "paper_trading_v2", "class": "canonical_v2_rolling_runtime", "path": "backend/services/paper_trading_v2"},
+      {"consumer_id": "strategy_package", "class": "canonical_v2_frozen_candidate", "path": "backend/services/strategy_package/models.py"},
+      {"consumer_id": "advisory_historical_range", "class": "canonical_v2_frozen_candidate", "path": "backend/services/advisory_historical_range"},
+      {"consumer_id": "advisory_model_first", "class": "canonical_v2_rolling_runtime", "path": "backend/services/advisory_model_first"},
+      {"consumer_id": "shared_inference_engine", "class": "canonical_v2_rolling_runtime", "path": "backend/inference_engine.py"},
+      {"consumer_id": "dataset_release_candidate_builder", "class": "canonical_v2_frozen_candidate", "path": "backend/services/dataset_release"},
+      {"consumer_id": "historical_reproduction", "class": "legacy_reproduction_only", "path": "backend/services/canonical_equity_pit.py"},
+      {"consumer_id": "test_fixture", "class": "test_fixture", "path": "backend/tests/dataset_release"},
+      {"consumer_id": "migration_tooling", "class": "migration_tool", "path": "scripts/build_stock_universe_pit_spans.py"}
+    ],
+    "classification_counts": {"canonical_v2_formal": 2, "canonical_v2_frozen_candidate": 4, "canonical_v2_rolling_runtime": 5, "legacy_reproduction_only": 1, "test_fixture": 1, "migration_tool": 1, "unknown": 0},
+    "unknown_count": 0,
+    "fallback_scan": {"status": "pass", "legacy_fallback_count": 0, "latest_guessing_count": 0, "mixed_identity_count": 0},
+    "file_digests": {
+      "backend/services/quantevolver/qe_dataset_contract.py": "e370720805155559f4e0b2103b01c86fde6cd296ffe79eb382e04964083c7983",
+      "backend/services/hmm_evolution/universe.py": "a04274909c7948ece33ec6bec7a3a024b1549c2b7d86c19212568302ae8a4735",
+      "backend/services/selection_center/canonical_pit_runtime.py": "0e5956d0afdaa5496b59da852e0a792afa83117582fafb28e40fd5b07c9d3060",
+      "backend/inference_engine.py": "1f3e60045a0c8237cbcd2bbed567fb325e8f3b8b2e6c027ea023b1ad19cda890",
+      "backend/services/dataset_release/pit.py": "09a85279099c2b4279762c6b139ac794e4c0155b9678a209e7e5bcd1add2ea9c",
+      "backend/services/canonical_equity_pit.py": "16963de5e17e40f2c7064ad053f3297bddaa41156766fb1a6ea107a2f4656373"
+    }
   },
   "overlap_review": {
     "W1_W2": "serial_no_overlap",
