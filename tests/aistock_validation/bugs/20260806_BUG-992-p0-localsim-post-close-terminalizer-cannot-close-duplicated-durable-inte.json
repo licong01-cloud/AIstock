@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-992",
-  "closed_at": null,
+  "closed_at": "2026-08-19T02:10:29.112514Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -139,9 +139,9 @@
   },
   "first_seen_at": "2026-08-06T07:34:59.747195Z",
   "fix_branch": "bug/BUG-992-p0-localsim-post-close-terminalizer-cannot-close-20260818",
-  "fix_commit": null,
+  "fix_commit": "5bc68ab89f7b21730e6da28f446fee9464dee316",
   "fix_summary": "Require independent durable ExecutionPlan readback for predecessor/rebuild/current lineage, exact frozen-intent/trading-rule/cash-fit closure, and existing current-state CAS progression while preserving predecessor receipt hashes as audit history. Extend no-parent-resubmit recovery to historical FAILED_RETRYABLE with distinct typed evidence. 2026-08-18 continuation: recognize the F-122 TWAP-only retired-plan typed reject during historical failed-run recovery and terminalize the run as FAILED_TERMINAL with a hash-closed localsim_historical_legacy_plan_terminalization_v1 evidence carrier and zero side effects, instead of retrying the permanent policy rejection forever; non-retired policy errors stay on the existing retryable path.",
-  "fixed_at": null,
+  "fixed_at": "2026-08-18T04:52:22Z",
   "github_issue_number": 3184,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3184",
   "last_seen_at": "2026-08-06T07:34:59.747195Z",
@@ -149,7 +149,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": null,
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3586",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -188,9 +188,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_source_merge_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending_current_continuation",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-992\\post-restart-receipt-20260819.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-992",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_evidence",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "7b1fafc3311c7eec2f7eb08ca681bfe19ded9fadd2b672a5acf1904ba203bb3b",
+      "contract_digest": "e308a1ae605483573a93d43c753a3cf5638eea52e341fbe8fa3e72405a560359",
+      "expected_identity": "5bc68ab89f7b21730e6da28f446fee9464dee316",
+      "expected_terminal_outcome_digest": "f43ffefbb8772277d2d5698a3e5aa2e86cb83286bece1b5dbfb8c15f9b4535a6",
+      "generated_at": "2026-08-19T02:02:45.074023Z",
+      "mode": "read_only",
+      "observed_identity": "24eabb8e1c0ce0a85fa2d75ad99d347c84a0c64f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "857c07a689cf74d0292a276176cdc8cf48579f5e0031758f8de05ad1aa7bcc47",
+      "receipt_sha256": "1fe838911b005614a9d3eba00eac3f30d935747e0a4d286ce7b56aa2763a35a8",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f6ed2619255e1310f42b86feba36d81b3947a10127e3bb707d7aaa9c1a94b258",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -200,7 +222,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "in_progress",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -259,7 +281,8 @@
     "2026-08-18 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k \"legacy_plan or unreadable_policy or inline_twap or v25_plan_is_rejected or malformed_plan_policy\" (DEV enabled) -> 14 passed",
     "2026-08-18 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py (DEV enabled) -> 316 passed",
     "2026-08-18 python -m nox -s simulation_core_l2 (round-2 HEAD) -> 614 passed, 2 skipped",
-    "2026-08-18 python -m nox -s validation_module_registry_l0 (round-2 HEAD) -> 14/14 mapped; python -m nox -s l0 (round-2 HEAD) -> blocking=0"
+    "2026-08-18 python -m nox -s validation_module_registry_l0 (round-2 HEAD) -> 14/14 mapped; python -m nox -s l0 (round-2 HEAD) -> blocking=0",
+    "validation-receipt: id=8e04b5219046c28e commit=3bdd433990f7b3ac15dbd760b57b1ac4eb41f04d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k legacy_plan_terminalization_commits -q` result=`passed: 1 DEV PostgreSQL independent writer/readback test; terminal status plus typed carrier committed, 492 durable states unchanged, retry control cleared, disjoint backend PIDs, six-table disposable cleanup readback all 0`"
   ],
   "validation_receipts": [
     "validation-receipt: id=68c8daf0a1b7d9fe commit=8fb4aa7c234a8dcbb4faceb0a0d7b8688e277825 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`passed: 466 tests, 1 explicitly gated DEV PostgreSQL skip`",
