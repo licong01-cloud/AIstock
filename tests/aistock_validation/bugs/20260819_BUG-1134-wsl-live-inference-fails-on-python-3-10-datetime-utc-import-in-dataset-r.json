@@ -120,8 +120,8 @@
   },
   "first_seen_at": "2026-08-19T04:08:09.213132Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "970b7211f2ba3d3b08082b6dfbc3a26ba26508f6",
+  "fixed_at": "2026-08-19T13:35:06Z",
   "github_issue_number": 3621,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3621",
   "last_seen_at": "2026-08-19T04:08:09.213132Z",
@@ -129,6 +129,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3626",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -155,6 +156,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -165,7 +167,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -174,6 +176,19 @@
     "fingerprint": "a0a267bab4a8174e76d6611a",
     "source_event_id": "FE-20260819-a0a267bab4a8"
   },
+  "validation_evidence": [
+    "validation-receipt: id=faa9e08dc899cb31 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_wsl_python310_datetime_compat.py -q` result=`11 passed`",
+    "validation-receipt: id=ed57f83faef34fe9 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release -q` result=`745 passed, 4 skipped`",
+    "validation-receipt: id=e0cb216da1351248 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_control_store.py backend/tests/dataset_release/test_cas_store.py backend/tests/infra/test_realtime_quote_subscriber_leases.py -q` result=`47 passed, 1 skipped`",
+    "validation-receipt: id=46107d710ff0e167 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_adapter.py backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_binding.py backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_contract_failures.py backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py backend/tests/advisory_phase1/test_readiness_plan_isolation.py backend/tests/advisory_phase1/test_source_observer_isolation_static.py -q` result=`77 passed`",
+    "validation-receipt: id=4cfadbef530bd6fb commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=42a70fd1b2d17901 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=qlib_data_backend status=passed command=`nox -s qlib_data_backend` result=`15 passed`",
+    "validation-receipt: id=4cafe5a21187f10b commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=qmt_client_contract status=passed command=`nox -s qmt_client_contract` result=`3 passed`",
+    "validation-receipt: id=f1a1fc17637ec8e1 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=paper_v2_backend status=passed command=`nox -s paper_v2_backend` result=`1115 passed, 3 skipped, 2 xfailed`",
+    "validation-receipt: id=f1cdb7cd315ed0fb commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=miniqmt_execution_runtime_l2 status=passed command=`nox -s miniqmt_execution_runtime_l2` result=`1503 passed, 82 skipped`",
+    "validation-receipt: id=61019d13eec9104e commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=ruff plan=direct status=passed command=`ruff check backend/services/dataset_release/control_store.py backend/infra/qmt_client.py backend/infra/realtime_quote_subscriber.py backend/execution_algos/adaptive_is/contracts.py backend/tests/dataset_release/test_wsl_python310_datetime_compat.py` result=`All checks passed`",
+    "validation-receipt: id=1f8e5bdfed022ceb commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=compile plan=direct status=passed command=`python -m py_compile <5 changed files> and git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
