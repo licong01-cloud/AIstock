@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import date
 from types import SimpleNamespace
 
-from backend.services.advisory_forward.service import ACTION_WATCH, _build_publication_list
+from backend.services.advisory_forward.service import (
+    ACTION_WATCH,
+    AdvisoryForwardService,
+    _build_publication_list,
+)
 from backend.services.advisory_program import ACTION_HOLD, ACTION_WAITING, AdvisoryCandidate, AdvisoryProgram
 
 
@@ -94,3 +98,41 @@ def test_after_close_publication_keeps_active_episode_missing_from_selection_as_
     assert waiting.rank is None
     assert waiting.entry_price is None
     assert version.waiting_count == 1
+
+
+def test_forward_freezes_meta_label_role_policy_and_projection_identity() -> None:
+    resolution = SimpleNamespace(
+        program_id="advp_test",
+        binding_version_id="advb_test",
+        package_id="pkg_test",
+        manifest_sha256="a" * 64,
+        style_profile_id="style-test",
+        style_profile_hash="b" * 64,
+        bundle_id="c" * 64,
+        bundle_manifest_sha256="d" * 64,
+        model_role="meta_label_take_skip_confidence",
+        shadow_policy_sha256="e" * 64,
+        selection_runtime_semantics_hash="f" * 64,
+        feature_schema_version="advisory_feature_schema_v1",
+        feature_schema_hash="1" * 64,
+        component_roles={"lstm": "alpha_lstm", "fund": "alpha_fund"},
+        terminal_weights={"alpha_lstm": 0.7, "alpha_fund": 0.3},
+        descriptor_sha256="2" * 64,
+    )
+    service = object.__new__(AdvisoryForwardService)
+    service.model_service = SimpleNamespace(model_root=lambda: "/model-root")
+    service.model_resolver = SimpleNamespace(
+        is_configured=lambda **_: True,
+        resolve=lambda **_: resolution,
+    )
+
+    frozen = service._freeze_model_resolution(
+        program=_program(),
+        active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
+        selection_run=SimpleNamespace(),
+    )
+
+    assert frozen["status"] == "CONFIGURED"
+    assert frozen["model_role"] == "meta_label_take_skip_confidence"
+    assert frozen["shadow_policy_sha256"] == "e" * 64
+    assert frozen["terminal_weights"] == {"alpha_lstm": 0.7, "alpha_fund": 0.3}
