@@ -2416,6 +2416,142 @@ def test_post_restart_verify_blocks_scheduler_payload_with_active_blocker_on_htt
     assert smoke["semantic"]["verdict"] == "failed"
 
 
+def test_post_restart_verify_accepts_structured_clear_current_trade_date_blockers(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "scheduler_loop_health": {"status": "HEALTHY"},
+                    "current_trade_date_blockers": {
+                        "status": "CLEAR",
+                        "blocker_count": 0,
+                        "blockers": [],
+                        "observed_blocker_count": 0,
+                        "truncated": False,
+                        "execution_gate": False,
+                    },
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["blocking"] == []
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "scheduler_status"
+    assert smoke["semantic"]["verdict"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("blocker_count", 1),
+        ("observed_blocker_count", 1),
+        ("blockers", [{"reason": "ACTIVE_BLOCKER"}]),
+        ("execution_gate", True),
+        ("truncated", True),
+        ("status", "BLOCKED"),
+        ("blocker_count", None),
+    ],
+)
+def test_post_restart_verify_rejects_non_clear_structured_current_trade_date_blockers(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    blockers = {
+        "status": "CLEAR",
+        "blocker_count": 0,
+        "blockers": [],
+        "observed_blocker_count": 0,
+        "truncated": False,
+        "execution_gate": False,
+    }
+    blockers[field] = value
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "current_trade_date_blockers": blockers,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert (
+        "scheduler.current_trade_date_blockers"
+        in smoke["semantic"]["facts"]["markers"]
+    )
+
+
+@pytest.mark.parametrize("blockers", [None, {}, "CLEAR", 0, False])
+def test_post_restart_verify_rejects_malformed_current_trade_date_blockers(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    blockers: object,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "current_trade_date_blockers": blockers,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["semantic"]["facts"]["markers"] == [
+        "scheduler.current_trade_date_blockers"
+    ]
+
+
 def test_post_restart_verify_blocks_malformed_business_smoke_payload(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
