@@ -87,6 +87,7 @@ def build_fixture_candidate_validation_bundle(
     """Build schema evidence without claiming a W7 candidate exists."""
 
     timestamp = _utc_text(created_at)
+    normalized_artifact_root = _validate_artifact_root_identity(artifact_root_identity)
     payload = {
         "schema_version": CANDIDATE_BUNDLE_SCHEMA,
         "candidate_validation_id": _identifier(candidate_validation_id, "candidate_validation_id"),
@@ -108,7 +109,7 @@ def build_fixture_candidate_validation_bundle(
             "requested": _date_text(requested_cutoff, "requested_cutoff"),
             "effective": _date_text(effective_cutoff, "effective_cutoff"),
         },
-        "artifact_root_identity": _validate_artifact_root_identity(artifact_root_identity),
+        "artifact_root_identity": normalized_artifact_root,
         "artifact_root_digest": _sha(artifact_root_digest, "artifact_root_digest"),
         "pit_identity": {
             "authority_id": CANONICAL_PIT_AUTHORITY_ID,
@@ -133,7 +134,7 @@ def build_fixture_candidate_validation_bundle(
         "frozen_release": {
             "candidate_identity": _identifier(candidate_id, "frozen_release.candidate_identity"),
             "release_id": _identifier(release_id, "frozen_release.release_id"),
-            "allowlisted_root_id": _identifier(artifact_root_identity["root_id"], "allowlisted_root_id"),
+            "allowlisted_root_id": normalized_artifact_root["root_id"],
             "artifact_root_digest": _sha(artifact_root_digest, "frozen_release.artifact_root_digest"),
             "pit_snapshot_digest": _sha(frozen_snapshot_digest, "frozen_release.pit_snapshot_digest"),
             "calendar_digest": _sha(calendar_digest, "frozen_release.calendar_digest"),
@@ -203,12 +204,11 @@ def validate_candidate_validation_bundle(
         raise CanonicalPitCandidateBundleError("candidate identity fields are invalid")
     _identifier(candidate["candidate_id"], "candidate_id")
     _identifier(candidate["release_id"], "release_id")
-    if candidate != {
-        **candidate,
-        "scope": "fixture",
-        "production_eligible": False,
-        "training_eligible": False,
-    } or candidate["scope"] != "fixture":
+    if (
+        candidate["scope"] != "fixture"
+        or candidate["production_eligible"] is not False
+        or candidate["training_eligible"] is not False
+    ):
         raise CanonicalPitCandidateBundleError("W6 bundles must remain fixture/non-production/non-training")
     cutoff = payload["cutoff"]
     if not isinstance(cutoff, dict) or set(cutoff) != {"requested", "effective"}:

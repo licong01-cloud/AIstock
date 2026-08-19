@@ -83,6 +83,46 @@ def test_bundle_rejects_external_path_and_real_candidate_claim() -> None:
         validate_candidate_validation_bundle(value)
 
 
+@pytest.mark.parametrize("field", ["production_eligible", "training_eligible"])
+def test_bundle_rejects_tampered_eligibility_flags(field: str) -> None:
+    value = _bundle().as_dict()
+    value["candidate_identity"][field] = True
+    with pytest.raises(CanonicalPitCandidateBundleError):
+        validate_candidate_validation_bundle(value)
+
+
+def test_builder_rejects_malformed_artifact_root_with_typed_error() -> None:
+    kwargs = {
+        "candidate_validation_id": "fixture-validation-1",
+        "created_at": datetime(2026, 8, 19, tzinfo=timezone.utc),
+        "source_commit": "8bd31797a3ebb18991be179b04998e5b56043fbb",
+        "profile_id": "qe_hmm_full_v2",
+        "profile_digest": SHA,
+        "toolchain_sha": SHA,
+        "candidate_id": "fixture-candidate-1",
+        "release_id": "fixture-release-1",
+        "requested_cutoff": "2026-07-31",
+        "effective_cutoff": "2026-07-31",
+        "artifact_root_identity": {"root_relative_path": "fixture/candidate"},
+        "artifact_root_digest": SHA,
+        "frozen_snapshot_digest": SHA,
+        "rolling_at_cutoff_digest": SHA,
+        "calendar_digest": SHA,
+        "manifest_digest": SHA,
+        "consumer_inventory_digest": SHA,
+        "state_source_digest": SHA,
+        "component_digests": {name: SHA for name in ("daily_bin", "minute_bin", "factor_h5", "static_factors", "domestic_index", "hmm_inputs")},
+        "instrument_universe_digest": SHA,
+        "validation_results": {"status": "pass_fixture", "receipt_digest": SHA},
+        "resource_receipt_digest": SHA,
+        "consumer_smoke_results": {"status": "pass_fixture", "receipt_digest": SHA},
+        "no_external_path_dependency_proof": {"status": "pass", "external_mutable_path_count": 0, "proof_digest": SHA},
+        "historical_baseline_immutability_digest": SHA,
+    }
+    with pytest.raises(CanonicalPitCandidateBundleError):
+        build_fixture_candidate_validation_bundle(**kwargs)
+
+
 def test_w8_fixture_is_not_independently_attested_and_activation_stays_blocked() -> None:
     bundle = _bundle()
     receipt = build_fixture_w8_attestation(
