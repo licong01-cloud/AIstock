@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from backend.services.advisory_model_first import model_inference
 from backend.services.advisory_model_first.feature_schema_v1 import MODEL_FEATURE_COLUMNS
@@ -53,7 +54,7 @@ class _MetaBindingResolver:
 
 
 class _Selection20Service:
-    def __init__(self) -> None:
+    def __init__(self, *, candidate_count: int = 20) -> None:
         self.run = SimpleNamespace(
             status=SelectionRunStatus.SUCCEEDED,
             trade_date=pd.Timestamp("2026-07-21").date(),
@@ -62,7 +63,7 @@ class _Selection20Service:
             manifest_sha256_by_package={PACKAGE_ID: MANIFEST_SHA256},
             aggregate_results=[
                 _candidate(f"{rank:06d}.SZ", rank=rank, score=1.0 - rank / 100.0)
-                for rank in range(1, 21)
+                for rank in range(1, candidate_count + 1)
             ],
         )
 
@@ -107,7 +108,12 @@ def _meta_bundle() -> dict[str, object]:
             "bundle_id": "e" * 64,
             "request_id": "advmetareq_test",
         },
-        "feature_schema": {"trained_feature_names": list(MODEL_FEATURE_COLUMNS)},
+        "feature_schema": {
+            "schema_version": "advisory_feature_schema_v1",
+            "feature_schema_hash": "e56adb47d444df26e35eb327d3aacacd273477edf67c4c1db201ea5b4c3bd49c",
+            "trained_feature_names": list(MODEL_FEATURE_COLUMNS),
+            "categorical_vocabulary": {"l2_code_id": [1, 2]},
+        },
         "manifest_file_sha256": "f" * 64,
         "continuation_cutoff": "2026-02-02",
         "hmm_models": {"schema_version": "fresh_sector_hmm_bundle_v1", "models": {"1": {}}},
@@ -197,6 +203,90 @@ def test_meta_label_runtime_rejects_non_top20_program_before_feature_access() ->
         feature_source=feature_source,
         model_root_provider=lambda: "/model-root",
         meta_label_bundle_loader=lambda **_: _meta_bundle(),
+        binding_resolver=_MetaBindingResolver(),
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "MODEL_UNAVAILABLE"
+    assert result["reason_code"] == "ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH"
+    assert feature_source.last_kwargs == {}
+
+
+def test_meta_label_runtime_rejects_incomplete_selection_top20_before_feature_access() -> None:
+    feature_source = _FeatureSource()
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(target_count=20),
+        selection_service=_Selection20Service(candidate_count=19),
+        review_source=_ReviewSource(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model-root",
+        meta_label_bundle_loader=lambda **_: _meta_bundle(),
+        binding_resolver=_MetaBindingResolver(),
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "MODEL_UNAVAILABLE"
+    assert result["reason_code"] == "ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE"
+    assert feature_source.last_kwargs == {}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda scored: scored.__setitem__(
+            "entry_priority_rank", scored["entry_priority_rank"].astype(float) + 0.5
+        ),
+        lambda scored: scored.__setitem__("advisory_model_confidence", 0.0),
+        lambda scored: scored.__setitem__("decision_as_of_trade_date", pd.Timestamp("2026-07-19")),
+    ),
+)
+def test_meta_label_runtime_rejects_rank_confidence_or_clock_drift(monkeypatch, mutation) -> None:
+    monkeypatch.setattr(model_inference, "build_advisory_feature_matrix", _fake_feature_build)
+
+    def _mutated_scorer(bundle: object, features: pd.DataFrame) -> pd.DataFrame:
+        scored = _reverse_rank_scorer(bundle, features)
+        mutation(scored)
+        return scored
+
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(target_count=20),
+        selection_service=_Selection20Service(),
+        review_source=_ReviewSource(),
+        feature_source=_FeatureSource(),
+        model_root_provider=lambda: "/model-root",
+        meta_label_bundle_loader=lambda **_: _meta_bundle(),
+        meta_label_scorer=_mutated_scorer,
+        binding_resolver=_MetaBindingResolver(),
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "MODEL_UNAVAILABLE"
+    assert result["reason_code"] == "ADVISORY_META_LABEL_SCORING_INVALID"
+
+
+def test_meta_label_runtime_rejects_feature_schema_identity_drift_before_feature_access() -> None:
+    feature_source = _FeatureSource()
+    bundle = _meta_bundle()
+    bundle["feature_schema"]["feature_schema_hash"] = "9" * 64
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(target_count=20),
+        selection_service=_Selection20Service(),
+        review_source=_ReviewSource(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model-root",
+        meta_label_bundle_loader=lambda **_: bundle,
         binding_resolver=_MetaBindingResolver(),
     )
 

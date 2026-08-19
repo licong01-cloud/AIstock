@@ -340,6 +340,12 @@ class AdvisoryModelShadowService:
             bundle=bundle,
             resolution=resolution,
         )
+        if is_meta_label and len(candidates) != 20:
+            raise AdvisoryModelFirstError(
+                "meta-label challenger requires a complete Selection Top20 candidate group",
+                reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
+                context={"expected_count": 20, "actual_count": len(candidates)},
+            )
         pit_universe_key: str | None = None
         if has_canonical_pit_runtime_profile(selection_run.runtime_config):
             runtime_lease = require_canonical_pit_runtime_binding(
@@ -771,9 +777,17 @@ def _validate_meta_label_bundle_runtime(
         or manifest.get("shadow_policy_sha256") != resolution.shadow_policy_sha256
         or manifest.get("feature_schema_version") != resolution.feature_schema_version
         or manifest.get("feature_schema_hash") != resolution.feature_schema_hash
+        or feature_schema.get("schema_version") != resolution.feature_schema_version
+        or feature_schema.get("feature_schema_hash") != resolution.feature_schema_hash
         or manifest.get("bundle_id") != resolution.bundle_id
         or bundle.get("manifest_file_sha256") != resolution.bundle_manifest_sha256
         or tuple(feature_schema.get("trained_feature_names") or ()) != tuple(MODEL_FEATURE_COLUMNS)
+        or set(feature_schema.get("categorical_vocabulary") or {})
+        != set(CATEGORICAL_FEATURE_COLUMNS)
+        or any(
+            not tuple((feature_schema.get("categorical_vocabulary") or {}).get(column) or ())
+            for column in CATEGORICAL_FEATURE_COLUMNS
+        )
         or not _matches_terminal_weights(
             resolution.terminal_weights,
             component_roles=resolution.component_roles,
@@ -1076,7 +1090,15 @@ def _meta_label_candidates(
             "meta-label scorer output is incomplete",
             reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
         )
-    expected = features[["instrument", "selection_effective_rank", "parent_combined_score"]].copy()
+    expected = features[
+        [
+            "instrument",
+            "decision_as_of_trade_date",
+            "target_trade_date",
+            "selection_effective_rank",
+            "parent_combined_score",
+        ]
+    ].copy()
     expected["instrument"] = expected["instrument"].astype(str)
     actual = scored.copy()
     actual["instrument"] = actual["instrument"].astype(str)
@@ -1114,25 +1136,46 @@ def _meta_label_candidates(
             "meta-label scorer output contains an invalid numeric value",
             reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
         ) from exc
-    ranks = sorted(int(value) for value in numeric["entry_priority_rank"])
+    try:
+        decision_dates_match = pd.to_datetime(actual["decision_as_of_trade_date"]).equals(
+            pd.to_datetime(actual["decision_as_of_trade_date_expected"])
+        )
+        target_dates_match = pd.to_datetime(actual["target_trade_date"]).equals(
+            pd.to_datetime(actual["target_trade_date_expected"])
+        )
+    except (TypeError, ValueError) as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label scorer output contains an invalid decision clock",
+            reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
+        ) from exc
+    entry_ranks = numeric["entry_priority_rank"].to_numpy(dtype=float)
+    selection_ranks = numeric["selection_effective_rank"].to_numpy(dtype=float)
+    expected_selection_ranks = numeric["selection_effective_rank_expected"].to_numpy(dtype=float)
+    exit_ranks = numeric["selection_exit_rank"].to_numpy(dtype=float)
+    ranks = sorted(entry_ranks.astype(int).tolist())
     if (
         ranks != list(range(1, len(actual) + 1))
         or not np.isfinite(np.column_stack([numeric[column] for column in numeric_columns])).all()
+        or not np.array_equal(entry_ranks, np.rint(entry_ranks))
+        or not np.array_equal(selection_ranks, np.rint(selection_ranks))
+        or not np.array_equal(exit_ranks, np.rint(exit_ranks))
+        or not decision_dates_match
+        or not target_dates_match
         or not np.allclose(
             numeric["take_probability"] + numeric["skip_probability"],
             1.0,
             rtol=0.0,
             atol=1e-10,
         )
+        or not np.allclose(
+            numeric["advisory_model_confidence"],
+            abs(numeric["take_probability"] - 0.5) * 2.0,
+            rtol=0.0,
+            atol=1e-10,
+        )
         or ((numeric["take_probability"] < 0.0) | (numeric["take_probability"] > 1.0)).any()
-        or not np.array_equal(
-            numeric["selection_effective_rank"].to_numpy(dtype=int),
-            numeric["selection_effective_rank_expected"].to_numpy(dtype=int),
-        )
-        or not np.array_equal(
-            numeric["selection_exit_rank"].to_numpy(dtype=int),
-            numeric["selection_effective_rank_expected"].to_numpy(dtype=int),
-        )
+        or not np.array_equal(selection_ranks, expected_selection_ranks)
+        or not np.array_equal(exit_ranks, expected_selection_ranks)
         or set(actual["model_status"]) != {"EXPERIMENTAL_MODEL"}
         or set(actual["calibration_state"]) != {"UNCALIBRATED"}
     ):

@@ -186,4 +186,5 @@ rollback 仅移除/停用该精确 descriptor 并由用户重启；无需 DB 回
 - Design Round 1：将范围从“写 descriptor”修正为 role-aware exact loader/scorer 闭环，避免元标签 bundle 被旧 M1/M5 loader 误读。
 - Source Round 1：补齐 v1/v2 兼容、Top20 固定候选组、dual-rank 输出和 child model typed unavailable。
 - Source Round 2：未知 descriptor schema 改为配置无效；训练词表外行业编码同步置位 missing indicator，禁止静默 NaN。
+- Source Round 3：补齐 Selection 必须恰好为连续 Top20、feature schema/version/vocabulary 精确一致，以及 rank/clock/confidence 输出不变量；19 只候选或小数 rank 均 fail closed。
 - Real bundle smoke：后端同款 `AIstock` 环境加载 `e555903e...`，核对 103 个模型特征、107 个 HMM 模型、统一 cutoff `2026-02-02`，真实 LightGBM 输出 take `0.5535642729` / skip `0.4464357271`。
