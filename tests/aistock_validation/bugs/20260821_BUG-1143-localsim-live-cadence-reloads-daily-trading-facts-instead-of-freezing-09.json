@@ -10,6 +10,8 @@
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "backend/tests/simulation_runtime/test_daily_trading_context.py",
     "backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "backend/tests/paper_trading_v2/test_v25_day_features.py",
     "tests/aistock_validation/bugs/20260821_BUG-1143-localsim-live-cadence-reloads-daily-trading-facts-instead-of-freezing-09.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -29,6 +31,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260821-5f9f16a5c7f6",
       "timestamp": "2026-08-21T11:30:17.297044Z"
+    },
+    {
+      "action": "expand_test_scope_for_contract_migration",
+      "actor": "codex",
+      "note": "Updated existing Paper v2 direct tests because the approved design removes live previous-close/ST limit derivation and forbids V25 day-feature loads on the LocalSIM hot path.",
+      "timestamp": "2026-08-21T13:25:00Z"
     }
   ],
   "evidence_uris": [
@@ -47,6 +55,8 @@
       "backend/services/simulation_runtime/models.py",
       "backend/services/simulation_runtime/decision.py",
       "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/paper_trading_v2/test_market_data.py",
+      "backend/tests/paper_trading_v2/test_v25_day_features.py",
       "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
     ],
     "ownership": {
@@ -59,7 +69,9 @@
         "backend/services/simulation_runtime/scheduler.py",
         "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
         "backend/tests/simulation_runtime/test_daily_trading_context.py",
-        "backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py"
+        "backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py",
+        "backend/tests/paper_trading_v2/test_market_data.py",
+        "backend/tests/paper_trading_v2/test_v25_day_features.py"
       ],
       "impacted_modules": [
         "local_data",
@@ -179,7 +191,9 @@
         "backend/services/simulation_runtime/scheduler.py",
         "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
         "backend/tests/simulation_runtime/test_daily_trading_context.py",
-        "backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py"
+        "backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py",
+        "backend/tests/paper_trading_v2/test_market_data.py",
+        "backend/tests/paper_trading_v2/test_v25_day_features.py"
       ],
       "unmatched_files": []
     },
@@ -193,7 +207,9 @@
       "backend/services/simulation_runtime/scheduler.py",
       "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
       "backend/tests/simulation_runtime/test_daily_trading_context.py",
-      "backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py"
+      "backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py",
+      "backend/tests/paper_trading_v2/test_market_data.py",
+      "backend/tests/paper_trading_v2/test_v25_day_features.py"
     ]
   },
   "first_seen_at": "2026-08-21T11:30:17.297061Z",
@@ -220,7 +236,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
