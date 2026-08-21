@@ -34,6 +34,7 @@ from uuid import uuid4
 from backend.execution_algos.board_lot import board_lot_rule
 from backend.services.paper_trading_v2.market_data import (
     LocalSimMarketSnapshotV1,
+    LocalSimMarketSnapshotV2,
     MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
     assert_broker_market_source_match,
@@ -47,6 +48,7 @@ from backend.services.trading_core.execution_algo_retirement import (
     require_execution_algo_active,
 )
 from backend.services.simulation_runtime.models import (
+    DailyTradingContextV1,
     LocalSimExecutionRuntimeStatus,
     LocalSimExecutionStateV1,
     LocalSimMarketMarkProvenance,
@@ -199,7 +201,8 @@ class LocalSimBackend(BrokerBackend):
         self._deferred_fill_events: list[FillEvent] = []
         self._runtime_run_id: str | None = None
         self._runtime_binding_id: str | None = None
-        self._market_snapshot: LocalSimMarketSnapshotV1 | None = None
+        self._market_snapshot: LocalSimMarketSnapshotV1 | LocalSimMarketSnapshotV2 | None = None
+        self._daily_trading_context: DailyTradingContextV1 | None = None
 
     # ----- Read accessors used by adapter / tests -----
     @property
@@ -556,6 +559,54 @@ class LocalSimBackend(BrokerBackend):
                     "eligible_bar_after": cursor.isoformat(),
                 },
             )
+        plan_payload = getattr(plan, "plan_payload_json", {})
+        raw_daily_context = plan_payload.get("daily_trading_context") if isinstance(plan_payload, dict) else None
+        if not isinstance(raw_daily_context, dict):
+            if not isinstance(self._market_data_provider, PaperV2MinuteMarketDataProvider):
+                # Untyped, DB-free broker test doubles predate the persisted
+                # plan contract. Runtime ExecutionPlan objects never enter
+                # this compatibility branch.
+                self._bound_plan_id = str(getattr(plan, "plan_id"))
+                self._scheduler_as_of_time = as_of_time
+                self._eligible_bar_after = cursor
+                symbols = {
+                    str(getattr(intent, "symbol", "") or "").strip()
+                    for intent in tuple(getattr(plan, "intents", ()) or ())
+                }
+                symbols.update(self._ledger.positions)
+                self._prepare_realtime_market_snapshot(
+                    symbols=symbols,
+                    trade_date=getattr(plan, "target_trade_date"),
+                    as_of_time=as_of_time,
+                )
+                return
+            raise BrokerSubmitError(
+                "LocalSim realtime execution plan is missing DailyTradingContextV1",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_TRADING_CONTEXT_MISSING",
+                    "plan_id": getattr(plan, "plan_id", None),
+                },
+            )
+        try:
+            daily_context = DailyTradingContextV1.model_validate(raw_daily_context)
+        except Exception as exc:
+            raise BrokerSubmitError(
+                "LocalSim realtime execution plan has an invalid DailyTradingContextV1",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_TRADING_CONTEXT_INVALID",
+                    "plan_id": getattr(plan, "plan_id", None),
+                },
+            ) from exc
+        if daily_context.trade_date != target_trade_date:
+            raise BrokerSubmitError(
+                "LocalSim daily trading context trade_date conflicts with the execution plan",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_TRADING_CONTEXT_IDENTITY_CONFLICT",
+                    "plan_id": getattr(plan, "plan_id", None),
+                    "target_trade_date": str(target_trade_date),
+                    "context_trade_date": daily_context.trade_date.isoformat(),
+                },
+            )
         self._bound_plan_id = str(getattr(plan, "plan_id"))
         self._scheduler_as_of_time = as_of_time
         self._eligible_bar_after = cursor
@@ -563,6 +614,18 @@ class LocalSimBackend(BrokerBackend):
             str(getattr(intent, "symbol", "") or "").strip() for intent in tuple(getattr(plan, "intents", ()) or ())
         }
         symbols.update(self._ledger.positions)
+        missing_context_symbols = sorted(symbols - set(daily_context.symbols))
+        if missing_context_symbols:
+            raise BrokerSubmitError(
+                "LocalSim daily trading context does not cover the runtime symbol set",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_TRADING_CONTEXT_SYMBOL_MISSING",
+                    "plan_id": getattr(plan, "plan_id", None),
+                    "context_id": daily_context.context_id,
+                    "missing_symbols": missing_context_symbols,
+                },
+            )
+        self._daily_trading_context = daily_context
         self._prepare_realtime_market_snapshot(
             symbols=symbols,
             trade_date=getattr(plan, "target_trade_date"),
@@ -1283,7 +1346,7 @@ class LocalSimBackend(BrokerBackend):
         symbols: Iterable[str],
         trade_date: date,
         as_of_time: datetime,
-    ) -> LocalSimMarketSnapshotV1:
+    ) -> LocalSimMarketSnapshotV1 | LocalSimMarketSnapshotV2:
         normalized = sorted({str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()})
         current = self._market_snapshot
         if current is not None and current.trade_date == trade_date and current.as_of_time == as_of_time:
@@ -1351,12 +1414,44 @@ class LocalSimBackend(BrokerBackend):
                         "as_of_time": as_of_time.isoformat(),
                     },
                 )
-        snapshot = LocalSimMarketSnapshotV1(
+        daily_context = self._daily_trading_context
+        if daily_context is None or daily_context.trade_date != trade_date:
+            if not isinstance(self._market_data_provider, PaperV2MinuteMarketDataProvider):
+                snapshot = LocalSimMarketSnapshotV1(
+                    trade_date=trade_date,
+                    as_of_time=as_of_time,
+                    source=self._data_source,
+                    market_inputs=market_inputs,
+                    errors=errors,
+                )
+                self._market_snapshot = snapshot
+                return snapshot
+            raise BrokerConnectivityError(
+                "LocalSim realtime snapshot is missing its frozen daily context",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_TRADING_CONTEXT_MISSING",
+                    "trade_date": trade_date.isoformat(),
+                },
+            )
+        missing_context_symbols = sorted(set(normalized) - set(daily_context.symbols))
+        if missing_context_symbols:
+            raise BrokerConnectivityError(
+                "LocalSim realtime snapshot symbols are not covered by the frozen daily context",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_TRADING_CONTEXT_SYMBOL_MISSING",
+                    "context_id": daily_context.context_id,
+                    "missing_symbols": missing_context_symbols,
+                },
+            )
+        snapshot = LocalSimMarketSnapshotV2(
             trade_date=trade_date,
             as_of_time=as_of_time,
             source=self._data_source,
             market_inputs=market_inputs,
             errors=errors,
+            daily_trading_context_id=daily_context.context_id,
+            daily_trading_context_hash=daily_context.context_hash,
+            symbol_set_hash=canonical_json_sha256(normalized),
         )
         self._market_snapshot = snapshot
         return snapshot
@@ -1398,15 +1493,77 @@ class LocalSimBackend(BrokerBackend):
         )
 
     def _load_realtime_market_input_uncached(self, *, symbol: str, trade_date: Any, as_of_time: datetime) -> Any:
-        try:
-            market_input = self._market_data_provider.load_observed_intraday(
-                symbol=symbol,
-                trade_date=trade_date,
-                source=self._data_source,
-                until_time=as_of_time,
-                require_suspend_status=True,
-                require_day_features=False,
+        daily_context = self._daily_trading_context
+        fact = daily_context.symbols.get(symbol) if daily_context is not None else None
+        if daily_context is None or fact is None or daily_context.trade_date != trade_date:
+            if not isinstance(self._market_data_provider, PaperV2MinuteMarketDataProvider):
+                try:
+                    market_input = self._market_data_provider.load_observed_intraday(
+                        symbol=symbol,
+                        trade_date=trade_date,
+                        source=self._data_source,
+                        until_time=as_of_time,
+                        require_suspend_status=True,
+                        require_day_features=False,
+                    )
+                except DataUnavailableError as exc:
+                    raise BrokerConnectivityError(
+                        "LocalSim could not load injected test minute market data",
+                        context={
+                            "reason_code": "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE",
+                            "symbol": symbol,
+                            "trade_date": trade_date.isoformat(),
+                            "source": self._data_source.value,
+                            "observed_until": as_of_time.isoformat(),
+                            "cause": exc.message,
+                        },
+                    ) from exc
+                self._validate_observed_bar_stream(
+                    symbol=symbol,
+                    trade_date=trade_date,
+                    observed_bars=market_input.minute_bars,
+                )
+                return market_input
+            raise BrokerConnectivityError(
+                "LocalSim realtime stream is missing its frozen daily trading fact",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_TRADING_FACT_MISSING",
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                },
             )
+        frozen_reference = {
+            "schema_version": "daily_trading_context_reference_v1",
+            "context_id": daily_context.context_id,
+            "context_hash": daily_context.context_hash,
+            "trade_date": daily_context.trade_date.isoformat(),
+            "symbol_set_hash": daily_context.symbol_set_hash,
+            "stk_limit_row_hash": fact.stk_limit_row_hash,
+            "source": "market.stk_limit",
+            "symbol_fact": fact.canonical_payload(),
+        }
+        try:
+            loader_kwargs = {
+                "symbol": symbol,
+                "trade_date": trade_date,
+                "source": self._data_source,
+                "until_time": as_of_time,
+                "require_suspend_status": True,
+                "require_day_features": False,
+                "frozen_daily_fact": frozen_reference,
+            }
+            try:
+                market_input = self._market_data_provider.load_observed_intraday(**loader_kwargs)
+            except TypeError as exc:
+                if "frozen_daily_fact" not in str(exc) or isinstance(
+                    self._market_data_provider,
+                    PaperV2MinuteMarketDataProvider,
+                ):
+                    raise
+                # Compatibility for DB-free injected test providers. The
+                # production provider above never enters this branch.
+                loader_kwargs.pop("frozen_daily_fact")
+                market_input = self._market_data_provider.load_observed_intraday(**loader_kwargs)
         except DataUnavailableError as exc:
             raise BrokerConnectivityError(
                 "LocalSim could not load realtime minute market data",
