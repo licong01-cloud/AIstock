@@ -1,0 +1,210 @@
+{
+  "actual": "BUG-1137 worker-role fix is active, but the K6-D online creation path incorrectly requires an offline TCA execution_parent_benchmark row even though the immutable paper_v2 ExecutionPlan already owns the admitted parent authority.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260821_BUG-1142-miniqmt-k6-d-plan-start-lacks-parent-benchmark-authority-after-worker-ro.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/miniqmt_execution_runtime/kernel_repository_k2b.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1142",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-21T08:45:40.994396Z",
+  "description": "BUG-1137 worker-role fix is active, but the K6-D online creation path incorrectly requires an offline TCA execution_parent_benchmark row even though the immutable paper_v2 ExecutionPlan already owns the admitted parent authority.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260821-6b2aff531e96",
+      "timestamp": "2026-08-21T08:45:40.994376Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Approved K6-D design requires online parent authority from immutable ExecutionPlan; scope includes V2 ALGO_START, route closure, dependent-BUY plan ownership, and direct regression tests while preserving the V1 TCA path.",
+      "timestamp": "2026-08-21T09:52:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "KERNEL_V2 plan-start reads every admitted parent from the exact immutable paper_v2 ExecutionPlan, independently closes runtime/plan/binding/release/date/policy lineage, and never requires offline TCA materialization before ALGO_START or dependent-BUY evaluation.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-21T08:45:40.994396Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3645,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3645",
+  "last_seen_at": "2026-08-21T08:45:40.994396Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_eb8fcd6d852a5031",
+  "required_verification": [
+    "l0",
+    "miniqmt_execution_runtime_l2",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked K6-D ExecutionPlan authority fix and passed 65 product runtime integration tests without broker, scheduler, or database side effects.",
+      "Fresh nox process loaded the tracked MiniQMT runtime sources and passed miniqmt_execution_runtime_l2: 1506 passed, 82 skipped; no production process control.",
+      "Fresh nox MiniQMT simulation stub process passed 359 scheduler and ledger tests with 2 skipped; fake-QMT only and no production broker or scheduler side effects."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT K6-D plan start lacks parent benchmark authority after worker-role fix",
+  "trigger_condition": {
+    "fingerprint": "6b2aff531e9617e715778d61",
+    "source_event_id": "FE-20260821-6b2aff531e96"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "miniqmt_execution_runtime"
+      ],
+      "plans": [
+        "miniqmt_execution_runtime_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "miniqmt_execution_runtime"
+        ],
+        "plans": [
+          "miniqmt_execution_runtime_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "allowed"
+}
