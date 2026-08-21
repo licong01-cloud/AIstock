@@ -226,6 +226,24 @@ def canonical_json_sha256(payload: dict[str, Any] | list[Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _require_strict_json_value(value: Any, *, path: str) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ValueError(f"{path} requires exact string keys")
+            _require_strict_json_value(item, path=f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _require_strict_json_value(item, path=f"{path}[{index}]")
+        return
+    if type(value) is float and not math.isfinite(value):
+        raise ValueError(f"{path} contains a non-finite number")
+    if value is None or type(value) in {str, bool, int, float}:
+        return
+    raise ValueError(f"{path} contains a non-canonical JSON value")
+
+
 def miniqmt_kernel_runtime_id(*, plan_id: str, binding_id: str, trade_date: date) -> str:
     """Single stable runtime identity for the final MiniQMT product route."""
 
@@ -974,6 +992,9 @@ class DailyTradingContextV1(BaseModel):
 
     @model_validator(mode="after")
     def _daily_context_identity_matches_payload(self) -> "DailyTradingContextV1":
+        if self.captured_at.tzinfo is None or self.captured_at.utcoffset() is None:
+            raise ValueError("daily trading context captured_at must be timezone-aware")
+        _require_strict_json_value(self.sources, path="daily_trading_context.sources")
         normalized = tuple(sorted(set(self.symbol_set)))
         if normalized != self.symbol_set or not normalized:
             raise ValueError("daily trading context symbol_set must be non-empty, unique, and sorted")

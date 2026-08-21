@@ -18,6 +18,7 @@ import json
 import math
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Protocol
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -699,6 +700,11 @@ class DailyTradingContextProvider:
             DailyTradingSymbolFactV1,
         )
 
+        captured_at = (
+            as_of_time.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+            if as_of_time.tzinfo is None
+            else as_of_time.astimezone(ZoneInfo("Asia/Shanghai"))
+        )
         raw_symbols = [str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()]
         normalized_aliases = [symbol.upper() for symbol in raw_symbols]
         if len(set(raw_symbols)) != len(set(normalized_aliases)):
@@ -712,7 +718,7 @@ class DailyTradingContextProvider:
                 "daily trading context requires a non-empty exact symbol set",
                 context={"reason_code": "DAILY_TRADING_CONTEXT_SYMBOL_SET_EMPTY"},
             )
-        if as_of_time.date() != trade_date:
+        if captured_at.date() != trade_date:
             raise DataUnavailableError(
                 "daily trading context time must match trade_date",
                 context={
@@ -721,7 +727,7 @@ class DailyTradingContextProvider:
                     "as_of_time": as_of_time.isoformat(),
                 },
             )
-        if as_of_time.time().replace(tzinfo=None) < self.ready_after:
+        if captured_at.time().replace(tzinfo=None) < self.ready_after:
             raise DataUnavailableError(
                 "daily trading context is waiting for the 09:10 stk_limit window",
                 context={
@@ -838,7 +844,7 @@ class DailyTradingContextProvider:
             "symbol_set": list(normalized),
             "symbol_set_hash": symbol_hash,
             "calendar_service_snapshot_id": calendar_snapshot_id,
-            "captured_at": as_of_time.isoformat(),
+            "captured_at": captured_at.isoformat(),
             "sources": sources,
             "symbols": {symbol: fact.canonical_payload() for symbol, fact in sorted(facts.items())},
         }
@@ -853,7 +859,7 @@ class DailyTradingContextProvider:
             symbol_set=normalized,
             symbol_set_hash=symbol_hash,
             calendar_service_snapshot_id=calendar_snapshot_id,
-            captured_at=as_of_time,
+            captured_at=captured_at,
             sources=sources,
             symbols=facts,
         )

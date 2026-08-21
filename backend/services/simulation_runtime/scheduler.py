@@ -18417,7 +18417,12 @@ class SimulationLifecycleScheduler:
             return {}
         daily_loader = getattr(self.context_provider, "load_daily_trading_context", None)
         frozen_daily_statuses: dict[str, dict[str, Any]] = {}
-        if callable(daily_loader):
+        planning_as_of = scheduler_time(as_of_time)
+        requires_live_daily_context = trade_date == planning_as_of.date() and (
+            binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            or context.market_data_source == MinuteDataSource.TDX_REALTIME.value
+        )
+        if callable(daily_loader) and requires_live_daily_context:
             service = self.trading_calendar_service
             if service is None:
                 raise DataUnavailableError(
@@ -18430,7 +18435,7 @@ class SimulationLifecycleScheduler:
                 trade_date=trade_date,
                 binding=binding,
                 runtime_release=runtime_release,
-                as_of_time=scheduler_time(as_of_time),
+                as_of_time=planning_as_of,
                 calendar_service_snapshot=calendar_snapshot,
             )
         if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
@@ -18445,6 +18450,8 @@ class SimulationLifecycleScheduler:
                     }
                     if frozen_statuses:
                         return frozen_statuses
+                if not requires_live_daily_context:
+                    return {}
                 if getattr(self.context_provider, "provider_mode", None) == "production":
                     raise DataUnavailableError(
                         "LocalSIM production planning requires DailyTradingContextV1",
