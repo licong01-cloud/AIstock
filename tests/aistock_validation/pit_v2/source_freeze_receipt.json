@@ -1,203 +1,168 @@
 {
-  "schema_version": "pit_v2_source_freeze_receipt_v1",
-  "observed_at": "2026-08-12T17:52:37.1355038Z",
-  "mode": "read_only",
+  "schema_version": "pit_v2_source_freeze_receipt_v2",
+  "observed_at": "2026-08-21T13:30:24.2929185Z",
+  "mode": "read_only_final_w6_source_freeze",
   "source": {
-    "branch": "feature/qe-pit-v2-phase0-inventory-20260813",
-    "head": "708d22395ecc8a6c5097a3441dd0e3ae133cc4a7",
-    "origin_main": "708d22395ecc8a6c5097a3441dd0e3ae133cc4a7",
-    "master_design": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md"
+    "branch": "docs/qe-pit-v2-w6-source-freeze-20260821",
+    "implementation_source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+    "w6_pr": "https://github.com/licong01-cloud/AIstock/pull/3622",
+    "w6_merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "head": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "origin_main": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "tree": "088090e8d3b44391544b7ca78c5d50980f9cd2b2",
+    "worktree_clean": true,
+    "receipt_metadata_changes_excluded_from_source_freeze": true,
+    "master_design": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+    "master_design_sha256": "c76ee888ab3679ade8e597445dcbbb30a18f4e2f8c9f03f2dc37bd2414f728fc",
+    "w6_scope_receipt_sha256": "9ce8cc793dce69a84db5fc79f60176f410a5589ddffc8a7be86ef85803099a23",
+    "design_compliance_receipt": "tests/aistock_validation/pit_v2/design_compliance_receipt.json",
+    "design_compliance_receipt_sha256": "2ccf9ae28c231f8912506998d86819b05bb4db415c107bbc291cfc270834fa91"
   },
   "initial_migration": {
+    "plan_path": "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
+    "file_sha256": "23ac3b6872a87768b1d555c6c985560455f420a19b8aec1925801cf2d80d1931",
+    "plan_id": "pit_v2_initial_20260731_v1",
+    "plan_digest": "995a268c6e982d433737c661fddbbbed26d59852f37c716c42e940bc5323d442",
     "requested_cutoff": "2026-07-31",
     "effective_cutoff": "2026-07-31",
-    "calendar_encoding": "market_trading_calendar_rows_v1:YYYY-MM-DD|0/1\\n:cal_date_asc",
-    "calendar_range_start": "2018-08-01",
-    "calendar_range_end": "2026-07-31",
-    "calendar_row_count": 2922,
-    "trading_day_count": 1940,
-    "cutoff_is_trading": true,
-    "calendar_sha256": "2b826bf599fa88f0496d91a517ebfdca6ab4ea4575a2c5cac11b6131d2d6b745"
+    "allowed_scopes": ["sample", "full"],
+    "sample_instruments": ["000001.SZ", "300379.SZ", "600462.SH", "600930.SH", "688981.SH"],
+    "sample_is_validation_only": true,
+    "full_requires_sample_terminal_pass": true,
+    "candidate_only": true
   },
   "profiles": {
     "legacy_v1": {
+      "path": "configs/datasets/qe_backtest_monthly_v1.yaml",
+      "file_sha256": "c2a9a2b14ae3d1b1eb9468ae5b26d05470d61185e93fd824d7d8381eaca3ed9e",
       "profile": "qe_hmm_full_v1",
       "config_digest": "aef6dff42371e0891cec0d73e8495551119f4601a614e85acfb4f8f43aed139c",
       "semantic_profile_digest": "fa75a5bec2251d9a39146789fd5c898caeb72c8400d02b4bb92037fdc8a100d5",
       "universe_key": "shsz_st_pit_active_v1",
-      "authority_status": "DEPLOYED_LEGACY_PENDING_MIGRATION"
+      "rule_version": "st_pub_next_trade_restore_active_l_v1",
+      "declared_authority_status": "DEPLOYED_LEGACY_PENDING_MIGRATION"
     },
     "canonical_v2": {
+      "path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+      "file_sha256": "4ae6137dcfbdd2e54c88b0c55fc32def24312aefdb6319cb325427025f46e74d",
       "profile": "qe_hmm_full_v2",
-      "config_digest": "7ba9b5ced83bb6e377ee52f9c6585b15a2ae9020258e8f15e6b6614f087d372d",
+      "config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
       "semantic_profile_digest": "6eb56920fbbf5485e0285831beee0612d3edd74abc0ed24742cc34cb4081706c",
       "universe_key": "aistock_equity_pit_canonical_v2",
-      "authority_status": "ACTIVE_CANONICAL"
+      "rule_version": "shsz_a_252td_st_delist_asof_v2",
+      "declared_target_authority_status": "ACTIVE_CANONICAL",
+      "candidate_root_id": "aistock-x-candidate-v1",
+      "candidate_root": "X:\\AIstock_dataset_candidates\\backtest_dataset_candidates",
+      "control_root": "X:\\AIstock_dataset_release_control"
     },
-    "resource_policy_digest": "58fb44371741e9b8f42de11e7a03c251bebf787f4ae2f8ebe61e1e6d998eefbc",
-    "qlib_toolchain_profile_digest": "2e124eff8ad3eb414d6c86ddb4f9686648aeb2f7d945549d65763f73ff9a55bd"
+    "nested_digest_method": "sha256(canonical_json(dataclasses.asdict))",
+    "resource_policy_digest": "0a056c5b810d85066b4b1439df7cb6b1ddba5cd9ce0eedcf603d9d23f6fc680a",
+    "qlib_toolchain_profile_digest": "7df2d592b9abc90da18f2c8006090197e29f2d80eccc0bf9dfd328b6ba71361e",
+    "index_codes": [
+      "000001.SH", "000016.SH", "000300.SH", "000688.SH", "000852.SH", "000905.SH",
+      "000985.CSI", "932000.CSI", "399001.SZ", "399006.SZ", "399102.SZ", "399107.SZ"
+    ],
+    "hmm_benchmark": "000300.SH"
   },
-  "production_dataset": {
-    "contract_id": "qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2",
-    "signal_end_date": "2026-06-30",
-    "qe_dataset_contract_env_override_present": false,
-    "qlib_bin": {
-      "path": "/home/lc999/data/qlib_bin",
-      "snapshot_id": "qlib_bin_st_pit_active_daily_candidate_20180801_20260630",
-      "size_bytes": 405619378,
-      "instruments_sha256": "94c9d82de1ba60446d7d6114b39b1066fa3bda3f2a7b9787bb7f0ad4a2a05ca4",
-      "calendar_sha256": "6ab71db126fd8c0173831162d5413691c33bfecbbc81db687d8a2de7cc776031",
-      "meta_export_sha256": "66c5c070b368ec1352ce4031dce4be982d44894e58968bb3ead0cdc5b65eefb3",
-      "source_constant_parity": "PASS"
+  "operator_contract_files": {
+    ".codex/skills/update-backtest-dataset/SKILL.md": "2dfead9b2293af69fbbaedc58c56bc503cd337e47e4101b1769379901b6c19ad",
+    ".codex/skills/update-backtest-dataset/references/monthly-workflow.md": "51f164290fe377177470afb6c6fecf937e7a9451d610a210ff5bfd506fab3692",
+    ".codex/skills/update-backtest-dataset/references/resource-and-worker.md": "bc8da4d9cf56b39aa095374826fe1d94e5986b00b5e1f0ceaab7416eb60f3be7",
+    ".codex/skills/update-backtest-dataset/references/release-receipt.md": "055e7f1c07c51ca539806ea635890a2fcd1348062f4b479c7608b241f530e071",
+    ".codex/skills/update-backtest-dataset/references/index-hmm-contract.md": "3f1503e797a84821fe5c3d1b1680352ae51400e5f733a18d49fbed9c699126c3",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md": "052593b54a6e463b5e479bd31a47445251c5e0ed9dacea775e985f9a9be0b66b"
+  },
+  "control_plane": {
+    "control_store": {
+      "control_store_id": "dsc_6defc25f3e0d4fdda73c1a3431259cc0",
+      "schema_version": 1,
+      "integrity": "PASS",
+      "quick_check": "ok",
+      "journal_mode": "wal"
     },
-    "factor_data": {
-      "active_path": "/home/lc999/data/factor_data",
-      "resolved_path": "/home/lc999/data/factor_data_versions/qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2",
-      "size_bytes": 5558977337,
-      "long_trend_manifest_sha256": "f281a206bb90421fe97e8850b3155e846213d0bc386e728bd0256450639d6838"
+    "catalog_activity": {
+      "attempt_count": 0,
+      "run_count": 0,
+      "lease_state_counts": {"FREE": 3},
+      "active_claim_count": 0,
+      "read_mode": "sqlite_uri_mode_ro"
+    },
+    "fresh_process_preflight": {
+      "status": "PASS",
+      "code_sha": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+      "profile_config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
+      "semantic_profile_digest": "6eb56920fbbf5485e0285831beee0612d3edd74abc0ed24742cc34cb4081706c",
+      "qlib_toolchain_digest": "90cbebc9034cbf6b3ed611b1d56ce4670dfc03b53dc8d8181b61edf71a4bc6ba",
+      "dump_bin_sha256": "b8f34c57ce1ef4b1772f3909735e66058f21b25bd7ab8a5f16318822401fe53f",
+      "subprocess_runner_sha256": "251e68e500eb17f9376641710e444618c1650acdb824e19d4707f997e161b956",
+      "wsl_resource_guardian_sha256": "df28234794ec29ac98a1f554c773c4e738776cef9238820af230f247d619ea95",
+      "claims": 0,
+      "heartbeat_writes": 0,
+      "data_process_started": false,
+      "database_writes": 0,
+      "production_writes": 0,
+      "process_controls": 0
+    },
+    "registered_worker": {
+      "instance_id": "dsw_e8b4483644e54bb084022c079af901ae",
+      "status": "IDLE",
+      "claim_kind": null,
+      "claim_id": null,
+      "code_sha": "4d3d6e5f946a48320de693c5f30bc14786007e76",
+      "profile_config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
+      "last_poll_at": "2026-08-21T13:27:25.722482+00:00",
+      "code_matches_source_freeze": false,
+      "restart_performed": false
     }
   },
-  "runtime": {
+  "runtime_and_production_readback": {
     "backend": {
       "health": "ok",
-      "merge_commit": "7fb64a7e3df5e2d0ab1dbe5e0bb57badf82a5b21",
-      "source_alignment_with_w0_head": false
+      "runtime_identity": "f8b9d16106a7841a153d1504ba73022f34b176b5",
+      "contains_w6_merge": false,
+      "restart_owner": "user",
+      "restart_performed": false,
+      "backend_restart_required_for_w7_cli": false
     },
-    "dataset_worker": {
-      "status": "IDLE",
-      "claim_id": null,
-      "pid": 1254472,
-      "code_sha": "034ccd36dd94441ec8c0fe0f94010d6874b8b799",
-      "profile_digests": {
-        "qe_hmm_full_v2": "7ba9b5ced83bb6e377ee52f9c6585b15a2ae9020258e8f15e6b6614f087d372d"
-      }
+    "paper_canonical_pit": {
+      "production_activation_performed": false,
+      "activation_ready": false,
+      "activation_blocker_count": 16,
+      "canonical_profile_version_count": 0,
+      "legacy_profile_version_count": 1,
+      "unfinished_run_count": 13
     },
-    "compute_nodes": [
-      {
-        "node_id": "wsl2-5080",
-        "status": "online",
-        "resolved_data_root_uri": "/home/lc999/data/factor_data_versions/qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2",
-        "dataset_identity_complete": false,
-        "reason_code": "qe_dataset_manifest_missing",
-        "long_trend_snapshot_id": "qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2",
-        "long_trend_manifest_sha256": "f281a206bb90421fe97e8850b3155e846213d0bc386e728bd0256450639d6838"
-      },
-      {
-        "node_id": "rdagent-node1",
-        "status": "online",
-        "resolved_data_root_uri": "/home/lc999/data/factor_data_versions/qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2",
-        "dataset_identity_complete": false,
-        "reason_code": "qe_dataset_manifest_missing",
-        "long_trend_snapshot_id": "qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2",
-        "long_trend_manifest_sha256": "f281a206bb90421fe97e8850b3155e846213d0bc386e728bd0256450639d6838"
-      }
-    ]
+    "production_dataset_read": false,
+    "historical_candidate_read": false,
+    "dataset_files_modified": 0,
+    "production_database_writes": 0,
+    "production_pointer_changes": 0,
+    "service_process_controls": 0
   },
-  "consumer_scan": {
-    "pattern": "shsz_st_pit_active_v1|shsz_st_pit_qe_dataset_[a-z0-9_.-]+",
-    "roots": ["backend", "scripts", "configs", ".codex", "tests"],
-    "file_count": 67,
-    "classification_counts": {
-      "production_consumer": 12,
-      "candidate_builder": 8,
-      "reproduction_only": 17,
-      "test_fixture": 30,
-      "unknown": 0
-    },
-    "production_consumer": [
-      "backend/services/advisory_dev_input_onboarding/contracts.py",
-      "backend/services/advisory_dev_input_onboarding/phase1e_orchestration.py",
-      "backend/services/advisory_historical_range/catalog_postgres.py",
-      "backend/services/advisory_historical_range/catalog_source_cache.py",
-      "backend/services/advisory_historical_range/decision_mark_provider.py",
-      "backend/services/advisory_historical_range/requirement_planner.py",
-      "backend/services/advisory_modeling/feature_sources.py",
-      "backend/services/hmm_evolution/universe.py",
-      "backend/services/quantevolver/qe_dataset_contract.py",
-      "backend/services/selection_center/runtime_profile.py",
-      "backend/services/stock_universe_pit_service.py",
-      "backend/services/strategy_package/advisory_input_projection.py"
-    ],
-    "candidate_builder": [
-      "backend/mcp/modules/qlib_export.py",
-      "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/services/dataset_release/profile.py",
-      "configs/datasets/qe_backtest_monthly_v1.yaml",
-      "scripts/backfill_factor_cache.py",
-      "scripts/build_stock_universe_pit_spans.py",
-      "scripts/export_suspend_d_candidate.py",
-      "scripts/hmm_risk/repair_b3_stock_fact_gaps.py"
-    ],
-    "reproduction_only": [
-      "backend/migrations/factor_metrics_st_pit_universe_metadata_20260506.sql",
-      "backend/services/canonical_equity_pit.py",
-      "backend/services/hmm_data_source/legacy_qe_artifact_manifests.py",
-      "tests/aistock_validation/bugs/20260514_BUG-039-isolate-qe-backtest-data-freshness-from-paper-latest-data-re.json",
-      "tests/aistock_validation/bugs/20260629_BUG-546-st-pit-risk-policy-remains-dirty-after-tushare-source-sync-and-blocks-lo.json",
-      "tests/aistock_validation/bugs/20260713_BUG-635-st-pit-qe.json",
-      "tests/aistock_validation/bugs/20260714_BUG-638-bug-638-p1-qe-st-pit-must-use-dataset-pinned-immutable-snapshot-isolated.json",
-      "tests/aistock_validation/bugs/20260717_BUG-704-qe-st-pit.json",
-      "tests/aistock_validation/bugs/20260719_BUG-772-hmm-v2-rejects-persisted-qe-loops-using-the-canonical-legacy-st-pit-key.json",
-      "tests/aistock_validation/history/qe/20260505_182545_l3_qe-mandatory-st-pit-risk-policy-for-new-and-derived-runs.md",
-      "tests/aistock_validation/history/qe/20260506_132323_l2_st-pit-factor-metrics-cache-validation.md",
-      "tests/aistock_validation/history/qlib_data/20260504_l3_st-pit-active-derived-universe-implementation.md",
-      "tests/aistock_validation/history/qlib_data/20260504_l4_st-pit-active-full-h5-bin-candidate-validation.md",
-      "tests/aistock_validation/history/qlib_data/20260505_l2_rdagent-data-doctor-skill-ui-export-coverage.md",
-      "tests/aistock_validation/history/qlib_data/20260505_l4_st-pit-active-manual-qe-validation.md",
-      "tests/aistock_validation/history/qlib_data/20260505_l4_st-pit-production-replacement-validation.md",
-      "tests/aistock_validation/history/qlib_data/20260505_l5_st-pit-active-full-candidate-overnight-validation.md"
-    ],
-    "test_fixture": [
-      "backend/tests/advisory_dev_input_onboarding/test_o3_historical_onboarding.py",
-      "backend/tests/advisory_dev_input_onboarding/test_o4_derived_pit_evidence.py",
-      "backend/tests/advisory_dev_input_onboarding/test_o4_input_bundle.py",
-      "backend/tests/advisory_dev_input_onboarding/test_o4_source_mapping.py",
-      "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py",
-      "backend/tests/advisory_historical_range/test_postgres_contracts.py",
-      "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py",
-      "backend/tests/advisory_historical_range/test_r2b_models.py",
-      "backend/tests/advisory_historical_range/test_repository.py",
-      "backend/tests/dataset_release/test_candidate_validator.py",
-      "backend/tests/dataset_release/test_canonical_stock_transformer.py",
-      "backend/tests/dataset_release/test_daily_minute_materializer.py",
-      "backend/tests/dataset_release/test_factor_partition_producer.py",
-      "backend/tests/dataset_release/test_pit.py",
-      "backend/tests/hmm_data_source/test_isolation_constraints.py",
-      "backend/tests/mcp/test_qlib_export_module.py",
-      "backend/tests/paper_trading_v2/test_risk_targets.py",
-      "backend/tests/paper_trading_v2/test_runtime_profile.py",
-      "backend/tests/quantevolver/test_official_evaluation_cache_source.py",
-      "backend/tests/quantevolver/test_official_runtime_validation.py",
-      "backend/tests/selection_center/test_risk_policy.py",
-      "backend/tests/selection_center/test_runtime_selection.py",
-      "backend/tests/test_canonical_equity_pit.py",
-      "backend/tests/test_correlation_compute_independence.py",
-      "backend/tests/test_factor_cache_wsl_env.py",
-      "backend/tests/test_factor_st_pit_metrics_cache.py",
-      "backend/tests/test_stock_universe_pit_service.py",
-      "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
-      "backend/tests/unified_engine/test_qe_config_truth.py",
-      "backend/tests/unified_engine/test_qe_frozen_suspend_filter.py"
-    ]
-  },
-  "database_consumer_summary": {
-    "transaction_read_only": true,
-    "active_strategy_packages": {"total": 7, "explicit_v1": 4},
-    "current_runtime_profiles": {"total": 98, "explicit_v1": 2},
-    "active_runtime_config_activations": {"total": 96, "explicit_pit_identity": 0},
-    "running_paper_runs": {"total": 16, "explicit_v1": 1, "ids": ["prun_ad0dc09375d541d9a35b2cd0e8d2e9e7"]},
-    "intraday_running_simulations": {"total": 1, "explicit_v1": 0},
-    "unfinished_qe_tasks": {"total": 3, "explicit_v1_in_strategy_params": 0},
-    "unfinished_qe_loops": {"total": 1, "explicit_v1": 1, "ids": ["qe_20260810_224522_b0d9_Loop3"]},
-    "created_qe_experiments": {"total": 173, "explicit_v1": 114},
-    "canonical_authority_registry_tables_present": false,
-    "canonical_v2_state_present": false
+  "entry_gate": {
+    "w6_source_ready": true,
+    "source_and_origin_main_equal": true,
+    "profile_and_plan_loaded": true,
+    "control_store_ready": true,
+    "fresh_process_preflight_ready": true,
+    "registered_worker_source_identity_ready": false,
+    "w7_sample_submission_allowed": false,
+    "blocker": {
+      "code": "BLOCKED_STALE_REGISTERED_WORKER",
+      "expected_code_sha": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+      "observed_code_sha": "4d3d6e5f946a48320de693c5f30bc14786007e76",
+      "required_owner_action": "restart_or_replace_dataset_release_worker_from_final_main",
+      "owner": "user",
+      "automatic_process_control_authorized": false
+    }
   },
   "exit_gate": {
     "consumer_inventory_unknown_count": 0,
     "historical_paths_read_only": true,
     "active_dataset_build_claims": 0,
-    "source_freeze_status": "PASS_W0",
-    "activation_ready": false
+    "source_freeze_status": "PASS_W6_SOURCE_READY",
+    "w7_execution_status": "BLOCKED_STALE_REGISTERED_WORKER",
+    "w8_status": "not_started",
+    "production_activation": "not_requested"
   }
 }
