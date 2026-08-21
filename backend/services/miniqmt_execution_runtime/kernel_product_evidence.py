@@ -764,8 +764,23 @@ class KernelProductEvidenceProviderV3:
             )
         plan_payload = plan_row["plan_payload_json"]
         intents = plan_payload.get("intents") if isinstance(plan_payload, dict) else None
+        if not isinstance(intents, list) or not intents or any(not isinstance(item, dict) for item in intents):
+            raise KernelProductEvidenceError(
+                "MINIQMT_K6_PRODUCT_PLAN_PARENT_INVALID",
+                "plan does not contain an exact nonempty parent set",
+                context={"execution_plan_id": payload["execution_plan_id"]},
+            )
+        intent_ids = [item.get("intent_id") for item in intents]
+        if any(type(item) is not str or not item.strip() for item in intent_ids) or len(intent_ids) != len(
+            set(intent_ids)
+        ):
+            raise KernelProductEvidenceError(
+                "MINIQMT_K6_PRODUCT_PLAN_PARENT_INVALID",
+                "plan contains an invalid or duplicate parent identity",
+                context={"execution_plan_id": payload["execution_plan_id"]},
+            )
         matches = [
-            item for item in intents or [] if isinstance(item, dict) and item.get("intent_id") == algo.parent_intent_id
+            item for item in intents if item.get("intent_id") == algo.parent_intent_id
         ]
         if len(matches) != 1:
             raise KernelProductEvidenceError(
@@ -829,6 +844,9 @@ class KernelProductEvidenceProviderV3:
             "strategy_name": strategy_name,
             "target_weight": None if intent.get("target_weight") is None else Decimal(str(intent["target_weight"])),
             "request_metadata": {**metadata, **risk_context},
+            "ordered_sell_parent_intent_ids": tuple(
+                item["intent_id"] for item in intents if item.get("side") == "SELL"
+            ),
             "intent": intent,
             "trading_rule_decision": decision_matches[0],
         }
@@ -1204,15 +1222,33 @@ class KernelProductEvidenceProviderV3:
         dependent_codes = tuple(sorted({item.code for item in preflight.errors} & _DEPENDENT_BUY_CODES))
         if not dependent_codes:
             return None
+        sell_parent_ids = plan.get("ordered_sell_parent_intent_ids")
+        if type(sell_parent_ids) is not tuple or any(
+            type(item) is not str or not item.strip() for item in sell_parent_ids
+        ):
+            raise KernelProductEvidenceError(
+                "MINIQMT_K6_PRODUCT_PLAN_PARENT_INVALID",
+                "dependent BUY plan context lacks its frozen SELL parent set",
+                context={"runtime_id": command.runtime_id, "parent_intent_id": command.parent_intent_id},
+            )
         cur.execute(
-            "SELECT parent.parent_intent_id,algo.algo_instance_id FROM qmt_strategy.execution_parent_benchmark parent "
-            "JOIN qmt_strategy.execution_algo_instance algo ON algo.runtime_id=parent.runtime_id "
-            "AND algo.parent_intent_id=parent.parent_intent_id "
-            "WHERE parent.runtime_id=%s AND parent.execution_plan_id=%s AND parent.side='SELL' "
-            "AND algo.kernel_contract_version='KERNEL_V2' ORDER BY parent.parent_intent_id FOR SHARE OF parent,algo",
-            (command.runtime_id, plan["execution_plan_id"]),
+            "SELECT parent_intent_id,algo_instance_id FROM qmt_strategy.execution_algo_instance "
+            "WHERE runtime_id=%s AND parent_intent_id=ANY(%s) AND side='SELL' "
+            "AND kernel_contract_version='KERNEL_V2' ORDER BY parent_intent_id FOR SHARE",
+            (command.runtime_id, list(sell_parent_ids)),
         )
         rows = cur.fetchall()
+        observed_sell_ids = tuple(row["parent_intent_id"] for row in rows)
+        if len(observed_sell_ids) != len(set(observed_sell_ids)) or set(observed_sell_ids) != set(sell_parent_ids):
+            raise KernelProductEvidenceError(
+                "MINIQMT_K6_PRODUCT_DEPENDENT_BUY_SELL_OWNER_MISSING",
+                "dependent BUY does not close over every frozen SELL parent algo",
+                context={
+                    "runtime_id": command.runtime_id,
+                    "expected_sell_parent_intent_ids": list(sell_parent_ids),
+                    "observed_sell_parent_intent_ids": list(observed_sell_ids),
+                },
+            )
         dependencies = tuple(
             DependentBuySellDependencyV2.create(
                 runtime_id=command.runtime_id,

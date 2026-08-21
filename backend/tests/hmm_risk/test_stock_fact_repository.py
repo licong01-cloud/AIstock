@@ -287,6 +287,91 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     assert all(params is None or sql.count("%s") == len(params) for _, sql, params in connection.executed)
 
 
+def test_all_stock_fact_query_paths_use_authoritative_full_day_suspension_before_price_lags() -> None:
+    connection = _Connection()
+    reader = _reader(connection)
+
+    reader._load_stock_base_rows(
+        window_start=date(2024, 1, 1),
+        window_end=date(2024, 1, 31),
+        fetch_size=100,
+        sector_level="L1",
+    )
+    reader._load_missing_price_base_rows(
+        window_start=date(2024, 1, 1),
+        window_end=date(2024, 1, 31),
+        fetch_size=100,
+        sector_level="L1",
+    )
+    list(
+        reader.iter_stock_fact_rows(
+            _window_start=date(2024, 1, 1),
+            _window_end=date(2024, 1, 31),
+        )
+    )
+
+    manifest = _identity_manifest()
+
+    class AliasManifest:
+        def alias_rows(self, source_dataset: str):
+            if source_dataset == "market.daily_basic":
+                return [
+                    {
+                        "canonical_ts_code": "000001.SZ",
+                        "source_ts_code": "000002.SZ",
+                        "effective_start": "2024-01-01",
+                        "effective_end": "2024-01-31",
+                        "security_identity_id": "test-alias",
+                        "row_hash": "a" * 64,
+                    }
+                ]
+            return manifest.alias_rows(source_dataset)
+
+        def resolve(self, *args, **kwargs):
+            return manifest.resolve(*args, **kwargs)
+
+        def evidence(self):
+            return manifest.evidence()
+
+    alias_reader = subject.PostgresStockFactReader(
+        connection,
+        _spec(),
+        security_identity_manifest=AliasManifest(),
+        provider_absence_manifest=_provider_absence_manifest(),
+    )
+    list(alias_reader.iter_missing_price_rows())
+
+    stock_queries = [
+        sql
+        for name, sql, _ in connection.executed
+        if name and (name.startswith("hmm_risk_stock_fact_base_") or name.startswith("hmm_risk_stock_fact_source_"))
+    ]
+    missing_queries = [
+        sql
+        for name, sql, _ in connection.executed
+        if name and (name.startswith("hmm_risk_missing_price_base_") or name == "hmm_risk_missing_price_source")
+    ]
+    assert len(stock_queries) == 2
+    assert len(missing_queries) == 2
+
+    for sql in (*stock_queries, *missing_queries):
+        assert "suspension.suspend_type='S'" in sql
+        assert "COALESCE(BTRIM(suspension.suspend_timing),'') IN ('','09:30-09:30')" in sql
+        assert "resume.suspend_type='R'" not in sql
+        assert "NOT ( EXISTS" in sql
+
+    for sql in stock_queries:
+        price_base = sql.split("price_base AS (", 1)[1].split("), price_history AS", 1)[0]
+        assert "market.suspend_d suspension" in price_base
+        assert "COALESCE(price.volume_hand,0)=0" in price_base
+        assert "COALESCE(price.amount_li,0)=0" in price_base
+
+
+def test_full_day_suspension_predicate_rejects_unregistered_sql_aliases() -> None:
+    with pytest.raises(ValueError, match="unsupported full-day suspension SQL identity"):
+        subject._full_day_suspension_exists_sql(trade_date="unsafe.trade_date", ts_code="unsafe.ts_code")
+
+
 def test_reader_uses_latest_causal_circ_mv_before_previous_market_day() -> None:
     connection = _Connection()
     connection.stock_rows = [

@@ -201,8 +201,8 @@ created_at / updated_at
 observation_payload_json
 ```
 
-- publication 阶段把 descriptor identity 或 typed unavailable resolution 冻结在 forward run；`UNAVAILABLE` 是当天解析时的真实事实，不因以后新增 bundle 而历史回填。
-- `FAILED` 只允许在同一 forward run、同一已冻结 exact descriptor 下显式重试并更新为成功；descriptor identity 变化时拒绝覆盖原 observation。
+- publication 阶段把 descriptor identity 或 typed unavailable resolution 冻结在 forward run；模型 descriptor/bundle 缺失等永久 `UNAVAILABLE` 是当天解析时的真实事实，不因以后新增 bundle 而历史回填。`ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE` 与 `ADVISORY_MODEL_FEATURE_REQUIRED_VALUE_MISSING` 表示发布后推理依赖尚未就绪，不属于永久 typed-unavailable。
+- `FAILED` 只允许在同一 forward run、同一已冻结 exact descriptor 下显式重试并更新为成功；descriptor identity 变化时拒绝覆盖原 observation。为兼容 BUG-1138 修复前已经写入的记录，上述两个暂态原因码的 `UNAVAILABLE` 也允许在同一冻结 descriptor 下恢复；其他 `UNAVAILABLE` 仍不可改写。
 - `maturity_trade_date` 使用已冻结 outcome bundle 声明的最大预测 horizon 与所有候选 `holding_period.range_high_days` 的最大值，从 target 日按权威交易日历向后推进；没有成功 outcome bundle 时为 `NULL`，不得用自然日或固定20日猜测。
 - payload 保存 baseline rank、model score/rank、Top5、outcome、price range 和 typed child status；不保存未来 realized return。
 
@@ -224,7 +224,7 @@ Selection 和模型计算不持有数据库长事务。Selection 成功后，`co
 
 ### 8.2 Challenger observation
 
-Challenger 在 baseline publication commit 后运行。它失败不能回滚已发布 baseline；服务必须写 `UNAVAILABLE` 或 `FAILED` observation，并保留 reason。重试只针对同一 `forward_run_id + model_descriptor_sha256` 且既有 observation 状态为 `FAILED`；`EXPERIMENTAL_SHADOW/UNAVAILABLE` 成功事实只接受相同payload幂等重放，不允许不同payload覆盖。保存时先以 `FOR UPDATE` 锁定父 `forward_run`，使同一 forward 的并发首次 insert 串行收敛；不得仅使用共享锁后竞争 child unique key。
+Challenger 在 baseline publication commit 后运行。它失败不能回滚已发布 baseline；服务必须写 `UNAVAILABLE` 或 `FAILED` observation，并保留 reason。推理依赖暂未就绪时写入 `FAILED`，由同一 `forward_run_id + model_descriptor_sha256` 重试；永久 typed-unavailable 写入 `UNAVAILABLE`。`EXPERIMENTAL_SHADOW` 和永久 `UNAVAILABLE` 只接受相同 payload 幂等重放；BUG-1138 修复前以两个暂态原因码误写的 `UNAVAILABLE` 可在同一冻结 descriptor 下恢复。保存时先以 `FOR UPDATE` 锁定父 `forward_run`，使同一 forward 的并发首次 insert 串行收敛；不得仅使用共享锁后竞争 child unique key。
 
 ### 8.3 Settlement commit
 
@@ -499,11 +499,12 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 | F-408 | descriptor驱动runtime常量和candidate projection |
 | F-409 | 当前两腿角色从descriptor读取并与bundle/Selection交叉校验；目标多Alpha模型字节不变 |
 | F-410 | 单Alpha与原生多Alpha共用resolver；无真实兼容bundle时typed unavailable且baseline继续 |
-| F-411 | scheduler仅处理Advisory自然当前日和pending settlement，默认关闭时不解析可选interval且无历史扫描 |
+| F-411 | scheduler先处理Advisory自然当前日和pending settlement，再按observation更新时间有界重试一条已等待至少5分钟的暂态模型观察；不回补历史publication，默认关闭时不解析可选interval |
 | F-412 | API/UI分开展示publication、settlement、challenger、maturity和错误 |
 | F-413 | API/UI显示真实当日状态且无交易入口 |
 | F-414 | 无简化版、静默错误、业务语义漂移、角色审批、二次准入或未经确认门禁 |
 | F-415 | migration/rollback可重复验证，DEV-first；merge、DDL、descriptor、restart、activation分别授权和报告 |
+| F-416 | 暂态行情/PIT数据未就绪按同一冻结descriptor重试；成功观察和永久typed-unavailable仍不可改写 |
 
 ## 18. Design Acceptance Matrix
 
@@ -527,11 +528,12 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 | F-408 | `backend/services/advisory_model_first/model_binding_resolution.py`, `backend/services/advisory_model_first/model_inference.py` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`, `backend/tests/advisory_model_first/test_model_inference.py` | pass | none |
 | F-409 | `backend/services/advisory_model_first/shared_feature_builder.py`, `backend/services/advisory_model_first/model_inference.py` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`, `backend/tests/advisory_model_first/test_model_inference.py` | pass | none |
 | F-410 | `backend/services/advisory_model_first/model_binding_resolution.py`, `backend/services/advisory_forward/service.py` | `backend/tests/advisory_model_first/test_forward_boundaries.py`, `backend/tests/advisory_model_first/test_dynamic_model_binding.py` | pass | none |
-| F-411 | `backend/services/advisory_forward/scheduler.py`, `backend/main.py` | `backend/tests/advisory_model_first/test_forward_scheduler.py`, `backend/tests/advisory_model_first/test_forward_date_clock.py` | pass | none |
+| F-411 | `backend/services/advisory_forward/service.py`, `backend/services/advisory_forward/repository.py`, `backend/services/advisory_forward/scheduler.py`, `backend/main.py` | `backend/tests/advisory_model_first/test_forward_scheduler.py`, `backend/tests/advisory_model_first/test_forward_date_clock.py`, `backend/tests/advisory_model_first/test_forward_recovery.py` | pass | none |
 | F-412 | `backend/routers/advisory.py`, `frontend/src/app/paper-v2/advisory/page.tsx` | `backend/tests/advisory_model_first/test_forward_api.py`, `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | pass | none |
 | F-413 | `frontend/src/app/paper-v2/advisory/page.tsx` | `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | pass | none |
 | F-414 | §19 repeated source review and changed scope | `python -m nox -s advisory_modeling_backend` | pass | none |
 | F-415 | `backend/db/migrations/add_advisory_forward_publication_20260813.sql`, rollback migration | `backend/tests/advisory_model_first/test_forward_postgres.py` | pass | none |
+| F-416 | `backend/services/advisory_forward/service.py`, `backend/services/advisory_forward/repository.py` | `backend/tests/advisory_model_first/test_forward_recovery.py`, `backend/tests/advisory_model_first/test_forward_postgres.py` | pass | none |
 
 ## 19. DESIGN-COMPLIANCE-001 Design Review
 
@@ -559,6 +561,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 - Source Round 12：修复 BUG-1067 跨进程 stale pending 在另一进程已完成结算后，使用结算后episode重算同一target并产生假冲突的问题；service在计算前后读回权威终态，已闭合事实直接幂等返回。
 - Source Round 13：修复 BUG-1069 同冻结descriptor下不同payload可覆盖既有成功observation、静默改写前向模型事实的问题；仅 `FAILED` 可显式恢复，成功/typed-unavailable事实保持不可变。
 - Source Round 14：修复API章节声称Program summary增加8个未实现重复字段的问题；文档改为与现有forward history/detail API及真实run-once状态完全一致，不以文档冒充不存在的实现。
+- Source Round 15：修复 BUG-1138 将暂态行情/PIT 数据未就绪误固化为永久 `UNAVAILABLE`、且跨日期后普通 `run-once` 不再访问旧 observation 的问题；两个明确数据就绪原因码可在同一冻结 descriptor 下恢复，核心 settlement/publication 后每个 tick 最多按更新时间公平重试一条已等待至少5分钟的记录，永久 `UNAVAILABLE` 与成功 observation 仍保持不可变。
 
 ## 20. Implementation Plan / 本阶段唯一实施顺序
 

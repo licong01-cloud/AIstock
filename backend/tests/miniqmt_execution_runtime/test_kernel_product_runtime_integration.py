@@ -4,6 +4,7 @@ import copy
 from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from hashlib import sha256
 import inspect
 import json
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from backend.services.miniqmt_execution_runtime.hot_market_data import (
 )
 from backend.services.miniqmt_execution_runtime.kernel_product_cutover import KernelProductCutoverCoordinator
 from backend.services.miniqmt_execution_runtime.kernel_delivery import (
+    KernelAlgoCreationRequestV2,
     KernelProductDeliveryWorkerV3,
     KernelTransitionWriteBundleV1,
 )
@@ -102,7 +104,7 @@ from backend.services.simulation_runtime.miniqmt_kernel_product import (
     build_simulation_miniqmt_product_runtime_v1,
 )
 from backend.services.simulation_runtime.miniqmt_quote_activation import build_miniqmt_quote_ingress_activation_from_env
-from backend.services.simulation_runtime.models import SimulationBrokerBackend
+from backend.services.simulation_runtime.models import SimulationBrokerBackend, miniqmt_kernel_runtime_id
 from backend.services.qmt_strategy_ledger.models import (
     VirtualAccount,
     VirtualAccountStatus,
@@ -150,6 +152,105 @@ def test_product_repository_exposes_only_v3_initialization_entry() -> None:
     assert callable(PostgresMiniQMTKernelRepository.read_callback_identity_chain)
 
 
+class _CreationAuthorityCursor:
+    def __init__(self, *, request: KernelAlgoCreationRequestV2, payload: dict[str, object]) -> None:
+        self.sql = ""
+        self.request = request
+        self.payload = payload
+
+    def execute(self, sql, _params=()):
+        self.sql = " ".join(str(sql).split())
+
+    def fetchone(self):
+        request = self.request
+        if "paper_v2.execution_plan" in self.sql:
+            return {
+                "plan_id": request.execution_plan_id,
+                "plan_hash": request.execution_plan_sha256,
+                "binding_id": request.binding_id,
+                "release_id": request.release_id,
+                "target_trade_date": date.fromisoformat(request.exchange_trade_date),
+                "execution_policy_version_id": request.policy_id,
+                "execution_policy_sha256": request.policy_sha256,
+                "plan_payload_json": self.payload,
+            }
+        if "strategy_pkg.strategy_runtime_release" in self.sql:
+            return {
+                "release_hash": request.release_sha256,
+                "execution_policy_version_id": request.policy_id,
+                "execution_policy_sha256": request.policy_sha256,
+            }
+        return None
+
+    def fetchall(self):
+        return []
+
+
+def test_k6d_creation_authority_reads_frozen_execution_plan_without_tca_parent_materialization() -> None:
+    base = _request()
+    payload = {
+        "schema_version": "execution_plan_v1",
+        "binding_id": "binding_k6d",
+        "release_id": base.release_id,
+        "target_trade_date": base.exchange_trade_date,
+        "intents": [
+            {
+                "intent_id": base.parent_intent_id,
+                "symbol": base.symbol,
+                "side": base.side.value,
+                "order_quantity": base.parent_quantity,
+            }
+        ],
+    }
+    plan_hash = sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    request = KernelAlgoCreationRequestV2.from_v1(
+        base.model_copy(
+            update={
+                "runtime_id": miniqmt_kernel_runtime_id(
+                    plan_id=base.execution_plan_id,
+                    binding_id="binding_k6d",
+                    trade_date=date.fromisoformat(base.exchange_trade_date),
+                ),
+                "execution_plan_sha256": plan_hash,
+            }
+        ),
+        binding_id="binding_k6d",
+        product_route_cutover_receipt_sha256="d" * 64,
+        product_route_owner_sha256="e" * 64,
+        product_route_epoch=1,
+        effective_new_instance_sequence=7,
+    )
+    cursor = _CreationAuthorityCursor(request=request, payload=payload)
+
+    repository = object.__new__(PostgresMiniQMTKernelRepository)
+    existing = repository._lock_and_validate_creation_authority_with_cursor(cursor, request)
+
+    assert existing == ()
+    assert "execution_parent_benchmark" not in cursor.sql
+
+    with pytest.raises(KernelRepositoryConflict, match="execution plan authority conflicts"):
+        repository._lock_and_validate_creation_authority_with_cursor(
+            _CreationAuthorityCursor(
+                request=request.model_copy(update={"runtime_id": "mqrt_sim_wrong_runtime"}),
+                payload=payload,
+            ),
+            request.model_copy(update={"runtime_id": "mqrt_sim_wrong_runtime"}),
+        )
+
+
+def test_k6d_online_product_seams_never_require_offline_tca_parent_rows() -> None:
+    seams = (
+        PostgresMiniQMTKernelRepository._lock_and_validate_k6d_plan_parent_with_cursor,
+        PostgresMiniQMTKernelRepository._lock_product_route_binding_with_cursor,
+        KernelProductEvidenceProviderV3._dependent_buy_candidate,
+    )
+
+    for seam in seams:
+        assert "execution_parent_benchmark" not in inspect.getsource(seam)
+
+
 def test_product_worker_hard_binds_v3_evidence_path(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -189,7 +290,7 @@ class _EvidenceCursor:
         self.sql = " ".join(str(sql).split())
 
     def fetchall(self):
-        if "execution_parent_benchmark" in self.sql:
+        if "execution_algo_instance" in self.sql:
             return list(self.dependency_rows)
         return []
 
@@ -260,6 +361,7 @@ def _evidence_plan(algo) -> dict[str, object]:
         "strategy_name": "strategy-product-evidence",
         "target_weight": Decimal("0.25"),
         "request_metadata": {"source": "product_evidence_test"},
+        "ordered_sell_parent_intent_ids": ("sell_parent",),
         "intent": {
             "intent_id": algo.parent_intent_id,
             "trading_rule_decision_id": "decision_product_evidence",
@@ -407,6 +509,37 @@ def test_product_evidence_preserves_dependent_buy_rejection_and_sell_owner(
     assert evidence.oms_preflight_receipt.decision.value == "REJECT"
     assert evidence.dependent_buy_candidate is not None
     assert evidence.dependent_buy_candidate.ordered_sell_dependencies[0].sell_parent_intent_id == "sell_parent"
+
+
+def test_product_evidence_dependent_buy_fails_when_frozen_sell_algo_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event, delivery, algo, state = _worker_facts()
+
+    class Error:
+        code = "SELL_PROCEEDS_REQUIRED"
+
+        @staticmethod
+        def to_dict():
+            return {"code": "SELL_PROCEEDS_REQUIRED", "message": "sell proceeds not settled"}
+
+    provider = _prepare_evidence_provider(
+        monkeypatch,
+        preflight=SimpleNamespace(errors=(Error(),), freeze_amount=Decimal("1025")),
+    )
+    cursor = _EvidenceCursor()
+    base = provider.build_base_services_with_cursor_v1(cur=cursor, event=event, delivery=delivery, algo=algo)
+
+    with pytest.raises(KernelProductEvidenceError, match="every frozen SELL parent algo"):
+        provider.build_with_cursor_v1(
+            cur=cursor,
+            event=event,
+            delivery=delivery,
+            algo=algo,
+            transition=_transition_with_commands(state, (_submit_command(event, algo),)),
+            base_services=base,
+            route_receipt=_route_receipt_for(algo),
+        )
 
 
 def test_product_evidence_zero_command_and_owner_failures_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2404,6 +2537,7 @@ def test_product_composition_restart_uses_durable_session_without_broker_side_ef
         effective_at_utc=datetime(2026, 7, 27, 0, 30, tzinfo=UTC),
     )
     registered: list[object] = []
+    worker_start_calls: list[dict[str, object]] = []
 
     class ProductRepository:
         @staticmethod
@@ -2423,7 +2557,8 @@ def test_product_composition_restart_uses_durable_session_without_broker_side_ef
             return None
 
         @staticmethod
-        def start_worker_incarnation(**_values):
+        def start_worker_incarnation(**values):
+            worker_start_calls.append(values)
             return SimpleNamespace(worker_id="worker_product_restart", process_incarnation_id="incarnation_restart")
 
         @staticmethod
@@ -2485,6 +2620,9 @@ def test_product_composition_restart_uses_durable_session_without_broker_side_ef
     assert runtime.runtime_id == runtime_id
     assert runtime.outbox_dispatcher is None
     assert registered == [(runtime, ("600000.SH",))]
+    assert len(worker_start_calls) == 1
+    assert worker_start_calls[0]["worker_id"] == "miniqmt_kernel_v2_product"
+    assert worker_start_calls[0]["process_role"] == "PRODUCT_COORDINATOR"
 
 
 def test_product_composition_preflights_registry_and_reuses_only_exact_source_runtime(

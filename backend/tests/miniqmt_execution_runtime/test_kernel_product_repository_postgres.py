@@ -40,6 +40,7 @@ from backend.services.miniqmt_execution_runtime.kernel_product_repository import
     migration_readback_sha256_v1,
     product_authority_schema_sha256_v3,
 )
+from backend.services.simulation_runtime.models import miniqmt_kernel_runtime_id
 from backend.tests.miniqmt_execution_runtime.test_kernel_k6_migration_postgres import (
     K6C_FORWARD,
     _apply_k2_and_k6,
@@ -397,12 +398,6 @@ def _seed_k6d_runtime_authority(cur: object, schema: str) -> tuple[str, str, str
             package_id TEXT NOT NULL, target_trade_date DATE NOT NULL,
             execution_policy_sha256 TEXT NOT NULL, tail_policy_sha256 TEXT NOT NULL
         );
-        CREATE TABLE {schema}.execution_parent_benchmark(
-            parent_intent_id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL,
-            execution_plan_id TEXT NOT NULL, execution_plan_hash TEXT NOT NULL,
-            binding_id TEXT NOT NULL, binding_hash TEXT NOT NULL, release_id TEXT NOT NULL,
-            package_id TEXT NOT NULL, trade_date DATE NOT NULL
-        );
         """
     )
     cur.execute(  # type: ignore[attr-defined]
@@ -440,24 +435,18 @@ def _seed_k6d_runtime_authority(cur: object, schema: str) -> tuple[str, str, str
             _sha("0"),
         ),
     )
-    cur.execute(  # type: ignore[attr-defined]
-        f"INSERT INTO {schema}.execution_parent_benchmark VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-        (
-            "intent_k6d",
-            "runtime_k6d",
-            "plan_k6d",
-            _sha("e"),
-            "binding_k6d",
-            binding_hash,
-            "release_k6d",
-            "package_k6d",
-            date(2026, 8, 6),
+    return (
+        miniqmt_kernel_runtime_id(
+            plan_id="plan_k6d",
+            binding_id="binding_k6d",
+            trade_date=date(2026, 8, 6),
         ),
+        "binding_k6d",
+        "plan_k6d",
     )
-    return "runtime_k6d", "binding_k6d", "plan_k6d"
 
 
-def test_k6d_runtime_uses_declared_parent_schema_and_release_join_on_dev_postgres() -> None:
+def test_k6d_runtime_uses_frozen_execution_plan_without_tca_parent_table_on_dev_postgres() -> None:
     if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
         pytest.skip("requires explicitly authorized disposable K6 DEV PostgreSQL fixture")
     schema = _fixture_schema().replace("k2a_", "k6d_authority_", 1)
@@ -476,31 +465,22 @@ def test_k6d_runtime_uses_declared_parent_schema_and_release_join_on_dev_postgre
         assert readback["runtime_id"] == runtime_id
         assert readback["metadata"]["route"] == "KERNEL_V2"
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT column_name FROM information_schema.columns WHERE table_schema=%s "
-                "AND table_name='execution_parent_benchmark' ORDER BY ordinal_position",
-                (schema,),
-            )
-            assert "release_hash" not in {row[0] for row in cur.fetchall()}
         drift_cases = (
-            ("execution_plan_id", "plan_conflict", plan_id),
-            ("execution_plan_hash", _sha("1"), _sha("e")),
+            ("plan_hash", _sha("1"), _sha("e")),
             ("binding_id", "binding_conflict", binding_id),
             ("binding_hash", _sha("2"), _sha("d")),
             ("release_id", "release_conflict", "release_k6d"),
             ("package_id", "package_conflict", "package_k6d"),
-            ("trade_date", date(2026, 8, 5), date(2026, 8, 6)),
+            ("target_trade_date", date(2026, 8, 5), date(2026, 8, 6)),
         )
         for field_name, conflicting, restored in drift_cases:
             with conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {schema}.execution_runtime WHERE runtime_id=%s", (runtime_id,))
                 cur.execute(
-                    f"UPDATE {schema}.execution_parent_benchmark SET {field_name}=%s "
-                    "WHERE parent_intent_id='intent_k6d'",
-                    (conflicting,),
+                    f"UPDATE {schema}.execution_plan SET {field_name}=%s WHERE plan_id=%s",
+                    (conflicting, plan_id),
                 )
-            with pytest.raises(KernelRepositoryConflict, match="frozen parent benchmark"):
+            with pytest.raises(KernelRepositoryConflict):
                 repository.ensure_product_runtime_v1(
                     runtime_id=runtime_id,
                     binding_id=binding_id,
@@ -508,9 +488,8 @@ def test_k6d_runtime_uses_declared_parent_schema_and_release_join_on_dev_postgre
                 )
             with conn.cursor() as cur:
                 cur.execute(
-                    f"UPDATE {schema}.execution_parent_benchmark SET {field_name}=%s "
-                    "WHERE parent_intent_id='intent_k6d'",
-                    (restored,),
+                    f"UPDATE {schema}.execution_plan SET {field_name}=%s WHERE plan_id=%s",
+                    (restored, plan_id),
                 )
     finally:
         with conn.cursor() as cur:

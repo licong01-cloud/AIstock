@@ -8,7 +8,7 @@ import time
 import uuid
 import weakref
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from backend.execution_algos.adaptive_is.contracts import QuoteSourceMethod
@@ -19,6 +19,11 @@ from backend.execution_algos.adaptive_is.reasons import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Python 3.10 compatibility: ``datetime.UTC`` exists only in 3.11+ and is the
+# identical singleton ``datetime.timezone.utc`` (same tzinfo object, offset,
+# and isoformat output).
+UTC = timezone.utc
 
 
 @dataclass(frozen=True)

@@ -102,6 +102,7 @@ def _write_runtime_catalog(root: Path) -> Path:
                         "source_globs": [
                             "backend/**/*.py",
                             "scripts/score_weighted_strategy.py",
+                            "scripts/score_weighted_strategy_v2.py",
                             "scripts/qe_sector_risk_overlay_artifacts.py",
                             "requirements*.txt",
                         ],
@@ -1330,6 +1331,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["scripts/score_weighted_strategy.py"],
         root=isolated_workflow_root,
     )
+    score_weighted_v2_asset = workflow._classify_runtime_impact(
+        ["scripts/score_weighted_strategy_v2.py"],
+        root=isolated_workflow_root,
+    )
     sector_risk_artifact = workflow._classify_runtime_impact(
         ["scripts/qe_sector_risk_overlay_artifacts.py"],
         root=isolated_workflow_root,
@@ -1410,6 +1415,9 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert score_weighted_asset["runtime_impact"] == "backend"
     assert score_weighted_asset["target_ids"] == ["backend-main"]
     assert score_weighted_asset["runtime_files"] == ["scripts/score_weighted_strategy.py"]
+    assert score_weighted_v2_asset["runtime_impact"] == "backend"
+    assert score_weighted_v2_asset["target_ids"] == ["backend-main"]
+    assert score_weighted_v2_asset["runtime_files"] == ["scripts/score_weighted_strategy_v2.py"]
     assert sector_risk_artifact["runtime_impact"] == "backend"
     assert sector_risk_artifact["target_ids"] == ["backend-main"]
     assert offline_hmm_preparation["runtime_impact"] == "none"
@@ -1461,6 +1469,46 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_contract["backend_restart_required"] is False
     assert offline_contract["pre_pr_ready"] is True
     assert offline_contract["blocking"] == []
+
+
+def test_bug_1141_offline_hmm_stock_fact_repository_is_exact_and_neighbor_stays_backend(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "backend/services/hmm_risk/stock_fact_repository.py",
+        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+        "backend/tests/hmm_risk/test_stock_fact_repository.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+        "tests/aistock_validation/bugs/20260821_BUG-1140.json",
+    ]
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            }
+        ),
+        changed_files=changed_files,
+        root=isolated_workflow_root,
+    )
+    neighboring_backend = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/stock_fact_observation.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert inference["runtime_impact"] == "none"
+    assert inference["runtime_files"] == []
+    assert inference["target_ids"] == []
+    assert contract["runtime_impact"] == "none"
+    assert contract["target_ids"] == []
+    assert contract["backend_restart_required"] is False
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert neighboring_backend["runtime_impact"] == "backend"
+    assert neighboring_backend["runtime_files"] == ["backend/services/hmm_risk/stock_fact_observation.py"]
+    assert neighboring_backend["target_ids"] == ["backend-main"]
 
 
 def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_activation(
@@ -2414,6 +2462,142 @@ def test_post_restart_verify_blocks_scheduler_payload_with_active_blocker_on_htt
     assert smoke["transport"]["ok"] is True
     assert smoke["semantic"]["contract_id"] == "scheduler_status"
     assert smoke["semantic"]["verdict"] == "failed"
+
+
+def test_post_restart_verify_accepts_structured_clear_current_trade_date_blockers(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "scheduler_loop_health": {"status": "HEALTHY"},
+                    "current_trade_date_blockers": {
+                        "status": "CLEAR",
+                        "blocker_count": 0,
+                        "blockers": [],
+                        "observed_blocker_count": 0,
+                        "truncated": False,
+                        "execution_gate": False,
+                    },
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["blocking"] == []
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "scheduler_status"
+    assert smoke["semantic"]["verdict"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("blocker_count", 1),
+        ("observed_blocker_count", 1),
+        ("blockers", [{"reason": "ACTIVE_BLOCKER"}]),
+        ("execution_gate", True),
+        ("truncated", True),
+        ("status", "BLOCKED"),
+        ("blocker_count", None),
+    ],
+)
+def test_post_restart_verify_rejects_non_clear_structured_current_trade_date_blockers(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    blockers = {
+        "status": "CLEAR",
+        "blocker_count": 0,
+        "blockers": [],
+        "observed_blocker_count": 0,
+        "truncated": False,
+        "execution_gate": False,
+    }
+    blockers[field] = value
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "current_trade_date_blockers": blockers,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert (
+        "scheduler.current_trade_date_blockers"
+        in smoke["semantic"]["facts"]["markers"]
+    )
+
+
+@pytest.mark.parametrize("blockers", [None, {}, "CLEAR", 0, False])
+def test_post_restart_verify_rejects_malformed_current_trade_date_blockers(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    blockers: object,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "current_trade_date_blockers": blockers,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["semantic"]["facts"]["markers"] == [
+        "scheduler.current_trade_date_blockers"
+    ]
 
 
 def test_post_restart_verify_blocks_malformed_business_smoke_payload(

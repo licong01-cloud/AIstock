@@ -1,0 +1,308 @@
+{
+  "actual": "ImportError: cannot import name 'UTC' from 'datetime' at backend/services/dataset_release/control_store.py line 22 under Python 3.10; both 2026-08-19 runs fail pre_run with strategy_package_wsl_inference_failed",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/control_store.py",
+    "backend/infra/qmt_client.py",
+    "backend/infra/realtime_quote_subscriber.py",
+    "backend/execution_algos/adaptive_is/contracts.py",
+    "backend/tests/dataset_release/test_wsl_python310_datetime_compat.py",
+    "tests/aistock_validation/bugs/20260819_BUG-1134-wsl-live-inference-fails-on-python-3-10-datetime-utc-import-in-dataset-r.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1134",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-19T04:08:09.213132Z",
+  "description": "ImportError: cannot import name 'UTC' from 'datetime' at backend/services/dataset_release/control_store.py line 22 under Python 3.10; both 2026-08-19 runs fail pre_run with strategy_package_wsl_inference_failed",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260819-a0a267bab4a8",
+      "timestamp": "2026-08-19T04:08:09.213119Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "WSL rdagent-gpu Python 3.10 imports the full strategy_package live-inference chain and scripts/strategy_package_live_inference.py --help exits 0; timezone-aware semantics, canonical datetime/hash, and CAS identity unchanged",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/control_store.py",
+      "backend/infra/qmt_client.py",
+      "backend/infra/realtime_quote_subscriber.py",
+      "backend/execution_algos/adaptive_is/contracts.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/control_store.py",
+        "backend/infra/qmt_client.py",
+        "backend/infra/realtime_quote_subscriber.py",
+        "backend/execution_algos/adaptive_is/contracts.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "qmt",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "simulation_runtime",
+        "strategy_package"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/control_store.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/infra/qmt_client.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "qmt",
+          "risk_level": "critical",
+          "rule_id": "qmt_infra"
+        },
+        {
+          "file": "backend/infra/realtime_quote_subscriber.py",
+          "impact_modules": [
+            "paper_v2",
+            "qmt"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_phase_one_quote_ingress"
+        },
+        {
+          "file": "backend/execution_algos/adaptive_is/contracts.py",
+          "impact_modules": [
+            "miniqmt_execution_runtime",
+            "simulation_runtime",
+            "qe.core",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "execution_algos_runtime"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/control_store.py",
+        "backend/infra/qmt_client.py",
+        "backend/infra/realtime_quote_subscriber.py",
+        "backend/execution_algos/adaptive_is/contracts.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/control_store.py",
+      "backend/infra/qmt_client.py",
+      "backend/infra/realtime_quote_subscriber.py",
+      "backend/execution_algos/adaptive_is/contracts.py"
+    ]
+  },
+  "first_seen_at": "2026-08-19T04:08:09.213132Z",
+  "fix_branch": null,
+  "fix_commit": "970b7211f2ba3d3b08082b6dfbc3a26ba26508f6",
+  "fixed_at": "2026-08-19T13:35:06Z",
+  "github_issue_number": 3621,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3621",
+  "last_seen_at": "2026-08-19T04:08:09.213132Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3626",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "wsl -d Ubuntu -- /home/lc999/miniconda3/envs/rdagent-gpu/bin/python -c \"import backend.services.dataset_release.control_store\"",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "qmt_client_contract",
+    "miniqmt_execution_runtime_l2",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "fresh_process_evidence": [
+      "WSL Ubuntu rdagent-gpu Python 3.10.19: cd /mnt/f/Dev/AIstock_worktrees/BUG-1134-wsl-live-inference-fails-on-python-3-10-datetime-20260819 && /home/lc999/miniconda3/envs/rdagent-gpu/bin/python -c 'import backend.services.dataset_release.control_store' -> OK, UTC is timezone.utc",
+      "WSL rdagent-gpu Python 3.10.19: /home/lc999/miniconda3/envs/rdagent-gpu/bin/python scripts/strategy_package_live_inference.py --help -> exit 0 (production ImportError gone)",
+      "WSL rdagent-gpu Python 3.10.19: import backend.infra.qmt_client, backend.infra.realtime_quote_subscriber, backend.execution_algos.adaptive_is.contracts -> OK",
+      "WSL rdagent-gpu Python 3.10.19: /home/lc999/miniconda3/envs/rdagent-gpu/bin/python scripts/strategy_package_live_inference.py --help -> exit 0 (production ImportError gone); sys.modules dump shows 111 repo modules all loaded under 3.10"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed_source_pending_user_restart",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "WSL live inference fails on Python 3.10 datetime.UTC import in dataset_release/infra closure",
+  "trigger_condition": {
+    "fingerprint": "a0a267bab4a8174e76d6611a",
+    "source_event_id": "FE-20260819-a0a267bab4a8"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=faa9e08dc899cb31 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_wsl_python310_datetime_compat.py -q` result=`11 passed`",
+    "validation-receipt: id=ed57f83faef34fe9 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release -q` result=`745 passed, 4 skipped`",
+    "validation-receipt: id=e0cb216da1351248 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_control_store.py backend/tests/dataset_release/test_cas_store.py backend/tests/infra/test_realtime_quote_subscriber_leases.py -q` result=`47 passed, 1 skipped`",
+    "validation-receipt: id=46107d710ff0e167 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_adapter.py backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_binding.py backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_contract_failures.py backend/tests/miniqmt_execution_runtime/test_kernel_outbox.py backend/tests/advisory_dev_input_onboarding/test_o4_static_and_cli.py backend/tests/advisory_phase1/test_readiness_plan_isolation.py backend/tests/advisory_phase1/test_source_observer_isolation_static.py -q` result=`77 passed`",
+    "validation-receipt: id=4cfadbef530bd6fb commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=42a70fd1b2d17901 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=qlib_data_backend status=passed command=`nox -s qlib_data_backend` result=`15 passed`",
+    "validation-receipt: id=4cafe5a21187f10b commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=qmt_client_contract status=passed command=`nox -s qmt_client_contract` result=`3 passed`",
+    "validation-receipt: id=f1a1fc17637ec8e1 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=paper_v2_backend status=passed command=`nox -s paper_v2_backend` result=`1115 passed, 3 skipped, 2 xfailed`",
+    "validation-receipt: id=f1cdb7cd315ed0fb commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=miniqmt_execution_runtime_l2 status=passed command=`nox -s miniqmt_execution_runtime_l2` result=`1503 passed, 82 skipped`",
+    "validation-receipt: id=61019d13eec9104e commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=ruff plan=direct status=passed command=`ruff check backend/services/dataset_release/control_store.py backend/infra/qmt_client.py backend/infra/realtime_quote_subscriber.py backend/execution_algos/adaptive_is/contracts.py backend/tests/dataset_release/test_wsl_python310_datetime_compat.py` result=`All checks passed`",
+    "validation-receipt: id=1f8e5bdfed022ceb commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=compile plan=direct status=passed command=`python -m py_compile <5 changed files> and git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "strategy_package",
+        "qlib_data",
+        "qmt_client_contract",
+        "miniqmt_execution_runtime",
+        "paper_v2"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "qmt_client_contract",
+        "miniqmt_execution_runtime_l2",
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "strategy_package",
+          "qlib_data",
+          "qmt_client_contract",
+          "miniqmt_execution_runtime",
+          "paper_v2"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "qmt_client_contract",
+          "miniqmt_execution_runtime_l2",
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
