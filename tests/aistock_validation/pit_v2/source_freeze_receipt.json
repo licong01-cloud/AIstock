@@ -1,6 +1,6 @@
 {
   "schema_version": "pit_v2_source_freeze_receipt_v2",
-  "observed_at": "2026-08-21T14:09:10.5026894Z",
+  "observed_at": "2026-08-21T14:30:45.6673383Z",
   "mode": "read_only_final_w6_source_freeze",
   "source": {
     "branch": "docs/qe-pit-v2-w6-source-freeze-20260821",
@@ -9,8 +9,8 @@
     "w6_merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
     "w6_source_base_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
     "w6_source_base_tree": "088090e8d3b44391544b7ca78c5d50980f9cd2b2",
-    "observed_origin_main": "f1a8821beb53c50d6106802e2b459e329cd14642",
-    "observed_origin_main_tree": "cd344e592652a29b2e0aef806d9609458bd9b9ff",
+    "observed_origin_main": "1ea9f26777d849c8f4a6492939c7dc7b47ab50b4",
+    "observed_origin_main_tree": "42f5ad8569f3abc586eb57b104cd237e7bc37f6b",
     "observed_origin_main_descends_w6": true,
     "worktree_clean": true,
     "receipt_metadata_changes_excluded_from_source_freeze": true,
@@ -18,7 +18,7 @@
     "master_design_sha256": "c76ee888ab3679ade8e597445dcbbb30a18f4e2f8c9f03f2dc37bd2414f728fc",
     "w6_scope_receipt_sha256": "9ce8cc793dce69a84db5fc79f60176f410a5589ddffc8a7be86ef85803099a23",
     "design_compliance_receipt": "tests/aistock_validation/pit_v2/design_compliance_receipt.json",
-    "design_compliance_receipt_sha256": "85dd89e5a4349b5c1f487467d0b4b1c15830a51db1c7f0ae6d8869db7130eed9"
+    "design_compliance_receipt_sha256": "4a2c8941cc048785262e1463f9638b1acef4e13f9886670aa0a926e65357c3c3"
   },
   "initial_migration": {
     "plan_path": "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
@@ -113,10 +113,14 @@
     },
     "fresh_process_preflight": {
       "status": "PASS",
-      "code_sha": "f1a8821beb53c50d6106802e2b459e329cd14642",
+      "repository_root": "F:\\Dev\\AIstock",
+      "repository_root_role": "canonical_w7_execution_root",
+      "code_sha": "1ea9f26777d849c8f4a6492939c7dc7b47ab50b4",
       "profile_config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
       "semantic_profile_digest": "6eb56920fbbf5485e0285831beee0612d3edd74abc0ed24742cc34cb4081706c",
-      "qlib_toolchain_digest": "90cbebc9034cbf6b3ed611b1d56ce4670dfc03b53dc8d8181b61edf71a4bc6ba",
+      "qlib_toolchain_digest": "f8cd9009f8de84add9748e2c02b09d174bda08e7d11692551ba95e4ff34e79eb",
+      "qlib_toolchain_digest_includes_absolute_repo_helper_paths": true,
+      "task_worktree_preflight_digest_is_authoritative": false,
       "dump_bin_sha256": "b8f34c57ce1ef4b1772f3909735e66058f21b25bd7ab8a5f16318822401fe53f",
       "subprocess_runner_sha256": "251e68e500eb17f9376641710e444618c1650acdb824e19d4707f997e161b956",
       "wsl_resource_guardian_sha256": "df28234794ec29ac98a1f554c773c4e738776cef9238820af230f247d619ea95",
@@ -134,7 +138,7 @@
       "claim_id": null,
       "code_sha": "4d3d6e5f946a48320de693c5f30bc14786007e76",
       "profile_config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
-      "last_poll_at": "2026-08-21T14:12:29.977343+00:00",
+      "last_poll_at": "2026-08-21T14:31:01.758546+00:00",
       "code_matches_source_freeze": false,
       "restart_performed": false
     }
