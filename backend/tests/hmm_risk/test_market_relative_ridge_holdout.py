@@ -917,6 +917,7 @@ def test_parent_propagates_valid_child_business_failure_without_reclassifying_it
     error = cli._child_failure_error(
         child_failure,
         request=request,
+        producer_commit="a" * 40,
         process_index=1,
         returncode=1,
         failure_path=tmp_path / "child.failure.json",
@@ -941,6 +942,7 @@ def test_parent_rejects_child_failure_receipt_with_mismatched_evaluation_identit
         cli._child_failure_error(
             child_failure,
             request=request,
+            producer_commit="a" * 40,
             process_index=1,
             returncode=1,
             failure_path=tmp_path / "child.failure.json",
@@ -948,6 +950,29 @@ def test_parent_rejects_child_failure_receipt_with_mismatched_evaluation_identit
 
     assert captured.value.reason_code == subject.REASON_REPRODUCIBILITY
     assert captured.value.stage == "fresh_process"
+
+
+def test_parent_rejects_child_failure_receipt_with_mismatched_producer_commit(tmp_path: Path) -> None:
+    request = {"holdout_evaluation_id": "b" * 64}
+    child_failure = subject.failure_receipt(
+        request=request,
+        producer_commit="c" * 40,
+        error=subject.HoldoutAcceptanceError(subject.REASON_METRIC, "metric unavailable", stage="metric"),
+        holdout_accessed=True,
+    )
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        cli._child_failure_error(
+            child_failure,
+            request=request,
+            producer_commit="a" * 40,
+            process_index=1,
+            returncode=1,
+            failure_path=tmp_path / "child.failure.json",
+        )
+
+    assert captured.value.reason_code == subject.REASON_REPRODUCIBILITY
+    assert captured.value.evidence["invalid_fields"] == ["producer_commit"]
 
 
 def test_parent_rejects_child_failure_receipt_with_untrusted_observation_flag(tmp_path: Path) -> None:
@@ -964,6 +989,7 @@ def test_parent_rejects_child_failure_receipt_with_untrusted_observation_flag(tm
         cli._child_failure_error(
             child_failure,
             request=request,
+            producer_commit="a" * 40,
             process_index=1,
             returncode=1,
             failure_path=tmp_path / "child.failure.json",
@@ -971,6 +997,178 @@ def test_parent_rejects_child_failure_receipt_with_untrusted_observation_flag(tm
 
     assert captured.value.reason_code == subject.REASON_REPRODUCIBILITY
     assert captured.value.evidence["invalid_fields"] == ["holdout_accessed"]
+
+
+def test_parent_rejects_child_failure_receipt_with_missing_observation_field(tmp_path: Path) -> None:
+    request = {"holdout_evaluation_id": "b" * 64}
+    child_failure = subject.failure_receipt(
+        request=request,
+        producer_commit="a" * 40,
+        error=subject.HoldoutAcceptanceError(subject.REASON_METRIC, "metric unavailable", stage="metric"),
+        holdout_accessed=None,
+    )
+    del child_failure["holdout_accessed"]
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        cli._child_failure_error(
+            child_failure,
+            request=request,
+            producer_commit="a" * 40,
+            process_index=1,
+            returncode=1,
+            failure_path=tmp_path / "child.failure.json",
+        )
+
+    assert captured.value.reason_code == subject.REASON_REPRODUCIBILITY
+    assert captured.value.evidence["invalid_fields"] == ["holdout_accessed"]
+
+
+def test_parent_rejects_child_failure_receipt_with_impossible_side_effect_order(tmp_path: Path) -> None:
+    request = {"holdout_evaluation_id": "b" * 64}
+    child_failure = subject.failure_receipt(
+        request=request,
+        producer_commit="a" * 40,
+        error=subject.HoldoutAcceptanceError(subject.REASON_METRIC, "metric unavailable", stage="metric"),
+        holdout_accessed=False,
+        product_acceptance_performed=True,
+    )
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        cli._child_failure_error(
+            child_failure,
+            request=request,
+            producer_commit="a" * 40,
+            process_index=1,
+            returncode=1,
+            failure_path=tmp_path / "child.failure.json",
+        )
+
+    assert captured.value.reason_code == subject.REASON_REPRODUCIBILITY
+    assert captured.value.evidence["invalid_fields"] == ["product_acceptance_performed"]
+
+
+def test_parent_failure_receipt_propagates_child_business_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = {"holdout_evaluation_id": "b" * 64}
+    child_failure = subject.failure_receipt(
+        request=request,
+        producer_commit="a" * 40,
+        error=subject.HoldoutAcceptanceError(subject.REASON_METRIC, "metric unavailable", stage="metric"),
+        holdout_accessed=True,
+    )
+    output = tmp_path / "acceptance.json"
+    args = cli.argparse.Namespace(
+        request=tmp_path / "request.json",
+        candidate=tmp_path / "candidate.json",
+        output=output,
+        model_output=tmp_path / "model.json",
+        ready_output=tmp_path / "ready.json",
+        child_dir=tmp_path / "children",
+        db_env_prefix="P2_4_TEST",
+    )
+    monkeypatch.setattr(cli, "load_request", lambda *args, **kwargs: request)
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "validate_static_request", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_validate_cli_outputs", lambda *args, **kwargs: {})
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: cli.subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(cli, "_read_child_failure", lambda *args, **kwargs: child_failure)
+
+    assert cli._parent(args) == 1
+
+    failure = json.loads((tmp_path / "acceptance.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_reason_code"] == subject.REASON_METRIC
+    assert failure["failure_stage"] == "metric"
+    assert failure["holdout_accessed"] is True
+    assert failure["product_acceptance_performed"] is False
+    assert failure["failure_evidence"]["child_failure_reason_code"] == subject.REASON_METRIC
+
+
+def test_parent_marks_side_effects_unknown_when_first_child_failure_receipt_is_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = {"holdout_evaluation_id": "b" * 64}
+    output = tmp_path / "acceptance.json"
+    args = cli.argparse.Namespace(
+        request=tmp_path / "request.json",
+        candidate=tmp_path / "candidate.json",
+        output=output,
+        model_output=tmp_path / "model.json",
+        ready_output=tmp_path / "ready.json",
+        child_dir=tmp_path / "children",
+        db_env_prefix="P2_4_TEST",
+    )
+    monkeypatch.setattr(cli, "load_request", lambda *args, **kwargs: request)
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "validate_static_request", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_validate_cli_outputs", lambda *args, **kwargs: {})
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: cli.subprocess.CompletedProcess(args=[], returncode=2, stdout="", stderr=""),
+    )
+
+    def fail_readback(*args: object, **kwargs: object) -> None:
+        raise subject.HoldoutAcceptanceError(subject.REASON_READBACK, "child failure missing", stage="fresh_process")
+
+    monkeypatch.setattr(cli, "_read_child_failure", fail_readback)
+
+    assert cli._parent(args) == 1
+
+    failure = json.loads((tmp_path / "acceptance.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_reason_code"] == subject.REASON_READBACK
+    assert failure["holdout_accessed"] is None
+    assert failure["product_acceptance_performed"] is None
+
+
+def test_parent_preserves_known_first_child_side_effects_when_second_failure_receipt_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = {"holdout_evaluation_id": "b" * 64}
+    invalid_child_failure = subject.failure_receipt(
+        request={"holdout_evaluation_id": "c" * 64},
+        producer_commit="a" * 40,
+        error=subject.HoldoutAcceptanceError(subject.REASON_METRIC, "metric unavailable", stage="metric"),
+        holdout_accessed=True,
+    )
+    output = tmp_path / "acceptance.json"
+    args = cli.argparse.Namespace(
+        request=tmp_path / "request.json",
+        candidate=tmp_path / "candidate.json",
+        output=output,
+        model_output=tmp_path / "model.json",
+        ready_output=tmp_path / "ready.json",
+        child_dir=tmp_path / "children",
+        db_env_prefix="P2_4_TEST",
+    )
+    completed = iter(
+        (
+            cli.subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            cli.subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+        )
+    )
+    monkeypatch.setattr(cli, "load_request", lambda *args, **kwargs: request)
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "validate_static_request", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_validate_cli_outputs", lambda *args, **kwargs: {})
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(cli.subprocess, "run", lambda *args, **kwargs: next(completed))
+    monkeypatch.setattr(cli, "_read_child_failure", lambda *args, **kwargs: invalid_child_failure)
+
+    assert cli._parent(args) == 1
+
+    failure = json.loads((tmp_path / "acceptance.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_reason_code"] == subject.REASON_REPRODUCIBILITY
+    assert failure["holdout_accessed"] is True
+    assert failure["product_acceptance_performed"] is True
 
 
 def test_write_once_is_external_collision_safe_and_canonical(tmp_path: Path) -> None:

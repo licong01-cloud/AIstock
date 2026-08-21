@@ -242,6 +242,7 @@ def _child_failure_error(
     child_failure: Mapping[str, Any],
     *,
     request: Mapping[str, Any],
+    producer_commit: str,
     process_index: int,
     returncode: int,
     failure_path: Path,
@@ -254,11 +255,14 @@ def _child_failure_error(
         "contract_version": CONTRACT_VERSION,
         "algorithm_version": ALGORITHM_VERSION,
         "status": "NOT_AVAILABLE",
+        "producer_commit": producer_commit,
         "holdout_evaluation_id": request.get("holdout_evaluation_id"),
         "fit_count": 0,
         "selection_performed": False,
         "model_write": False,
+        "model_sha256": None,
         "ready_write": False,
+        "ready_sha256": None,
         "database_write": False,
         "runtime_action": False,
     }
@@ -273,8 +277,10 @@ def _child_failure_error(
         invalid_fields.append("failure_evidence")
     for field in ("holdout_accessed", "product_acceptance_performed"):
         observed = child_failure.get(field)
-        if observed is not None and not isinstance(observed, bool):
+        if field not in child_failure or (observed is not None and not isinstance(observed, bool)):
             invalid_fields.append(field)
+    if child_failure.get("product_acceptance_performed") is True and child_failure.get("holdout_accessed") is not True:
+        invalid_fields.append("product_acceptance_performed")
     if invalid_fields:
         raise HoldoutAcceptanceError(
             REASON_REPRODUCIBILITY,
@@ -422,18 +428,19 @@ def _parent(args: argparse.Namespace) -> int:
             )
             if completed.returncode != 0:
                 child_failure_path = _failure_path(_child_path(args.child_dir, index))
-                child_failure = _read_child_failure(child_failure_path)
                 try:
+                    child_failure = _read_child_failure(child_failure_path)
                     child_error = _child_failure_error(
                         child_failure,
                         request=request,
+                        producer_commit=producer,
                         process_index=index,
                         returncode=completed.returncode,
                         failure_path=child_failure_path,
                     )
                 except HoldoutAcceptanceError:
-                    holdout_accessed = None
-                    product_acceptance_performed = None
+                    holdout_accessed = _merge_observed_flag(holdout_accessed, None)
+                    product_acceptance_performed = _merge_observed_flag(product_acceptance_performed, None)
                     raise
                 holdout_accessed = _merge_observed_flag(holdout_accessed, child_failure.get("holdout_accessed"))
                 product_acceptance_performed = _merge_observed_flag(
