@@ -412,6 +412,53 @@ def _evaluation_fixture() -> tuple[dict[str, object], subject.FrozenCandidate, d
     return inputs, candidate, request
 
 
+def test_request_builder_freezes_loaded_source_and_exact_output_authority() -> None:
+    inputs, candidate, expected = _evaluation_fixture()
+    holdout_source = expected["holdout_source"]
+    assert isinstance(holdout_source, dict)
+    source = holdout_source["source"]
+    outputs = expected["artifact_outputs"]
+    assert isinstance(source, dict) and isinstance(outputs, dict)
+
+    request = subject.build_holdout_request(
+        inputs,
+        candidate,
+        source=source,
+        artifact_outputs=outputs,
+    )
+
+    assert request == expected
+    receipt = subject.validate_static_request(request, candidate)
+    assert receipt["fit_count"] == 0
+    assert receipt["selection_performed"] is False
+    assert receipt["holdout_accessed"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value", "invalid_components"),
+    [
+        ("mapping_manifest", None, ["mapping_manifest"]),
+        ("dataset_manifest", {"calendar_benchmark": {}}, []),
+    ],
+)
+def test_request_builder_rejects_missing_source_component_instead_of_hashing_null(
+    field: str, invalid_value: object, invalid_components: list[str]
+) -> None:
+    inputs, candidate, expected = _evaluation_fixture()
+    inputs[field] = invalid_value
+    holdout_source = expected["holdout_source"]
+    assert isinstance(holdout_source, dict)
+    source = holdout_source["source"]
+    outputs = expected["artifact_outputs"]
+    assert isinstance(source, dict) and isinstance(outputs, dict)
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.build_holdout_request(inputs, candidate, source=source, artifact_outputs=outputs)
+
+    assert captured.value.reason_code == subject.REASON_SOURCE
+    assert captured.value.evidence == {"invalid_components": invalid_components}
+
+
 def test_candidate_and_request_preflight_close_exact_authority(tmp_path: Path) -> None:
     report = _candidate_report()
     path = tmp_path / "candidate.json"
@@ -887,6 +934,145 @@ def test_cli_invalid_candidate_stops_before_database_loader(tmp_path: Path, monk
     assert failure["holdout_accessed"] is False
     assert failure["fit_count"] == 0
     assert failure["model_write"] is False
+
+
+def test_cli_prepares_canonical_request_before_parent_without_product_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, candidate, expected = _evaluation_fixture()
+    holdout_source = expected["holdout_source"]
+    assert isinstance(holdout_source, dict)
+    tail_end = date.fromisoformat(str(holdout_source["outcome_tail_end"]))
+    artifact_root = tmp_path / "artifacts"
+    request_path = artifact_root / "request.json"
+    candidate_path = tmp_path / "candidate.json"
+    _write_json(candidate_path, {"candidate": "patched fixture"})
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(cli, "_resolve_outcome_tail_end", lambda *args, **kwargs: tail_end)
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", lambda *args, **kwargs: inputs)
+
+    result = cli.main(
+        [
+            "--prepare-request",
+            "--request",
+            str(request_path),
+            "--candidate",
+            str(candidate_path),
+            "--output",
+            str(artifact_root / "acceptance.json"),
+            "--model-output",
+            str(artifact_root / "model.json"),
+            "--ready-output",
+            str(artifact_root / "ready.json"),
+            "--child-dir",
+            str(artifact_root / "children"),
+            "--db-env-prefix",
+            "P2_4_TEST",
+        ]
+    )
+
+    assert result == 0
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    subject.validate_static_request(request, candidate)
+    subject.validate_loaded_source(inputs, request)
+    assert request["holdout_source"]["outcome_tail_end"] == tail_end.isoformat()
+    assert not (artifact_root / "acceptance.json").exists()
+    assert not (artifact_root / "model.json").exists()
+    assert not (artifact_root / "ready.json").exists()
+
+
+def test_request_preparation_resolves_tail_from_calendar_only_and_closes_readonly_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [(subject.HOLDOUT_END + timedelta(days=index),) for index in range(1, 21)]
+    observed: dict[str, object] = {}
+
+    class Cursor:
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute(self, query: str, params: tuple[object, ...]) -> None:
+            observed["query"] = query
+            observed["params"] = params
+
+        def fetchall(self) -> list[tuple[date]]:
+            return rows
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def rollback(self) -> None:
+            observed["rollback"] = True
+
+        def close(self) -> None:
+            observed["close"] = True
+
+    monkeypatch.setattr(cli, "_connect_readonly", lambda prefix: (Connection(), {"prefix": prefix}))
+
+    assert cli._resolve_outcome_tail_end("P2_4_TEST") == rows[-1][0]
+    assert "SELECT cal_date::date" in str(observed["query"])
+    assert "pct_chg" not in str(observed["query"])
+    assert observed["params"] == (subject.HOLDOUT_END, subject.OUTCOME_TAIL_TRADING_DAYS)
+    assert observed["rollback"] is True
+    assert observed["close"] is True
+
+
+def test_cli_request_preparation_failure_records_access_and_blocks_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, candidate, expected = _evaluation_fixture()
+    holdout_source = expected["holdout_source"]
+    assert isinstance(holdout_source, dict)
+    tail_end = date.fromisoformat(str(holdout_source["outcome_tail_end"]))
+    artifact_root = tmp_path / "artifacts"
+    request_path = artifact_root / "request.json"
+    candidate_path = tmp_path / "candidate.json"
+    _write_json(candidate_path, {"candidate": "patched fixture"})
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(cli, "_resolve_outcome_tail_end", lambda *args, **kwargs: tail_end)
+    calls = 0
+
+    def fail_loader(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("source failed")
+
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_loader)
+    argv = [
+        "--prepare-request",
+        "--request",
+        str(request_path),
+        "--candidate",
+        str(candidate_path),
+        "--output",
+        str(artifact_root / "acceptance.json"),
+        "--model-output",
+        str(artifact_root / "model.json"),
+        "--ready-output",
+        str(artifact_root / "ready.json"),
+        "--child-dir",
+        str(artifact_root / "children"),
+        "--db-env-prefix",
+        "P2_4_TEST",
+    ]
+
+    assert cli.main(argv) == 1
+    failure_path = artifact_root / "acceptance.failure.json"
+    failure = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert failure["holdout_accessed"] is True
+    assert failure["product_acceptance_performed"] is False
+    assert failure["fit_count"] == 0
+    assert not request_path.exists()
+    assert calls == 1
+
+    assert cli.main(argv) == 2
+    assert calls == 1
 
 
 def test_cli_output_drift_stops_before_holdout_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,6 +6,7 @@ import argparse
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +16,13 @@ if str(ROOT) not in sys.path:
 
 from backend.services.hmm_risk.market_relative_ridge_holdout import (  # noqa: E402
     HoldoutAcceptanceError,
+    HOLDOUT_END,
+    OUTCOME_TAIL_TRADING_DAYS,
+    REASON_SOURCE,
+    build_holdout_request,
     close_children,
     evaluate_child,
+    expected_holdout_source,
     failure_receipt,
     finalize_acceptance,
     load_frozen_candidate,
@@ -31,7 +37,7 @@ from backend.services.hmm_risk.market_relative_ridge_holdout import (  # noqa: E
     write_once,
 )
 from backend.services.hmm_risk.state_model_set import canonical_json_bytes, canonical_sha256  # noqa: E402
-from scripts.hmm_risk.prepare_state_model_set import _load_l1_source_inputs  # noqa: E402
+from scripts.hmm_risk.prepare_state_model_set import _connect_readonly, _load_l1_source_inputs  # noqa: E402
 
 
 def _producer_commit() -> str:
@@ -67,6 +73,113 @@ def _loader_request(request: dict[str, Any]) -> dict[str, Any]:
     source = request["holdout_source"]["source"]
     family = {"train_start": "2022-01-04", "train_end": "2025-03-31"}
     return {"source": source, "families": [dict(family), dict(family)]}
+
+
+def _artifact_outputs(args: argparse.Namespace) -> dict[str, str]:
+    child_1 = _child_path(args.child_dir, 1)
+    child_2 = _child_path(args.child_dir, 2)
+    return {
+        "acceptance_output": str(args.output.resolve()),
+        "acceptance_failure_output": str(_failure_path(args.output.resolve())),
+        "model_output": str(args.model_output.resolve()),
+        "ready_output": str(args.ready_output.resolve()),
+        "child_1_output": str(child_1),
+        "child_1_failure_output": str(_failure_path(child_1)),
+        "child_2_output": str(child_2),
+        "child_2_failure_output": str(_failure_path(child_2)),
+    }
+
+
+def _resolve_outcome_tail_end(db_prefix: str) -> date:
+    conn, _ = _connect_readonly(db_prefix)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cal_date::date
+                FROM market.trading_calendar
+                WHERE is_trading=true AND cal_date > %s
+                ORDER BY cal_date
+                LIMIT %s
+                """,
+                (HOLDOUT_END, OUTCOME_TAIL_TRADING_DAYS),
+            )
+            rows = cursor.fetchall()
+    finally:
+        conn.rollback()
+        conn.close()
+    values = tuple(row[0] for row in rows)
+    if (
+        len(values) != OUTCOME_TAIL_TRADING_DAYS
+        or any(type(value) is not date for value in values)
+        or values != tuple(sorted(set(values)))
+        or values[0] <= HOLDOUT_END
+    ):
+        raise HoldoutAcceptanceError(
+            REASON_SOURCE,
+            "canonical calendar cannot resolve the exact outcome-tail end",
+            stage="source_preflight",
+        )
+    return values[-1]
+
+
+def _prepare_request(args: argparse.Namespace) -> int:
+    request: dict[str, Any] = {}
+    producer = "unknown"
+    holdout_accessed = False
+    try:
+        candidate = load_frozen_candidate(args.candidate.resolve())
+        producer = _producer_commit()
+        outputs = _artifact_outputs(args)
+        for path in (args.request.resolve(), *(Path(value) for value in outputs.values())):
+            preflight_output(path, repository_root=ROOT)
+        outcome_tail_end = _resolve_outcome_tail_end(str(args.db_env_prefix))
+        source = expected_holdout_source(outcome_tail_end=outcome_tail_end)
+        holdout_accessed = True
+        inputs = _load_l1_source_inputs(
+            _loader_request({"holdout_source": {"source": source}}),
+            db_prefix=str(args.db_env_prefix),
+            c010_formal=True,
+        )
+        request = build_holdout_request(
+            inputs,
+            candidate,
+            source=source,
+            artifact_outputs=outputs,
+        )
+        write_once(args.request.resolve(), request, repository_root=ROOT)
+        sys.stdout.buffer.write(
+            canonical_json_bytes(
+                {
+                    "status": "request_prepared",
+                    "output": str(args.request.resolve()),
+                    "request_sha256": request["request_sha256"],
+                }
+            )
+            + b"\n"
+        )
+        return 0
+    except Exception as exc:
+        failure = failure_receipt(
+            request=request,
+            producer_commit=producer,
+            error=exc,
+            holdout_accessed=holdout_accessed,
+            product_acceptance_performed=False,
+        )
+        try:
+            write_once(_failure_path(args.output.resolve()), failure, repository_root=ROOT)
+        except Exception as write_exc:
+            sys.stderr.write(
+                f"P2-4 request preparation failed and failure receipt could not be written: "
+                f"{type(write_exc).__name__}: {write_exc}\n"
+            )
+            return 2
+        sys.stderr.write(
+            f"P2-4 request preparation failed: {failure['failure_reason_code']}; "
+            f"receipt={_failure_path(args.output.resolve())}\n"
+        )
+        return 1
 
 
 def _read_child(path: Path) -> dict[str, Any]:
@@ -291,8 +404,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ready-output", type=Path, required=True)
     parser.add_argument("--child-dir", type=Path, required=True)
     parser.add_argument("--db-env-prefix", required=True)
+    parser.add_argument("--prepare-request", action="store_true")
     parser.add_argument("--child-index", type=int, choices=(1, 2))
     args = parser.parse_args(argv)
+    if args.prepare_request and args.child_index is not None:
+        parser.error("--prepare-request and --child-index are mutually exclusive")
+    if args.prepare_request:
+        return _prepare_request(args)
     return _child(args) if args.child_index is not None else _parent(args)
 
 
