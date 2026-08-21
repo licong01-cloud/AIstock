@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1136",
-  "closed_at": null,
+  "closed_at": "2026-08-21T01:46:24Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -88,8 +88,8 @@
   },
   "first_seen_at": "2026-08-19T15:29:32.592445Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "384464c4d4639558e079567cb8baa8489c1d62c6",
+  "fixed_at": "2026-08-21T01:46:24Z",
   "github_issue_number": 3628,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3628",
   "last_seen_at": "2026-08-19T15:29:32.592445Z",
@@ -97,6 +97,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3629",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -111,6 +112,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -118,7 +121,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -127,6 +130,10 @@
     "fingerprint": "260c69f0963befe86dfd36ad",
     "source_event_id": "FE-20260819-260c69f0963b"
   },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests passed; ownership files=14 mapped=14 unmapped=0 ambiguous=0",
+    "python -m nox -s guardrail_changed_files -> passed on staged final tree: files=3 findings=0 blocking=0; ownership mapped=3 unmapped=0 ambiguous=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
