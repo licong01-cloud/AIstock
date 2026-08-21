@@ -2,7 +2,9 @@
   "actual": "Run simrun_0467020286e93882 is FAILED_RETRYABLE at LOCAL_SIM_INTRADAY_ADVANCE_FAILED because order ord_e935f4593da1485aab82e9c7fe0096c attempts 1900 shares at 09:33 against 301386.SZ bar volume 1400 after all 370 intents were submitted.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260821_BUG-1139-localsim-twap-minute-step-fill-exceeds-authoritative-bar-volume.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/execution_algos/twap_algo.py",
+    "backend/tests/trading_core/test_minute_execution.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1139",
@@ -20,12 +22,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260821-d9b90ec25a94",
       "timestamp": "2026-08-21T03:09:30.540598Z"
+    },
+    {
+      "action": "scope_clarification",
+      "actor": "codex",
+      "note": "Exact trace shows the observed defect is one TWAP step exceeding its own authoritative minute-bar volume; cross-order aggregate liquidity allocation is not evidenced and is not added as unapproved business semantics.",
+      "timestamp": "2026-08-21T03:18:37.555146Z"
     }
   ],
   "evidence_uris": [
     "runtime-api:simrun_0467020286e93882@2026-08-21"
   ],
-  "expected": "LocalSIM TWAP applies one deterministic aggregate per-symbol per-minute liquidity budget from the authoritative minute bar, allocates fills without any individual or cumulative step exceeding bar volume, persists remaining quantity for later bars, and fails loudly for malformed/negative/non-finite volume while preserving price, cash, position, order, TWAP-only and no-future-data contracts.",
+  "expected": "LocalSIM TWAP caps each deterministic step fill to the authoritative minute-bar volume, persists any remaining order quantity for later bars, and fails loudly for malformed volume while preserving price, cash, position, order, TWAP-only and no-future-data contracts. This BUG does not invent a cross-order aggregate liquidity allocator beyond the observed one-order failure.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -62,13 +70,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked TWAP minute-volume cap and passed the exact 1900-share versus 1400-volume incremental regression plus malformed-volume fail-loud matrix; no backend process control.",
+      "Fresh pytest process loaded the tracked TWAP volume cap and passed the exact 1900-versus-1400 incremental regression, invalid-volume fail-loud matrix, 40-test minute matrix and Paper v2 gate; no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
