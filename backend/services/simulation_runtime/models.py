@@ -226,6 +226,24 @@ def canonical_json_sha256(payload: dict[str, Any] | list[Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _require_strict_json_value(value: Any, *, path: str) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ValueError(f"{path} requires exact string keys")
+            _require_strict_json_value(item, path=f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _require_strict_json_value(item, path=f"{path}[{index}]")
+        return
+    if type(value) is float and not math.isfinite(value):
+        raise ValueError(f"{path} contains a non-finite number")
+    if value is None or type(value) in {str, bool, int, float}:
+        return
+    raise ValueError(f"{path} contains a non-canonical JSON value")
+
+
 def miniqmt_kernel_runtime_id(*, plan_id: str, binding_id: str, trade_date: date) -> str:
     """Single stable runtime identity for the final MiniQMT product route."""
 
@@ -871,6 +889,156 @@ class DailySelectionEvidence(BaseModel):
         if self.evidence_id != expected_id:
             raise ValueError("evidence_id does not match artifact_hash")
         return self
+
+
+class DailyTradingSymbolFactV1(BaseModel):
+    """Immutable per-symbol daily trading facts captured before plan compile."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    symbol: str
+    trade_date: date
+    pre_close: float
+    up_limit: float
+    down_limit: float
+    price_basis: Literal["raw"] = "raw"
+    stk_limit_row_hash: str
+    is_st: bool
+    st_source: str
+    st_evidence_hash: str
+    is_suspended: bool
+    suspend_type: str | None = None
+    suspend_timing: str | None = None
+    suspend_source: str
+    board: str
+    lot_rule: dict[str, int]
+
+    @field_validator("symbol", "stk_limit_row_hash", "st_source", "st_evidence_hash", "suspend_source", "board")
+    @classmethod
+    def _daily_fact_required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("daily trading fact text field is required")
+        return value
+
+    @field_validator("pre_close", "up_limit", "down_limit")
+    @classmethod
+    def _daily_fact_positive_finite_price(cls, value: float) -> float:
+        value = float(value)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("daily trading fact prices must be positive and finite")
+        return value
+
+    @model_validator(mode="after")
+    def _daily_fact_price_and_lot_contract(self) -> "DailyTradingSymbolFactV1":
+        if not self.down_limit < self.pre_close < self.up_limit:
+            raise ValueError("daily trading fact requires down_limit < pre_close < up_limit")
+        if set(self.lot_rule) != {"min_quantity", "increment"}:
+            raise ValueError("daily trading fact lot_rule has invalid fields")
+        if any(type(value) is not int or value <= 0 for value in self.lot_rule.values()):
+            raise ValueError("daily trading fact lot_rule values must be positive exact integers")
+        row_payload = {
+            "source": "market.stk_limit",
+            "symbol": self.symbol,
+            "trade_date": self.trade_date.isoformat(),
+            "pre_close": self.pre_close,
+            "up_limit": self.up_limit,
+            "down_limit": self.down_limit,
+            "price_basis": self.price_basis,
+        }
+        if self.stk_limit_row_hash != canonical_json_sha256(row_payload):
+            raise ValueError("daily trading fact stk_limit_row_hash mismatch")
+        return self
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+class DailyTradingContextV1(BaseModel):
+    """Plan-bound daily market authority; never rebuilt by the live cadence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["daily_trading_context_v1"] = "daily_trading_context_v1"
+    context_id: str
+    context_hash: str
+    trade_date: date
+    timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
+    plan_identity: str
+    binding_identity: str
+    package_identity: str
+    symbol_set: tuple[str, ...]
+    symbol_set_hash: str
+    calendar_service_snapshot_id: str
+    captured_at: datetime
+    sources: dict[str, dict[str, Any]]
+    symbols: dict[str, DailyTradingSymbolFactV1]
+
+    @field_validator(
+        "context_id",
+        "context_hash",
+        "plan_identity",
+        "binding_identity",
+        "package_identity",
+        "symbol_set_hash",
+        "calendar_service_snapshot_id",
+    )
+    @classmethod
+    def _daily_context_required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("daily trading context identity field is required")
+        return value
+
+    @model_validator(mode="after")
+    def _daily_context_identity_matches_payload(self) -> "DailyTradingContextV1":
+        if self.captured_at.tzinfo is None or self.captured_at.utcoffset() is None:
+            raise ValueError("daily trading context captured_at must be timezone-aware")
+        _require_strict_json_value(self.sources, path="daily_trading_context.sources")
+        normalized = tuple(sorted(set(self.symbol_set)))
+        if normalized != self.symbol_set or not normalized:
+            raise ValueError("daily trading context symbol_set must be non-empty, unique, and sorted")
+        if set(self.symbols) != set(normalized):
+            raise ValueError("daily trading context symbols must exactly cover symbol_set")
+        if set(self.sources) != {"stk_limit", "stock_st", "suspend_d"}:
+            raise ValueError("daily trading context sources are incomplete")
+        if self.sources["stk_limit"].get("source") != "market.stk_limit":
+            raise ValueError("daily trading context limit authority must be market.stk_limit")
+        for symbol, fact in self.symbols.items():
+            if fact.symbol != symbol or fact.trade_date != self.trade_date:
+                raise ValueError("daily trading context symbol fact identity mismatch")
+        expected_symbol_hash = canonical_json_sha256(list(normalized))
+        if self.symbol_set_hash != expected_symbol_hash:
+            raise ValueError("daily trading context symbol_set_hash mismatch")
+        digest = canonical_json_sha256(self.canonical_payload())
+        if self.context_hash != digest:
+            raise ValueError("daily trading context context_hash mismatch")
+        if self.context_id != f"dtc_{digest[:16]}":
+            raise ValueError("daily trading context context_id mismatch")
+        return self
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "trade_date": self.trade_date.isoformat(),
+            "timezone": self.timezone,
+            "plan_identity": self.plan_identity,
+            "binding_identity": self.binding_identity,
+            "package_identity": self.package_identity,
+            "symbol_set": list(self.symbol_set),
+            "symbol_set_hash": self.symbol_set_hash,
+            "calendar_service_snapshot_id": self.calendar_service_snapshot_id,
+            "captured_at": self.captured_at.isoformat(),
+            "sources": self.sources,
+            "symbols": {symbol: fact.canonical_payload() for symbol, fact in sorted(self.symbols.items())},
+        }
+
+    def carrier_payload(self) -> dict[str, Any]:
+        return {
+            **self.canonical_payload(),
+            "context_id": self.context_id,
+            "context_hash": self.context_hash,
+        }
 
 
 class TradingRuleDecision(BaseModel):

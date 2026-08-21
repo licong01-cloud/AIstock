@@ -28,7 +28,7 @@ from .data_completeness import (
 
 
 DAILY_CLOSE_READY_AFTER = dt.time(20, 0)
-STK_LIMIT_READY_AFTER = dt.time(9, 0)
+STK_LIMIT_READY_AFTER = dt.time(9, 10)
 STK_LIMIT_PREOPEN_RETRY_UNTIL = dt.time(9, 15)
 
 NO_FULL_TABLE_FALLBACK = frozenset({"kline_minute_raw"})
@@ -92,11 +92,7 @@ class AuditBackedDataHealthChecker:
     def __init__(self, db_cfg: Dict[str, Any], *, allow_physical_fallback: bool = True) -> None:
         self._db_cfg = db_cfg
         self._allow_physical_fallback = allow_physical_fallback
-        self._dataset_tiers = {
-            dataset: tier.name
-            for tier in ALL_TIERS
-            for dataset in tier.tables
-        }
+        self._dataset_tiers = {dataset: tier.name for tier in ALL_TIERS for dataset in tier.tables}
 
     def _conn(self):
         return psycopg2.connect(**self._db_cfg)
@@ -173,7 +169,9 @@ class AuditBackedDataHealthChecker:
             expected_date=expected_date,
         )
 
-    def _fetch_audit_rows(self, dataset: str, expected_date: Optional[dt.date]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    def _fetch_audit_rows(
+        self, dataset: str, expected_date: Optional[dt.date]
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         with self._conn() as conn:
             with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
                 cur.execute(
@@ -208,7 +206,9 @@ class AuditBackedDataHealthChecker:
                     latest_expected = cur.fetchone()
         return (dict(latest_success) if latest_success else None, dict(latest_expected) if latest_expected else None)
 
-    def _from_physical_fallback(self, dataset: str, expected_date: Optional[dt.date], elapsed_ms: float) -> AuditDatasetCheckResult | None:
+    def _from_physical_fallback(
+        self, dataset: str, expected_date: Optional[dt.date], elapsed_ms: float
+    ) -> AuditDatasetCheckResult | None:
         if not self._allow_physical_fallback or dataset in NO_FULL_TABLE_FALLBACK:
             return None
         try:
