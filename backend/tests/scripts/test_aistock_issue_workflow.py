@@ -1471,6 +1471,46 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_contract["blocking"] == []
 
 
+def test_bug_1141_offline_hmm_stock_fact_repository_is_exact_and_neighbor_stays_backend(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "backend/services/hmm_risk/stock_fact_repository.py",
+        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+        "backend/tests/hmm_risk/test_stock_fact_repository.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+        "tests/aistock_validation/bugs/20260821_BUG-1140.json",
+    ]
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            }
+        ),
+        changed_files=changed_files,
+        root=isolated_workflow_root,
+    )
+    neighboring_backend = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/stock_fact_observation.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert inference["runtime_impact"] == "none"
+    assert inference["runtime_files"] == []
+    assert inference["target_ids"] == []
+    assert contract["runtime_impact"] == "none"
+    assert contract["target_ids"] == []
+    assert contract["backend_restart_required"] is False
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert neighboring_backend["runtime_impact"] == "backend"
+    assert neighboring_backend["runtime_files"] == ["backend/services/hmm_risk/stock_fact_observation.py"]
+    assert neighboring_backend["target_ids"] == ["backend-main"]
+
+
 def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_activation(
     isolated_workflow_root: Path,
 ) -> None:

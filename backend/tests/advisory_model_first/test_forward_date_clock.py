@@ -22,6 +22,10 @@ class _Calendar:
 
 
 class _Repository:
+    def retryable_model_observations(self, *, limit: int):
+        assert limit == 1
+        return []
+
     def pending_settlements(self, *, on_or_before: date):
         return []
 
