@@ -1,0 +1,285 @@
+{
+  "actual": "run-once returns an idempotent UNAVAILABLE observation forever; only FAILED observations are retried and replaceable.",
+  "allowed_write_scope": [
+    "backend/services/advisory_forward/service.py",
+    "backend/services/advisory_forward/repository.py",
+    "backend/tests/advisory_model_first/test_forward_boundaries.py",
+    "backend/tests/advisory_model_first/test_forward_date_clock.py",
+    "backend/tests/advisory_model_first/test_forward_recovery.py",
+    "backend/tests/advisory_model_first/test_forward_postgres.py",
+    "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md",
+    "tests/aistock_validation/bugs/20260821_BUG-1138-advisory-forward-model-observation-cannot-recover-after-transient-data-u.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1138",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-21T02:40:44.538083Z",
+  "description": "run-once returns an idempotent UNAVAILABLE observation forever; only FAILED observations are retried and replaceable.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260821-12edb798501e",
+      "timestamp": "2026-08-21T02:40:44.538067Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime API 2026-08-21: model-shadow target 2026-08-20 succeeds while persisted forward observation remains ADVISORY_MODEL_FEATURE_REQUIRED_VALUE_MISSING"
+  ],
+  "expected": "A published forward run with a transient UNAVAILABLE model observation retries against the same frozen descriptor and may transition to EXPERIMENTAL_SHADOW once required PIT data is ready; successful observations remain immutable.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/advisory_forward/repository.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py",
+      "backend/tests/advisory_model_first/test_forward_date_clock.py",
+      "backend/tests/advisory_model_first/test_forward_recovery.py",
+      "backend/tests/advisory_model_first/test_forward_postgres.py",
+      "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_forward/service.py",
+        "backend/services/advisory_forward/repository.py",
+        "backend/tests/advisory_model_first/test_forward_boundaries.py",
+        "backend/tests/advisory_model_first/test_forward_date_clock.py",
+        "backend/tests/advisory_model_first/test_forward_recovery.py",
+        "backend/tests/advisory_model_first/test_forward_postgres.py",
+        "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "advisory.model_first"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_forward/service.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/advisory_forward/repository.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_forward_recovery.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_forward_postgres.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_forward/service.py",
+        "backend/services/advisory_forward/repository.py",
+        "backend/tests/advisory_model_first/test_forward_boundaries.py",
+        "backend/tests/advisory_model_first/test_forward_date_clock.py",
+        "backend/tests/advisory_model_first/test_forward_recovery.py",
+        "backend/tests/advisory_model_first/test_forward_postgres.py",
+        "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/advisory_forward/repository.py",
+      "backend/tests/advisory_model_first/test_forward_boundaries.py",
+      "backend/tests/advisory_model_first/test_forward_date_clock.py",
+      "backend/tests/advisory_model_first/test_forward_recovery.py",
+      "backend/tests/advisory_model_first/test_forward_postgres.py",
+      "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
+    ]
+  },
+  "first_seen_at": "2026-08-21T02:40:44.538083Z",
+  "fix_branch": null,
+  "fix_commit": "09e4ebd3e3ea02d8a2c8c1776d268dd12387d971",
+  "fixed_at": "2026-08-21T09:00:34Z",
+  "github_issue_number": 3633,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3633",
+  "last_seen_at": "2026-08-21T02:40:44.538083Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3637",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/advisory/forward-runs/advfwd_1a98d00fa0524ecfa5b330333e14f544 shows UNAVAILABLE after model-shadow for the same target succeeds",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded the tracked Advisory forward service and repository recovery semantics; the five-file affected matrix passed 37 tests without backend process control.",
+      "Fresh Python nox process loaded tracked Advisory forward service/repository and passed advisory_modeling_backend: 322 passed, 5 skipped; no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed_source_pending_user_restart",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "Advisory forward model observation cannot recover after transient data unavailability",
+  "trigger_condition": {
+    "fingerprint": "12edb798501e17de197f8a37",
+    "source_event_id": "FE-20260821-12edb798501e"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 platform_api_backend advisory_modeling_backend -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_modeling",
+        "platform_api"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_modeling",
+          "platform_api"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -30,6 +30,23 @@ from backend.services.strategy_package.runtime_variant import canonical_json_sha
 from backend.services.trading_core.errors import InvalidStateTransitionError
 
 
+RETRYABLE_MODEL_OBSERVATION_REASON_CODES = frozenset(
+    {
+        "ADVISORY_MODEL_FEATURE_REQUIRED_VALUE_MISSING",
+        "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+    }
+)
+
+
+def is_retryable_model_observation(observation: Mapping[str, Any]) -> bool:
+    status = str(observation.get("status") or "")
+    if status == "FAILED":
+        return True
+    return status == "UNAVAILABLE" and str(observation.get("reason_code") or "") in (
+        RETRYABLE_MODEL_OBSERVATION_REASON_CODES
+    )
+
+
 class AdvisoryForwardPGRepository:
     def __init__(self, *, conn_factory: Any | None = None) -> None:
         self._conn_factory = conn_factory or get_conn
@@ -287,11 +304,22 @@ class AdvisoryForwardPGRepository:
                 existing = cur.fetchone()
                 if existing is not None:
                     if existing["payload_sha256"] == payload_hash:
+                        if is_retryable_model_observation(existing):
+                            cur.execute(
+                                """
+                                UPDATE app.advisory_forward_model_observation
+                                SET updated_at=NOW()
+                                WHERE forward_run_id=%s
+                                RETURNING *
+                                """,
+                                (observation.forward_run_id,),
+                            )
+                            existing = cur.fetchone()
                         _clear_observation_failure(cur, observation.forward_run_id)
                         return dict(existing)
-                    if existing["status"] != "FAILED":
+                    if not is_retryable_model_observation(existing):
                         raise InvalidStateTransitionError(
-                            "successful forward model observation payload cannot change",
+                            "terminal forward model observation payload cannot change",
                             context={"forward_run_id": observation.forward_run_id},
                         )
                     if existing["model_descriptor_sha256"] != observation.model_descriptor_sha256:
@@ -386,6 +414,35 @@ class AdvisoryForwardPGRepository:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(sql, params)
+                return [dict(row) for row in cur.fetchall()]
+
+    def retryable_model_observations(self, *, limit: int = 1) -> list[dict[str, Any]]:
+        if limit <= 0:
+            raise ValueError("retryable model observation limit must be positive")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT forward_run.*
+                    FROM app.advisory_forward_run AS forward_run
+                    JOIN app.advisory_forward_model_observation AS observation
+                      ON observation.forward_run_id = forward_run.forward_run_id
+                    WHERE forward_run.publication_status = 'PUBLISHED'
+                      AND observation.model_descriptor_sha256 IS NOT NULL
+                      AND observation.updated_at <= NOW() - INTERVAL '5 minutes'
+                      AND (
+                        observation.status = 'FAILED'
+                        OR (
+                          observation.status = 'UNAVAILABLE'
+                          AND observation.reason_code = ANY(%s)
+                        )
+                      )
+                    ORDER BY observation.updated_at ASC, forward_run.target_trade_date ASC,
+                             forward_run.program_id ASC
+                    LIMIT %s
+                    """,
+                    (sorted(RETRYABLE_MODEL_OBSERVATION_REASON_CODES), int(limit)),
+                )
                 return [dict(row) for row in cur.fetchall()]
 
     def pending_settlements(self, *, on_or_before: date) -> list[dict[str, Any]]:
