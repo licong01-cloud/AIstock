@@ -57,7 +57,9 @@
       "matched_rules": [
         {
           "file": "backend/services/advisory_forward/service.py",
-          "impact_modules": ["platform.db"],
+          "impact_modules": [
+            "platform.db"
+          ],
           "primary_module": "platform.api",
           "risk_level": "high",
           "rule_id": "platform_api"
@@ -98,7 +100,9 @@
           "rule_id": "advisory_model_first_training"
         }
       ],
-      "risk_levels": ["high"],
+      "risk_levels": [
+        "high"
+      ],
       "suggested_scope": [
         "backend/services/advisory_forward/service.py",
         "backend/services/advisory_model_first/meta_label_bundle.py",
@@ -145,7 +149,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/model-shadow?target_trade_date=2026-08-24",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "AIstock interpreter loaded exact P0-D bundle e555903e from git-tracked worktree source and read shadow_policy_maturity_horizon_days=20"
+      "AIstock interpreter loaded exact P0-D bundle e555903e from git-tracked worktree source and read shadow_policy_maturity_horizon_days=20",
+      "AIstock interpreter loaded exact P0-D bundle e555903e and read frozen maturity horizon 20"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -155,7 +160,9 @@
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
-    "target_ids": ["backend-main"]
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
