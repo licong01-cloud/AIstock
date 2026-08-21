@@ -1,7 +1,7 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-16T18:29:20.4636922Z",
-  "source_head": "b0bd967dfd9bc94a758cf3aa07e9ce2ec33e1ca4",
+  "observed_at": "2026-08-21T12:41:17.4910733Z",
+  "source_head": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
   "current_revision": {
@@ -17,54 +17,48 @@
     "forbidden": ["business_code", "data_build", "data_export", "dataset_mutation", "ddl_dml", "activation", "distribution", "restart", "cleanup", "process_control"]
   },
   "active_slice": {
-    "id": "W3-C",
-    "branch": "feature/qe-pit-v2-w3c-integration-20260816",
-    "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3c-20260816",
-    "base_head": "66bab73f83c9cf8067de705b3b3a6c5f2ff53eb8",
-    "status": "implementation_review_passed_final_head_ready_for_pr",
-    "implementation_commit": "2ae89f7a6b3d29f24b5531e50697954571c5146b",
-    "integration_head": "b0bd967dfd9bc94a758cf3aa07e9ce2ec33e1ca4",
-    "entry_runtime_identity": "45af026c7b59974e0e5220a8a4cd62a7b4c7fac8",
-    "w3b_merge_commit": "7d4120b1f3d583358783ca43eb20df6dcc11fb61",
-    "runtime_health": "pass",
-    "authority_pointer_readback": "blocked_missing_table_no_ddl_performed",
+    "id": "W6",
+    "branch": "feature/qe-pit-v2-w6-integration-20260819",
+    "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w6-integration-20260819",
+    "base_head": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
+    "status": "implementation_review_passed_receipt_refresh_pending_ci",
+    "implementation_commit": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
+    "integration_head": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
+    "main_sync_merge_commit": "a557ad2331ef4bdc1d53f86c2752360a3e666c10",
+    "runtime_impact": "backend",
+    "runtime_targets": ["backend-main"],
+    "authority_pointer_readback": "not_run_missing_worktree_db_credentials_no_write_performed",
     "validation": {
-      "direct_matrix": "65 passed",
-      "hmm_evolution_backend": "218 passed, 5 deselected",
-      "hmm_data_source_backend": "78 passed, 1 skipped, 5 deselected",
-      "hmm_risk_backend": "485 passed",
+      "direct_matrix": "18 passed",
+      "inference_adjacent_matrix": "32 passed",
+      "w3d_identity_matrix": "39 passed",
+      "w4_w5_adjacent_matrix": "91 passed",
+      "advisory_historical_range_backend": "378 passed, 5 skipped",
       "qlib_data_backend": "15 passed",
+      "platform_api_backend": "13 passed",
       "f2": "30/30 warnings=0",
       "catalog_integrity": "7 passed",
       "module_registry": "8 passed, 14/14 mapped",
-      "classifier": "targeted_ci_required, 11 changed, 0 unmapped",
-      "l0": "guardrail findings=0; repository findings=4 baseline, blocking=0",
-      "ruff_compile_diff": "pass",
-      "scope_readback": "11/11 exact match",
-      "client_gate": "feature ready, blocking=0, warnings=0",
-      "remote_main": "6538d32db38abec56e260647ab1ebed9b9abe5c4",
+      "classifier": "targeted_ci_required, 7 changed, 0 unmapped",
+      "l0": "7 files, findings=0, blocking=0",
+      "ruff_compile_diff": "pass; format check advisory not applied to avoid whole-file churn",
+      "scope_readback": "7/7 exact match and ownership mapped",
+      "client_gate": "merge_aftercare ready, blocking=0, warnings=0",
+      "remote_main": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
       "main_sync": "merged_without_conflict",
-      "merge_tree": "clean against origin/main@24e4ae79; exact changed-path overlap=0"
+      "review_findings": "unconditional missing PIT identity regression and unreachable real W8 envelope path fixed",
+      "production_gates": "ddl=noop; dml=noop; candidate_write=not_performed; activation=not_performed; process_control=not_performed"
     },
     "actual_write_files": [
-      "backend/services/hmm_evolution/universe.py",
-      "backend/services/hmm_risk/canonical_stock_fact_source.py",
-      "scripts/hmm_risk/repair_b3_stock_fact_gaps.py",
-      "backend/tests/hmm_evolution/test_universe.py",
-      "backend/tests/hmm_data_source/test_isolation_constraints.py",
-      "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
-      "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
-      "backend/tests/test_qe_hmm_canonical_pit_integration.py",
-      "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/inference_engine.py",
+      "backend/services/canonical_pit_inference_boundary.py",
+      "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+      "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+      "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
       "tests/aistock_validation/pit_v2/window_scope_receipt.json"
     ],
-    "released_candidate_files": [
-      "backend/services/hmm_data_source/legacy_qe_artifact_manifests.py",
-      "backend/services/hmm_risk/stock_fact_repository.py"
-    ],
-    "overlap_evidence": "PR #2770 remains OPEN/CONFLICTING on stock_fact_repository.py; current main supersedes its two-line semantic fix, so W3-C leaves that file untouched and adds a generation-bound online adapter",
-    "forbidden": ["w1_w2_core", "qe_business_files", "selection_paper_simulation", "strategy_package_advisory", "data_export", "dataset_mutation", "ddl_dml", "runtime_activation", "process_control"]
+    "forbidden": ["production_or_full_candidate", "dataset_mutation", "ddl_dml", "runtime_activation", "process_control", "cleanup"]
   },
   "windows": {
     "W0": {
@@ -478,16 +472,16 @@
       ],
       "source_ready_receipt": {
         "schema_version": "pit_v2_w6_source_ready_receipt_v1",
-        "source_commit": "c60f438b52df229579e6910d01bc9d911eff9c23",
-        "baseline_origin_main": "8b4dfa5b2427a10d2b6b912314686a32e14cc241",
-        "baseline_user_ancestor": "1e4aef4f",
+        "source_commit": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
+        "baseline_origin_main": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
+        "baseline_user_ancestor": "a6da5a35",
         "consumer_inventory_unknown_count": 0,
         "fallback_scan_count": 0,
-        "direct_tests": "10 passed",
+        "direct_tests": "18 passed; adjacent and classified matrices pass",
         "f2": "30/30 pass",
         "compileall": "pass",
         "git_diff_check": "pass",
-        "ruff": "not_available_in_validation_environment",
+        "ruff": "pass",
         "production_gates": {
           "production_ddl_gate": "noop",
           "production_dml_gate": "noop",
@@ -498,7 +492,7 @@
           "QE_experiment_run": "not_performed",
           "runtime_real_data_evidence": "not_run_not_authorized"
         },
-        "receipt_binding_note": "Bound to immutable implementation source freeze commit c60f438b52df229579e6910d01bc9d911eff9c23; the metadata-only scope receipt update is not included in source_commit to avoid self-referential hashing."
+        "receipt_binding_note": "Bound to immutable implementation source freeze commit 4ee6da752f7451f3c31c15cf53a296b01cebbf21; this metadata-only receipt refresh is excluded from source_commit to avoid self-referential hashing."
       },
       "additional_shared_file_rule": "requires explicit handoff from W1-W5 and W6 single-writer registration before edit",
       "forbidden": ["production_or_full_candidate", "activation", "unscoped_shared_core_edit"]
@@ -509,7 +503,7 @@
   },
   "consumer_inventory": {
     "schema_version": "canonical_pit_consumer_inventory_v1",
-    "source_commit": "c60f438b52df229579e6910d01bc9d911eff9c23",
+    "source_commit": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
     "classification_values": ["canonical_v2_formal", "canonical_v2_frozen_candidate", "canonical_v2_rolling_runtime", "legacy_reproduction_only", "test_fixture", "migration_tool", "unknown"],
     "consumers": [
       {"consumer_id": "qe_formal_training", "class": "canonical_v2_formal", "path": "backend/services/quantevolver/qe_dataset_contract.py"},
@@ -534,9 +528,9 @@
       "backend/services/quantevolver/qe_dataset_contract.py": "e370720805155559f4e0b2103b01c86fde6cd296ffe79eb382e04964083c7983",
       "backend/services/hmm_evolution/universe.py": "a04274909c7948ece33ec6bec7a3a024b1549c2b7d86c19212568302ae8a4735",
       "backend/services/selection_center/canonical_pit_runtime.py": "0e5956d0afdaa5496b59da852e0a792afa83117582fafb28e40fd5b07c9d3060",
-      "backend/services/canonical_pit_inference_boundary.py": "b14dab920081a399e150e8814315f3d9068dd9c397c7e556d95e10333f8e7b9e",
-      "backend/inference_engine.py": "4b244880a00dab55dd6207ede5fa537b9ac52b7ce8052cf0ac824bdb30cd2510",
-      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py": "c10fcc1bf67299cfaa574fd64713f3241d3ce138612becdc65b4ec572123a894",
+      "backend/services/canonical_pit_inference_boundary.py": "25320a4412770b3c0d9c380a423d8a09eb16a7d414363c7effdc4424db35aab7",
+      "backend/inference_engine.py": "28a4bf9d114bfd876696022f33be5779adae0bcd7a1a738057da60b0f84a63df",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py": "0bb72d778b3ac9b5b51bdeade195b8d8c7157fa405b7d60524ce713f1a995826",
       "backend/services/dataset_release/pit.py": "09a85279099c2b4279762c6b139ac794e4c0155b9678a209e7e5bcd1add2ea9c",
       "backend/services/canonical_equity_pit.py": "16963de5e17e40f2c7064ad053f3297bddaa41156766fb1a6ea107a2f4656373"
     }
@@ -546,6 +540,6 @@
     "W3_internal": "W3-A_to_W3-B_to_W3-C_to_W3-D_serial_short_leases",
     "W3_W4_W5": "parallel_only_when_exact_changed_files_are_disjoint",
     "shared_core": "W6_single_writer_only",
-    "status": "PASS_REVISED_W3_SCOPE_PENDING_USER_CONFIRMATION"
+    "status": "PASS_W6_SOURCE_READY_PENDING_REMOTE_CI"
   }
 }
