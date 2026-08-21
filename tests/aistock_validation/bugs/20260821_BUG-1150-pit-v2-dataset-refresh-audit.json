@@ -7,6 +7,8 @@
     "tests/aistock_validation/pit_v2/source_freeze_receipt.json",
     "docs/standards/aistock_runtime_targets_v1.yaml",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260821_BUG-1150-pit-v2-dataset-refresh-audit.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -38,6 +40,12 @@
       "actor": "codex",
       "note": "Fail-closed runtime classification requires exact non-runtime catalog registration for scripts/seed_dataset_refresh_audit.py plus a neighboring-script regression test; no wildcard or directory downgrade is permitted.",
       "timestamp": "2026-08-21T19:37:33.628658Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "PR #3672 CI identified the operator script and its direct test as unmapped code. Add only their exact ownership entries and a classifier regression test under the existing qlib monthly dataset release validation boundary.",
+      "timestamp": "2026-08-22T00:00:00+08:00"
     }
   ],
   "evidence_uris": [
@@ -53,6 +61,8 @@
       "tests/aistock_validation/pit_v2/source_freeze_receipt.json"
       ,"docs/standards/aistock_runtime_targets_v1.yaml"
       ,"backend/tests/scripts/test_aistock_issue_workflow.py"
+      ,"tests/aistock_validation/catalog/file_ownership.yaml"
+      ,"backend/tests/scripts/test_ci_change_classifier.py"
     ],
     "ownership": {
       "changed_files": [
@@ -124,6 +134,8 @@
       "tests/aistock_validation/pit_v2/source_freeze_receipt.json"
       ,"docs/standards/aistock_runtime_targets_v1.yaml"
       ,"backend/tests/scripts/test_aistock_issue_workflow.py"
+      ,"tests/aistock_validation/catalog/file_ownership.yaml"
+      ,"backend/tests/scripts/test_ci_change_classifier.py"
     ]
   },
   "first_seen_at": "2026-08-21T18:59:47.959768Z",

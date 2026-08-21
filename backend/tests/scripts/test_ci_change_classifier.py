@@ -410,6 +410,28 @@ def test_qlib_exporter_tests_select_qlib_data_backend(tmp_path: Path) -> None:
     assert payload["unmapped_code_files"] == []
 
 
+def test_dataset_refresh_audit_operator_selects_qlib_data_backend(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/seed_dataset_refresh_audit.py",
+            "backend/tests/test_dataset_refresh_audit.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["qlib_data_backend"]
+    assert payload["catalog_impacted_modules"] == [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+    ]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_canonical_equity_pit_selects_qlib_data_backend(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
