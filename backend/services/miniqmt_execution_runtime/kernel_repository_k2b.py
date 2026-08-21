@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date
+import hashlib
+import json
 from typing import Any
 
 import psycopg2.extras
@@ -597,39 +599,37 @@ class KernelRepositoryK2BMixin:
             "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
             (f"{authority.runtime_id}|{authority.parent_intent_id}|{authority.strategy_slot_id}",),
         )
-        cur.execute(
-            """
-            SELECT runtime_id,execution_plan_id,execution_plan_hash,release_id,binding_id,trade_date,symbol,side,
-                   emitted_parent_quantity,execution_policy_id,execution_policy_sha256
-            FROM qmt_strategy.execution_parent_benchmark
-            WHERE parent_intent_id=%s
-            ORDER BY parent_revision DESC LIMIT 1 FOR SHARE
-            """,
-            (authority.parent_intent_id,),
-        )
-        parent = cur.fetchone()
-        if parent is None:
-            raise KernelRepositoryConflict("ALGO_START parent benchmark authority is missing")
-        expected_parent = {
-            "runtime_id": authority.runtime_id,
-            "execution_plan_id": authority.execution_plan_id,
-            "execution_plan_hash": authority.execution_plan_sha256,
-            "release_id": authority.release_id,
-            "symbol": authority.symbol,
-            "side": authority.side.value,
-            "emitted_parent_quantity": authority.parent_quantity,
-            "execution_policy_id": authority.policy_id,
-            "execution_policy_sha256": authority.policy_sha256,
-        }
-        actual_parent = {key: parent[key] for key in expected_parent}
-        actual_parent["emitted_parent_quantity"] = int(actual_parent["emitted_parent_quantity"])
-        if actual_parent != expected_parent:
-            raise KernelRepositoryConflict("ALGO_START parent benchmark authority conflicts with request")
-        if type(authority) is KernelAlgoCreationRequestV2 and (
-            parent["binding_id"] != authority.binding_id
-            or parent["trade_date"] != date.fromisoformat(authority.exchange_trade_date)
-        ):
-            raise KernelRepositoryConflict("K6-D parent benchmark binding/date authority conflicts with request")
+        if type(authority) is KernelAlgoCreationRequestV2:
+            self._lock_and_validate_k6d_plan_parent_with_cursor(cur, authority=authority)
+        else:
+            cur.execute(
+                """
+                SELECT runtime_id,execution_plan_id,execution_plan_hash,release_id,symbol,side,
+                       emitted_parent_quantity,execution_policy_id,execution_policy_sha256
+                FROM qmt_strategy.execution_parent_benchmark
+                WHERE parent_intent_id=%s
+                ORDER BY parent_revision DESC LIMIT 1 FOR SHARE
+                """,
+                (authority.parent_intent_id,),
+            )
+            parent = cur.fetchone()
+            if parent is None:
+                raise KernelRepositoryConflict("ALGO_START parent benchmark authority is missing")
+            expected_parent = {
+                "runtime_id": authority.runtime_id,
+                "execution_plan_id": authority.execution_plan_id,
+                "execution_plan_hash": authority.execution_plan_sha256,
+                "release_id": authority.release_id,
+                "symbol": authority.symbol,
+                "side": authority.side.value,
+                "emitted_parent_quantity": authority.parent_quantity,
+                "execution_policy_id": authority.policy_id,
+                "execution_policy_sha256": authority.policy_sha256,
+            }
+            actual_parent = {key: parent[key] for key in expected_parent}
+            actual_parent["emitted_parent_quantity"] = int(actual_parent["emitted_parent_quantity"])
+            if actual_parent != expected_parent:
+                raise KernelRepositoryConflict("ALGO_START parent benchmark authority conflicts with request")
         cur.execute(
             """
             SELECT release_hash,execution_policy_version_id,execution_policy_sha256
@@ -659,6 +659,92 @@ class KernelRepositoryK2BMixin:
         if len(existing) > 1:
             raise KernelRepositoryConflict("multiple KERNEL_V2 algos own the same parent/slot authority")
         return existing
+
+    @staticmethod
+    def _lock_and_validate_k6d_plan_parent_with_cursor(
+        cur: Any,
+        *,
+        authority: KernelAlgoCreationRequestV2,
+    ) -> None:
+        """Lock the compiler-owned K6-D parent instead of requiring offline TCA evidence."""
+
+        cur.execute(
+            "SELECT plan_id,plan_hash,binding_id,release_id,target_trade_date,execution_policy_version_id,"
+            "execution_policy_sha256,plan_payload_json FROM paper_v2.execution_plan "
+            "WHERE plan_id=%s FOR SHARE",
+            (authority.execution_plan_id,),
+        )
+        plan = cur.fetchone()
+        if plan is None:
+            raise KernelRepositoryConflict("K6-D ALGO_START execution plan authority is missing")
+        payload = plan["plan_payload_json"]
+        if type(payload) is not dict:
+            raise KernelRepositoryConflict("K6-D ALGO_START execution plan payload is invalid")
+        digest = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        expected_runtime_id = "mqrt_sim_" + hashlib.sha256(
+            json.dumps(
+                {
+                    "binding_id": authority.binding_id,
+                    "plan_id": authority.execution_plan_id,
+                    "trade_date": authority.exchange_trade_date,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        expected_plan = (
+            authority.execution_plan_id,
+            authority.execution_plan_sha256,
+            authority.binding_id,
+            authority.release_id,
+            date.fromisoformat(authority.exchange_trade_date),
+            authority.policy_id,
+            authority.policy_sha256,
+        )
+        actual_plan = (
+            plan["plan_id"],
+            plan["plan_hash"],
+            plan["binding_id"],
+            plan["release_id"],
+            plan["target_trade_date"],
+            plan["execution_policy_version_id"],
+            plan["execution_policy_sha256"],
+        )
+        if (
+            authority.runtime_id != expected_runtime_id
+            or actual_plan != expected_plan
+            or digest != plan["plan_hash"]
+        ):
+            raise KernelRepositoryConflict("K6-D ALGO_START execution plan authority conflicts with request")
+        if (
+            payload.get("schema_version") != "execution_plan_v1"
+            or payload.get("binding_id") != authority.binding_id
+            or payload.get("release_id") != authority.release_id
+            or payload.get("target_trade_date") != authority.exchange_trade_date
+        ):
+            raise KernelRepositoryConflict("K6-D ALGO_START execution plan envelope conflicts with request")
+        intents = payload.get("intents")
+        if type(intents) is not list or not intents or any(type(item) is not dict for item in intents):
+            raise KernelRepositoryConflict("K6-D ALGO_START execution plan parent set is invalid")
+        intent_ids = [item.get("intent_id") for item in intents]
+        if any(type(item) is not str or not item.strip() for item in intent_ids) or len(intent_ids) != len(
+            set(intent_ids)
+        ):
+            raise KernelRepositoryConflict("K6-D ALGO_START execution plan parent set is invalid")
+        matches = [item for item in intents if item["intent_id"] == authority.parent_intent_id]
+        if len(matches) != 1:
+            raise KernelRepositoryConflict("K6-D ALGO_START parent is missing from the frozen execution plan")
+        parent = matches[0]
+        if (
+            parent.get("symbol") != authority.symbol
+            or parent.get("side") != authority.side.value
+            or type(parent.get("order_quantity")) is not int
+            or parent["order_quantity"] != authority.parent_quantity
+        ):
+            raise KernelRepositoryConflict("K6-D ALGO_START frozen execution-plan parent conflicts with request")
 
     def apply_claimed_delivery_atomic(
         self,

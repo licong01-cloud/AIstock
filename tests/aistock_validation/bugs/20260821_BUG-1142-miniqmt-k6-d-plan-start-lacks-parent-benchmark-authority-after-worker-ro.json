@@ -1,8 +1,14 @@
 {
-  "actual": "BUG-1137 worker-role fix is active, but K6-D creation now fails because execution_parent_benchmark has no authoritative row for an admitted parent intent.",
+  "actual": "BUG-1137 worker-role fix is active, but the K6-D online creation path incorrectly requires an offline TCA execution_parent_benchmark row even though the immutable paper_v2 ExecutionPlan already owns the admitted parent authority.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260821_BUG-1142-miniqmt-k6-d-plan-start-lacks-parent-benchmark-authority-after-worker-ro.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/miniqmt_execution_runtime/kernel_repository_k2b.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_repository_postgres.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1142",
@@ -13,17 +19,23 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-21T08:45:40.994396Z",
-  "description": "BUG-1137 worker-role fix is active, but K6-D creation now fails because execution_parent_benchmark has no authoritative row for an admitted parent intent.",
+  "description": "BUG-1137 worker-role fix is active, but the K6-D online creation path incorrectly requires an offline TCA execution_parent_benchmark row even though the immutable paper_v2 ExecutionPlan already owns the admitted parent authority.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260821-6b2aff531e96",
       "timestamp": "2026-08-21T08:45:40.994376Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Approved K6-D design requires online parent authority from immutable ExecutionPlan; scope includes V2 ALGO_START, route closure, dependent-BUY plan ownership, and direct regression tests while preserving the V1 TCA path.",
+      "timestamp": "2026-08-21T09:52:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "KERNEL_V2 plan-start materializes or reads the exact immutable parent benchmark authority for every admitted parent intent before ALGO_START, with deterministic lineage and no broker side effect before authority closure.",
+  "expected": "KERNEL_V2 plan-start reads every admitted parent from the exact immutable paper_v2 ExecutionPlan, independently closes runtime/plan/binding/release/date/policy lineage, and never requires offline TCA materialization before ALGO_START or dependent-BUY evaluation.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -55,18 +67,31 @@
   "reproduce_command": "GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_eb8fcd6d852a5031",
   "required_verification": [
     "l0",
-    "miniqmt_execution_runtime_l2"
+    "miniqmt_execution_runtime_l2",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked K6-D ExecutionPlan authority fix and passed 65 product runtime integration tests without broker, scheduler, or database side effects.",
+      "Fresh nox process loaded the tracked MiniQMT runtime sources and passed miniqmt_execution_runtime_l2: 1505 passed, 82 skipped; no production process control.",
+      "Fresh nox MiniQMT simulation stub process passed 359 scheduler and ledger tests with 2 skipped; fake-QMT only and no production broker or scheduler side effects."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -181,5 +206,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
