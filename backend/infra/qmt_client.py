@@ -9,7 +9,7 @@ Design goals:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 import os
 from pathlib import Path
@@ -19,6 +19,11 @@ import threading
 import time
 import logging
 from zoneinfo import ZoneInfo
+
+# Python 3.10 compatibility: ``datetime.UTC`` exists only in 3.11+ and is the
+# identical singleton ``datetime.timezone.utc`` (same tzinfo object, offset,
+# and isoformat output).
+UTC = timezone.utc
 
 
 _GLOBAL_QMT_CLIENT: Optional["BaseQMTClient"] = None

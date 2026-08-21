@@ -19,7 +19,7 @@ import uuid
 import ctypes
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
@@ -31,6 +31,11 @@ from .contracts import (
     Scope,
 )
 from .errors import IdentityConflictError
+
+# Python 3.10 compatibility: ``datetime.UTC`` exists only in 3.11+ and is the
+# identical singleton ``datetime.timezone.utc`` (same tzinfo object, offset,
+# and isoformat output).
+UTC = timezone.utc
 
 
 CONTROL_SCHEMA_VERSION = 1

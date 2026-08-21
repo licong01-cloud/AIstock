@@ -66,6 +66,7 @@ READY_SCHEMA_VERSION = "hmm_risk_market_conditioned_ridge_ready_v1"
 EXPECTED_CANDIDATE_SHA256 = "792d4f6ac6b313961eaf5017a0a3ea4a3ebf96ab8364f4ff8518c182a68d17e3"
 EXPECTED_CANDIDATE_PRODUCER = "8ca1b98db922489f91814b5d51aae1ab9c59fbd0"
 EXPECTED_DEVELOPMENT_REQUEST_SHA256 = "4807125d24a9c01596f923122079c6d70dd48ff39522d3755c6ab0ad09ec6336"
+EXPECTED_DEVELOPMENT_REQUEST_IDENTITY_SHA256 = "7cf7f7a7dd6ecbf8b3f63bd820250202ed7737b45ea1da0af5c3aa743c3d20f4"
 EXPECTED_UNIVERSE_KEY = "shsz_st_pit_qe_dataset_qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2"
 EXPECTED_UNIVERSE_RULE_VERSION = "st_pub_next_trade_restore_active_l_v1"
 EXPECTED_SECURITY_IDENTITY_MANIFEST_PATH = "backend/services/hmm_risk/manifests/security_source_identity_v1.json"
@@ -220,7 +221,12 @@ def load_frozen_candidate(path: Path, *, expected_sha256: str = EXPECTED_CANDIDA
     }
     if any(report.get(key) != value for key, value in expected.items()):
         raise _fail(REASON_CANDIDATE, "candidate status or side-effect boundary is invalid", stage="preflight")
-    if report.get("request_identity_sha256") != EXPECTED_DEVELOPMENT_REQUEST_SHA256:
+    request_identity = report.get("request_identity")
+    if (
+        not isinstance(request_identity, dict)
+        or report.get("request_identity_sha256") != EXPECTED_DEVELOPMENT_REQUEST_IDENTITY_SHA256
+        or canonical_sha256(request_identity) != EXPECTED_DEVELOPMENT_REQUEST_IDENTITY_SHA256
+    ):
         raise _fail(REASON_CANDIDATE, "candidate development request identity is invalid", stage="preflight")
     components = report.get("components")
     hashes = report.get("component_receipt_sha256s")

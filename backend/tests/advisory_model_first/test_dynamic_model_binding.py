@@ -40,6 +40,25 @@ def _descriptor() -> dict[str, object]:
     return payload
 
 
+def _meta_descriptor() -> dict[str, object]:
+    payload = _descriptor()
+    payload.pop("descriptor_sha256")
+    payload.update(
+        {
+            "schema_version": "advisory_program_model_binding_v2",
+            "model_role": "meta_label_take_skip_confidence",
+            "shadow_policy_sha256": "1" * 64,
+        }
+    )
+    payload["candidate_projection"] = {
+        "schema_version": "advisory_candidate_projection_v1",
+        "component_roles": {"lstm": "alpha_lstm", "fund": "alpha_fund"},
+        "terminal_weights": {"alpha_lstm": 0.7, "alpha_fund": 0.3},
+    }
+    payload["descriptor_sha256"] = canonical_json_sha256(payload)
+    return payload
+
+
 def test_exact_program_descriptor_resolves_without_latest_scan(tmp_path) -> None:
     path = tmp_path / "program_bindings" / "advp_test" / "advb_test.json"
     path.parent.mkdir(parents=True)
@@ -58,6 +77,56 @@ def test_exact_program_descriptor_resolves_without_latest_scan(tmp_path) -> None
     assert resolution.bundle_id == "e" * 64
 
 
+def test_meta_label_descriptor_v2_resolves_exact_role_policy_and_weights(tmp_path) -> None:
+    path = tmp_path / "program_bindings" / "advp_test" / "advb_test.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(_meta_descriptor()), encoding="utf-8")
+
+    resolution = AdvisoryModelBindingResolver().resolve(
+        model_root=tmp_path,
+        program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
+        active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
+        selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+    )
+
+    assert resolution.model_role == "meta_label_take_skip_confidence"
+    assert resolution.shadow_policy_sha256 == "1" * 64
+    assert resolution.terminal_weights == {"alpha_lstm": 0.7, "alpha_fund": 0.3}
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason_code"),
+    (
+        (lambda payload: payload.update(model_role="quality_reranker"), "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"),
+        (
+            lambda payload: payload["candidate_projection"].update(
+                terminal_weights={"alpha_lstm": 0.6, "alpha_fund": 0.3}
+            ),
+            "ADVISORY_MODEL_CANDIDATE_PROJECTION_UNSUPPORTED",
+        ),
+    ),
+)
+def test_meta_label_descriptor_v2_rejects_role_or_weight_drift(tmp_path, mutation, reason_code) -> None:
+    payload = _meta_descriptor()
+    mutation(payload)
+    payload["descriptor_sha256"] = canonical_json_sha256(
+        {key: value for key, value in payload.items() if key != "descriptor_sha256"}
+    )
+    path = tmp_path / "program_bindings" / "advp_test" / "advb_test.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        AdvisoryModelBindingResolver().resolve(
+            model_root=tmp_path,
+            program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
+            active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
+            selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+        )
+
+    assert error.value.reason_code == reason_code
+
+
 def test_missing_exact_descriptor_is_typed_unavailable_without_directory_scan(tmp_path) -> None:
     unrelated = tmp_path / "program_bindings" / "other" / "latest.json"
     unrelated.parent.mkdir(parents=True)
@@ -72,6 +141,27 @@ def test_missing_exact_descriptor_is_typed_unavailable_without_directory_scan(tm
         )
 
     assert error.value.reason_code == "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE"
+
+
+def test_descriptor_rejects_unknown_schema_as_invalid_not_target_drift(tmp_path) -> None:
+    payload = _descriptor()
+    payload["schema_version"] = "advisory_program_model_binding_v999"
+    payload["descriptor_sha256"] = canonical_json_sha256(
+        {key: value for key, value in payload.items() if key != "descriptor_sha256"}
+    )
+    path = tmp_path / "program_bindings" / "advp_test" / "advb_test.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        AdvisoryModelBindingResolver().resolve(
+            model_root=tmp_path,
+            program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
+            active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
+            selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+        )
+
+    assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
 
 
 @pytest.mark.parametrize(
@@ -211,6 +301,23 @@ def test_descriptor_publish_is_atomic_idempotent_and_refuses_identity_overwrite(
     with pytest.raises(AdvisoryModelFirstError) as error:
         publish_program_model_descriptor(model_root=tmp_path, payload=changed)
     assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
+
+
+def test_meta_label_descriptor_v2_publish_is_atomic_and_resolvable(tmp_path) -> None:
+    payload = _meta_descriptor()
+    payload.pop("descriptor_sha256")
+
+    target = publish_program_model_descriptor(model_root=tmp_path, payload=payload)
+    resolution = AdvisoryModelBindingResolver().resolve(
+        model_root=tmp_path,
+        program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
+        active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
+        selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+    )
+
+    assert target.is_file()
+    assert resolution.model_role == "meta_label_take_skip_confidence"
+    assert resolution.bundle_id == "e" * 64
 
 
 def test_descriptor_publish_rejects_invalid_component_projection_before_write(tmp_path) -> None:
