@@ -2435,11 +2435,11 @@ _COLLECTION_LIST_KEYS = (
 _SCHEDULER_BLOCKING_LIST_KEYS = frozenset({
     "blockers",
     "blocking_reasons",
-    "current_trade_date_blockers",
     "errors",
     "failure_reasons",
     "last_result_errors",
 })
+_SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY = "current_trade_date_blockers"
 _SCHEDULER_BLOCKING_VALUE_KEYS = frozenset({"blocking_result", "last_blocking_result"})
 _SCHEDULER_REASON_KEYS = frozenset({
     "blocked_reason",
@@ -2707,6 +2707,22 @@ def _validate_run_terminal_evidence(
     return "passed", None, facts
 
 
+def _structured_current_trade_date_blockers_are_clear(value: Any) -> bool:
+    """Accept only the scheduler's explicit, internally consistent CLEAR shape."""
+    if not isinstance(value, dict):
+        return False
+    return bool(
+        str(value.get("status") or "").strip().upper() == "CLEAR"
+        and type(value.get("blocker_count")) is int
+        and value["blocker_count"] == 0
+        and type(value.get("observed_blocker_count")) is int
+        and value["observed_blocker_count"] == 0
+        and value.get("blockers") == []
+        and value.get("execution_gate") is False
+        and value.get("truncated") is False
+    )
+
+
 def _scheduler_failure_markers(payload: Any) -> list[str]:
     """Scan a scheduler/health-class payload for blocking or failure markers."""
     markers: list[str] = []
@@ -2719,7 +2735,13 @@ def _scheduler_failure_markers(payload: Any) -> list[str]:
             for key, value in node.items():
                 name = f"{prefix}.{key}" if prefix else str(key)
                 lowered = str(key).lower()
-                if lowered in _SCHEDULER_BLOCKING_LIST_KEYS and value:
+                if lowered == _SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY:
+                    if isinstance(value, list):
+                        if value:
+                            markers.append(name)
+                    elif not _structured_current_trade_date_blockers_are_clear(value):
+                        markers.append(name)
+                elif lowered in _SCHEDULER_BLOCKING_LIST_KEYS and value:
                     markers.append(name)
                 elif lowered in _SCHEDULER_BLOCKING_VALUE_KEYS and isinstance(value, dict) and value:
                     markers.append(name)
