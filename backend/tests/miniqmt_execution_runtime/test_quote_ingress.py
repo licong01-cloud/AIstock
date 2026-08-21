@@ -13,6 +13,7 @@ from typing import Any, Mapping
 import pytest
 
 import backend.infra.realtime_quote_subscriber as subscriber_module
+import backend.services.miniqmt_execution_runtime.quote_ingress as quote_ingress_module
 from backend.execution_algos.adaptive_is.contracts import (
     CalendarSnapshot,
     CalendarSnapshotSet,
@@ -320,6 +321,148 @@ def test_projection_observation_failure_is_loud_without_rewriting_normalized_quo
     assert sink.health()["projection"]["last_error_by_symbol"]["000001.SZ"]["reason_code"] == (
         QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED.value
     )
+
+
+def test_contextual_failure_governor_bounds_one_hundred_thousand_identical_errors_and_recovers(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caplog.set_level("ERROR")
+    context_store = QuoteEvaluationContextStore()
+    context = _projection_context()
+    context_store.publish(context)
+    raw = PhaseOneRawQuoteSnapshotStore(max_symbols=1)
+    normalized = BoundedNormalizedQuoteStore(max_symbols=1)
+    loud_failures: list[QuoteContractError] = []
+    projection = PhaseOneQuoteProjectionSink(
+        raw_store=raw,
+        normalized_store=normalized,
+        context_store=context_store,
+        loud_sink=loud_failures.append,
+        loud_interval_seconds=60,
+    )
+    projection.replace_admitted(("000001.SZ",))
+    projection.on_generation_published(2)
+    frame = _frame(generation=2, sequence=1, last_price=10.0)
+    sample_frames = (
+        frame,
+        _frame(generation=2, sequence=2, last_price=10.0, symbol="000002.SZ"),
+        _frame(generation=2, sequence=3, last_price=10.0, symbol="000003.SZ"),
+        _frame(generation=2, sequence=4, last_price=10.0, symbol="000004.SZ"),
+    )
+    consumer_id = "k6d-kernel-v2:runtime-governor"
+    now_monotonic_ns = [1_000_000_000]
+    monkeypatch.setattr(quote_ingress_module.time, "monotonic_ns", lambda: now_monotonic_ns[0])
+
+    for occurrence in range(100_000):
+        projection._record_contextual_sink_exception(  # noqa: SLF001 - direct contract stress seam
+            frame=sample_frames[occurrence % len(sample_frames)],
+            context=context,
+            consumer_id=consumer_id,
+            exception=RuntimeError("do not include a quote payload"),
+            stage="SYNCHRONOUS",
+        )
+
+    health = projection.health()["projection"]["failure_governor"]
+    assert health["observed_count"] == 100_000
+    assert health["emitted_count"] == 1
+    assert health["suppressed_count"] == 99_999
+    assert health["tracked_fingerprint_count"] == 1
+    assert health["active_failure_count"] == 1
+    bucket = next(iter(health["fingerprints"].values()))
+    assert bucket["occurrence_count"] == 100_000
+    assert bucket["symbol_samples"] == ["000001.SZ", "000002.SZ", "000003.SZ"]
+    assert loud_failures and len(loud_failures) == 1
+    assert sum("Phase 1 quote projection loud failure" in record.message for record in caplog.records) == 1
+    assert all("bidPrice" not in record.message and "lastPrice" not in record.message for record in caplog.records)
+
+    now_monotonic_ns[0] += 60_000_000_000
+    projection._record_contextual_sink_exception(  # noqa: SLF001 - window expiry emits one aggregate
+        frame=frame,
+        context=context,
+        consumer_id=consumer_id,
+        exception=RuntimeError("do not include a quote payload"),
+        stage="SYNCHRONOUS",
+    )
+    aggregate = projection.health()["projection"]["failure_governor"]
+    assert aggregate["emitted_count"] == 2
+    assert aggregate["suppressed_count"] == 99_999
+    aggregate_bucket = next(iter(aggregate["fingerprints"].values()))
+    assert aggregate_bucket["occurrence_count"] == 100_001
+    assert aggregate_bucket["suppressed_since_emit"] == 0
+
+    projection._record_contextual_sink_exception(  # noqa: SLF001 - changed fingerprint must be immediate
+        frame=frame,
+        context=context,
+        consumer_id=consumer_id,
+        exception=LookupError("a distinct exception class"),
+        stage="SYNCHRONOUS",
+    )
+    changed = projection.health()["projection"]["failure_governor"]
+    assert changed["emitted_count"] == 3
+    assert changed["tracked_fingerprint_count"] == 2
+    assert len(loud_failures) == 3
+
+    projection.register_observation_sink(
+        consumer_id=consumer_id,
+        symbols=("000001.SZ",),
+        sink=lambda _observation, _context: None,
+    )
+    projection.project(
+        capture_raw_quote_frame(
+            {
+                **_payload(10.01),
+                "openint": "OPEN",
+                "bidPrice": [10.00, 9.99, None, None, None],
+                "bidVol": [100, 100, 0, 0, 0],
+                "askPrice": [10.02, 10.03, None, None, None],
+                "askVol": [100, 100, 0, 0, 0],
+            },
+            callback_symbol="000001.SZ",
+            source_session_id="governor-recovery",
+            ingress_generation=2,
+            ingress_sequence=2,
+            received_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+            received_monotonic_ns=2_000_000_002,
+            clock_domain_id="test-clock",
+            source_method=QuoteSourceMethod.WHOLE_QUOTE_CALLBACK,
+        )
+    )
+
+    recovered = projection.health()["projection"]
+    assert recovered["failure_governor"]["active_failure_count"] == 0
+    assert recovered["failure_governor"]["recovery_count"] == 2
+    assert recovered["failure_governor"]["observed_count"] == 100_002
+    assert recovered["last_error_by_symbol"] == {}
+
+
+def test_failure_governor_bounds_fingerprint_and_symbol_cardinality() -> None:
+    governor = quote_ingress_module._ProcessLocalQuoteFailureGovernor(  # noqa: SLF001 - bounded contract seam
+        loud_interval_seconds=60,
+        max_fingerprints=16,
+        max_symbol_samples=2,
+    )
+    error = quote_contract_error(
+        QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+        "bounded diagnostic",
+    )
+
+    for index in range(300):
+        governor.record(
+            runtime_id="runtime-cardinality",
+            generation=1,
+            consumer_id="consumer-cardinality",
+            stage="SYNCHRONOUS",
+            error=error,
+            exception_type=f"FailureType{index}",
+            symbol=f"{index:06d}.SZ",
+        )
+
+    health = governor.health()
+    assert health["tracked_fingerprint_count"] == 16
+    assert health["evicted_count"] == 284
+    assert health["max_fingerprints"] == 16
+    assert all(len(bucket["symbol_samples"]) <= 2 for bucket in health["fingerprints"].values())
 
 
 @pytest.mark.parametrize(
@@ -655,9 +798,7 @@ def test_projection_pending_is_owned_by_runtime_and_symbol_without_overlap_colli
     )
     after_a = projection.health()["projection"]
     assert after_a["active_pending_count"] == 1
-    assert set(after_a["last_pending_by_symbol"]["000001.SZ"]) == {
-        "k6d-kernel-v2:runtime_overlap_b"
-    }
+    assert set(after_a["last_pending_by_symbol"]["000001.SZ"]) == {"k6d-kernel-v2:runtime_overlap_b"}
     signals["runtime_overlap_b"].resolve(
         business_success=True,
         completed_at_utc=datetime(2026, 7, 12, 1, 30, 1, tzinfo=UTC),
@@ -710,11 +851,14 @@ def test_projection_unregister_cancels_pending_and_bounds_late_completion_histor
         pending_identity_sha256=pending_identity,
         completion_signal=signal,
     )
-    assert projection._record_pending(
-        frame=frame,
-        carrier=pending,
-        expected_owner=projection._contextual_observation_sinks[consumer_id],
-    ) is True
+    assert (
+        projection._record_pending(
+            frame=frame,
+            carrier=pending,
+            expected_owner=projection._contextual_observation_sinks[consumer_id],
+        )
+        is True
+    )
 
     assert projection.unregister_observation_sink(
         consumer_id=consumer_id,
@@ -723,9 +867,7 @@ def test_projection_unregister_cancels_pending_and_bounds_late_completion_histor
     )
     unregistered = projection.health()["projection"]
     assert unregistered["active_pending_count"] == 0
-    assert unregistered["pending_drop_count_by_reason"] == {
-        "PROJECTION_PENDING_SINK_UNREGISTERED": 1
-    }
+    assert unregistered["pending_drop_count_by_reason"] == {"PROJECTION_PENDING_SINK_UNREGISTERED": 1}
 
     projection.register_observation_sink(
         consumer_id=consumer_id,
@@ -758,11 +900,14 @@ def test_projection_unregister_cancels_pending_and_bounds_late_completion_histor
         pending_identity_sha256=successor_identity,
         completion_signal=successor_signal,
     )
-    assert projection._record_pending(
-        frame=frame,
-        carrier=successor_pending,
-        expected_owner=projection._contextual_observation_sinks[consumer_id],
-    ) is True
+    assert (
+        projection._record_pending(
+            frame=frame,
+            carrier=successor_pending,
+            expected_owner=projection._contextual_observation_sinks[consumer_id],
+        )
+        is True
+    )
     successor_signal.resolve(
         business_success=True,
         completed_at_utc=datetime(2026, 8, 12, 1, 29, tzinfo=UTC),
@@ -994,11 +1139,14 @@ def test_projection_runtime_id_churn_bounds_stale_snapshot_pending_and_completio
             pending_identity_sha256=pending_identity,
             completion_signal=signal,
         )
-        assert projection._record_pending(
-            frame=frame,
-            carrier=pending,
-            expected_owner=expected_owner,
-        ) is False
+        assert (
+            projection._record_pending(
+                frame=frame,
+                carrier=pending,
+                expected_owner=expected_owner,
+            )
+            is False
+        )
         signal.resolve(
             business_success=True,
             completed_at_utc=datetime(2026, 8, 12, 1, 30, tzinfo=UTC),
@@ -1008,12 +1156,8 @@ def test_projection_runtime_id_churn_bounds_stale_snapshot_pending_and_completio
     health = projection.health()["projection"]
     assert health["active_pending_count"] == 0
     assert health["last_completion_by_owner"] == {}
-    assert health["pending_drop_count_by_reason"] == {
-        "PROJECTION_PENDING_STALE_SINK_OWNER": churn_count
-    }
-    assert set(health["contextual_observation_sink_owners"]) == {
-        "k6d-kernel-v2:runtime_churn_peer"
-    }
+    assert health["pending_drop_count_by_reason"] == {"PROJECTION_PENDING_STALE_SINK_OWNER": churn_count}
+    assert set(health["contextual_observation_sink_owners"]) == {"k6d-kernel-v2:runtime_churn_peer"}
 
 
 def test_contextual_kernel_fanout_enqueues_every_owner_before_one_shared_wait_budget() -> None:
@@ -2005,6 +2149,21 @@ def test_supervisor_is_default_off_and_release_isolated_from_the_subscriber(fake
     )
 
 
+def test_supervisor_projection_and_worker_share_one_failure_governor(fake_xtdata: _FakeXtData) -> None:
+    supervisor = QuoteIngressSupervisor(
+        subscriber=RealtimeQuoteSubscriber(),
+        config=_config(loud_interval_seconds=17),
+        data_session_key="SIM:shared-failure-governor",
+        owner="scheduler-owner-A",
+        bootstrap_fetcher=lambda symbols: {symbol: _payload(10.0) for symbol in symbols},
+    )
+
+    assert supervisor._projection_sink._failure_governor is supervisor._failure_governor  # noqa: SLF001
+    assert supervisor._worker._failure_governor is supervisor._failure_governor  # noqa: SLF001
+    assert supervisor.health()["projection"]["failure_governor"] == supervisor.health()["writer"]["failure_governor"]
+    supervisor.shutdown()
+
+
 @pytest.mark.parametrize(
     ("drift", "expected_state"),
     (
@@ -2178,10 +2337,13 @@ def test_non_exact_acquire_retains_retryable_owner_when_physical_rollback_is_unk
 
     monkeypatch.setattr(subscriber, "release_phase_one_lease", original_release)
     assert supervisor.release_consumer(consumer_id="consumer") is True
-    assert supervisor.consumer_lease_owner_snapshot(
-        consumer_id="consumer",
-        symbols=("000001.SZ",),
-    )["state"] == "ABSENT"
+    assert (
+        supervisor.consumer_lease_owner_snapshot(
+            consumer_id="consumer",
+            symbols=("000001.SZ",),
+        )["state"]
+        == "ABSENT"
+    )
     supervisor.shutdown()
 
 

@@ -517,6 +517,246 @@ class _ContextualObservationSinkOwner:
     ownership_sha256: str
 
 
+@dataclass
+class _QuoteFailureBucket:
+    """Bounded process-local diagnostics for one low-cardinality failure identity."""
+
+    fingerprint_sha256: str
+    runtime_id: str
+    generation: int | None
+    consumer_id: str
+    stage: str
+    reason_code: str
+    exception_type: str
+    message_sha256: str
+    first_observed_at: str
+    last_observed_at: str
+    last_observed_monotonic_ns: int
+    last_emitted_monotonic_ns: int
+    occurrence_count: int = 0
+    active_occurrence_count: int = 0
+    suppressed_since_emit: int = 0
+    emitted_count: int = 0
+    recovery_count: int = 0
+    active: bool = True
+    symbol_samples: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _QuoteFailureDecision:
+    emit: bool
+    log_payload: Mapping[str, Any]
+    snapshot: Mapping[str, Any]
+
+
+class _ProcessLocalQuoteFailureGovernor:
+    """Shared, bounded failure fingerprint governor for the MiniQMT quote plane."""
+
+    _SCHEMA_VERSION = "miniqmt_quote_failure_governor_v1"
+
+    def __init__(
+        self,
+        *,
+        loud_interval_seconds: int,
+        max_fingerprints: int = 256,
+        max_symbol_samples: int = 3,
+    ) -> None:
+        if loud_interval_seconds <= 0 or max_fingerprints <= 0 or max_symbol_samples <= 0:
+            raise ValueError("quote failure governor bounds must be positive")
+        self._loud_interval_ns = loud_interval_seconds * 1_000_000_000
+        self._max_fingerprints = max_fingerprints
+        self._max_symbol_samples = max_symbol_samples
+        self._lock = threading.RLock()
+        self._buckets: dict[str, _QuoteFailureBucket] = {}
+        self._observed_count = 0
+        self._suppressed_count = 0
+        self._emitted_count = 0
+        self._recovery_count = 0
+        self._evicted_count = 0
+
+    @staticmethod
+    def _fingerprint(
+        *,
+        runtime_id: str,
+        generation: int | None,
+        consumer_id: str,
+        stage: str,
+        reason_code: str,
+        exception_type: str,
+        message_sha256: str,
+    ) -> str:
+        identity = "\x1f".join(
+            (
+                runtime_id,
+                "" if generation is None else str(generation),
+                consumer_id,
+                stage,
+                reason_code,
+                exception_type,
+                message_sha256,
+            )
+        )
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _snapshot(bucket: _QuoteFailureBucket) -> dict[str, Any]:
+        return {
+            "schema_version": _ProcessLocalQuoteFailureGovernor._SCHEMA_VERSION,
+            "fingerprint_sha256": bucket.fingerprint_sha256,
+            "runtime_id": bucket.runtime_id,
+            "generation": bucket.generation,
+            "consumer_id": bucket.consumer_id,
+            "stage": bucket.stage,
+            "reason_code": bucket.reason_code,
+            "exception_type": bucket.exception_type,
+            "message_sha256": bucket.message_sha256,
+            "first_observed_at": bucket.first_observed_at,
+            "last_observed_at": bucket.last_observed_at,
+            "occurrence_count": bucket.occurrence_count,
+            "active_occurrence_count": bucket.active_occurrence_count,
+            "suppressed_since_emit": bucket.suppressed_since_emit,
+            "emitted_count": bucket.emitted_count,
+            "recovery_count": bucket.recovery_count,
+            "active": bucket.active,
+            "symbol_samples": list(bucket.symbol_samples),
+        }
+
+    def record(
+        self,
+        *,
+        runtime_id: str,
+        generation: int | None,
+        consumer_id: str,
+        stage: str,
+        error: QuoteContractError,
+        exception_type: str,
+        symbol: str | None,
+        now_monotonic_ns: int | None = None,
+    ) -> _QuoteFailureDecision:
+        now_ns = time.monotonic_ns() if now_monotonic_ns is None else now_monotonic_ns
+        now_utc = datetime.now(UTC).isoformat()
+        message_sha256 = hashlib.sha256(error.message.encode("utf-8")).hexdigest()
+        fingerprint = self._fingerprint(
+            runtime_id=runtime_id,
+            generation=generation,
+            consumer_id=consumer_id,
+            stage=stage,
+            reason_code=error.reason_code.value,
+            exception_type=exception_type,
+            message_sha256=message_sha256,
+        )
+        with self._lock:
+            bucket = self._buckets.get(fingerprint)
+            first_or_recovered = bucket is None or not bucket.active
+            if bucket is None:
+                if len(self._buckets) >= self._max_fingerprints:
+                    evicted_fingerprint = min(
+                        self._buckets,
+                        key=lambda item: (
+                            self._buckets[item].active,
+                            self._buckets[item].last_observed_monotonic_ns,
+                        ),
+                    )
+                    self._buckets.pop(evicted_fingerprint)
+                    self._evicted_count += 1
+                bucket = _QuoteFailureBucket(
+                    fingerprint_sha256=fingerprint,
+                    runtime_id=runtime_id,
+                    generation=generation,
+                    consumer_id=consumer_id,
+                    stage=stage,
+                    reason_code=error.reason_code.value,
+                    exception_type=exception_type,
+                    message_sha256=message_sha256,
+                    first_observed_at=now_utc,
+                    last_observed_at=now_utc,
+                    last_observed_monotonic_ns=now_ns,
+                    last_emitted_monotonic_ns=0,
+                )
+                self._buckets[fingerprint] = bucket
+            elif not bucket.active:
+                bucket.active = True
+                bucket.active_occurrence_count = 0
+                bucket.suppressed_since_emit = 0
+                bucket.message_sha256 = message_sha256
+            bucket.last_observed_at = now_utc
+            bucket.last_observed_monotonic_ns = now_ns
+            bucket.occurrence_count += 1
+            bucket.active_occurrence_count += 1
+            self._observed_count += 1
+            if symbol and symbol not in bucket.symbol_samples and len(bucket.symbol_samples) < self._max_symbol_samples:
+                bucket.symbol_samples.append(symbol)
+            interval_expired = (
+                bucket.last_emitted_monotonic_ns > 0
+                and now_ns - bucket.last_emitted_monotonic_ns >= self._loud_interval_ns
+            )
+            emit = first_or_recovered or interval_expired
+            if emit:
+                event = "FIRST_FAILURE" if first_or_recovered else "AGGREGATE_FAILURE"
+                suppressed_for_event = bucket.suppressed_since_emit
+                bucket.suppressed_since_emit = 0
+                bucket.last_emitted_monotonic_ns = now_ns
+                bucket.emitted_count += 1
+                self._emitted_count += 1
+            else:
+                event = "SUPPRESSED"
+                bucket.suppressed_since_emit += 1
+                suppressed_for_event = bucket.suppressed_since_emit
+                self._suppressed_count += 1
+            snapshot = self._snapshot(bucket)
+            log_payload = {
+                **snapshot,
+                "event": event,
+                "suppressed_occurrence_count": suppressed_for_event,
+            }
+        return _QuoteFailureDecision(emit=emit, log_payload=log_payload, snapshot=snapshot)
+
+    def resolve(
+        self,
+        *,
+        runtime_id: str,
+        consumer_id: str,
+        generation: int | None = None,
+        stage: str | None = None,
+    ) -> int:
+        resolved = 0
+        with self._lock:
+            for bucket in self._buckets.values():
+                if (
+                    not bucket.active
+                    or bucket.runtime_id != runtime_id
+                    or bucket.consumer_id != consumer_id
+                    or (generation is not None and bucket.generation != generation)
+                    or (stage is not None and bucket.stage != stage)
+                ):
+                    continue
+                bucket.active = False
+                bucket.recovery_count += 1
+                bucket.suppressed_since_emit = 0
+                resolved += 1
+            self._recovery_count += resolved
+        return resolved
+
+    def health(self) -> dict[str, Any]:
+        with self._lock:
+            fingerprints = {
+                fingerprint: self._snapshot(bucket) for fingerprint, bucket in sorted(self._buckets.items())
+            }
+            return {
+                "schema_version": self._SCHEMA_VERSION,
+                "max_fingerprints": self._max_fingerprints,
+                "max_symbol_samples": self._max_symbol_samples,
+                "tracked_fingerprint_count": len(self._buckets),
+                "active_failure_count": sum(bucket.active for bucket in self._buckets.values()),
+                "observed_count": self._observed_count,
+                "suppressed_count": self._suppressed_count,
+                "emitted_count": self._emitted_count,
+                "recovery_count": self._recovery_count,
+                "evicted_count": self._evicted_count,
+                "fingerprints": fingerprints,
+            }
+
+
 class PhaseOneQuoteProjectionSink:
     """P1-C same-writer raw-to-normalized projection; never calls providers or a broker."""
 
@@ -528,12 +768,17 @@ class PhaseOneQuoteProjectionSink:
         context_store: QuoteEvaluationContextStore,
         loud_sink: Callable[[QuoteContractError], None] | None = None,
         observation_sink: Callable[[NormalizedQuoteObservation], MiniQMTKernelProductIngressResult] | None = None,
+        failure_governor: _ProcessLocalQuoteFailureGovernor | None = None,
+        loud_interval_seconds: int = 30,
     ) -> None:
         self._raw_store = raw_store
         self._normalized_store = normalized_store
         self._context_store = context_store
         self._ordering = QuoteOrderingTracker()
         self._loud_sink = loud_sink
+        self._failure_governor = failure_governor or _ProcessLocalQuoteFailureGovernor(
+            loud_interval_seconds=loud_interval_seconds
+        )
         self._observation_sinks: dict[
             str,
             Callable[[NormalizedQuoteObservation], MiniQMTKernelProductIngressResult],
@@ -784,6 +1029,11 @@ class PhaseOneQuoteProjectionSink:
                 ordering_disposition=decision.disposition,
             )
             self._normalized_store.accept(observation)
+            self._resolve_failure(
+                frame=frame,
+                consumer_id="quote-projection",
+                stage="PROJECTION",
+            )
             observation_sink_failed = False
             observation_sink_pending = False
             with self._lock:
@@ -814,9 +1064,20 @@ class PhaseOneQuoteProjectionSink:
                             )
                             or observation_sink_pending
                         )
+                    else:
+                        self._resolve_failure(
+                            frame=frame,
+                            consumer_id=consumer_id,
+                            stage="OBSERVATION",
+                        )
                 except QuoteContractError as error:
                     observation_sink_failed = True
-                    self._record_loud(frame=frame, error=error)
+                    self._record_loud(
+                        frame=frame,
+                        error=error,
+                        consumer_id=consumer_id,
+                        stage="OBSERVATION",
+                    )
                 except Exception as exc:  # noqa: BLE001 - observation reporting must not rewrite quote state.
                     observation_sink_failed = True
                     self._record_loud(
@@ -830,6 +1091,9 @@ class PhaseOneQuoteProjectionSink:
                                 "exception_type": type(exc).__name__,
                             },
                         ),
+                        consumer_id=consumer_id,
+                        stage="OBSERVATION",
+                        exception_type=type(exc).__qualname__,
                     )
             deferred_contextual_sinks: list[tuple[_ContextualObservationSinkOwner, Callable[..., Any], Any]] = []
             synchronous_contextual_sinks: list[_ContextualObservationSinkOwner] = []
@@ -843,7 +1107,12 @@ class PhaseOneQuoteProjectionSink:
                         dispatch = enqueue(observation, context)
                     except QuoteContractError as error:
                         observation_sink_failed = True
-                        self._record_loud(frame=frame, error=error)
+                        self._record_loud(
+                            frame=frame,
+                            error=error,
+                            consumer_id=owner.consumer_id,
+                            stage="ENQUEUE",
+                        )
                     except Exception as exc:  # noqa: BLE001 - all peers must still receive the frame.
                         observation_sink_failed = True
                         self._record_contextual_sink_exception(
@@ -854,6 +1123,11 @@ class PhaseOneQuoteProjectionSink:
                             stage="ENQUEUE",
                         )
                     else:
+                        self._resolve_failure(
+                            frame=frame,
+                            consumer_id=owner.consumer_id,
+                            stage="ENQUEUE",
+                        )
                         deferred_contextual_sinks.append((owner, await_result, dispatch))
                 elif callable(enqueue) or callable(await_result):
                     observation_sink_failed = True
@@ -864,6 +1138,8 @@ class PhaseOneQuoteProjectionSink:
                             "contextual quote sink exposes an incomplete asynchronous dispatch contract",
                             context={"consumer_id": owner.consumer_id, "symbol": frame.symbol},
                         ),
+                        consumer_id=owner.consumer_id,
+                        stage="DISPATCH_CONTRACT",
                     )
                 else:
                     synchronous_contextual_sinks.append(owner)
@@ -898,9 +1174,20 @@ class PhaseOneQuoteProjectionSink:
                             )
                             or observation_sink_pending
                         )
+                    else:
+                        self._resolve_failure(
+                            frame=frame,
+                            consumer_id=consumer_id,
+                            stage="AWAIT",
+                        )
                 except QuoteContractError as error:
                     observation_sink_failed = True
-                    self._record_loud(frame=frame, error=error)
+                    self._record_loud(
+                        frame=frame,
+                        error=error,
+                        consumer_id=consumer_id,
+                        stage="AWAIT",
+                    )
                 except Exception as exc:  # noqa: BLE001 - all peers were already enqueued before this wait.
                     observation_sink_failed = True
                     self._record_contextual_sink_exception(
@@ -933,9 +1220,20 @@ class PhaseOneQuoteProjectionSink:
                             )
                             or observation_sink_pending
                         )
+                    else:
+                        self._resolve_failure(
+                            frame=frame,
+                            consumer_id=consumer_id,
+                            stage="SYNCHRONOUS",
+                        )
                 except QuoteContractError as error:
                     observation_sink_failed = True
-                    self._record_loud(frame=frame, error=error)
+                    self._record_loud(
+                        frame=frame,
+                        error=error,
+                        consumer_id=consumer_id,
+                        stage="SYNCHRONOUS",
+                    )
                 except Exception as exc:  # noqa: BLE001 - generic non-kernel observers retain loud isolation.
                     observation_sink_failed = True
                     self._record_contextual_sink_exception(
@@ -951,7 +1249,12 @@ class PhaseOneQuoteProjectionSink:
                     self._last_error_by_symbol.pop(frame.symbol, None)
                     self._last_suppression_by_symbol.pop(frame.symbol, None)
         except QuoteContractError as error:
-            self._record_loud(frame=frame, error=error)
+            self._record_loud(
+                frame=frame,
+                error=error,
+                consumer_id="quote-projection",
+                stage="PROJECTION",
+            )
 
     def health(self) -> dict[str, Any]:
         with self._lock:
@@ -1009,6 +1312,7 @@ class PhaseOneQuoteProjectionSink:
                     }
                     for owner in contextual_observation_sink_owners
                 },
+                "failure_governor": self._failure_governor.health(),
             }
         }
 
@@ -1433,6 +1737,9 @@ class PhaseOneQuoteProjectionSink:
                     "exception_type": type(exception).__name__,
                 },
             ),
+            consumer_id=consumer_id,
+            stage=stage,
+            exception_type=type(exception).__qualname__,
         )
 
     def _record_pending(
@@ -1535,10 +1842,9 @@ class PhaseOneQuoteProjectionSink:
                 )
                 self._last_completion_by_owner[owner_key] = payload
                 return
-            if (
-                current.get("pending_identity_sha256") != expected.get("pending_identity_sha256")
-                or current.get("attempt_token") != expected.get("attempt_token")
-            ):
+            if current.get("pending_identity_sha256") != expected.get("pending_identity_sha256") or current.get(
+                "attempt_token"
+            ) != expected.get("attempt_token"):
                 self._record_projection_pending_drop_locked(
                     expected,
                     reason="ASYNC_COMPLETION_STALE_PENDING_OWNER",
@@ -1576,29 +1882,105 @@ class PhaseOneQuoteProjectionSink:
             ),
         }
 
-    def _record_loud(self, *, frame: RawQuoteFrame, error: QuoteContractError) -> None:
-        payload = error.as_loud_payload()
+    @staticmethod
+    def _runtime_id_for_consumer(
+        *,
+        consumer_id: str,
+        error: QuoteContractError | None = None,
+    ) -> str:
+        if error is not None:
+            runtime_id = error.context.get("runtime_id")
+            if type(runtime_id) is str and runtime_id and runtime_id == runtime_id.strip():
+                return runtime_id
+        if ":" in consumer_id:
+            suffix = consumer_id.rsplit(":", maxsplit=1)[-1]
+            if suffix:
+                return suffix
+        return consumer_id
+
+    def _resolve_failure(
+        self,
+        *,
+        frame: RawQuoteFrame,
+        consumer_id: str,
+        stage: str,
+    ) -> None:
+        resolved = self._failure_governor.resolve(
+            runtime_id=self._runtime_id_for_consumer(consumer_id=consumer_id),
+            generation=frame.ingress_generation,
+            consumer_id=consumer_id,
+            stage=stage,
+        )
+        if not resolved:
+            return
+        with self._lock:
+            self._last_error_by_symbol = {
+                symbol: payload
+                for symbol, payload in self._last_error_by_symbol.items()
+                if not (
+                    payload.get("consumer_id") == consumer_id
+                    and payload.get("generation") == frame.ingress_generation
+                    and payload.get("stage") == stage
+                )
+            }
+
+    def _record_loud(
+        self,
+        *,
+        frame: RawQuoteFrame,
+        error: QuoteContractError,
+        consumer_id: str = "quote-projection",
+        stage: str = "PROJECTION",
+        exception_type: str | None = None,
+    ) -> None:
+        context_exception_type = error.context.get("exception_type")
+        exact_exception_type = exception_type or (
+            str(context_exception_type)
+            if type(context_exception_type) is str and context_exception_type
+            else type(error).__qualname__
+        )
+        decision = self._failure_governor.record(
+            runtime_id=self._runtime_id_for_consumer(consumer_id=consumer_id, error=error),
+            generation=frame.ingress_generation,
+            consumer_id=consumer_id,
+            stage=stage,
+            error=error,
+            exception_type=exact_exception_type,
+            symbol=frame.symbol,
+        )
         with self._lock:
             self._rejected_count += 1
-            self._last_error_by_symbol[frame.symbol] = payload
+            self._last_error_by_symbol[frame.symbol] = dict(decision.snapshot)
+        if not decision.emit:
+            return
         logger.error(
-            "Phase 1 quote projection loud failure: symbol=%s generation=%s sequence=%s payload=%s",
-            frame.symbol,
-            frame.ingress_generation,
-            frame.ingress_sequence,
-            payload,
+            "Phase 1 quote projection loud failure: %s",
+            dict(decision.log_payload),
         )
         if self._loud_sink is None:
             return
         try:
             self._loud_sink(error)
         except Exception as exc:  # noqa: BLE001 - reporting cannot alter projection state.
-            logger.error(
-                "Phase 1 quote projection loud sink failed: symbol=%s exception_type=%s",
-                frame.symbol,
-                type(exc).__name__,
-                exc_info=True,
+            reporting_error = quote_contract_error(
+                QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+                "quote projection loud sink raised unexpectedly",
+                context={"consumer_id": consumer_id, "exception_type": type(exc).__qualname__},
             )
+            reporting_decision = self._failure_governor.record(
+                runtime_id=self._runtime_id_for_consumer(consumer_id=consumer_id),
+                generation=frame.ingress_generation,
+                consumer_id=consumer_id,
+                stage="REPORTING",
+                error=reporting_error,
+                exception_type=type(exc).__qualname__,
+                symbol=frame.symbol,
+            )
+            if reporting_decision.emit:
+                logger.error(
+                    "Phase 1 quote projection loud sink failed: %s",
+                    dict(reporting_decision.log_payload),
+                )
 
 
 @dataclass(frozen=True)
@@ -1618,6 +2000,7 @@ class QuoteIngressWorker:
         config: QuoteIngressRuntimeConfig,
         frame_sink: Callable[[RawQuoteFrame], None],
         loud_sink: Callable[[QuoteContractError], None] | None = None,
+        failure_governor: _ProcessLocalQuoteFailureGovernor | None = None,
     ) -> None:
         if not consumer_id.strip() or not callable(frame_sink) or (loud_sink is not None and not callable(loud_sink)):
             raise quote_contract_error(
@@ -1628,6 +2011,9 @@ class QuoteIngressWorker:
         self._config = config
         self._frame_sink = frame_sink
         self._loud_sink = loud_sink
+        self._failure_governor = failure_governor or _ProcessLocalQuoteFailureGovernor(
+            loud_interval_seconds=config.loud_interval_seconds
+        )
         self._mailbox = ReservedSymbolMailbox(max_symbols=config.max_symbols)
         self._lock = threading.RLock()
         self._writer_stop_event: threading.Event | None = None
@@ -1642,8 +2028,6 @@ class QuoteIngressWorker:
         self._last_heartbeat_monotonic_ns: int | None = None
         self._last_failure: dict[str, Any] | None = None
         self._active_failure: dict[str, Any] | None = None
-        self._failure_samples: dict[str, dict[str, Any]] = {}
-        self._last_loud_emitted_monotonic_ns: dict[str, int] = {}
         self._restart_count = 0
         self._restart_attempts_in_epoch = 0
         self._next_restart_after_monotonic_ns = 0
@@ -1744,6 +2128,14 @@ class QuoteIngressWorker:
                 )
             )
             return False
+        resolved = self._failure_governor.resolve(
+            runtime_id=self._consumer_id,
+            generation=frame.ingress_generation,
+            consumer_id=self._consumer_id,
+        )
+        if resolved:
+            with self._lock:
+                self._active_failure = None
         return True
 
     def on_generation_published(self, data_session_key: str, generation: int) -> bool:
@@ -1825,6 +2217,10 @@ class QuoteIngressWorker:
         if started:
             with self._lock:
                 self._active_failure = None
+            self._failure_governor.resolve(
+                runtime_id=self._consumer_id,
+                consumer_id=self._consumer_id,
+            )
         return started
 
     def prepare_generation(self, data_session_key: str, generation: int) -> bool:
@@ -1989,6 +2385,7 @@ class QuoteIngressWorker:
                 "pending_frame_count": sum(len(frames) for frames in self._pending_by_generation.values()),
                 "pending_drop_count_by_reason": dict(sorted(self._pending_drop_count_by_reason.items())),
                 "last_pending_drop": (dict(self._last_pending_drop) if self._last_pending_drop is not None else None),
+                "failure_governor": self._failure_governor.health(),
             }
 
     def shutdown(self) -> None:
@@ -2131,48 +2528,68 @@ class QuoteIngressWorker:
         )
 
     def _record_failure_locked(self, error: QuoteContractError, *, status: str) -> None:
-        payload = error.as_loud_payload()
-        context = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
-        sample_key = ":".join(
-            str(value) for value in (payload["reason_code"], context.get("symbol", ""), context.get("generation", ""))
-        )
-        now = datetime.now(UTC).isoformat()
-        sample = self._failure_samples.get(sample_key)
-        if sample is None:
-            sample = {"first_observed_at": now, "occurrence_count": 0}
-            self._failure_samples[sample_key] = sample
-        sample["last_observed_at"] = now
-        sample["occurrence_count"] = int(sample["occurrence_count"]) + 1
-        self._last_failure = {**payload, **sample, "sample_key": sample_key}
+        self._last_failure = {
+            "schema_version": _ProcessLocalQuoteFailureGovernor._SCHEMA_VERSION,
+            "runtime_id": self._consumer_id,
+            "consumer_id": self._consumer_id,
+            "reason_code": error.reason_code.value,
+            "stage": f"WORKER_{error.stage.value}",
+            "active": True,
+        }
         self._active_failure = self._last_failure
         self._status = status
 
     def _emit_loud(self, error: QuoteContractError) -> None:
-        payload = error.as_loud_payload()
-        context = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
-        sample_key = ":".join(
-            str(value) for value in (payload["reason_code"], context.get("symbol", ""), context.get("generation", ""))
+        context = error.context
+        generation_value = context.get("generation")
+        generation = generation_value if type(generation_value) is int else self._active_generation
+        exception_type_value = context.get("exception_type")
+        exception_type = (
+            str(exception_type_value)
+            if type(exception_type_value) is str and exception_type_value
+            else type(error).__qualname__
         )
-        now_monotonic_ns = time.monotonic_ns()
+        symbol_value = context.get("symbol")
+        symbol = str(symbol_value) if type(symbol_value) is str and symbol_value else None
+        decision = self._failure_governor.record(
+            runtime_id=self._consumer_id,
+            generation=generation,
+            consumer_id=self._consumer_id,
+            stage=f"WORKER_{error.stage.value}",
+            error=error,
+            exception_type=exception_type,
+            symbol=symbol,
+        )
         with self._lock:
-            sample = dict(self._failure_samples.get(sample_key, {}))
-            previous_emit = self._last_loud_emitted_monotonic_ns.get(sample_key, 0)
-            if now_monotonic_ns - previous_emit < self._config.loud_interval_seconds * 1_000_000_000:
-                return
-            self._last_loud_emitted_monotonic_ns[sample_key] = now_monotonic_ns
-        logger.error("Phase 1 quote ingress loud failure: %s", {**payload, **sample})
+            self._last_failure = dict(decision.snapshot)
+            self._active_failure = self._last_failure
+        if not decision.emit:
+            return
+        logger.error("Phase 1 quote ingress loud failure: %s", dict(decision.log_payload))
         if self._loud_sink is None:
             return
         try:
             self._loud_sink(error)
         except Exception as exc:  # noqa: BLE001 - reporting must not rewrite quote business state
-            logger.error(
-                "Phase 1 quote ingress loud sink failed: reason=%s consumer_id=%s exception_type=%s",
-                error.reason_code.value,
-                self._consumer_id,
-                type(exc).__name__,
-                exc_info=True,
+            reporting_error = quote_contract_error(
+                QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+                "quote ingress loud sink raised unexpectedly",
+                context={"consumer_id": self._consumer_id, "exception_type": type(exc).__qualname__},
             )
+            reporting_decision = self._failure_governor.record(
+                runtime_id=self._consumer_id,
+                generation=generation,
+                consumer_id=self._consumer_id,
+                stage="WORKER_REPORTING",
+                error=reporting_error,
+                exception_type=type(exc).__qualname__,
+                symbol=symbol,
+            )
+            if reporting_decision.emit:
+                logger.error(
+                    "Phase 1 quote ingress loud sink failed: %s",
+                    dict(reporting_decision.log_payload),
+                )
 
 
 @dataclass
@@ -2242,18 +2659,21 @@ class QuoteIngressSupervisor:
         self._last_release_reconciliation: dict[str, Any] | None = None
         self._source_session_id = f"phase1-{hashlib.sha256(data_session_key.encode('utf-8')).hexdigest()[:24]}"
         self._clock_domain_id = MINIQMT_QUOTE_CLOCK_DOMAIN_ID
+        self._failure_governor = _ProcessLocalQuoteFailureGovernor(loud_interval_seconds=config.loud_interval_seconds)
         self._projection_sink = PhaseOneQuoteProjectionSink(
             raw_store=self._snapshot_store,
             normalized_store=self._normalized_store,
             context_store=self._context_store,
             loud_sink=loud_sink,
             observation_sink=observation_sink,
+            failure_governor=self._failure_governor,
         )
         self._worker = QuoteIngressWorker(
             consumer_id=f"{data_session_key}:single-writer",
             config=config,
             frame_sink=self._projection_sink.project,
             loud_sink=loud_sink,
+            failure_governor=self._failure_governor,
         )
 
     @property
@@ -2659,9 +3079,7 @@ class QuoteIngressSupervisor:
                     except Exception as rollback_error:  # noqa: BLE001 - preserve invalid owner and cleanup state.
                         rollback_exception_type = type(rollback_error).__qualname__
                 consumer_lease_retained = bool(
-                    type(lease) is PhaseOneQuoteLease
-                    and bool(lease.lease_id)
-                    and rollback_released is not True
+                    type(lease) is PhaseOneQuoteLease and bool(lease.lease_id) and rollback_released is not True
                 )
                 if consumer_lease_retained:
                     consumer.lease = lease
@@ -2689,9 +3107,7 @@ class QuoteIngressSupervisor:
                             else ("RELEASED" if rollback_released is True else "NOT_APPLICABLE")
                         ),
                         "consumer_lease_retained": consumer_lease_retained,
-                        "retained_owner_state": (
-                            "ACQUIRE_ROLLBACK_UNKNOWN" if consumer_lease_retained else None
-                        ),
+                        "retained_owner_state": ("ACQUIRE_ROLLBACK_UNKNOWN" if consumer_lease_retained else None),
                     },
                 )
                 self._worker.record_loud_failure(error)
@@ -2948,13 +3364,9 @@ class QuoteIngressSupervisor:
             actual_lease = snapshot.get("actual_lease")
             consumers[consumer_id] = {
                 "lease_id": actual_lease.get("lease_id") if isinstance(actual_lease, Mapping) else None,
-                "symbols": (
-                    list(actual_lease.get("symbols") or ()) if isinstance(actual_lease, Mapping) else []
-                ),
+                "symbols": (list(actual_lease.get("symbols") or ()) if isinstance(actual_lease, Mapping) else []),
                 "expected_symbols": list(owner.symbols),
-                "lease_generation": (
-                    actual_lease.get("generation") if isinstance(actual_lease, Mapping) else None
-                ),
+                "lease_generation": (actual_lease.get("generation") if isinstance(actual_lease, Mapping) else None),
                 "lease_status": actual_lease.get("status") if isinstance(actual_lease, Mapping) else None,
                 "physical_subscription_id": (
                     actual_lease.get("physical_subscription_id") if isinstance(actual_lease, Mapping) else None
