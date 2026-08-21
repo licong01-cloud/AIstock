@@ -101,6 +101,7 @@ rules:
       - backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py
       - backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py
       - backend/tests/unified_engine/test_score_weighted_capacity_registration.py
+      - backend/tests/unified_engine/test_score_weighted_strategy_determinism.py
       - backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py
       - scripts/build_qe_sector_risk_overlay.py
       - scripts/qe_sector_risk_overlay*.py

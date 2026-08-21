@@ -1,5 +1,5 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-08-15"
+updated_at: "2026-08-19"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
@@ -19,6 +19,7 @@ targets:
       - backend/**/*.py
       - scripts/qe_sector_risk_overlay_strategy.py
       - scripts/score_weighted_strategy.py
+      - scripts/score_weighted_strategy_v2.py
       - scripts/qe_sector_risk_overlay_artifacts.py
       - scripts/qe_build_frozen_risk_policy.py
       - scripts/qe_build_frozen_suspend_filter.py

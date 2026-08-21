@@ -38,6 +38,25 @@ from score_weighted_strategy import ScoreWeightedTopkStrategy
 logger = logging.getLogger(__name__)
 
 
+def _ordered_topk_candidates(ranked, topk, current_holdings):
+    """Return Top-K membership and buy candidates in canonical rank order.
+
+    Sets are safe for membership checks but cannot be ordering authorities.
+    ``ranked`` already carries the stable mergesort order, including its
+    deterministic secondary order for equal scores, so preserve that order.
+    """
+    ranked_topk = ranked.head(int(topk))
+    ordered_ids = ranked_topk.index.tolist()
+    topk_membership = set(ordered_ids)
+    current_membership = set(current_holdings)
+    buy_candidates = [
+        (sid, float(score))
+        for sid, score in zip(ordered_ids, ranked_topk.to_numpy())
+        if sid not in current_membership
+    ]
+    return topk_membership, buy_candidates
+
+
 class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
     """
     ScoreWeightedTopkStrategy 的修复版，topk 持仓数量严格受控。
@@ -169,7 +188,11 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
         # kind='mergesort': stable sort ensures deterministic tie-breaking
         # across different CPU SIMD (AVX-512 vs AVX2) — fixes cross-node divergence
         ranked = scores.sort_values(ascending=False, kind='mergesort')
-        topk_stocks = set(ranked.head(self.topk).index.tolist())
+        topk_stocks, buy_candidates = _ordered_topk_candidates(
+            ranked,
+            self.topk,
+            current_holdings,
+        )
 
         # ── Fix #2: 幽灵持仓强制卖出 ──
         # 无评分的旧持仓（停牌/退市等）直接加入卖出列表，不再静默积累
@@ -190,13 +213,6 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
                 sc = float(scores.get(sid, -999.0))
                 sell_candidates.append((sid, sc))
         sell_candidates.sort(key=lambda x: x[1])
-
-        buy_candidates = []
-        for sid in topk_stocks:
-            if sid not in current_holdings:
-                sc = float(scores.get(sid, 0.0))
-                buy_candidates.append((sid, sc))
-        buy_candidates.sort(key=lambda x: -x[1])
 
         # 5. 建仓/补仓 vs 动态 n_drop
         # 建仓阶段：直接买入填满到 topk（不限制速度）
