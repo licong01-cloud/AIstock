@@ -1,7 +1,7 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-21T13:00:13.6046530Z",
-  "source_head": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+  "observed_at": "2026-08-21T13:30:24.2929185Z",
+  "source_head": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
   "current_revision": {
@@ -21,10 +21,11 @@
     "branch": "feature/qe-pit-v2-w6-integration-20260819",
     "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w6-integration-20260819",
     "base_head": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
-    "status": "implementation_review_passed_receipt_refresh_pending_ci",
+    "status": "merged_via_pr_3622_source_ready",
     "implementation_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
-    "integration_head": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+    "integration_head": "516b4a64823f98b02227cb62d3bb233e8b7801e0",
     "main_sync_merge_commit": "a557ad2331ef4bdc1d53f86c2752360a3e666c10",
+    "pr_merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
     "runtime_impact": "backend",
     "runtime_targets": ["backend-main"],
     "authority_pointer_readback": "not_run_missing_worktree_db_credentials_no_write_performed",
@@ -46,6 +47,7 @@
       "client_gate": "merge_aftercare ready, blocking=0, warnings=0",
       "remote_main": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
       "main_sync": "merged_without_conflict",
+      "remote_ci": "19 checks completed with success/neutral/skipped; failures=0",
       "review_findings": "missing PIT identity regression, unreachable real W8 envelope path, and detached-universe date leakage fixed",
       "production_gates": "ddl=noop; dml=noop; candidate_write=not_performed; activation=not_performed; process_control=not_performed"
     },
@@ -455,6 +457,9 @@
     "W6": {
       "depends_on": ["W3-D_passed", "W4_merged", "W5_merged"],
       "owner": "Integration",
+      "status": "source_merged_pr_3622_509e12c2",
+      "final_pr_head": "516b4a64823f98b02227cb62d3bb233e8b7801e0",
+      "merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
       "planned_exact_write_files": [
         "backend/inference_engine.py",
         "backend/tests/test_canonical_pit_consumer_inventory.py",
@@ -540,6 +545,6 @@
     "W3_internal": "W3-A_to_W3-B_to_W3-C_to_W3-D_serial_short_leases",
     "W3_W4_W5": "parallel_only_when_exact_changed_files_are_disjoint",
     "shared_core": "W6_single_writer_only",
-    "status": "PASS_W6_SOURCE_READY_PENDING_REMOTE_CI"
+    "status": "PASS_W6_MERGED_SOURCE_READY"
   }
 }

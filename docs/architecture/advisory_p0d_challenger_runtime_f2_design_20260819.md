@@ -22,10 +22,12 @@ P0-D 已产出精确的 `advisory_meta_label_bundle_v1`：模型根据 Selection
 允许修改：
 
 - `backend/services/advisory_model_first/model_binding_resolution.py`
+- `scripts/advisory_publish_program_model_descriptor.py`
 - `backend/services/advisory_model_first/meta_label_bundle.py`
 - `backend/services/advisory_model_first/model_inference.py`
 - `backend/services/advisory_forward/service.py`
-- 对应定向测试与本设计文档
+- `backend/tests/advisory_model_first/test_dynamic_model_binding.py`
+- 本设计文档与 `advisory_strategy_conditioned_model_blueprint_v1_20260710.md` 的当前下一步
 
 ## 3. Non-goals / 非目标与边界
 
@@ -97,9 +99,18 @@ descriptor 仍原子写入 `program_bindings/<program_id>/<binding_version_id>.j
 - M3 outcome、price range 在此角色返回各自 typed unavailable，不影响元标签候选排序成功状态。
 - 不完整 Top20、未来时钟、bundle 损坏、HMM 续推失败、必需特征缺失或无效概率均返回明确 reason code，不回退 Selection 排序冒充模型结果。
 
+### 5.5 Descriptor 安全切换与回滚
+
+- 已存在 descriptor 的切换必须显式传入 `expected_current_descriptor_sha256`；发布器在同一跨进程独占锁内重新读取当前文件并执行 compare-and-swap。当前 descriptor 不存在、hash 无效或与预期不符时返回结构化冲突，目标文件保持不变。
+- 新 descriptor 在进入锁前完成 schema、Program/binding、package、bundle 与 candidate projection 校验；切换使用同目录临时文件、文件 `fsync`、原子 `os.replace` 和替换后精确 bytes readback。
+- 每次成功切换前，将当前 descriptor 的精确 bytes 写入 `program_bindings/<program_id>/.descriptor_history/<binding_version_id>/<descriptor_sha256>.json`。历史快照不可变；同 hash 不同 bytes、缺失快照或损坏快照均 fail closed。
+- rollback 不是删除 descriptor。它必须显式传入当前 descriptor hash 与目标历史 hash，并复用同一 CAS、原子替换、readback 和反向快照逻辑，因此回滚后仍可恢复到回滚前版本。
+- 首次发布继续兼容现有 CLI，且在同一独占锁下保持“相同 bytes 幂等、不同 bytes 拒绝覆盖”。切换/回滚只由显式 CLI 参数触发，不扫描 latest，不自动发布、不重启后端。
+- 成功 receipt 必须返回 operation、目标路径、previous/current descriptor hash 和 rollback snapshot 路径；失败不得输出 `ok=true`。
+
 ## 6. Verification Plan / 验证方案
 
-1. descriptor v1 回归、v2 原子发布、身份/角色/权重/shadow policy fail-closed。
+1. descriptor v1 回归、v2 原子发布、CAS 切换、不可变快照、精确回滚、并发冲突，以及身份/角色/权重/shadow policy fail-closed。
 2. exact meta-label loader 的路径、manifest 文件 hash、全文件 readback、统一 HMM cutoff 验证。
 3. 真实结构 fixture 下完成 Top20 特征到概率重排，断言 entry rank 改变而 exit rank 不变。
 4. 断言 meta-label 路径不调用旧 quality loader/scorer，不触发 outcome/price-range loader。
@@ -117,17 +128,20 @@ descriptor 仍原子写入 `program_bindings/<program_id>/<binding_version_id>.j
 | bundle 角色串线 | descriptor model role、bundle schema/model role 双重一致性校验 |
 | outcome 子模型错误绑定 | meta-label 角色不加载 legacy child bundle，返回 typed unavailable |
 | 模型效果被夸大 | 保留 experimental/uncalibrated；不自动激活、不替换 baseline |
+| 并发发布导致 lost update | Program/binding 粒度跨进程独占锁与 expected-current hash CAS；冲突时目标不变 |
+| 覆盖旧 descriptor 后无法回滚 | 切换前保存内容寻址不可变快照；rollback 复用同一 CAS 与 readback，不以删除文件降级 |
+| 替换后磁盘 readback 异常 | 在锁内恢复刚保存的旧 bytes 并返回明确失败；禁止把未核验写入报告为成功 |
 
 ## 8. Rollout / Rollback
 
 代码合入后仍不产生运行时变化。后续 rollout 必须由用户分别确认：
 
 1. 将已验证 bundle 放在配置 model root 的精确目录（现有资产满足时只读核验）。
-2. 发布精确 v2 descriptor。
-3. 用户重启后端并核对 source/runtime SHA。
-4. 先观察 forward challenger，不改变 baseline publication。
+2. 用户在源码合入后重启后端，并核对 source/runtime SHA；源码激活与 descriptor 激活分开报告。
+3. 用户单独授权后，使用 expected-current hash 安全发布精确 v2 descriptor，并核对 receipt/readback。resolver 每次推理读取 exact descriptor，因此切换会在下一次荐股调用生效，不以第二次后端重启作为生效门禁。
+4. 立即执行只读业务 readback，并先观察 forward challenger，不改变 baseline publication。
 
-rollback 仅移除/停用该精确 descriptor 并由用户重启；无需 DB 回滚，也不修改 Selection、Program binding 或模型资产。
+rollback 使用发布时产生的精确不可变快照和当前 descriptor hash 执行 CAS 恢复；恢复在下一次荐股调用生效，不要求额外重启。禁止删除 descriptor 作为正常回滚。无需 DB 回滚，也不修改 Selection、Program binding 或模型资产。
 
 ## 9. Production Gates / 生产门禁
 
@@ -136,7 +150,7 @@ rollback 仅移除/停用该精确 descriptor 并由用户重启；无需 DB 回
 | 源码、测试、PR | 自动执行 | 已授权 |
 | 合入 PR | 等待 | 用户确认 |
 | 发布/替换运行时 descriptor | 禁止自动执行 | 用户确认 |
-| 后端重启 | 禁止自动执行 | 用户执行 |
+| 源码合入后的后端重启 | 禁止自动执行 | 用户执行；不与 descriptor 激活合并报告 |
 | DB DDL/DML | 不需要 | 不适用 |
 | 替换正式荐股排序 | 不允许 | 新设计与新授权 |
 
@@ -152,10 +166,13 @@ rollback 仅移除/停用该精确 descriptor 并由用户重启；无需 DB 回
 | F-706 | forward 冻结 model role/descriptor/bundle，baseline 独立；不适用 child model 返回 typed unavailable |
 | F-707 | 无 DB/API/UI/正式策略变更、无自动 descriptor 发布/激活/重启、无额外平台工程 |
 | F-708 | F2 validator、定向测试与重复源码审核全部通过后才满足合入条件 |
+| F-709 | 已存在 descriptor 仅能在跨进程锁内以 expected-current hash CAS 切换；冲突不改文件且返回结构化失败 |
+| F-710 | 切换前保存内容寻址不可变快照；rollback 复用 CAS、原子替换、替换后 readback 并保留反向恢复能力 |
+| F-711 | 现有首次发布 CLI 保持兼容；切换/回滚必须显式参数触发并返回可核验 receipt；descriptor 在下一次推理生效但不自动执行、不控制后端进程 |
 
 ## 11. Implementation Plan / 实施方案
 
-1. 扩展 descriptor resolver/publisher，兼容 v1 并增加严格 v2 契约。
+1. 扩展 descriptor resolver/publisher，兼容 v1 并增加严格 v2 契约、跨进程锁、CAS 切换、不可变快照与回滚。
 2. 增加 exact meta-label runtime loader 与运行时 bundle 校验。
 3. 在 shadow service 按 model role 分派 candidate frame、特征、scorer 和 child 状态。
 4. 扩展 forward frozen resolution；补齐 descriptor、loader、inference、forward 测试。
@@ -173,13 +190,16 @@ rollback 仅移除/停用该精确 descriptor 并由用户重启；无需 DB 回
 | F-706 | `advisory_forward/service.py` | `backend/tests/advisory_model_first/test_forward_publication.py` | pass | none |
 | F-707 | changed-file boundary | `backend/tests/advisory_model_first/test_meta_label_runtime_inference.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0d_challenger_runtime_f2_design_20260819.md --tier F2` | pass | none |
 | F-708 | source and workflow gates | `python -m nox -s advisory_modeling_backend`; `python -m nox -s l0`; `python -m nox -s platform_api_backend` | pass | none |
+| F-709 | `backend/services/advisory_model_first/model_binding_resolution.py` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`; `rtk pytest backend/tests/advisory_model_first/test_dynamic_model_binding.py -q` | pass | none |
+| F-710 | `backend/services/advisory_model_first/model_binding_resolution.py` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`; exact rotate/rollback/reverse-snapshot/corrupt-snapshot tests | pass | none |
+| F-711 | `scripts/advisory_publish_program_model_descriptor.py` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`; CLI compatibility/receipt/conflict/two-process tests | pass | none |
 
 ## 13. DESIGN-COMPLIANCE-001
 
 1. 无简化版：真实 exact bundle、真实共享 PIT 特征、真实 fresh HMM 续推和真实 LightGBM scorer 均进入运行路径。
 2. 无静默错误：角色、身份、文件、时钟、候选组、特征和概率全部 fail closed；禁止跨角色回退。
 3. 无业务偏移：只改变 challenger 新入场优先级，Selection 正式排序和退出 rank 不变。
-4. 无额外门禁：experimental 结论不升级为审批、收益门槛或自动激活；合入和重启仍由用户确认。
+4. 无额外门禁：experimental 结论不升级为审批、收益门槛或自动激活；源码合入、源码重启和已有 descriptor 激活动作仍按原授权边界分别由用户确认。
 
 审核记录：
 
@@ -187,4 +207,7 @@ rollback 仅移除/停用该精确 descriptor 并由用户重启；无需 DB 回
 - Source Round 1：补齐 v1/v2 兼容、Top20 固定候选组、dual-rank 输出和 child model typed unavailable。
 - Source Round 2：未知 descriptor schema 改为配置无效；训练词表外行业编码同步置位 missing indicator，禁止静默 NaN。
 - Source Round 3：补齐 Selection 必须恰好为连续 Top20、feature schema/version/vocabulary 精确一致，以及 rank/clock/confidence 输出不变量；19 只候选或小数 rank 均 fail closed。
+- Source Round 4：补齐 expected-current hash CAS、跨进程锁、替换后 readback、不可变历史快照、精确 rollback、反向快照及兼容 CLI receipt；竞争进程只能一个成功。
+- Source Round 5：修正损坏 rollback 快照的错误归因，限制 history/lock realpath 不得逃逸，并验证冲突、缺失和损坏路径均不修改当前 descriptor。
+- Runtime Semantics Round：确认 resolver 每次推理读取 exact descriptor；将 rollout 修正为源码重启后单独授权切换，切换和 rollback 均在下一次荐股调用生效，不虚构第二次重启门禁。
 - Real bundle smoke：后端同款 `AIstock` 环境加载 `e555903e...`，核对 103 个模型特征、107 个 HMM 模型、统一 cutoff `2026-02-02`，真实 LightGBM 输出 take `0.5535642729` / skip `0.4464357271`。

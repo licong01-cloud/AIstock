@@ -727,6 +727,7 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`。该状态只关�
 | F-148 | 首版使用单持久worker和默认5日chunk，先验证内存/I/O/恢复再评估并发；并发不是业务完成或性能验收的替代 |
 | F-149 | H0不修改实盘binding、Program发布语义、策略包状态、Selection/Paper/QMT，也不修改、覆盖或回写已冻结v6的code-release与结果 |
 | F-150 | 性能receipt分解workspace/source/raw/overlay/publish耗时、I/O、RSS和cache hit；目标未达不得删减PIT、typed failure或业务逻辑 |
+| F-151 | P0-D descriptor 接入不得覆盖现有 M1 文件；已存在 binding 只允许 expected-current hash CAS 原子切换，切换前保存不可变快照并支持同契约精确回滚 |
 
 ## 11. Design Acceptance Matrix
 
@@ -772,6 +773,7 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`。该状态只关�
 | F-138 | P0-C Top40/held-symbol rank reconstruction | `backend/tests/advisory_model_first/test_policy_rank_source.py`; artifact: P0-C `candidate_rankings.parquet` | implemented_real_file_reconstruction_verified | none |
 | F-139 | candidate meta-label evaluator + shadow portfolio policy simulator | `backend/tests/advisory_model_first/test_policy_episode_labels.py`; `backend/tests/advisory_model_first/test_shadow_portfolio_policy.py`; artifact: P0-D matched baseline report | implemented_real_policy_simulation_verified_not_activated | none |
 | F-140 | after-close publication and target-open episode clock | `backend/tests/advisory_model_first/test_forward_date_clock.py`; `backend/tests/advisory_model_first/test_forward_recovery.py`; runtime: target 2026-08-14/17 SETTLED, target 2026-08-18 pre-open WAITING_DATA | APPROVED_BY_USER_RUNTIME_TARGET_OPEN_SETTLEMENT_VERIFIED | approved_by_user: no target-open fallback; each future target remains WAITING_DATA until authoritative open arrives |
+| F-151 | `model_binding_resolution.py`; descriptor operator CLI | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`; P0-D runtime F2 design F-709/F-710/F-711 | SOURCE_IMPLEMENTED_LOCAL_VALIDATION_PASS_PENDING_PR | none |
 | F-141 | H0 shared day business composition + two executors | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-142 | `AdvisoryPITAsOfViewV1` + historical batch source | `backend/tests/advisory_execution/test_pit_asof_view.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-143 | content-addressed runtime workspace session | `backend/tests/strategy_package/test_runtime_workspace_session.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
@@ -927,7 +929,7 @@ M0-M5C 的代码、真实 WSL 实验和固定日期推理已形成当前基线�
 
 下一工作严格按以下顺序执行；模型/前向与 H0 历史执行是互不阻断的两条线：
 
-1. **P0-D experimental challenger descriptor 接入**：绑定 exact bundle `e555903e...`，保持 `EXPERIMENTAL_MODEL/UNCALIBRATED/NOT_ACTIVATED`；不得覆盖baseline、Selection rank、正式Program policy或现有M1 descriptor。源码合入、后端重启和运行时readback继续由用户分别确认。
+1. **P0-D experimental challenger descriptor 接入**：先补齐 expected-current hash CAS、不可变快照、替换后readback和精确rollback，再绑定 exact bundle `e555903e...`；保持 `EXPERIMENTAL_MODEL/UNCALIBRATED/NOT_ACTIVATED`，不得直接覆盖或删除现有M1 descriptor，不得改变baseline、Selection rank或正式Program policy。源码合入后先由用户重启并核对runtime SHA，再由用户单独授权descriptor切换；resolver按调用读取descriptor，切换/rollback在下一次荐股调用生效，均与源码重启和业务readback分别报告。
 2. **关闭 Historical Range 正确性缺口**：按单BUG流程优先处理 BUG-1078、BUG-1080、BUG-1083、BUG-1098、BUG-1110、BUG-1111；它们分别影响可运行包真实性、day terminal receipt、已发布成功日、父子lease、T+1 outcome timeline和planner semantics hash。正确性未关闭前不以H0性能结果声明完成。
 3. **实施 H0**：在独立后续revision以冻结v6为oracle，按H0-0至H0-6推进batch size=1、代表日、完整44日、未来毒化、raw共享反例、chunk恢复和性能验收；实盘继续单日运行。BUG-991的重复catalog查询/worker开销作为H0性能证据，不替代F-141至F-150。
 4. **继续自然前向证据**：当前open-mark指标只证明episode已建立；模型maturity trade date到达前保持 `EVIDENCE_IMMATURE`，不补历史、不用冻结test或基线episode冒充P0-D胜率。
