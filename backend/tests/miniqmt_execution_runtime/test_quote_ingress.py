@@ -403,6 +403,17 @@ def test_contextual_failure_governor_bounds_one_hundred_thousand_identical_error
     assert changed["tracked_fingerprint_count"] == 2
     assert len(loud_failures) == 3
 
+    projection._record_loud(  # noqa: SLF001 - explicit runtime labels must not block owner recovery
+        frame=frame,
+        consumer_id=consumer_id,
+        stage="SYNCHRONOUS",
+        error=quote_contract_error(
+            QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+            "explicit runtime label",
+            context={"runtime_id": "runtime-explicit-label", "exception_type": "RuntimeError"},
+        ),
+    )
+
     projection.register_observation_sink(
         consumer_id=consumer_id,
         symbols=("000001.SZ",),
@@ -431,8 +442,8 @@ def test_contextual_failure_governor_bounds_one_hundred_thousand_identical_error
 
     recovered = projection.health()["projection"]
     assert recovered["failure_governor"]["active_failure_count"] == 0
-    assert recovered["failure_governor"]["recovery_count"] == 2
-    assert recovered["failure_governor"]["observed_count"] == 100_002
+    assert recovered["failure_governor"]["recovery_count"] == 3
+    assert recovered["failure_governor"]["observed_count"] == 100_003
     assert recovered["last_error_by_symbol"] == {}
 
 

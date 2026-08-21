@@ -134,7 +134,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "fresh Python process imported quote_ingress, verified QuoteIngressSupervisor injects one shared governor into projection and worker, and loaded bounded runtime/message fingerprint source; source_sha256=d34bebbbb88c2d5530e4cab7bb3e98015b972bbf546e8f7de9d5682faf5b36f0; exit=0"
+      "fresh Python process imported quote_ingress, verified QuoteIngressSupervisor injects one shared governor into projection and worker, and loaded bounded runtime/message fingerprint plus owner-scoped recovery source; source_sha256=f928b580df51e725fbe6779c2f7335c04cfc6987c18b4a08193f61f6ad96b529; exit=0"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",

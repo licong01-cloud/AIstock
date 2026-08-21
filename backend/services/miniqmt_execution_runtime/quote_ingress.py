@@ -714,7 +714,7 @@ class _ProcessLocalQuoteFailureGovernor:
     def resolve(
         self,
         *,
-        runtime_id: str,
+        runtime_id: str | None,
         consumer_id: str,
         generation: int | None = None,
         stage: str | None = None,
@@ -724,7 +724,7 @@ class _ProcessLocalQuoteFailureGovernor:
             for bucket in self._buckets.values():
                 if (
                     not bucket.active
-                    or bucket.runtime_id != runtime_id
+                    or (runtime_id is not None and bucket.runtime_id != runtime_id)
                     or bucket.consumer_id != consumer_id
                     or (generation is not None and bucket.generation != generation)
                     or (stage is not None and bucket.stage != stage)
@@ -1906,7 +1906,7 @@ class PhaseOneQuoteProjectionSink:
         stage: str,
     ) -> None:
         resolved = self._failure_governor.resolve(
-            runtime_id=self._runtime_id_for_consumer(consumer_id=consumer_id),
+            runtime_id=None,
             generation=frame.ingress_generation,
             consumer_id=consumer_id,
             stage=stage,
