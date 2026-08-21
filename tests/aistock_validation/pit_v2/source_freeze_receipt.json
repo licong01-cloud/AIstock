@@ -1,22 +1,24 @@
 {
   "schema_version": "pit_v2_source_freeze_receipt_v2",
-  "observed_at": "2026-08-21T13:30:24.2929185Z",
+  "observed_at": "2026-08-21T14:09:10.5026894Z",
   "mode": "read_only_final_w6_source_freeze",
   "source": {
     "branch": "docs/qe-pit-v2-w6-source-freeze-20260821",
     "implementation_source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
     "w6_pr": "https://github.com/licong01-cloud/AIstock/pull/3622",
     "w6_merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
-    "head": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
-    "origin_main": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
-    "tree": "088090e8d3b44391544b7ca78c5d50980f9cd2b2",
+    "w6_source_base_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "w6_source_base_tree": "088090e8d3b44391544b7ca78c5d50980f9cd2b2",
+    "observed_origin_main": "f1a8821beb53c50d6106802e2b459e329cd14642",
+    "observed_origin_main_tree": "cd344e592652a29b2e0aef806d9609458bd9b9ff",
+    "observed_origin_main_descends_w6": true,
     "worktree_clean": true,
     "receipt_metadata_changes_excluded_from_source_freeze": true,
     "master_design": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
     "master_design_sha256": "c76ee888ab3679ade8e597445dcbbb30a18f4e2f8c9f03f2dc37bd2414f728fc",
     "w6_scope_receipt_sha256": "9ce8cc793dce69a84db5fc79f60176f410a5589ddffc8a7be86ef85803099a23",
     "design_compliance_receipt": "tests/aistock_validation/pit_v2/design_compliance_receipt.json",
-    "design_compliance_receipt_sha256": "2ccf9ae28c231f8912506998d86819b05bb4db415c107bbc291cfc270834fa91"
+    "design_compliance_receipt_sha256": "85dd89e5a4349b5c1f487467d0b4b1c15830a51db1c7f0ae6d8869db7130eed9"
   },
   "initial_migration": {
     "plan_path": "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
@@ -72,6 +74,28 @@
     ".codex/skills/update-backtest-dataset/references/index-hmm-contract.md": "3f1503e797a84821fe5c3d1b1680352ae51400e5f733a18d49fbed9c699126c3",
     "docs/operations/qe_backtest_dataset_monthly_update_runbook.md": "052593b54a6e463b5e479bd31a47445251c5e0ed9dacea775e985f9a9be0b66b"
   },
+  "worker_source_policy": {
+    "schema_version": "pit_v2_worker_source_policy_v1",
+    "worker_dependency_paths": [
+      "backend/services/dataset_release",
+      "scripts/dataset_release_worker.py",
+      "scripts/dataset_release_build_stage.py",
+      "scripts/dataset_release_candidate_consumer_smoke.py",
+      "scripts/dataset_release_source_recheck.py",
+      "scripts/dataset_release_source_stage.py",
+      "configs/datasets/qe_backtest_monthly_v1.yaml",
+      "configs/datasets/qe_backtest_monthly_v2.yaml"
+    ],
+    "dependency_tree_digest_method": "sha256(canonical_json(path_and_git_object_id_list))",
+    "w6_source_base_dependency_tree_digest": "786f8e1036a8425abb295f9b30fa9e776374853514d314a9b877b875e2337b7a",
+    "observed_origin_main_dependency_tree_digest": "786f8e1036a8425abb295f9b30fa9e776374853514d314a9b877b875e2337b7a",
+    "dependency_tree_matches_w6_source_base": true,
+    "required_worker_code_sha_policy": "equals_current_origin_main_at_execution",
+    "required_worker_ancestry_policy": "w6_merge_commit_is_ancestor",
+    "required_dependency_policy": "dependency_tree_digest_matches_frozen_digest",
+    "metadata_only_descendants_allowed": true,
+    "build_dependency_drift_allowed": false
+  },
   "control_plane": {
     "control_store": {
       "control_store_id": "dsc_6defc25f3e0d4fdda73c1a3431259cc0",
@@ -89,7 +113,7 @@
     },
     "fresh_process_preflight": {
       "status": "PASS",
-      "code_sha": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+      "code_sha": "f1a8821beb53c50d6106802e2b459e329cd14642",
       "profile_config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
       "semantic_profile_digest": "6eb56920fbbf5485e0285831beee0612d3edd74abc0ed24742cc34cb4081706c",
       "qlib_toolchain_digest": "90cbebc9034cbf6b3ed611b1d56ce4670dfc03b53dc8d8181b61edf71a4bc6ba",
@@ -110,7 +134,7 @@
       "claim_id": null,
       "code_sha": "4d3d6e5f946a48320de693c5f30bc14786007e76",
       "profile_config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
-      "last_poll_at": "2026-08-21T13:27:25.722482+00:00",
+      "last_poll_at": "2026-08-21T14:12:29.977343+00:00",
       "code_matches_source_freeze": false,
       "restart_performed": false
     }
@@ -149,9 +173,11 @@
     "w7_sample_submission_allowed": false,
     "blocker": {
       "code": "BLOCKED_STALE_REGISTERED_WORKER",
-      "expected_code_sha": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+      "expected_code_sha_policy": "equals_current_origin_main_at_execution",
+      "minimum_required_ancestor": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+      "required_dependency_tree_digest": "786f8e1036a8425abb295f9b30fa9e776374853514d314a9b877b875e2337b7a",
       "observed_code_sha": "4d3d6e5f946a48320de693c5f30bc14786007e76",
-      "required_owner_action": "restart_or_replace_dataset_release_worker_from_final_main",
+      "required_owner_action": "restart_or_replace_dataset_release_worker_from_current_origin_main_then_readback_identity_and_dependency_digest",
       "owner": "user",
       "automatic_process_control_authorized": false
     }
