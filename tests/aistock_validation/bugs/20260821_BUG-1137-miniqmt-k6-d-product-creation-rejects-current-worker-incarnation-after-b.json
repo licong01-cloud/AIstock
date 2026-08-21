@@ -50,8 +50,8 @@
   },
   "first_seen_at": "2026-08-21T02:25:44.401568Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f78e71e79cbad278674e629ce84770de7b8003f5",
+  "fixed_at": "2026-08-21T04:43:28Z",
   "github_issue_number": 3632,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3632",
   "last_seen_at": "2026-08-21T02:25:44.401568Z",
@@ -59,6 +59,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3635",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -93,7 +94,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -102,6 +103,14 @@
     "fingerprint": "dea13a89dac56efa24c603a1",
     "source_event_id": "FE-20260821-dea13a89dac5"
   },
+  "validation_evidence": [
+    "validation-receipt: id=264f0805bf326445 commit=25c28668c9dbe8c9598995e6db186c6c8044e87b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=36e40ea19e530ef9 commit=25c28668c9dbe8c9598995e6db186c6c8044e87b kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`622 passed, 2 skipped`",
+    "validation-receipt: id=4c0e49b573adc534 commit=25c28668c9dbe8c9598995e6db186c6c8044e87b kind=nox plan=miniqmt_execution_runtime_l2 status=passed command=`python -m nox -s miniqmt_execution_runtime_l2` result=`1503 passed, 82 skipped`",
+    "validation-receipt: id=94abd7f0fdf62400 commit=25c28668c9dbe8c9598995e6db186c6c8044e87b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -q` result=`62 passed`",
+    "validation-receipt: id=f9fa3f7bea2b406a commit=25c28668c9dbe8c9598995e6db186c6c8044e87b kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`passed`",
+    "validation-receipt: id=c32d2f9c168977e9 commit=25c28668c9dbe8c9598995e6db186c6c8044e87b kind=compile plan=direct status=passed command=`python -m py_compile backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py and git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
