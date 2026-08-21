@@ -37,6 +37,11 @@ def _full_day_suspension_exists_sql(*, trade_date: str, ts_code: str) -> str:
     }
     if (trade_date, ts_code) not in allowed_identities:
         raise ValueError("unsupported full-day suspension SQL identity")
+    no_trade_clause = (
+        "AND COALESCE(price.volume_hand,0)=0 AND COALESCE(price.amount_li,0)=0"
+        if (trade_date, ts_code) == ("price.trade_date", "price.ts_code")
+        else ""
+    )
     return f"""
         EXISTS (
           SELECT 1
@@ -44,14 +49,8 @@ def _full_day_suspension_exists_sql(*, trade_date: str, ts_code: str) -> str:
           WHERE suspension.trade_date={trade_date}
             AND suspension.ts_code={ts_code}
             AND suspension.suspend_type='S'
-            AND COALESCE(BTRIM(suspension.suspend_timing),'')=''
-            AND NOT EXISTS (
-              SELECT 1
-              FROM market.suspend_d resume
-              WHERE resume.trade_date=suspension.trade_date
-                AND resume.ts_code=suspension.ts_code
-                AND resume.suspend_type='R'
-            )
+            AND COALESCE(BTRIM(suspension.suspend_timing),'') IN ('','09:30-09:30')
+            {no_trade_clause}
         )
     """
 

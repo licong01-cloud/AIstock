@@ -356,14 +356,15 @@ def test_all_stock_fact_query_paths_use_authoritative_full_day_suspension_before
 
     for sql in (*stock_queries, *missing_queries):
         assert "suspension.suspend_type='S'" in sql
-        assert "COALESCE(BTRIM(suspension.suspend_timing),'')=''" in sql
-        assert "resume.suspend_type='R'" in sql
+        assert "COALESCE(BTRIM(suspension.suspend_timing),'') IN ('','09:30-09:30')" in sql
+        assert "resume.suspend_type='R'" not in sql
         assert "NOT ( EXISTS" in sql
 
     for sql in stock_queries:
         price_base = sql.split("price_base AS (", 1)[1].split("), price_history AS", 1)[0]
         assert "market.suspend_d suspension" in price_base
-        assert "volume_hand=0" not in price_base
+        assert "COALESCE(price.volume_hand,0)=0" in price_base
+        assert "COALESCE(price.amount_li,0)=0" in price_base
 
 
 def test_full_day_suspension_predicate_rejects_unregistered_sql_aliases() -> None:
