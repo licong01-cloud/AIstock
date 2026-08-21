@@ -458,3 +458,65 @@ def test_failed_model_observation_can_recover_under_same_descriptor() -> None:
         "UPDATE app.advisory_forward_model_observation" in sql
         for sql in conn.cursor_instance.sql
     )
+
+
+def test_transient_unavailable_model_observation_can_recover_under_same_descriptor() -> None:
+    existing = {
+        "forward_run_id": "advfwd-test",
+        "status": "UNAVAILABLE",
+        "reason_code": "ADVISORY_MODEL_FEATURE_REQUIRED_VALUE_MISSING",
+        "payload_sha256": "a" * 64,
+        "model_descriptor_sha256": "b" * 64,
+    }
+    conn = _ObservationConnection(existing=existing)
+    repository = AdvisoryForwardPGRepository(conn_factory=lambda: conn)
+    observation = AdvisoryForwardModelObservationV1(
+        observation_id="advobs-test",
+        forward_run_id="advfwd-test",
+        program_id="advp-test",
+        binding_version_id="advb-test",
+        decision_as_of_trade_date=date(2026, 8, 14),
+        target_trade_date=date(2026, 8, 17),
+        status="EXPERIMENTAL_SHADOW",
+        model_descriptor_sha256="b" * 64,
+        prediction_payload_json={"candidate_count": 1},
+    )
+
+    saved = repository.save_observation(observation)
+
+    assert saved["status"] == "EXPERIMENTAL_SHADOW"
+    assert any(
+        "UPDATE app.advisory_forward_model_observation" in sql
+        for sql in conn.cursor_instance.sql
+    )
+
+
+def test_permanent_unavailable_model_observation_remains_immutable() -> None:
+    existing = {
+        "forward_run_id": "advfwd-test",
+        "status": "UNAVAILABLE",
+        "reason_code": "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+        "payload_sha256": "a" * 64,
+        "model_descriptor_sha256": "b" * 64,
+    }
+    conn = _ObservationConnection(existing=existing)
+    repository = AdvisoryForwardPGRepository(conn_factory=lambda: conn)
+    observation = AdvisoryForwardModelObservationV1(
+        observation_id="advobs-test",
+        forward_run_id="advfwd-test",
+        program_id="advp-test",
+        binding_version_id="advb-test",
+        decision_as_of_trade_date=date(2026, 8, 14),
+        target_trade_date=date(2026, 8, 17),
+        status="EXPERIMENTAL_SHADOW",
+        model_descriptor_sha256="b" * 64,
+        prediction_payload_json={"candidate_count": 1},
+    )
+
+    with pytest.raises(InvalidStateTransitionError, match="payload cannot change"):
+        repository.save_observation(observation)
+
+    assert not any(
+        "UPDATE app.advisory_forward_model_observation" in sql
+        for sql in conn.cursor_instance.sql
+    )

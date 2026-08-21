@@ -5,6 +5,7 @@
     "backend/services/advisory_forward/repository.py",
     "backend/tests/advisory_model_first/test_forward_recovery.py",
     "backend/tests/advisory_model_first/test_forward_postgres.py",
+    "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md",
     "tests/aistock_validation/bugs/20260821_BUG-1138-advisory-forward-model-observation-cannot-recover-after-transient-data-u.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -36,14 +37,16 @@
       "backend/services/advisory_forward/service.py",
       "backend/services/advisory_forward/repository.py",
       "backend/tests/advisory_model_first/test_forward_recovery.py",
-      "backend/tests/advisory_model_first/test_forward_postgres.py"
+      "backend/tests/advisory_model_first/test_forward_postgres.py",
+      "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/advisory_forward/service.py",
         "backend/services/advisory_forward/repository.py",
         "backend/tests/advisory_model_first/test_forward_recovery.py",
-        "backend/tests/advisory_model_first/test_forward_postgres.py"
+        "backend/tests/advisory_model_first/test_forward_postgres.py",
+        "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
       ],
       "impacted_modules": [
         "platform.api",
@@ -91,7 +94,8 @@
         "backend/services/advisory_forward/service.py",
         "backend/services/advisory_forward/repository.py",
         "backend/tests/advisory_model_first/test_forward_recovery.py",
-        "backend/tests/advisory_model_first/test_forward_postgres.py"
+        "backend/tests/advisory_model_first/test_forward_postgres.py",
+        "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
       ],
       "unmatched_files": []
     },
@@ -100,7 +104,8 @@
       "backend/services/advisory_forward/service.py",
       "backend/services/advisory_forward/repository.py",
       "backend/tests/advisory_model_first/test_forward_recovery.py",
-      "backend/tests/advisory_model_first/test_forward_postgres.py"
+      "backend/tests/advisory_model_first/test_forward_postgres.py",
+      "docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md"
     ]
   },
   "first_seen_at": "2026-08-21T02:40:44.538083Z",
@@ -126,9 +131,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded the tracked Advisory forward service and repository recovery semantics; the five-file affected matrix passed 34 tests without backend process control.",
+      "Fresh Python nox process loaded tracked Advisory forward service/repository and passed advisory_modeling_backend: 319 passed, 5 skipped; no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

@@ -13,7 +13,11 @@ from backend.services.advisory_forward.models import (
     AdvisoryForwardRunV1,
     utcnow,
 )
-from backend.services.advisory_forward.repository import AdvisoryForwardPGRepository
+from backend.services.advisory_forward.repository import (
+    RETRYABLE_MODEL_OBSERVATION_REASON_CODES,
+    AdvisoryForwardPGRepository,
+    is_retryable_model_observation,
+)
 from backend.services.advisory_model_first.model_binding_resolution import AdvisoryModelBindingResolver
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
 from backend.services.advisory_program import (
@@ -366,7 +370,7 @@ class AdvisoryForwardService:
     def _resume_published_observation(self, persisted: Mapping[str, Any]) -> dict[str, Any]:
         detail = self.repository.get(str(persisted["forward_run_id"]))
         existing = detail.get("model_observation")
-        if existing is not None and existing["status"] != "FAILED":
+        if existing is not None and not is_retryable_model_observation(existing):
             return {
                 "program_id": persisted["program_id"],
                 "forward_run_id": persisted["forward_run_id"],
@@ -534,10 +538,20 @@ class AdvisoryForwardService:
             or effective_bundle_id != frozen_resolution.get("bundle_id")
         ):
             raise RuntimeError("model inference identity differs from the publication-frozen descriptor")
-        status = str(prediction.get("status") or "FAILED")
-        observation_status = "EXPERIMENTAL_SHADOW" if status == "EXPERIMENTAL_SHADOW" else "UNAVAILABLE"
         outcome = prediction.get("outcome") if isinstance(prediction.get("outcome"), Mapping) else {}
         price_range = prediction.get("price_range") if isinstance(prediction.get("price_range"), Mapping) else {}
+        reason_code = (
+            prediction.get("reason_code")
+            or outcome.get("reason_code")
+            or price_range.get("reason_code")
+        )
+        status = str(prediction.get("status") or "FAILED")
+        if status == "EXPERIMENTAL_SHADOW":
+            observation_status = "EXPERIMENTAL_SHADOW"
+        elif str(reason_code or "") in RETRYABLE_MODEL_OBSERVATION_REASON_CODES:
+            observation_status = "FAILED"
+        else:
+            observation_status = "UNAVAILABLE"
         maturity_horizons = list(outcome.get("horizons") or [])
         for candidate in outcome.get("candidates") or []:
             if not isinstance(candidate, Mapping):
@@ -559,11 +573,7 @@ class AdvisoryForwardService:
             decision_as_of_trade_date=decision_date,
             target_trade_date=target_date,
             status=observation_status,
-            reason_code=(
-                prediction.get("reason_code")
-                or outcome.get("reason_code")
-                or price_range.get("reason_code")
-            ),
+            reason_code=reason_code,
             message=(
                 prediction.get("message")
                 or outcome.get("message")

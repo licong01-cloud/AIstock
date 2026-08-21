@@ -30,6 +30,23 @@ from backend.services.strategy_package.runtime_variant import canonical_json_sha
 from backend.services.trading_core.errors import InvalidStateTransitionError
 
 
+RETRYABLE_MODEL_OBSERVATION_REASON_CODES = frozenset(
+    {
+        "ADVISORY_MODEL_FEATURE_REQUIRED_VALUE_MISSING",
+        "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+    }
+)
+
+
+def is_retryable_model_observation(observation: Mapping[str, Any]) -> bool:
+    status = str(observation.get("status") or "")
+    if status == "FAILED":
+        return True
+    return status == "UNAVAILABLE" and str(observation.get("reason_code") or "") in (
+        RETRYABLE_MODEL_OBSERVATION_REASON_CODES
+    )
+
+
 class AdvisoryForwardPGRepository:
     def __init__(self, *, conn_factory: Any | None = None) -> None:
         self._conn_factory = conn_factory or get_conn
@@ -289,9 +306,9 @@ class AdvisoryForwardPGRepository:
                     if existing["payload_sha256"] == payload_hash:
                         _clear_observation_failure(cur, observation.forward_run_id)
                         return dict(existing)
-                    if existing["status"] != "FAILED":
+                    if not is_retryable_model_observation(existing):
                         raise InvalidStateTransitionError(
-                            "successful forward model observation payload cannot change",
+                            "terminal forward model observation payload cannot change",
                             context={"forward_run_id": observation.forward_run_id},
                         )
                     if existing["model_descriptor_sha256"] != observation.model_descriptor_sha256:

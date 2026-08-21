@@ -72,13 +72,22 @@ def _episode() -> AdvisoryEpisode:
 
 
 class _RecoveryRepository:
-    def __init__(self, persisted: dict[str, object]) -> None:
+    def __init__(
+        self,
+        persisted: dict[str, object],
+        *,
+        model_observation: dict[str, object] | None = None,
+    ) -> None:
         self.persisted = persisted
+        self.model_observation = model_observation
         self.saved_observation = None
         self.settlement_kwargs = None
 
     def get(self, _forward_run_id: str):
-        return {"forward_run": self.persisted, "model_observation": None}
+        return {
+            "forward_run": self.persisted,
+            "model_observation": self.model_observation,
+        }
 
     def save_observation(self, observation):
         self.saved_observation = observation
@@ -174,6 +183,89 @@ def test_published_run_recovers_missing_model_observation_without_republishing()
     assert result["model_status"] == "UNAVAILABLE"
     assert repository.saved_observation is not None
     assert repository.saved_observation.observation_id.startswith("advobs_")
+
+
+def test_published_run_recovers_legacy_transient_unavailable_observation() -> None:
+    program = _program()
+    descriptor_sha256 = "c" * 64
+    bundle_id = "d" * 64
+    persisted = {
+        **_persisted(program),
+        "model_resolution_json": {
+            "status": "CONFIGURED",
+            "descriptor_sha256": descriptor_sha256,
+            "bundle_id": bundle_id,
+            "package_id": "pkg_test",
+        },
+    }
+    repository = _RecoveryRepository(
+        persisted,
+        model_observation={
+            "status": "UNAVAILABLE",
+            "reason_code": "ADVISORY_MODEL_FEATURE_REQUIRED_VALUE_MISSING",
+        },
+    )
+    model_service = SimpleNamespace(
+        model_shadow_for_forward=lambda **_kwargs: {
+            "status": "EXPERIMENTAL_SHADOW",
+            "model_descriptor_sha256": descriptor_sha256,
+            "bundle_id": bundle_id,
+            "candidate_count": 20,
+            "shortlist_count": 5,
+        }
+    )
+    service = AdvisoryForwardService(
+        repository=repository,
+        program_service=_RecoveryPrograms(program, _episode()),
+        model_service=model_service,
+        calendar=SimpleNamespace(),
+    )
+
+    result = service._resume_published_observation(persisted)
+
+    assert result["status"] == "IDEMPOTENT_REPLAY"
+    assert result["model_status"] == "EXPERIMENTAL_SHADOW"
+    assert repository.saved_observation.status == "EXPERIMENTAL_SHADOW"
+    assert repository.saved_observation.model_descriptor_sha256 == descriptor_sha256
+
+
+def test_transient_realtime_gap_is_persisted_as_retryable_failure() -> None:
+    program = _program()
+    descriptor_sha256 = "c" * 64
+    bundle_id = "d" * 64
+    service = AdvisoryForwardService(
+        repository=SimpleNamespace(),
+        program_service=_RecoveryPrograms(program, _episode()),
+        model_service=SimpleNamespace(
+            model_shadow_for_forward=lambda **_kwargs: {
+                "status": "UNAVAILABLE",
+                "reason_code": "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+                "message": "realtime market breadth query returned no rows",
+                "model_descriptor_sha256": descriptor_sha256,
+                "bundle_id": bundle_id,
+            }
+        ),
+        calendar=SimpleNamespace(),
+    )
+
+    observation = service._model_observation(
+        forward_run_id="advfwd-test",
+        program=program,
+        binding_version_id="advb-test",
+        decision_date=date(2026, 8, 14),
+        target_date=date(2026, 8, 17),
+        frozen_resolution={
+            "status": "CONFIGURED",
+            "descriptor_sha256": descriptor_sha256,
+            "bundle_id": bundle_id,
+        },
+        selection_run_id="sel-test",
+        review_run_id="review-test",
+        list_version_id="list-test",
+    )
+
+    assert observation.status == "FAILED"
+    assert observation.reason_code == "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE"
 
 
 def test_settlement_reloads_legal_active_state_change_and_protects_commit_with_current_hash() -> None:
