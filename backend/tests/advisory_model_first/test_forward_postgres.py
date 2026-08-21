@@ -139,6 +139,8 @@ class _ObservationCursor(_Cursor):
             self.one = self.existing
         elif "INSERT INTO app.advisory_forward_model_observation" in normalized:
             self.one = {"forward_run_id": "advfwd-test", "status": "UNAVAILABLE"}
+        elif "SET updated_at=NOW()" in normalized:
+            self.one = dict(self.existing or {})
         elif "UPDATE app.advisory_forward_model_observation" in normalized:
             self.one = {"forward_run_id": "advfwd-test", "status": params[0]}
 
@@ -146,6 +148,29 @@ class _ObservationCursor(_Cursor):
 class _ObservationConnection(_Connection):
     def __init__(self, *, existing: dict | None = None) -> None:
         self.cursor_instance = _ObservationCursor(existing=existing)
+        self.rolled_back = False
+        self.committed = False
+
+
+class _RetryableObservationCursor(_Cursor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.params = None
+
+    def execute(self, sql, params=()):
+        assert str(sql).count("%s") == len(params), str(sql)
+        normalized = " ".join(str(sql).split())
+        assert "JOIN app.advisory_forward_model_observation" in normalized
+        assert "model_descriptor_sha256 IS NOT NULL" in normalized
+        assert "INTERVAL '5 minutes'" in normalized
+        assert "ORDER BY observation.updated_at ASC" in normalized
+        self.params = params
+        self.rows = [{"forward_run_id": "advfwd-retry", "publication_status": "PUBLISHED"}]
+
+
+class _RetryableObservationConnection(_Connection):
+    def __init__(self) -> None:
+        self.cursor_instance = _RetryableObservationCursor()
         self.rolled_back = False
         self.committed = False
 
@@ -520,3 +545,50 @@ def test_permanent_unavailable_model_observation_remains_immutable() -> None:
         "UPDATE app.advisory_forward_model_observation" in sql
         for sql in conn.cursor_instance.sql
     )
+
+
+def test_same_retryable_payload_refreshes_attempt_time_for_fair_bounded_retry() -> None:
+    observation = AdvisoryForwardModelObservationV1(
+        observation_id="advobs-test",
+        forward_run_id="advfwd-test",
+        program_id="advp-test",
+        binding_version_id="advb-test",
+        decision_as_of_trade_date=date(2026, 8, 14),
+        target_trade_date=date(2026, 8, 17),
+        status="FAILED",
+        reason_code="ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+        model_descriptor_sha256="b" * 64,
+    )
+    existing = {
+        "forward_run_id": "advfwd-test",
+        "status": "FAILED",
+        "reason_code": observation.reason_code,
+        "payload_sha256": observation.payload_sha256(),
+        "model_descriptor_sha256": "b" * 64,
+    }
+    conn = _ObservationConnection(existing=existing)
+    repository = AdvisoryForwardPGRepository(conn_factory=lambda: conn)
+
+    saved = repository.save_observation(observation)
+
+    assert saved["status"] == "FAILED"
+    assert any("SET updated_at=NOW()" in sql for sql in conn.cursor_instance.sql)
+
+
+def test_retryable_model_observation_query_is_bounded_and_includes_legacy_reasons() -> None:
+    conn = _RetryableObservationConnection()
+    repository = AdvisoryForwardPGRepository(conn_factory=lambda: conn)
+
+    rows = repository.retryable_model_observations(limit=1)
+
+    assert rows == [{"forward_run_id": "advfwd-retry", "publication_status": "PUBLISHED"}]
+    assert conn.cursor_instance.params == (
+        [
+            "ADVISORY_MODEL_FEATURE_REQUIRED_VALUE_MISSING",
+            "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+        ],
+        1,
+    )
+
+    with pytest.raises(ValueError, match="limit must be positive"):
+        repository.retryable_model_observations(limit=0)

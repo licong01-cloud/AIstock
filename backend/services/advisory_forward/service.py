@@ -116,6 +116,7 @@ class AdvisoryForwardService:
                 results.append(self._visible_failure(pending, stage="TARGET_OPEN_SETTLE", exc=exc))
                 blocked_program_ids.add(pending_program_id)
         if not self._publication_due(now):
+            self._retry_one_model_observation(results)
             return {
                 "schema_version": "advisory_forward_run_once_v1",
                 "decision_as_of_trade_date": None,
@@ -148,6 +149,7 @@ class AdvisoryForwardService:
                     "target_trade_date": target_date,
                 }
                 results.append(self._visible_failure(placeholder, stage="AFTER_CLOSE_PUBLISH", exc=exc))
+        self._retry_one_model_observation(results)
         return {
             "schema_version": "advisory_forward_run_once_v1",
             "decision_as_of_trade_date": decision_date.isoformat(),
@@ -167,6 +169,31 @@ class AdvisoryForwardService:
             now.hour,
             now.minute,
         ) >= (self.after_close_hour, self.after_close_minute)
+
+    def _retry_one_model_observation(self, results: list[dict[str, Any]]) -> None:
+        for persisted in self.repository.retryable_model_observations(limit=1):
+            try:
+                retry_result = self._resume_published_observation(persisted)
+            except Exception as exc:
+                LOGGER.exception(
+                    "advisory forward bounded model observation retry failed forward_run_id=%s",
+                    persisted.get("forward_run_id"),
+                )
+                results.append(
+                    {
+                        "program_id": persisted.get("program_id"),
+                        "forward_run_id": persisted.get("forward_run_id"),
+                        "status": "FAILED",
+                        "stage": "MODEL_OBSERVATION_RETRY",
+                        "reason_code": str(
+                            getattr(exc, "reason_code", None)
+                            or getattr(exc, "error_code", None)
+                            or "ADVISORY_FORWARD_MODEL_OBSERVATION_RETRY_FAILED"
+                        ),
+                    }
+                )
+                continue
+            results.append({**retry_result, "stage": "MODEL_OBSERVATION_RETRY"})
 
     def _publish(self, program_id: str, *, decision_date: date, target_date: date) -> dict[str, Any]:
         initial_program = self.program_service.get_program(program_id)

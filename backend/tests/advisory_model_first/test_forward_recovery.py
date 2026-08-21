@@ -77,11 +77,20 @@ class _RecoveryRepository:
         persisted: dict[str, object],
         *,
         model_observation: dict[str, object] | None = None,
+        retryable_observations: list[dict[str, object]] | None = None,
     ) -> None:
         self.persisted = persisted
         self.model_observation = model_observation
+        self.retryable_observations = retryable_observations or []
         self.saved_observation = None
         self.settlement_kwargs = None
+
+    def pending_settlements(self, **_kwargs):
+        return []
+
+    def retryable_model_observations(self, *, limit: int):
+        assert limit == 1
+        return self.retryable_observations[:limit]
 
     def get(self, _forward_run_id: str):
         return {
@@ -266,6 +275,60 @@ def test_transient_realtime_gap_is_persisted_as_retryable_failure() -> None:
 
     assert observation.status == "FAILED"
     assert observation.reason_code == "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE"
+
+
+def test_run_once_recovers_transient_observation_after_publication_date_has_advanced() -> None:
+    program = _program()
+    descriptor_sha256 = "c" * 64
+    bundle_id = "d" * 64
+    persisted = {
+        **_persisted(program),
+        "model_resolution_json": {
+            "status": "CONFIGURED",
+            "descriptor_sha256": descriptor_sha256,
+            "bundle_id": bundle_id,
+            "package_id": "pkg_test",
+        },
+    }
+    repository = _RecoveryRepository(
+        persisted,
+        model_observation={
+            "status": "UNAVAILABLE",
+            "reason_code": "ADVISORY_MODEL_FEATURE_REQUIRED_VALUE_MISSING",
+        },
+        retryable_observations=[persisted],
+    )
+    service = AdvisoryForwardService(
+        repository=repository,
+        program_service=_RecoveryPrograms(program, _episode()),
+        model_service=SimpleNamespace(
+            model_shadow_for_forward=lambda **_kwargs: {
+                "status": "EXPERIMENTAL_SHADOW",
+                "model_descriptor_sha256": descriptor_sha256,
+                "bundle_id": bundle_id,
+                "candidate_count": 20,
+                "shortlist_count": 5,
+            }
+        ),
+        calendar=SimpleNamespace(is_trading_day=lambda _value: True),
+        now_provider=lambda: datetime(2026, 8, 21, 2, 30, tzinfo=UTC),
+    )
+
+    result = service.run_once()
+
+    assert result["publication_due"] is False
+    assert result["results"] == [
+        {
+            "program_id": program.program_id,
+            "forward_run_id": "advfwd-test",
+            "status": "IDEMPOTENT_REPLAY",
+            "target_trade_date": "2026-08-17",
+            "model_status": "EXPERIMENTAL_SHADOW",
+            "model_reason_code": None,
+            "stage": "MODEL_OBSERVATION_RETRY",
+        }
+    ]
+    assert repository.saved_observation.status == "EXPERIMENTAL_SHADOW"
 
 
 def test_settlement_reloads_legal_active_state_change_and_protects_commit_with_current_hash() -> None:

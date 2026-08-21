@@ -499,7 +499,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 | F-408 | descriptor驱动runtime常量和candidate projection |
 | F-409 | 当前两腿角色从descriptor读取并与bundle/Selection交叉校验；目标多Alpha模型字节不变 |
 | F-410 | 单Alpha与原生多Alpha共用resolver；无真实兼容bundle时typed unavailable且baseline继续 |
-| F-411 | scheduler仅处理Advisory自然当前日和pending settlement，默认关闭时不解析可选interval且无历史扫描 |
+| F-411 | scheduler先处理Advisory自然当前日和pending settlement，再按observation更新时间有界重试一条已等待至少5分钟的暂态模型观察；不回补历史publication，默认关闭时不解析可选interval |
 | F-412 | API/UI分开展示publication、settlement、challenger、maturity和错误 |
 | F-413 | API/UI显示真实当日状态且无交易入口 |
 | F-414 | 无简化版、静默错误、业务语义漂移、角色审批、二次准入或未经确认门禁 |
@@ -528,7 +528,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 | F-408 | `backend/services/advisory_model_first/model_binding_resolution.py`, `backend/services/advisory_model_first/model_inference.py` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`, `backend/tests/advisory_model_first/test_model_inference.py` | pass | none |
 | F-409 | `backend/services/advisory_model_first/shared_feature_builder.py`, `backend/services/advisory_model_first/model_inference.py` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`, `backend/tests/advisory_model_first/test_model_inference.py` | pass | none |
 | F-410 | `backend/services/advisory_model_first/model_binding_resolution.py`, `backend/services/advisory_forward/service.py` | `backend/tests/advisory_model_first/test_forward_boundaries.py`, `backend/tests/advisory_model_first/test_dynamic_model_binding.py` | pass | none |
-| F-411 | `backend/services/advisory_forward/scheduler.py`, `backend/main.py` | `backend/tests/advisory_model_first/test_forward_scheduler.py`, `backend/tests/advisory_model_first/test_forward_date_clock.py` | pass | none |
+| F-411 | `backend/services/advisory_forward/service.py`, `backend/services/advisory_forward/repository.py`, `backend/services/advisory_forward/scheduler.py`, `backend/main.py` | `backend/tests/advisory_model_first/test_forward_scheduler.py`, `backend/tests/advisory_model_first/test_forward_date_clock.py`, `backend/tests/advisory_model_first/test_forward_recovery.py` | pass | none |
 | F-412 | `backend/routers/advisory.py`, `frontend/src/app/paper-v2/advisory/page.tsx` | `backend/tests/advisory_model_first/test_forward_api.py`, `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | pass | none |
 | F-413 | `frontend/src/app/paper-v2/advisory/page.tsx` | `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | pass | none |
 | F-414 | §19 repeated source review and changed scope | `python -m nox -s advisory_modeling_backend` | pass | none |
@@ -561,7 +561,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 - Source Round 12：修复 BUG-1067 跨进程 stale pending 在另一进程已完成结算后，使用结算后episode重算同一target并产生假冲突的问题；service在计算前后读回权威终态，已闭合事实直接幂等返回。
 - Source Round 13：修复 BUG-1069 同冻结descriptor下不同payload可覆盖既有成功observation、静默改写前向模型事实的问题；仅 `FAILED` 可显式恢复，成功/typed-unavailable事实保持不可变。
 - Source Round 14：修复API章节声称Program summary增加8个未实现重复字段的问题；文档改为与现有forward history/detail API及真实run-once状态完全一致，不以文档冒充不存在的实现。
-- Source Round 15：修复 BUG-1138 将暂态行情/PIT 数据未就绪误固化为永久 `UNAVAILABLE` 的问题；两个明确数据就绪原因码可在同一冻结 descriptor 下恢复，永久 `UNAVAILABLE` 与成功 observation 仍保持不可变。
+- Source Round 15：修复 BUG-1138 将暂态行情/PIT 数据未就绪误固化为永久 `UNAVAILABLE`、且跨日期后普通 `run-once` 不再访问旧 observation 的问题；两个明确数据就绪原因码可在同一冻结 descriptor 下恢复，核心 settlement/publication 后每个 tick 最多按更新时间公平重试一条已等待至少5分钟的记录，永久 `UNAVAILABLE` 与成功 observation 仍保持不可变。
 
 ## 20. Implementation Plan / 本阶段唯一实施顺序
 
