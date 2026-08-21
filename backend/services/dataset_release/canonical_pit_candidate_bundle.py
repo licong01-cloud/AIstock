@@ -1,8 +1,8 @@
 """Immutable W6 validation bundle for a future canonical PIT v2 candidate.
 
-The W6 builder is intentionally fixture-only.  W7 supplies the first real
-candidate and may use the same validator, but W6 cannot manufacture real-data
-evidence or a production/training-eligible receipt.
+The W6 builder is intentionally fixture-only.  W7 publishes its real release
+through the durable control catalog and terminal receipt; this module cannot
+manufacture real-data evidence or a production/training-eligible receipt.
 """
 
 from __future__ import annotations

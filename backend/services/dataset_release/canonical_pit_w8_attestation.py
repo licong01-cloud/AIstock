@@ -74,6 +74,7 @@ def validate_w8_attestation(
     *,
     expected_candidate_bundle_digest: str | None = None,
     require_real_pass: bool = False,
+    allow_real_pass: bool = False,
 ) -> CanonicalPitW8Attestation:
     if not isinstance(value, Mapping):
         raise CanonicalPitW8AttestationError("W8 receipt must be an object")
@@ -113,15 +114,27 @@ def validate_w8_attestation(
         raise CanonicalPitW8AttestationError("W8 independently_attested must be boolean")
     if payload["runtime_real_data_evidence"] not in {"not_run_not_authorized", "real_candidate_evidence"}:
         raise CanonicalPitW8AttestationError("W8 real-data evidence status is invalid")
+    _identifier(payload["validator_identity"])
+    real_pass = (
+        payload["attestation_scope"] == "real_candidate"
+        and payload["independently_attested"] is True
+        and payload["outcome"] == "pass"
+        and payload["runtime_real_data_evidence"] == "real_candidate_evidence"
+    )
     if require_real_pass:
-        if payload["attestation_scope"] != "real_candidate":
-            raise CanonicalPitW8AttestationError("real W8 validation requires a real candidate scope")
-        if payload["independently_attested"] is not True or payload["outcome"] != "pass":
+        if not real_pass:
             raise CanonicalPitW8AttestationError("real W8 PASS is not present")
-        if payload["runtime_real_data_evidence"] != "real_candidate_evidence":
-            raise CanonicalPitW8AttestationError("real W8 PASS lacks real-data evidence")
-    elif payload["independently_attested"] or payload["outcome"] == "pass":
-        raise CanonicalPitW8AttestationError("W6 cannot claim independently_attested or PASS")
+    elif real_pass:
+        if not allow_real_pass:
+            raise CanonicalPitW8AttestationError("W6 cannot claim independently_attested or PASS")
+    elif (
+        payload["independently_attested"]
+        or payload["outcome"] == "pass"
+        or payload["runtime_real_data_evidence"] == "real_candidate_evidence"
+    ):
+        raise CanonicalPitW8AttestationError("partial or inconsistent real W8 evidence is forbidden")
+    elif payload["outcome"] != "not_run_not_authorized":
+        raise CanonicalPitW8AttestationError("fixture W8 outcome is invalid")
     digest = hashlib.sha256(encoded).hexdigest()
     return CanonicalPitW8Attestation(payload=payload, digest=digest)
 

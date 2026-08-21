@@ -35,10 +35,12 @@ from .data_service.preprocessor import (
 )
 from .data_service.moneyflow_contract import MONEYFLOW_FIELD_MAP
 from .services.factor_validator import FactorValidator
+from .services.canonical_equity_pit import CanonicalPitAuthorityResolver, PitAuthorityStatus
 from .services.canonical_pit_inference_boundary import (
     CanonicalPitInferenceBoundaryError,
     InferencePitIdentity,
     InferencePitMode,
+    manifest_inference_pit_identity,
     resolve_inference_pit_identity,
 )
 from .services.strategy_package.workspace_policy import (
@@ -48,6 +50,27 @@ from .services.strategy_package.workspace_policy import (
 
 logger = logging.getLogger("aistock.inference")
 LAST_STRICT_FEATURE_FILTER: dict[str, Any] | None = None
+
+
+def _resolve_inference_pit_identity_for_run(
+    *,
+    manifest: Dict[str, Any],
+    pit_identity: Optional[Dict[str, Any]],
+    version_tag: str,
+    receipt_admissibility: str,
+    authority_resolver: CanonicalPitAuthorityResolver | None = None,
+) -> InferencePitIdentity:
+    declared = pit_identity is not None or manifest_inference_pit_identity(manifest) is not None
+    live_binding = None
+    if not declared:
+        live_binding = (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding()
+    return resolve_inference_pit_identity(
+        pit_identity,
+        manifest=manifest,
+        version_tag=version_tag,
+        live_binding=live_binding,
+        allow_active_canonical_pointer=(receipt_admissibility == "PROSPECTIVE_FIRST_OBSERVED"),
+    )
 
 def _strict_inference_enabled() -> bool:
     return str(os.environ.get("AISTOCK_STRICT_INFERENCE", "")).strip().lower() in {"1", "true", "yes", "on"}
@@ -740,7 +763,10 @@ class InferenceEngine:
     ) -> list[str]:
         """Resolve a detached frozen pool or an explicit rolling PIT lease."""
         effective_date = (trade_date or datetime.now()).date()
-        if pit_identity.mode is InferencePitMode.FROZEN_CANDIDATE:
+        if pit_identity.mode in {
+            InferencePitMode.FROZEN_CANDIDATE,
+            InferencePitMode.LEGACY_REPRODUCTION,
+        }:
             if not pit_identity.universe_codes:
                 raise CanonicalPitInferenceBoundaryError(
                     "frozen inference has no detached universe; online PIT completion is forbidden"
@@ -749,7 +775,7 @@ class InferenceEngine:
         from .services.stock_universe_pit_service import StockUniversePitService
 
         service = StockUniversePitService()
-        if pit_identity.mode is InferencePitMode.ROLLING_RUNTIME:
+        if pit_identity.binding.authority_status is PitAuthorityStatus.ACTIVE_CANONICAL:
             universe = service.get_eligible_codes(
                 trade_date=effective_date,
                 universe_key=pit_identity.binding.universe_key,
@@ -1402,14 +1428,12 @@ class InferenceEngine:
                 raise ValueError(f"未找到本地任务资产 manifest: {task_id}")
             task_dir = self.assets_root / task_id
 
-        try:
-            resolved_pit_identity = resolve_inference_pit_identity(
-                pit_identity,
-                manifest=manifest,
-                version_tag=version_tag,
-            )
-        except CanonicalPitInferenceBoundaryError:
-            raise
+        resolved_pit_identity = _resolve_inference_pit_identity_for_run(
+            manifest=manifest,
+            pit_identity=pit_identity,
+            version_tag=version_tag,
+            receipt_admissibility=receipt_admissibility,
+        )
 
         primary = manifest.get("primary_assets", {})
         

@@ -54,6 +54,7 @@ def build_activation_envelope(
             w8_receipt,
             expected_candidate_bundle_digest=candidate_digest,
             require_real_pass=False,
+            allow_real_pass=True,
         )
     except CanonicalPitW8AttestationError as exc:
         raise CanonicalPitActivationEnvelopeError(str(exc)) from exc
@@ -72,7 +73,7 @@ def build_activation_envelope(
         "node_readback": _readback(node_readback),
         "session_drain_readiness": _readback(session_drain_readiness),
         "rollback_target": _readback(rollback_target),
-        "status": "sealed_ready" if ready and _all_readbacks_ready(
+        "status": "w9_seal_required" if ready and _all_readbacks_ready(
             inactive_distribution_readback, node_readback, session_drain_readiness, rollback_target
         ) else "blocked_w8_attestation",
         "activation_performed": False,
@@ -121,9 +122,7 @@ def validate_activation_envelope(value: Mapping[str, Any]) -> CanonicalPitActiva
         _readback(payload[field])
     if payload["pointer_cas_owner"] != "W9" or payload["activation_performed"] is not False:
         raise CanonicalPitActivationEnvelopeError("W6 cannot perform pointer activation")
-    if payload["status"] == "sealed_ready":
-        raise CanonicalPitActivationEnvelopeError("W6 cannot seal an activation envelope")
-    if payload["status"] != "blocked_w8_attestation":
+    if payload["status"] not in {"blocked_w8_attestation", "w9_seal_required"}:
         raise CanonicalPitActivationEnvelopeError("activation envelope status is invalid")
     digest = hashlib.sha256(encoded).hexdigest()
     return CanonicalPitActivationEnvelope(payload=payload, digest=digest)
