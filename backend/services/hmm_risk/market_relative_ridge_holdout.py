@@ -697,15 +697,17 @@ def _panel_returns(panel: pd.DataFrame) -> dict[tuple[str, date], float]:
 
 def _benchmark_returns(dataset_manifest: Mapping[str, Any]) -> dict[date, float]:
     manifest = dataset_manifest.get("calendar_benchmark")
-    rows = manifest.get("benchmark_returns") if isinstance(manifest, dict) else None
+    rows = manifest.get("rows") if isinstance(manifest, Mapping) else None
     if not isinstance(rows, list):
         raise _fail(REASON_METRIC, "holdout benchmark returns are missing", stage="metric")
     output: dict[date, float] = {}
     for row in rows:
+        if not isinstance(row, list) or len(row) != 2:
+            raise _fail(REASON_METRIC, "holdout benchmark row is invalid", stage="metric")
         try:
             day = date.fromisoformat(str(row[0]))
             value = float(row[1])
-        except (IndexError, TypeError, ValueError) as exc:
+        except (TypeError, ValueError) as exc:
             raise _fail(REASON_METRIC, "holdout benchmark row is invalid", stage="metric") from exc
         if day in output or not math.isfinite(value):
             raise _fail(REASON_METRIC, "holdout benchmark identity is invalid", stage="metric")
@@ -1771,7 +1773,9 @@ def failure_receipt(
     if isinstance(error, HoldoutAcceptanceError):
         reason = error.reason_code
         stage = error.stage
-        evidence = error.evidence
+        evidence = dict(error.evidence)
+        evidence.setdefault("exception_type", type(error).__name__)
+        evidence.setdefault("error_message", str(error))
     else:
         reason = REASON_UNEXPECTED
         stage = "unknown"
