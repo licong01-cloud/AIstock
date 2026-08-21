@@ -78,7 +78,7 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh pytest process loaded the tracked K6-D ExecutionPlan authority fix and passed 65 product runtime integration tests without broker, scheduler, or database side effects.",
-      "Fresh nox process loaded the tracked MiniQMT runtime sources and passed miniqmt_execution_runtime_l2: 1505 passed, 82 skipped; no production process control.",
+      "Fresh nox process loaded the tracked MiniQMT runtime sources and passed miniqmt_execution_runtime_l2: 1506 passed, 82 skipped; no production process control.",
       "Fresh nox MiniQMT simulation stub process passed 359 scheduler and ledger tests with 2 skipped; fake-QMT only and no production broker or scheduler side effects."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
