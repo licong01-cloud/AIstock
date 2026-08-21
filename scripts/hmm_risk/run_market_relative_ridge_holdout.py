@@ -8,16 +8,20 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.services.hmm_risk.market_relative_ridge_holdout import (  # noqa: E402
+    ACCEPTANCE_SCHEMA_VERSION,
+    ALGORITHM_VERSION,
+    CONTRACT_VERSION,
     HoldoutAcceptanceError,
     HOLDOUT_END,
     OUTCOME_TAIL_TRADING_DAYS,
+    REASON_REPRODUCIBILITY,
     REASON_SOURCE,
     build_holdout_request,
     close_children,
@@ -234,6 +238,72 @@ def _read_child_failure(path: Path) -> dict[str, Any]:
     return value
 
 
+def _child_failure_error(
+    child_failure: Mapping[str, Any],
+    *,
+    request: Mapping[str, Any],
+    process_index: int,
+    returncode: int,
+    failure_path: Path,
+) -> HoldoutAcceptanceError:
+    reason = child_failure.get("failure_reason_code")
+    stage = child_failure.get("failure_stage")
+    failure_evidence = child_failure.get("failure_evidence")
+    expected_identity = {
+        "schema_version": ACCEPTANCE_SCHEMA_VERSION,
+        "contract_version": CONTRACT_VERSION,
+        "algorithm_version": ALGORITHM_VERSION,
+        "status": "NOT_AVAILABLE",
+        "holdout_evaluation_id": request.get("holdout_evaluation_id"),
+        "fit_count": 0,
+        "selection_performed": False,
+        "model_write": False,
+        "ready_write": False,
+        "database_write": False,
+        "runtime_action": False,
+    }
+    invalid_fields = sorted(
+        field for field, expected in expected_identity.items() if child_failure.get(field) != expected
+    )
+    if not isinstance(reason, str) or not reason.startswith("hmm_risk_p2_4_"):
+        invalid_fields.append("failure_reason_code")
+    if not isinstance(stage, str) or not stage:
+        invalid_fields.append("failure_stage")
+    if not isinstance(failure_evidence, Mapping):
+        invalid_fields.append("failure_evidence")
+    for field in ("holdout_accessed", "product_acceptance_performed"):
+        observed = child_failure.get(field)
+        if observed is not None and not isinstance(observed, bool):
+            invalid_fields.append(field)
+    if invalid_fields:
+        raise HoldoutAcceptanceError(
+            REASON_REPRODUCIBILITY,
+            "child failure receipt identity is invalid",
+            stage="fresh_process",
+            evidence={
+                "process_index": process_index,
+                "returncode": returncode,
+                "failure_receipt": str(failure_path),
+                "invalid_fields": sorted(set(invalid_fields)),
+            },
+        )
+
+    child_message = str(failure_evidence.get("error_message") or "P2-4 child process failed")
+    return HoldoutAcceptanceError(
+        reason,
+        f"P2-4 child process failed: {child_message}",
+        stage=stage,
+        evidence={
+            "process_index": process_index,
+            "returncode": returncode,
+            "failure_receipt": str(failure_path),
+            "child_failure_reason_code": reason,
+            "child_failure_stage": stage,
+            "child_failure_evidence": dict(failure_evidence),
+        },
+    )
+
+
 def _validate_cli_outputs(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, str]:
     return validate_output_identity(
         request,
@@ -353,21 +423,23 @@ def _parent(args: argparse.Namespace) -> int:
             if completed.returncode != 0:
                 child_failure_path = _failure_path(_child_path(args.child_dir, index))
                 child_failure = _read_child_failure(child_failure_path)
+                try:
+                    child_error = _child_failure_error(
+                        child_failure,
+                        request=request,
+                        process_index=index,
+                        returncode=completed.returncode,
+                        failure_path=child_failure_path,
+                    )
+                except HoldoutAcceptanceError:
+                    holdout_accessed = None
+                    product_acceptance_performed = None
+                    raise
                 holdout_accessed = _merge_observed_flag(holdout_accessed, child_failure.get("holdout_accessed"))
                 product_acceptance_performed = _merge_observed_flag(
                     product_acceptance_performed, child_failure.get("product_acceptance_performed")
                 )
-                raise HoldoutAcceptanceError(
-                    "hmm_risk_p2_4_fresh_process_reproducibility_failed",
-                    "P2-4 child process failed",
-                    stage="fresh_process",
-                    evidence={
-                        "process_index": index,
-                        "returncode": completed.returncode,
-                        "failure_receipt": str(child_failure_path),
-                        "child_failure_reason_code": child_failure.get("failure_reason_code"),
-                    },
-                )
+                raise child_error
             holdout_accessed = True
             product_acceptance_performed = True
         holdout_accessed = True
