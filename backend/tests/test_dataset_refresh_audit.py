@@ -1,10 +1,13 @@
 import datetime as dt
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.trading_core.errors import DataUnavailableError
+from scripts import seed_dataset_refresh_audit as audit_seed
 
 
 class _FakeCursor:
@@ -23,11 +26,15 @@ class _FakeCursor:
     def fetchone(self):
         return self._conn.fetchone_result
 
+    def fetchall(self):
+        return self._conn.fetchall_result
+
 
 class _FakeConn:
-    def __init__(self, fetchone_result=None):
+    def __init__(self, fetchone_result=None, fetchall_result=None):
         self.executed = []
         self.fetchone_result = fetchone_result
+        self.fetchall_result = list(fetchall_result or [])
 
     def __enter__(self):
         return self
@@ -156,3 +163,236 @@ def test_dataset_refresh_audit_schema_comments_are_declared_in_migrations():
         needle = f"COMMENT ON COLUMN market.dataset_date_refresh_audit.{column}"
         assert needle in migration
         assert needle in init_schema
+
+
+def test_dataset_release_audit_seed_specs_match_registered_source_authority():
+    dated = {
+        spec.audit_dataset
+        for spec in audit_seed.PRODUCTION_QUERY_SPECS.values()
+        if spec.audit_dataset is not None
+    }
+
+    assert set(audit_seed.SPECS) == dated
+    assert all(audit_seed.AUTHORITY in spec.eligible_sources for spec in audit_seed.SPECS.values())
+    assert audit_seed.SPECS["kline_minute_raw"].start_policy == "minute"
+    assert audit_seed.SPECS["suspend_d"].sparse_ok is True
+    assert audit_seed.SPECS["trading_calendar"].table_identity == "market.trading_calendar"
+
+
+def test_dense_physical_gap_blocks_but_registered_sparse_gap_is_empty_valid():
+    day1 = dt.date(2026, 7, 30)
+    day2 = dt.date(2026, 7, 31)
+    dense = audit_seed._build_dataset_plan(
+        audit_seed.SPECS["adj_factor"],
+        start=day1,
+        end=day2,
+        expected_dates=(day1, day2),
+        physical_counts={day1: 5},
+        existing_ready_dates=(),
+    )
+    sparse = audit_seed._build_dataset_plan(
+        audit_seed.SPECS["suspend_d"],
+        start=day1,
+        end=day2,
+        expected_dates=(day1, day2),
+        physical_counts={day1: 1},
+        existing_ready_dates=(),
+    )
+
+    assert dense.blocked_dates == (day2,)
+    assert [row.quality_status for row in dense.planned_rows] == ["ok"]
+    assert sparse.blocked_dates == ()
+    assert [(row.row_count, row.quality_status) for row in sparse.planned_rows] == [
+        (1, "ok"),
+        (0, "empty_valid"),
+    ]
+
+
+def test_existing_registered_authority_is_reused_without_seed_rewrite():
+    day = dt.date(2026, 7, 31)
+    plan = audit_seed._build_dataset_plan(
+        audit_seed.SPECS["index_daily"],
+        start=day,
+        end=day,
+        expected_dates=(day,),
+        physical_counts={day: 12},
+        existing_ready_dates=(day,),
+    )
+
+    assert plan.existing_ready_dates == 1
+    assert plan.planned_rows == ()
+    assert plan.blocked_dates == ()
+
+
+def test_index_physical_seed_requires_every_profile_index_for_the_day():
+    day = dt.date(2026, 7, 31)
+    indices = tuple(
+        SimpleNamespace(daily_code=code, required_from=dt.date(2018, 8, 1))
+        for code in ("000001.SH", "000300.SH", "399006.SZ")
+    )
+    profile = SimpleNamespace(indices=indices, source_date_chunk_months=3)
+    incomplete = _FakeConn(fetchall_result=[(day, 20, ["000001.SH", "000300.SH"], 0)])
+    complete = _FakeConn(fetchall_result=[(day, 30, [value.daily_code for value in indices], 0)])
+
+    incomplete_counts = audit_seed._physical_counts(
+        incomplete,
+        audit_seed.SPECS["index_daily"],
+        day,
+        day,
+        profile=profile,
+    )
+    complete_counts = audit_seed._physical_counts(
+        complete,
+        audit_seed.SPECS["index_daily"],
+        day,
+        day,
+        profile=profile,
+    )
+
+    assert incomplete_counts[day] == 0
+    assert complete_counts[day] == 30
+
+
+def test_physical_count_chunks_never_exceed_profile_three_month_boundary():
+    chunks = audit_seed._date_chunks(
+        dt.date(2024, 1, 2),
+        dt.date(2024, 7, 31),
+        months=3,
+    )
+
+    assert chunks == (
+        (dt.date(2024, 1, 2), dt.date(2024, 3, 31)),
+        (dt.date(2024, 4, 1), dt.date(2024, 6, 30)),
+        (dt.date(2024, 7, 1), dt.date(2024, 7, 31)),
+    )
+
+
+def test_required_non_null_violation_blocks_physical_seed_date():
+    day = dt.date(2026, 7, 31)
+    conn = _FakeConn(fetchall_result=[(day, 5000, None, 1)])
+    profile = SimpleNamespace(indices=(), source_date_chunk_months=3)
+
+    counts = audit_seed._physical_counts(
+        conn,
+        audit_seed.SPECS["kline_daily_raw"],
+        day,
+        day,
+        profile=profile,
+    )
+
+    assert counts[day] == 0
+
+
+def test_apply_requires_authorization_and_production_requires_matching_dev_receipt(tmp_path):
+    profile = SimpleNamespace(
+        profile="qe_hmm_full_v2",
+        config_digest="a" * 64,
+        semantic_profile_digest="b" * 64,
+    )
+    with pytest.raises(audit_seed.AuditSeedError, match="authorization-ref"):
+        audit_seed._require_apply_authorization(
+            target="dev",
+            authorization_ref=None,
+            dev_receipt=None,
+            profile=profile,
+            end_date=dt.date(2026, 7, 31),
+            datasets=("adj_factor",),
+        )
+    with pytest.raises(audit_seed.AuditSeedError, match="dev-receipt"):
+        audit_seed._require_apply_authorization(
+            target="production",
+            authorization_ref="ISSUE-3669",
+            dev_receipt=None,
+            profile=profile,
+            end_date=dt.date(2026, 7, 31),
+            datasets=("adj_factor",),
+        )
+
+    receipt = tmp_path / "dev-receipt.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema_version": audit_seed.RECEIPT_SCHEMA_VERSION,
+                "mode": "apply",
+                "database_target": "dev",
+                "status": "PASS",
+                "profile": profile.profile,
+                "profile_config_digest": profile.config_digest,
+                "semantic_profile_digest": profile.semantic_profile_digest,
+                "end_date": "2026-07-31",
+                "dataset_names": ["adj_factor"],
+                "required_failures": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit_seed._require_apply_authorization(
+        target="production",
+        authorization_ref="ISSUE-3669",
+        dev_receipt=receipt,
+        profile=profile,
+        end_date=dt.date(2026, 7, 31),
+        datasets=("adj_factor",),
+    )
+
+
+def test_receipt_records_credential_location_but_never_secret_value(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "TDX_DB_DEV_HOST=127.0.0.1",
+                "TDX_DB_DEV_PORT=5432",
+                "TDX_DB_DEV_USER=dev_user",
+                "TDX_DB_DEV_PASSWORD=super-secret-value",
+                "TDX_DB_DEV_NAME=aistock_dev",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = audit_seed._load_database_config("dev", env_file)
+    profile = SimpleNamespace(
+        profile="qe_hmm_full_v2",
+        config_digest="a" * 64,
+        semantic_profile_digest="b" * 64,
+    )
+    value = audit_seed._receipt(
+        mode="plan",
+        target=target,
+        profile=profile,
+        end_date=dt.date(2026, 7, 31),
+        plans=(),
+        plan_digest="c" * 64,
+        authorization_ref=None,
+        rows_changed=0,
+        required_failures=0,
+    )
+    encoded = json.dumps(value)
+
+    assert value["credential_location"] == str(env_file.resolve())
+    assert value["credential_values_recorded"] is False
+    assert "super-secret-value" not in encoded
+
+
+def test_receipt_path_is_control_root_scoped_and_immutable(tmp_path):
+    root = tmp_path / "operator_receipts"
+    target = root / "receipt.json"
+    audit_seed._write_receipt(target, {"status": "PASS"}, allowed_root=root)
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"status": "PASS"}
+    with pytest.raises(audit_seed.AuditSeedError, match="immutable"):
+        audit_seed._write_receipt(target, {"status": "PASS"}, allowed_root=root)
+    with pytest.raises(audit_seed.AuditSeedError, match="direct child"):
+        audit_seed._write_receipt(
+            tmp_path / "outside.json",
+            {"status": "PASS"},
+            allowed_root=root,
+        )
+
+
+def test_cli_defaults_to_read_only_plan_mode():
+    args = audit_seed._parser().parse_args(["--database", "dev", "--end-date", "2026-07-31"])
+
+    assert args.mode == "plan"
+    assert args.authorization_ref is None
+    assert args.dev_receipt is None

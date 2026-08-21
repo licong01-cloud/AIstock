@@ -82,6 +82,7 @@ def _write_runtime_catalog(root: Path) -> Path:
     for script_name in (
         "scripts/backfill_tushare_daily_basic_fields.py",
         "scripts/ingest_tushare_daily_basic.py",
+        "scripts/seed_dataset_refresh_audit.py",
     ):
         script_path = root / script_name
         script_path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,6 +96,7 @@ def _write_runtime_catalog(root: Path) -> Path:
                 "non_runtime_source_paths": [
                     "scripts/backfill_tushare_daily_basic_fields.py",
                     "scripts/ingest_tushare_daily_basic.py",
+                    "scripts/seed_dataset_refresh_audit.py",
                 ],
                 "targets": {
                     "backend-main": {
@@ -1371,8 +1373,13 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         [
             "scripts/build_stock_universe_pit_spans.py",
             "scripts/dataset_release_control_store.py",
+            "scripts/seed_dataset_refresh_audit.py",
             "scripts/update_backtest_dataset_monthly.py",
         ],
+        root=isolated_workflow_root,
+    )
+    dataset_audit_neighbor = workflow._classify_runtime_impact(
+        ["scripts/seed_other_dataset_refresh_audit.py"],
         root=isolated_workflow_root,
     )
     dataset_worker = workflow._classify_runtime_impact(
@@ -1436,6 +1443,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_advisory_batch_b["runtime_files"] == []
     assert dataset_offline_tools["runtime_impact"] == "none"
     assert dataset_offline_tools["runtime_files"] == []
+    assert dataset_audit_neighbor["runtime_impact"] == "unknown"
+    assert dataset_audit_neighbor["runtime_files"] == []
     assert dataset_worker["runtime_impact"] == "worker_scheduler"
     assert dataset_worker["target_ids"] == ["worker-scheduler"]
     assert dataset_source_stage["runtime_impact"] == "worker_scheduler"
