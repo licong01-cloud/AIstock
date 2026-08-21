@@ -1,6 +1,6 @@
 {
   "schema_version": "pit_v2_design_compliance_receipt_v2",
-  "observed_at": "2026-08-21T14:09:10.5026894Z",
+  "observed_at": "2026-08-21T14:30:45.6673383Z",
   "design": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
   "design_tier": "F2",
   "design_validation": {
@@ -11,7 +11,7 @@
   },
   "source_identity": {
     "w6_source_base_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
-    "observed_origin_main": "f1a8821beb53c50d6106802e2b459e329cd14642",
+    "observed_origin_main": "1ea9f26777d849c8f4a6492939c7dc7b47ab50b4",
     "observed_origin_main_descends_w6": true,
     "worker_dependency_tree_digest_unchanged": true,
     "w6_pr": "https://github.com/licong01-cloud/AIstock/pull/3622",
