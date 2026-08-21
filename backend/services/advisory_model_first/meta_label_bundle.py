@@ -15,6 +15,7 @@ import pandas as pd
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.meta_label_contracts import FrozenAdvisoryMetaLabelTrainingRequestV1
+from backend.services.advisory_model_first.policy_contracts import transition_policy_from_payload
 from backend.services.advisory_model_first.policy_dataset_bundle import _json_ready
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 
@@ -249,6 +250,33 @@ def load_exact_meta_label_runtime_bundle(
         expected_bundle_id=bundle_id,
         load_booster=load_booster,
     )
+    policy_dataset_bundle_id = str(loaded["manifest"].get("policy_dataset_bundle_id") or "")
+    if not _is_sha256(policy_dataset_bundle_id):
+        raise AdvisoryModelFirstError(
+            "meta-label runtime policy dataset identity is invalid",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        )
+    policy_path = (root / "policy_datasets" / policy_dataset_bundle_id / "shadow_policy.json").resolve()
+    try:
+        policy_path.relative_to(root)
+    except ValueError as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime policy escapes its configured root",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        ) from exc
+    shadow_policy = _read_runtime_json(policy_path, expected_type=dict)
+    if canonical_json_sha256(shadow_policy) != loaded["manifest"].get("shadow_policy_sha256"):
+        raise AdvisoryModelFirstError(
+            "meta-label runtime policy differs from the frozen bundle identity",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        )
+    try:
+        transition_policy = transition_policy_from_payload(shadow_policy)
+    except ValueError as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime policy is invalid",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        ) from exc
     feature_schema = _read_runtime_json(bundle_path / "feature_schema.json", expected_type=dict)
     hmm_models = _read_runtime_json(bundle_path / "fresh_hmm_models.json", expected_type=dict)
     hmm_unavailable = _read_runtime_json(
@@ -287,6 +315,8 @@ def load_exact_meta_label_runtime_bundle(
             "hmm_models": hmm_models,
             "hmm_unavailable": tuple(hmm_unavailable),
             "baselines": baselines,
+            "shadow_policy": shadow_policy,
+            "shadow_policy_maturity_horizon_days": transition_policy.time_stop_days,
             "continuation_cutoff": continuation_cutoff,
             "manifest_file_sha256": bundle_manifest_sha256,
         }

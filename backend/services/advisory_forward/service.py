@@ -18,7 +18,10 @@ from backend.services.advisory_forward.repository import (
     AdvisoryForwardPGRepository,
     is_retryable_model_observation,
 )
-from backend.services.advisory_model_first.model_binding_resolution import AdvisoryModelBindingResolver
+from backend.services.advisory_model_first.model_binding_resolution import (
+    META_LABEL_MODEL_ROLE,
+    AdvisoryModelBindingResolver,
+)
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
 from backend.services.advisory_program import (
     ACTION_HOLD,
@@ -580,6 +583,15 @@ class AdvisoryForwardService:
         else:
             observation_status = "UNAVAILABLE"
         maturity_horizons = list(outcome.get("horizons") or [])
+        if frozen_resolution.get("model_role") == META_LABEL_MODEL_ROLE:
+            if prediction.get("model_role") != META_LABEL_MODEL_ROLE:
+                raise RuntimeError("model inference role differs from the publication-frozen descriptor")
+            if prediction.get("shadow_policy_sha256") != frozen_resolution.get("shadow_policy_sha256"):
+                raise RuntimeError("model inference policy differs from the publication-frozen descriptor")
+            policy_horizon = prediction.get("shadow_policy_maturity_horizon_days")
+            if not isinstance(policy_horizon, int) or isinstance(policy_horizon, bool) or policy_horizon <= 0:
+                raise RuntimeError("meta-label model inference is missing policy maturity")
+            maturity_horizons.append(policy_horizon)
         for candidate in outcome.get("candidates") or []:
             if not isinstance(candidate, Mapping):
                 raise RuntimeError("model outcome candidate is not an object")
