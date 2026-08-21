@@ -1,6 +1,7 @@
 """TWAP 均匀拆分执行算法."""
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Optional
 
 from .base_algo import BaseExecutionAlgo, OrderState, StepResult
@@ -32,6 +33,16 @@ class TWAPAlgo(BaseExecutionAlgo):
         price = bar_data.get("close", 0)
         if price <= 0:
             return None
+        raw_volume = bar_data.get("volume")
+        if isinstance(raw_volume, bool):
+            raise ValueError("TWAP requires finite non-negative integral minute volume")
+        try:
+            volume = float(raw_volume)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("TWAP requires finite non-negative integral minute volume") from exc
+        if not math.isfinite(volume) or volume < 0 or volume != int(volume):
+            raise ValueError("TWAP requires finite non-negative integral minute volume")
+        available_volume = int(volume)
 
         # 最后一步：强制执行全部剩余
         is_final_step = state.step >= self.split_count - 1
@@ -42,11 +53,12 @@ class TWAPAlgo(BaseExecutionAlgo):
             expected_executed = state.total_quantity / self.split_count * (state.step + 1)
             step_qty = expected_executed - state.executed_quantity
 
+        step_qty = min(int(step_qty), available_volume, remaining)
         step_qty = self._round_lot(
-            int(step_qty),
+            step_qty,
             symbol=state.symbol,
             side=state.side,
-            allow_sell_residual=is_final_step,
+            allow_sell_residual=is_final_step and step_qty == remaining,
         )
         step_qty = min(step_qty, remaining)
 
