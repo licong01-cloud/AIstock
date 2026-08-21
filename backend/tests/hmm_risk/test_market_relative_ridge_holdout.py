@@ -1085,6 +1085,26 @@ def test_cli_request_preparation_failure_records_access_and_blocks_retry(
     assert calls == 1
 
 
+def test_holdout_source_loader_uses_stable_reason_for_untyped_state_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_loader(*args: object, **kwargs: object) -> None:
+        raise StateModelSetError("source failed without typed reason")
+
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_loader)
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        cli._load_holdout_inputs({"holdout_source": {"source": {}}}, db_prefix="P2_4_TEST")
+
+    assert captured.value.reason_code == subject.REASON_SOURCE
+    assert captured.value.stage == "source_preflight"
+    assert captured.value.evidence == {
+        "exception_type": "StateModelSetError",
+        "source_reason_code": cli.SOURCE_LOADER_FAILURE,
+        "error_message": "source failed without typed reason",
+    }
+
+
 def test_cli_output_drift_stops_before_holdout_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     artifact_root = tmp_path / "artifacts"
     report = _candidate_report()

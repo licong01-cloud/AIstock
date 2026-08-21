@@ -43,6 +43,8 @@ from backend.services.hmm_risk.state_model_set import (  # noqa: E402
 )
 from scripts.hmm_risk.prepare_state_model_set import _connect_readonly, _load_l1_source_inputs  # noqa: E402
 
+SOURCE_LOADER_FAILURE = "hmm_risk_p2_4_source_loader_failed"
+
 
 def _producer_commit() -> str:
     status = subprocess.run(
@@ -136,7 +138,12 @@ def _load_holdout_inputs(request: dict[str, Any], *, db_prefix: str) -> Any:
         )
     except StateModelSetError as exc:
         message = str(exc)
-        source_reason_code = message.partition(":")[0].strip() or type(exc).__name__
+        candidate_reason = message.partition(":")[0].strip()
+        source_reason_code = (
+            candidate_reason
+            if candidate_reason.startswith("hmm_risk_") and candidate_reason.replace("_", "").isalnum()
+            else SOURCE_LOADER_FAILURE
+        )
         raise HoldoutAcceptanceError(
             REASON_SOURCE,
             message,
