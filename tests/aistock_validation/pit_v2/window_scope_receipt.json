@@ -1,7 +1,7 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-21T12:41:17.4910733Z",
-  "source_head": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
+  "observed_at": "2026-08-21T13:00:13.6046530Z",
+  "source_head": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
   "current_revision": {
@@ -22,15 +22,15 @@
     "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w6-integration-20260819",
     "base_head": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
     "status": "implementation_review_passed_receipt_refresh_pending_ci",
-    "implementation_commit": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
-    "integration_head": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
+    "implementation_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+    "integration_head": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
     "main_sync_merge_commit": "a557ad2331ef4bdc1d53f86c2752360a3e666c10",
     "runtime_impact": "backend",
     "runtime_targets": ["backend-main"],
     "authority_pointer_readback": "not_run_missing_worktree_db_credentials_no_write_performed",
     "validation": {
-      "direct_matrix": "18 passed",
-      "inference_adjacent_matrix": "32 passed",
+      "direct_matrix": "20 passed",
+      "inference_adjacent_matrix": "53 passed",
       "w3d_identity_matrix": "39 passed",
       "w4_w5_adjacent_matrix": "91 passed",
       "advisory_historical_range_backend": "378 passed, 5 skipped",
@@ -46,7 +46,7 @@
       "client_gate": "merge_aftercare ready, blocking=0, warnings=0",
       "remote_main": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
       "main_sync": "merged_without_conflict",
-      "review_findings": "unconditional missing PIT identity regression and unreachable real W8 envelope path fixed",
+      "review_findings": "missing PIT identity regression, unreachable real W8 envelope path, and detached-universe date leakage fixed",
       "production_gates": "ddl=noop; dml=noop; candidate_write=not_performed; activation=not_performed; process_control=not_performed"
     },
     "actual_write_files": [
@@ -472,12 +472,12 @@
       ],
       "source_ready_receipt": {
         "schema_version": "pit_v2_w6_source_ready_receipt_v1",
-        "source_commit": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
+        "source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
         "baseline_origin_main": "a6da5a35d7fcfa2b9b50220275bfea147f4094a0",
         "baseline_user_ancestor": "a6da5a35",
         "consumer_inventory_unknown_count": 0,
         "fallback_scan_count": 0,
-        "direct_tests": "18 passed; adjacent and classified matrices pass",
+        "direct_tests": "20 passed; adjacent and classified matrices pass",
         "f2": "30/30 pass",
         "compileall": "pass",
         "git_diff_check": "pass",
@@ -492,7 +492,7 @@
           "QE_experiment_run": "not_performed",
           "runtime_real_data_evidence": "not_run_not_authorized"
         },
-        "receipt_binding_note": "Bound to immutable implementation source freeze commit 4ee6da752f7451f3c31c15cf53a296b01cebbf21; this metadata-only receipt refresh is excluded from source_commit to avoid self-referential hashing."
+        "receipt_binding_note": "Bound to immutable implementation source freeze commit ddcf89a56d61f63d6eb96650de615c9fe5795976; this metadata-only receipt refresh is excluded from source_commit to avoid self-referential hashing."
       },
       "additional_shared_file_rule": "requires explicit handoff from W1-W5 and W6 single-writer registration before edit",
       "forbidden": ["production_or_full_candidate", "activation", "unscoped_shared_core_edit"]
@@ -503,7 +503,7 @@
   },
   "consumer_inventory": {
     "schema_version": "canonical_pit_consumer_inventory_v1",
-    "source_commit": "4ee6da752f7451f3c31c15cf53a296b01cebbf21",
+    "source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
     "classification_values": ["canonical_v2_formal", "canonical_v2_frozen_candidate", "canonical_v2_rolling_runtime", "legacy_reproduction_only", "test_fixture", "migration_tool", "unknown"],
     "consumers": [
       {"consumer_id": "qe_formal_training", "class": "canonical_v2_formal", "path": "backend/services/quantevolver/qe_dataset_contract.py"},
@@ -528,9 +528,9 @@
       "backend/services/quantevolver/qe_dataset_contract.py": "e370720805155559f4e0b2103b01c86fde6cd296ffe79eb382e04964083c7983",
       "backend/services/hmm_evolution/universe.py": "a04274909c7948ece33ec6bec7a3a024b1549c2b7d86c19212568302ae8a4735",
       "backend/services/selection_center/canonical_pit_runtime.py": "0e5956d0afdaa5496b59da852e0a792afa83117582fafb28e40fd5b07c9d3060",
-      "backend/services/canonical_pit_inference_boundary.py": "25320a4412770b3c0d9c380a423d8a09eb16a7d414363c7effdc4424db35aab7",
-      "backend/inference_engine.py": "28a4bf9d114bfd876696022f33be5779adae0bcd7a1a738057da60b0f84a63df",
-      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py": "0bb72d778b3ac9b5b51bdeade195b8d8c7157fa405b7d60524ce713f1a995826",
+      "backend/services/canonical_pit_inference_boundary.py": "13b400258e6183f898147f13c312d83906863bfc61700d6c87a4de2940254eff",
+      "backend/inference_engine.py": "3e99bbac5430c52e33efac06322792b67f6f8d153fea2446d968f2f993b52e33",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py": "86e4e523b18710c83bfeceb0362f53e2b8063225da9c5d922e9d844cef13af91",
       "backend/services/dataset_release/pit.py": "09a85279099c2b4279762c6b139ac794e4c0155b9678a209e7e5bcd1add2ea9c",
       "backend/services/canonical_equity_pit.py": "16963de5e17e40f2c7064ad053f3297bddaa41156766fb1a6ea107a2f4656373"
     }
