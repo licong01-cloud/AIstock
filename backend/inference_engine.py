@@ -763,6 +763,15 @@ class InferenceEngine:
     ) -> list[str]:
         """Resolve a detached frozen pool or an explicit rolling PIT lease."""
         effective_date = (trade_date or datetime.now()).date()
+        if pit_identity.mode is InferencePitMode.ROLLING_RUNTIME and (
+            pit_identity.binding.coverage_start is None
+            or pit_identity.binding.coverage_end is None
+            or effective_date < pit_identity.binding.coverage_start
+            or effective_date > pit_identity.binding.coverage_end
+        ):
+            raise CanonicalPitInferenceBoundaryError(
+                f"rolling PIT identity does not cover inference date {effective_date}"
+            )
         if pit_identity.mode in {
             InferencePitMode.FROZEN_CANDIDATE,
             InferencePitMode.LEGACY_REPRODUCTION,
@@ -770,6 +779,10 @@ class InferenceEngine:
             if not pit_identity.universe_codes:
                 raise CanonicalPitInferenceBoundaryError(
                     "frozen inference has no detached universe; online PIT completion is forbidden"
+                )
+            if pit_identity.universe_as_of != effective_date:
+                raise CanonicalPitInferenceBoundaryError(
+                    f"detached PIT universe is bound to {pit_identity.universe_as_of}, not {effective_date}"
                 )
             return list(pit_identity.universe_codes)
         from .services.stock_universe_pit_service import StockUniversePitService

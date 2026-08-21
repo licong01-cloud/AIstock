@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.inference_engine import _resolve_inference_pit_identity_for_run
+from backend.inference_engine import InferenceEngine, _resolve_inference_pit_identity_for_run
 from backend.services.dataset_release.canonical_pit_activation_envelope import (
     CanonicalPitActivationEnvelopeError,
     build_activation_envelope,
@@ -217,6 +217,7 @@ def test_inference_boundary_rejects_missing_identity_and_accepts_detached_frozen
             "release_id": "fixture-release-1",
             "cutoff": "2026-07-31",
             "snapshot_digest": SHA,
+            "universe_as_of": "2026-07-31",
             "universe_codes": ["000001.SZ", "600000.SH"],
         },
         version_tag="strategy_package_live",
@@ -224,6 +225,26 @@ def test_inference_boundary_rejects_missing_identity_and_accepts_detached_frozen
     assert identity.mode is InferencePitMode.FROZEN_CANDIDATE
     assert identity.binding.release_id == "fixture-release-1"
     assert identity.universe_codes == ("000001.SZ", "600000.SH")
+
+
+def test_detached_frozen_universe_cannot_be_reused_for_another_trade_date() -> None:
+    identity = resolve_inference_pit_identity(
+        {
+            "mode": "canonical_v2_frozen_candidate",
+            "release_id": "fixture-release-1",
+            "cutoff": "2026-07-31",
+            "snapshot_digest": SHA,
+            "universe_as_of": "2026-07-31",
+            "universe_codes": ["000001.SZ"],
+        },
+        version_tag="strategy_package_live",
+    )
+    with pytest.raises(CanonicalPitInferenceBoundaryError):
+        InferenceEngine()._get_default_universe_excluding_st(
+            datetime(2026, 7, 30),
+            ensure=False,
+            pit_identity=identity,
+        )
 
 
 def test_inference_boundary_requires_explicit_legacy_reproduction_identity() -> None:
@@ -238,6 +259,7 @@ def test_inference_boundary_requires_explicit_legacy_reproduction_identity() -> 
             "release_id": "legacy-release-20260630",
             "cutoff": "2026-06-30",
             "snapshot_digest": SHA,
+            "universe_as_of": "2026-06-30",
             "universe_codes": ["600000.SH", "000001.SZ"],
         },
         version_tag="legacy_reproduction",
@@ -337,6 +359,20 @@ def test_prospective_inference_accepts_resolver_issued_active_canonical_pointer(
     assert identity.binding.universe_key == CANONICAL_PIT_UNIVERSE_KEY
 
 
+def test_rolling_pointer_must_cover_the_inference_date_before_query() -> None:
+    identity = resolve_inference_pit_identity(
+        None,
+        version_tag="strategy_package_live",
+        live_binding=_live_binding(canonical=False),
+    )
+    with pytest.raises(CanonicalPitInferenceBoundaryError):
+        InferenceEngine()._get_default_universe_excluding_st(
+            datetime(2026, 8, 1),
+            ensure=False,
+            pit_identity=identity,
+        )
+
+
 def test_inference_run_uses_singleton_pointer_only_when_manifest_has_no_identity() -> None:
     class Resolver:
         calls = 0
@@ -369,6 +405,7 @@ def test_inference_run_does_not_read_pointer_for_detached_frozen_identity() -> N
                 "release_id": "fixture-release-1",
                 "cutoff": "2026-07-31",
                 "snapshot_digest": SHA,
+                "universe_as_of": "2026-07-31",
                 "universe_codes": ["000001.SZ"],
             }
         },

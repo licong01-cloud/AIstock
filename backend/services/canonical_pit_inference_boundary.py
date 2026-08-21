@@ -43,6 +43,7 @@ class InferencePitIdentity:
     mode: InferencePitMode
     binding: PitConsumerBinding
     universe_codes: tuple[str, ...] = ()
+    universe_as_of: date | None = None
 
     @property
     def receipt_mode(self) -> str:
@@ -71,6 +72,7 @@ class InferencePitIdentity:
             "release_id": binding.release_id,
             "cutoff": binding.cutoff.isoformat() if binding.cutoff else None,
             "snapshot_digest": binding.snapshot_digest,
+            "universe_as_of": self.universe_as_of.isoformat() if self.universe_as_of else None,
             "universe_codes_digest": _codes_digest(self.universe_codes) if self.universe_codes else None,
         }
 
@@ -223,6 +225,9 @@ def _frozen_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
     release_id = _identifier(value.get("release_id"), "release_id")
     cutoff = _date(value.get("cutoff"), "cutoff")
     snapshot_digest = _sha(value.get("snapshot_digest") or value.get("frozen_snapshot_digest"), "snapshot_digest")
+    universe_as_of = _date(value.get("universe_as_of"), "universe_as_of")
+    if universe_as_of > cutoff:
+        raise CanonicalPitInferenceBoundaryError("frozen universe_as_of cannot exceed release cutoff")
     codes = _universe_codes(value.get("universe_codes"), field="frozen inference universe_codes")
     frozen_key = f"aistock_equity_pit_snapshot_{release_id}"
     binding = PitConsumerBinding(
@@ -235,7 +240,12 @@ def _frozen_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
         cutoff=cutoff,
         release_id=release_id,
     )
-    return InferencePitIdentity(mode=InferencePitMode.FROZEN_CANDIDATE, binding=binding, universe_codes=codes)
+    return InferencePitIdentity(
+        mode=InferencePitMode.FROZEN_CANDIDATE,
+        binding=binding,
+        universe_codes=codes,
+        universe_as_of=universe_as_of,
+    )
 
 
 def _legacy_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
@@ -246,6 +256,9 @@ def _legacy_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
     release_id = _identifier(value.get("release_id"), "release_id")
     cutoff = _date(value.get("cutoff"), "cutoff")
     snapshot_digest = _sha(value.get("snapshot_digest") or value.get("frozen_snapshot_digest"), "snapshot_digest")
+    universe_as_of = _date(value.get("universe_as_of"), "universe_as_of")
+    if universe_as_of > cutoff:
+        raise CanonicalPitInferenceBoundaryError("legacy universe_as_of cannot exceed release cutoff")
     key = str(value.get("universe_key") or f"{LEGACY_NONCANONICAL_SNAPSHOT_PREFIXES[0]}{release_id}")
     if not key.startswith(LEGACY_NONCANONICAL_SNAPSHOT_PREFIXES):
         raise CanonicalPitInferenceBoundaryError("legacy reproduction requires an immutable snapshot universe key")
@@ -265,6 +278,7 @@ def _legacy_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
         mode=InferencePitMode.LEGACY_REPRODUCTION,
         binding=binding,
         universe_codes=codes,
+        universe_as_of=universe_as_of,
     )
 
 
