@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1138",
-  "closed_at": null,
+  "closed_at": "2026-08-21T11:46:30.369170Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -152,9 +152,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1138/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1138",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6244bb12a9bda61dd400affc367d6057c9af3a0f0f8b28450e3bf1eb0be376df",
+      "contract_digest": "29faa5e91ff7b2d436a9c89e777be52124d5b742c796006eb4d6482b342baba5",
+      "expected_identity": "09e4ebd3e3ea02d8a2c8c1776d268dd12387d971",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-21T11:36:43.360722Z",
+      "mode": "read_only",
+      "observed_identity": "f8b9d16106a7841a153d1504ba73022f34b176b5",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b64520b537c2a1949b0784c5e9495e31e00dbde787f3a4f8ab0ebfeeac6daa27",
+      "receipt_sha256": "deb01232f1a8c3c24c2add221bb03677ca814318aee8b457a49dd3a6fce91b80",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "149c080102de4d59eace2dc2c3018a6ddb0864a65ec0cb883432c6e195fd3502",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -164,7 +186,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -174,7 +196,8 @@
     "source_event_id": "FE-20260821-12edb798501e"
   },
   "validation_evidence": [
-    "python -m nox -s validation_module_registry_l0 platform_api_backend advisory_modeling_backend -> passed"
+    "python -m nox -s validation_module_registry_l0 platform_api_backend advisory_modeling_backend -> passed",
+    "post-restart backend-main identity and Advisory forward status -> passed; target dates 2026-08-17 through 2026-08-21 recovered to EXPERIMENTAL_SHADOW"
   ],
   "verification_budget": {
     "budget": "standard",
