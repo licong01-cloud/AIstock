@@ -503,11 +503,8 @@ def build_holdout_request(
         name for name, value in required_mappings.items() if not isinstance(value, Mapping) or not value
     )
     dataset_manifest = required_mappings["dataset_manifest"]
-    if (
-        invalid_components
-        or not isinstance(dataset_manifest, Mapping)
-        or not isinstance(dataset_manifest.get("calendar_benchmark"), Mapping)
-    ):
+    calendar_manifest = dataset_manifest.get("calendar_benchmark") if isinstance(dataset_manifest, Mapping) else None
+    if invalid_components or not isinstance(calendar_manifest, Mapping) or not calendar_manifest:
         raise _fail(
             REASON_SOURCE,
             "holdout request source components are missing or invalid",
@@ -523,7 +520,7 @@ def build_holdout_request(
         "outcome_tail_trading_day_count": OUTCOME_TAIL_TRADING_DAYS,
         "dataset_manifest_sha256": canonical_sha256(dataset_manifest),
         "mapping_manifest_sha256": canonical_sha256(required_mappings["mapping_manifest"]),
-        "calendar_manifest_sha256": canonical_sha256(dataset_manifest["calendar_benchmark"]),
+        "calendar_manifest_sha256": canonical_sha256(calendar_manifest),
         "feature_formula_sha256": canonical_sha256(
             {
                 "L1": required_mappings["feature_definition"],

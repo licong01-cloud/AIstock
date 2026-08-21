@@ -434,9 +434,18 @@ def test_request_builder_freezes_loaded_source_and_exact_output_authority() -> N
     assert receipt["holdout_accessed"] is False
 
 
-def test_request_builder_rejects_missing_source_component_instead_of_hashing_null() -> None:
+@pytest.mark.parametrize(
+    ("field", "invalid_value", "invalid_components"),
+    [
+        ("mapping_manifest", None, ["mapping_manifest"]),
+        ("dataset_manifest", {"calendar_benchmark": {}}, []),
+    ],
+)
+def test_request_builder_rejects_missing_source_component_instead_of_hashing_null(
+    field: str, invalid_value: object, invalid_components: list[str]
+) -> None:
     inputs, candidate, expected = _evaluation_fixture()
-    inputs["mapping_manifest"] = None
+    inputs[field] = invalid_value
     holdout_source = expected["holdout_source"]
     assert isinstance(holdout_source, dict)
     source = holdout_source["source"]
@@ -447,7 +456,7 @@ def test_request_builder_rejects_missing_source_component_instead_of_hashing_nul
         subject.build_holdout_request(inputs, candidate, source=source, artifact_outputs=outputs)
 
     assert captured.value.reason_code == subject.REASON_SOURCE
-    assert captured.value.evidence == {"invalid_components": ["mapping_manifest"]}
+    assert captured.value.evidence == {"invalid_components": invalid_components}
 
 
 def test_candidate_and_request_preflight_close_exact_authority(tmp_path: Path) -> None:

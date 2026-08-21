@@ -35,7 +35,6 @@
       "backend/services/hmm_risk/market_relative_ridge_holdout.py",
       "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
       "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
-      "tests/aistock_validation/bugs/.bug_id_allocator.json",
       "tests/aistock_validation/bugs/20260819_BUG-1135-p2-4-formal-holdout-lacks-controlled-request-preparation-authority.json"
     ],
     "ownership": {
