@@ -50,8 +50,8 @@
   },
   "first_seen_at": "2026-08-21T03:09:30.540619Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "70caf64bc0efc9fd8a759d8d8f4d15132c4216f5",
+  "fixed_at": "2026-08-21T05:03:24Z",
   "github_issue_number": 3636,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3636",
   "last_seen_at": "2026-08-21T03:09:30.540619Z",
@@ -59,6 +59,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3639",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -93,7 +94,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -102,6 +103,13 @@
     "fingerprint": "d9b90ec25a94546ad345af41",
     "source_event_id": "FE-20260821-d9b90ec25a94"
   },
+  "validation_evidence": [
+    "validation-receipt: id=10ce685e8f36499b commit=f1e9fa50a2c5bb3bcf57c6a4526e80a610169b4e kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=1b7ca2317a773cec commit=f1e9fa50a2c5bb3bcf57c6a4526e80a610169b4e kind=nox plan=paper_v2_backend status=passed command=`python -m nox -s paper_v2_backend` result=`1123 passed, 3 skipped, 2 xfailed`",
+    "validation-receipt: id=bc02d75c8d15f8d1 commit=f1e9fa50a2c5bb3bcf57c6a4526e80a610169b4e kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/trading_core/test_minute_execution.py -q` result=`40 passed`",
+    "validation-receipt: id=822e42725c737bc0 commit=f1e9fa50a2c5bb3bcf57c6a4526e80a610169b4e kind=ruff plan=direct status=passed command=`python -m ruff check backend/execution_algos/twap_algo.py backend/tests/trading_core/test_minute_execution.py` result=`passed`",
+    "validation-receipt: id=70023218b590b019 commit=f1e9fa50a2c5bb3bcf57c6a4526e80a610169b4e kind=compile plan=direct status=passed command=`python -m py_compile backend/execution_algos/twap_algo.py backend/tests/trading_core/test_minute_execution.py and git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
