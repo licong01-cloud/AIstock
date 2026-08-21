@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1145",
-  "closed_at": null,
+  "closed_at": "2026-08-21T19:02:15Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -87,8 +87,8 @@
   },
   "first_seen_at": "2026-08-21T13:21:59.365782Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "79e85bd0b72c662717dd30b59178ef569e040a65",
+  "fixed_at": "2026-08-21T19:02:15Z",
   "github_issue_number": 3656,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3656",
   "last_seen_at": "2026-08-21T13:21:59.365782Z",
@@ -96,6 +96,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3658",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -110,6 +111,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -117,7 +120,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -126,6 +129,12 @@
     "fingerprint": "c0c01c8072940652652e83a7",
     "source_event_id": "FE-20260821-c0c01c807294"
   },
+  "validation_evidence": [
+    "rtk nox -s hmm_risk_backend -> passed: 565 tests, coverage 77.58%",
+    "rtk nox -s validation_module_registry_l0 -> passed: 8 tests, 14/14 mapped",
+    "rtk nox -s l0 -> passed: 0 blocking findings",
+    "PR #3658 final CI -> 10 success, 1 neutral, 6 skipped, 0 failed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
