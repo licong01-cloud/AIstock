@@ -1,85 +1,110 @@
 {
-  "schema_version": "pit_v2_design_compliance_receipt_v1",
-  "observed_at": "2026-08-12T17:52:37.1355038Z",
-  "scope": "W0_baseline_inventory_and_window_scope_only",
-  "source_head": "708d22395ecc8a6c5097a3441dd0e3ae133cc4a7",
+  "schema_version": "pit_v2_design_compliance_receipt_v2",
+  "observed_at": "2026-08-21T14:30:45.6673383Z",
   "design": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
-  "standard": "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-compliance-001",
-  "checks": [
+  "design_tier": "F2",
+  "design_validation": {
+    "status": "PASS",
+    "design_items": 30,
+    "matrix_rows": 30,
+    "warnings": 0
+  },
+  "source_identity": {
+    "w6_source_base_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "observed_origin_main": "1ea9f26777d849c8f4a6492939c7dc7b47ab50b4",
+    "observed_origin_main_descends_w6": true,
+    "worker_dependency_tree_digest_unchanged": true,
+    "w6_pr": "https://github.com/licong01-cloud/AIstock/pull/3622",
+    "w6_merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "implementation_source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+    "source_freeze_receipt": "tests/aistock_validation/pit_v2/source_freeze_receipt.json"
+  },
+  "stage_acceptance": [
     {
-      "id": "no_simplified_delivery",
-      "status": "PASS",
-      "evidence": [
-        "W0 is reported only as baseline and inventory completion",
-        "W1-W9 remain explicitly pending",
-        "no candidate, activation, production or full-project completion is claimed"
-      ]
+      "stage": "W0",
+      "requirement": "inventory and retained-history boundaries",
+      "evidence": "tests/aistock_validation/pit_v2/retention_inventory.json",
+      "status": "PASS"
     },
     {
-      "id": "no_silent_error",
-      "status": "PASS",
-      "evidence": [
-        "missing qe_dataset_manifest.json is recorded for both compute nodes",
-        "empty control catalog is not treated as proof that legacy candidates are unreferenced",
-        "unmeasured failed-candidate sizes are null with size_status instead of invented values",
-        "all unresolved references retain FULL_IMMUTABLE"
-      ]
+      "stage": "W1_W2",
+      "requirement": "canonical PIT authority and candidate-only monthly workflow source",
+      "evidence": "current origin/main plus W6 final integration matrix",
+      "status": "PASS_SOURCE_MERGED"
     },
     {
-      "id": "no_business_logic_change",
-      "status": "PASS",
-      "evidence": [
-        "changed files are documentation and validation receipts only",
-        "production v1 and 20260731 candidate files were read only",
-        "no source, config, skill, DB, runtime or process state was changed"
-      ]
+      "stage": "W3_D",
+      "requirement": "QE/HMM unified identity and no online fallback for frozen consumers",
+      "evidence": "39 passed on final W6 branch before merge",
+      "status": "PASS"
     },
     {
-      "id": "no_private_gate",
-      "status": "PASS",
-      "evidence": [
-        "gates mirror the approved master design",
-        "DEV migration, production DDL/DML, activation, restart and cleanup remain separate existing action boundaries",
-        "no additional monthly manual approval was introduced"
-      ]
+      "stage": "W4_W5",
+      "requirement": "Selection/Paper/Simulation and StrategyPackage/Advisory integration",
+      "evidence": "91 adjacent tests plus 378 advisory historical tests, 5 skipped",
+      "status": "PASS_SOURCE_MERGED"
+    },
+    {
+      "stage": "W6",
+      "requirement": "consumer inventory, inference boundary, candidate/W8/W9 envelope contracts and final source receipt",
+      "evidence": "PR #3622; 20 direct tests; 53 final inference-adjacent tests; CI failures=0",
+      "status": "PASS_SOURCE_MERGED"
+    },
+    {
+      "stage": "W7",
+      "requirement": "real sample then full candidate-only initial migration",
+      "evidence": "registered Worker code_sha=4d3d6e5f946a48320de693c5f30bc14786007e76 differs from source freeze 509e12c2aeed0f34612d2cad78f4fecb7b691618",
+      "status": "BLOCKED_STALE_REGISTERED_WORKER"
+    },
+    {
+      "stage": "W8",
+      "requirement": "independent read-only candidate validation",
+      "evidence": "cannot start before W7 terminal immutable candidate",
+      "status": "NOT_STARTED"
+    },
+    {
+      "stage": "W9",
+      "requirement": "separately authorized distribution, authority CAS, activation and aftercare",
+      "evidence": "production_activation_performed=false; activation blockers=16",
+      "status": "NOT_AUTHORIZED_NOT_STARTED"
     }
   ],
-  "acceptance_matrix": [
-    {
-      "requirement": "P0 freeze source/profile/toolchain/calendar and current production identity",
-      "implementation": "tests/aistock_validation/pit_v2/source_freeze_receipt.json",
-      "evidence": "origin/main, both profile digests, calendar digest, production qlib pins, runtime and node readbacks",
-      "conclusion": "PASS_W0"
+  "design_compliance_001": {
+    "complete_design_scope": {
+      "status": "PASS_W6",
+      "evidence": "W6 source contracts and all planned integration files are merged; real W7/W8/W9 results are explicitly not claimed"
     },
-    {
-      "requirement": "P0 classify every v1 source/config/test reference with no unknown",
-      "implementation": "tests/aistock_validation/pit_v2/source_freeze_receipt.json#consumer_scan",
-      "evidence": "67 files; production_consumer=12, candidate_builder=8, reproduction_only=17, test_fixture=30, unknown=0",
-      "conclusion": "PASS_W0"
+    "no_simplified_subset_or_poc_claim": {
+      "status": "PASS",
+      "evidence": "fixture evidence remains fixture-only and runtime_real_data_evidence is not_run_not_authorized"
     },
-    {
-      "requirement": "P0 retain 20260630, 20260731, failures and duplicates read only",
-      "implementation": "tests/aistock_validation/pit_v2/retention_inventory.json",
-      "evidence": "20 release/candidate records; FULL_IMMUTABLE=20; cleanup targets=0",
-      "conclusion": "PASS_W0"
+    "no_silent_fallback_or_latest_guessing": {
+      "status": "PASS",
+      "evidence": "singleton authority pointer only during migration; detached reproduction requires immutable identity, exact as-of date and codes"
     },
+    "no_unapproved_gate_or_runtime_action": {
+      "status": "PASS",
+      "evidence": "no DB write, dataset mutation, activation, restart, scheduler action, process control or cleanup was performed"
+    }
+  },
+  "production_gates": {
+    "production_ddl_gate": "noop",
+    "production_dml_gate": "noop",
+    "production_activation": "not_requested",
+    "backend_restart": "pending_user",
+    "dataset_worker_restart": "required_user_action_before_W7",
+    "dataset_candidate_write": "not_performed",
+    "cleanup": "not_requested"
+  },
+  "blocking_findings": [
     {
-      "requirement": "F-006 independent worktrees and single-writer scope",
-      "implementation": "tests/aistock_validation/pit_v2/window_scope_receipt.json",
-      "evidence": "W0 exact changed files; W1/W2 exact planned files; W3-W5 disjoint reservations; W6 shared single-writer",
-      "conclusion": "PASS_W0"
-    },
-    {
-      "requirement": "Activation and cleanup must remain blocked until their approved stages",
-      "implementation": "docs/analysis/qe_pit_v2_phase0_inventory_and_scope_20260813.md",
-      "evidence": "running v1 Paper run, pending v1 QE loop, unmigrated records and node manifest gaps are explicit",
-      "conclusion": "PASS_FAIL_CLOSED"
+      "id": "BLOCKED_STALE_REGISTERED_WORKER",
+      "severity": "P1_ENTRY_GATE",
+      "expected": "Worker code_sha equals current origin/main at execution; W6 merge is an ancestor; dependency digest=786f8e1036a8425abb295f9b30fa9e776374853514d314a9b877b875e2337b7a",
+      "observed": "4d3d6e5f946a48320de693c5f30bc14786007e76",
+      "owner": "user",
+      "safe_next_action": "restart or replace the dataset release Worker from current origin/main, then rerun status/preflight and verify ancestry plus dependency digest"
     }
   ],
-  "gaps": [
-    {"id": "W1_W9_not_implemented", "impact": "v2 cannot be activated", "next_step": "start W1 from latest origin/main after W0 review/merge"},
-    {"id": "compute_node_dataset_manifest_missing", "impact": "complete immutable dataset identity cannot be attested", "next_step": "W2/W6 implement and validate the manifest contract"},
-    {"id": "retention_reference_graph_unsettled", "impact": "no legacy candidate is eligible for cleanup", "next_step": "close catalog/model/audit/node identity coverage in W6/W9 before any separate cleanup request"}
-  ],
-  "overall": "PASS_W0_ONLY"
+  "overall": "PASS_W6_SOURCE_READY_W7_BLOCKED_STALE_WORKER"
 }
