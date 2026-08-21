@@ -1494,7 +1494,7 @@ def build_simulation_miniqmt_product_runtime_v1(
     )
     startup = repository.start_worker_incarnation(
         worker_id="miniqmt_kernel_v2_product",
-        process_role="K6D_PRODUCT_DELIVERY",
+        process_role="PRODUCT_COORDINATOR",
         source_revision=source_capability.capability_sha256,
         started_at_utc=observed_at.astimezone(UTC),
     )

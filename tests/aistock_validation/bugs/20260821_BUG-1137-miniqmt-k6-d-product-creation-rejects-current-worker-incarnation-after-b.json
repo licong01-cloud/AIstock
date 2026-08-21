@@ -2,7 +2,9 @@
   "actual": "Run simrun_eb8fcd6d852a5031 is FAILED_RETRYABLE at MINIQMT_KERNEL_V2_PLAN_START_FAILED with K6-D product creation uses a stale or ambiguous worker incarnation; submitted_intents=0 and current-day scheduler status is BLOCKED.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260821_BUG-1137-miniqmt-k6-d-product-creation-rejects-current-worker-incarnation-after-b.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1137",
@@ -20,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260821-dea13a89dac5",
       "timestamp": "2026-08-21T02:25:44.401546Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Exact error-text trace located the product-root worker role mismatch; add the runtime composition source and its direct restart regression test before implementation.",
+      "timestamp": "2026-08-21T02:37:43.755101Z"
     }
   ],
   "evidence_uris": [
@@ -62,13 +70,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked product-root role fix and passed the restart composition regression with exact PRODUCT_COORDINATOR worker authority; no backend process control.",
+      "Fresh pytest process loaded the tracked MiniQMT product runtime integration module and passed 62 tests; no backend process control.",
+      "Fresh pytest process loaded the tracked product-root PRODUCT_COORDINATOR role and passed the restart regression plus 62-test product runtime matrix; no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

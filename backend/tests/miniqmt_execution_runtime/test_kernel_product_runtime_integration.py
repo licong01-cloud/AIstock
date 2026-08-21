@@ -2404,6 +2404,7 @@ def test_product_composition_restart_uses_durable_session_without_broker_side_ef
         effective_at_utc=datetime(2026, 7, 27, 0, 30, tzinfo=UTC),
     )
     registered: list[object] = []
+    worker_start_calls: list[dict[str, object]] = []
 
     class ProductRepository:
         @staticmethod
@@ -2423,7 +2424,8 @@ def test_product_composition_restart_uses_durable_session_without_broker_side_ef
             return None
 
         @staticmethod
-        def start_worker_incarnation(**_values):
+        def start_worker_incarnation(**values):
+            worker_start_calls.append(values)
             return SimpleNamespace(worker_id="worker_product_restart", process_incarnation_id="incarnation_restart")
 
         @staticmethod
@@ -2485,6 +2487,9 @@ def test_product_composition_restart_uses_durable_session_without_broker_side_ef
     assert runtime.runtime_id == runtime_id
     assert runtime.outbox_dispatcher is None
     assert registered == [(runtime, ("600000.SH",))]
+    assert len(worker_start_calls) == 1
+    assert worker_start_calls[0]["worker_id"] == "miniqmt_kernel_v2_product"
+    assert worker_start_calls[0]["process_role"] == "PRODUCT_COORDINATOR"
 
 
 def test_product_composition_preflights_registry_and_reuses_only_exact_source_runtime(
