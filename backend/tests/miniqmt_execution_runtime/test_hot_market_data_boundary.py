@@ -58,6 +58,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
 from backend.services.miniqmt_execution_runtime.plugin_canonical import freeze_json_v1, hash_hex_v1, thaw_json_v1
 from backend.services.simulation_runtime.miniqmt_kernel_product import SimulationMiniQMTProductRuntimeV1
 from backend.services.simulation_runtime.miniqmt_kernel_product import build_k6d_gateway_catalog_v1
+import backend.services.miniqmt_execution_runtime.quote_ingress as quote_ingress_module
 
 
 def _forged_hot_tick() -> RuntimeEventEnvelopeV2:
@@ -175,6 +176,28 @@ def test_hot_quote_callback_does_not_own_outbox_or_reconciliation_cadence() -> N
     assert "dispatch_due_outbox_v1" not in source
     assert "reconcile_due_outbox_v1" not in source
     assert "dispatch_due_outbox_v1" in scheduler_source or "wake_clock_v1" in scheduler_source
+
+
+def test_quote_failure_governor_is_process_local_and_has_zero_database_or_outbox_seams() -> None:
+    governed_source = "\n".join(
+        (
+            inspect.getsource(quote_ingress_module._ProcessLocalQuoteFailureGovernor),
+            inspect.getsource(quote_ingress_module.PhaseOneQuoteProjectionSink._record_loud),
+            inspect.getsource(quote_ingress_module.PhaseOneQuoteProjectionSink._record_contextual_sink_exception),
+            inspect.getsource(quote_ingress_module.QuoteIngressWorker._emit_loud),
+        )
+    ).lower()
+
+    for forbidden in (
+        "repository",
+        "backend.db",
+        "execute(",
+        "cursor(",
+        "dispatch_due_outbox",
+        "reconcile_due_outbox",
+        "outbox scan",
+    ):
+        assert forbidden not in governed_source
 
 
 def _hot_view(*, sequence: int = 1) -> HotMarketDataViewV1:
