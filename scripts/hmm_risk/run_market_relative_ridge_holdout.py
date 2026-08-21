@@ -36,8 +36,14 @@ from backend.services.hmm_risk.market_relative_ridge_holdout import (  # noqa: E
     validate_static_request,
     write_once,
 )
-from backend.services.hmm_risk.state_model_set import canonical_json_bytes, canonical_sha256  # noqa: E402
+from backend.services.hmm_risk.state_model_set import (  # noqa: E402
+    StateModelSetError,
+    canonical_json_bytes,
+    canonical_sha256,
+)
 from scripts.hmm_risk.prepare_state_model_set import _connect_readonly, _load_l1_source_inputs  # noqa: E402
+
+SOURCE_LOADER_FAILURE = "hmm_risk_p2_4_source_loader_failed"
 
 
 def _producer_commit() -> str:
@@ -123,6 +129,33 @@ def _resolve_outcome_tail_end(db_prefix: str) -> date:
     return values[-1]
 
 
+def _load_holdout_inputs(request: dict[str, Any], *, db_prefix: str) -> Any:
+    try:
+        return _load_l1_source_inputs(
+            _loader_request(request),
+            db_prefix=db_prefix,
+            c010_formal=True,
+        )
+    except StateModelSetError as exc:
+        message = str(exc)
+        candidate_reason = message.partition(":")[0].strip()
+        source_reason_code = (
+            candidate_reason
+            if candidate_reason.startswith("hmm_risk_") and candidate_reason.replace("_", "").isalnum()
+            else SOURCE_LOADER_FAILURE
+        )
+        raise HoldoutAcceptanceError(
+            REASON_SOURCE,
+            message,
+            stage="source_preflight",
+            evidence={
+                "exception_type": type(exc).__name__,
+                "source_reason_code": source_reason_code,
+                "error_message": message,
+            },
+        ) from exc
+
+
 def _prepare_request(args: argparse.Namespace) -> int:
     request: dict[str, Any] = {}
     producer = "unknown"
@@ -136,10 +169,9 @@ def _prepare_request(args: argparse.Namespace) -> int:
         outcome_tail_end = _resolve_outcome_tail_end(str(args.db_env_prefix))
         source = expected_holdout_source(outcome_tail_end=outcome_tail_end)
         holdout_accessed = True
-        inputs = _load_l1_source_inputs(
-            _loader_request({"holdout_source": {"source": source}}),
+        inputs = _load_holdout_inputs(
+            {"holdout_source": {"source": source}},
             db_prefix=str(args.db_env_prefix),
-            c010_formal=True,
         )
         request = build_holdout_request(
             inputs,
@@ -235,11 +267,7 @@ def _child(args: argparse.Namespace) -> int:
         _validate_cli_outputs(args, request)
         producer = _producer_commit()
         holdout_accessed = True
-        inputs = _load_l1_source_inputs(
-            _loader_request(request),
-            db_prefix=str(args.db_env_prefix),
-            c010_formal=True,
-        )
+        inputs = _load_holdout_inputs(request, db_prefix=str(args.db_env_prefix))
         report = evaluate_child(
             inputs,
             request,

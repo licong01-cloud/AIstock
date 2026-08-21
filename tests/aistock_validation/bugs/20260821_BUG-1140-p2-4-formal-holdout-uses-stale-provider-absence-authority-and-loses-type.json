@@ -1,0 +1,204 @@
+{
+  "actual": "On clean main 1182e925, the first authorized P2-4 request preparation failed after holdout access but before product acceptance. The direct root cause is not an unaudited normal provider absence: market.suspend_d records 601969.SH/2026-01-30 as suspend_type=S, while market.kline_daily_raw contains a synthetic zero-volume/zero-amount flat bar. Both stock-fact observed-price readers ignore suspend_d, hard-code is_suspended=false, and evaluate moneyflow, so a normal full-day suspension becomes provider_absence_unverified and terminates the whole P2-4 source load. Both missing-price readers also exclude every suspend_d row without distinguishing full-day S from R-only or true intraday suspension. Formal holdout readback proves five dates have same-day blank-timing S/R and no price before a later real traded resume, while two dates use the provider full-day sentinel 09:30-09:30; same-day R therefore cannot by itself override full-day suspension. Price lag windows are built before suspension filtering, so synthetic suspension bars can also enter previous-close lags. The P2-4 CLI then collapses the typed source failure to hmm_risk_p2_4_unknown_execution_failure. Durable receipt canonical e4397982 remains immutable with holdout_accessed=true, product_acceptance_performed=false, and zero fit/selection/model/READY/DB/runtime.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/stock_fact_repository.py",
+    "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+    "backend/tests/hmm_risk/test_stock_fact_repository.py",
+    "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+    "tests/aistock_validation/bugs/20260821_BUG-1140-p2-4-formal-holdout-uses-stale-provider-absence-authority-and-loses-type.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1140",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-21T04:02:06.678575Z",
+  "description": "Restore authoritative full-day suspension handling before price lag and moneyflow evaluation in every HMM stock-fact reader. A full-day S row with blank suspend_timing or the provider full-day sentinel 09:30-09:30 must be excluded from price history, contributor evaluation, missing-price evidence and provider-absence validation even when a same-day R record also exists. R-only rows and all other intraday suspension timings remain ordinary trading candidates; missing prices on those rows remain explicit missing_non_suspended evidence rather than being silently excluded. Zero-volume rows without authoritative full-day suspension evidence must not be guessed as suspended. P2-4 source loader failures must persist a typed source reason instead of unknown_execution_failure. Preserve the frozen candidate, D1-D6, zero refit/reselection, original failure receipt and zero DB/runtime side effects. A post-fix formal holdout rerun remains separately user-controlled.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260821-4b7cfda536a4",
+      "timestamp": "2026-08-21T04:02:06.678556Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Normal full-day suspensions, including same-day S/R and 09:30-09:30 sentinel cases without actual trading, are authoritatively excluded without evaluating moneyflow or failing the whole HMM source load; R-only and true intraday rows are not misclassified as full-day suspension; previous-close lags exclude synthetic full-day suspension bars; genuine non-suspension source defects remain fail-closed with a typed P2-4 source reason.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+      "tests/aistock_validation/bugs/20260821_BUG-1140-p2-4-formal-holdout-uses-stale-provider-absence-authority-and-loses-type.json"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260821_BUG-1140-p2-4-formal-holdout-uses-stale-provider-absence-authority-and-loses-type.json"
+    ]
+  },
+  "first_seen_at": "2026-08-21T04:02:06.678575Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3640,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3640",
+  "last_seen_at": "2026-08-21T04:02:06.678575Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "P2-4 stock-fact reader misclassifies full-day suspension and hides resume-date gaps",
+  "trigger_condition": {
+    "fingerprint": "4b7cfda536a4f01f89f278be",
+    "source_event_id": "FE-20260821-4b7cfda536a4"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
