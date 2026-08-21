@@ -30,6 +30,7 @@ from backend.db.pg_pool import get_conn
 from backend.execution_algos.adaptive_is.reasons import QuoteContractError
 from backend.services.paper_trading_v2.broker.base import BrokerBackend
 from backend.services.paper_trading_v2.market_data import (
+    DailyTradingContextProvider,
     MinuteDataSource,
     PreTradeTradabilityProvider,
     fetch_tdx_realtime_quotes,
@@ -444,6 +445,7 @@ class ProductionSimulationRunContextProvider:
         package_manifest_loader: Callable[[str], StrategyPackageManifest | dict[str, Any] | None] | None = None,
         runtime_repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
         pre_trade_tradability_provider: PreTradeTradabilityProvider | Any | None = None,
+        daily_trading_context_provider: DailyTradingContextProvider | Any | None = None,
         enable_localsim_broker: bool | None = None,
         enable_miniqmt_submit: bool | None = None,
     ) -> None:
@@ -465,6 +467,7 @@ class ProductionSimulationRunContextProvider:
             realtime_quote_fetcher=fetch_tdx_realtime_quotes,
             realtime_quote_source="TDX_REALTIME.batch_quote",
         )
+        self._daily_trading_context_provider = daily_trading_context_provider or DailyTradingContextProvider()
         self._enable_localsim_broker = (
             _env_flag("SIMULATION_RUNTIME_ENABLE_LOCALSIM_BROKER", default=True)
             if enable_localsim_broker is None
@@ -700,13 +703,11 @@ class ProductionSimulationRunContextProvider:
             self._load_pre_trade_tradability(
                 symbols=list(positions),
                 trade_date=trade_date,
-                require_realtime_quote=bool(
-                    require_realtime_quote
-                    and market_data_source == MinuteDataSource.TDX_REALTIME
-                    and self._position_loader is None
-                ),
+                require_realtime_quote=False,
                 as_of_time=as_of_time,
             )
+            if planning_market_data and self._pre_trade_tradability_provider_injected
+            else {}
             if planning_market_data
             else deepcopy(frozen_pre_trade_tradability or {})
         )
@@ -888,12 +889,16 @@ class ProductionSimulationRunContextProvider:
                 strategy_id=binding.strategy_id,
                 binding_id=binding.binding_id,
             )
-            pre_trade_tradability = self._load_miniqmt_pre_trade_tradability(
-                symbols=list(positions),
-                trade_date=trade_date,
-                binding=binding,
-                qmt_client=qmt_client,
-                require_realtime_quote=self._position_loader is None and trade_date == date.today(),
+            pre_trade_tradability = (
+                self._load_miniqmt_pre_trade_tradability(
+                    symbols=list(positions),
+                    trade_date=trade_date,
+                    binding=binding,
+                    qmt_client=qmt_client,
+                    require_realtime_quote=self._position_loader is None and trade_date == date.today(),
+                )
+                if self._pre_trade_tradability_provider_injected
+                else {}
             )
         else:
             prices = self._load_miniqmt_runtime_marks(
@@ -1043,6 +1048,7 @@ class ProductionSimulationRunContextProvider:
         require_realtime_quote: bool | None = None,
         as_of_time: datetime | None = None,
         side_by_symbol: dict[str, Any] | None = None,
+        frozen_daily_statuses: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         if require_realtime_quote is None:
             current_trade_date = (
@@ -1071,6 +1077,7 @@ class ProductionSimulationRunContextProvider:
                 require_realtime_quote=require_quote,
                 as_of_time=as_of_time,
                 side_by_symbol=side_by_symbol,
+                frozen_daily_statuses=frozen_daily_statuses,
             )
         return self._load_pre_trade_tradability(
             symbols=symbols,
@@ -1078,7 +1085,29 @@ class ProductionSimulationRunContextProvider:
             require_realtime_quote=require_quote,
             as_of_time=as_of_time,
             side_by_symbol=side_by_symbol,
+            frozen_daily_statuses=frozen_daily_statuses,
         )
+
+    def load_daily_trading_context(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        as_of_time: datetime,
+        calendar_service_snapshot: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        context = self._daily_trading_context_provider.load(
+            symbols=symbols,
+            trade_date=trade_date,
+            as_of_time=scheduler_time(as_of_time),
+            calendar_service_snapshot=calendar_service_snapshot,
+            binding_identity=f"{binding.binding_id}:{binding.binding_hash}",
+            package_identity=f"{runtime_release.package_id}:{runtime_release.manifest_sha256}",
+            release_identity=f"{runtime_release.release_id}:{runtime_release.release_hash}",
+        )
+        return self._daily_trading_context_provider.to_pre_trade_statuses(context)
 
     def _load_miniqmt_pre_trade_tradability(
         self,
@@ -1090,9 +1119,10 @@ class ProductionSimulationRunContextProvider:
         require_realtime_quote: bool,
         as_of_time: datetime | None = None,
         side_by_symbol: dict[str, Any] | None = None,
+        frozen_daily_statuses: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         if not require_realtime_quote:
-            return {}
+            return {str(symbol): dict(status) for symbol, status in (frozen_daily_statuses or {}).items()}
         quote_fetcher = self._build_miniqmt_quote_fetcher(
             qmt_client=qmt_client,
             binding=binding,
@@ -1119,6 +1149,7 @@ class ProductionSimulationRunContextProvider:
             provider=provider,
             as_of_time=as_of_time,
             side_by_symbol=side_by_symbol,
+            frozen_daily_statuses=frozen_daily_statuses,
         )
 
     def _build_miniqmt_quote_fetcher(
@@ -1253,9 +1284,10 @@ class ProductionSimulationRunContextProvider:
         provider: Any | None = None,
         as_of_time: datetime | None = None,
         side_by_symbol: dict[str, Any] | None = None,
+        frozen_daily_statuses: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         if self._position_loader is not None and not self._pre_trade_tradability_provider_injected:
-            return {}
+            return {str(symbol): dict(status) for symbol, status in (frozen_daily_statuses or {}).items()}
         tradability_provider = provider or self._pre_trade_tradability_provider
         loader = getattr(tradability_provider, "get_statuses", None)
         if not callable(loader):
@@ -1274,6 +1306,7 @@ class ProductionSimulationRunContextProvider:
             "require_realtime_quote": require_realtime_quote,
             "as_of_time": as_of_time,
             "side_by_symbol": side_by_symbol,
+            "frozen_daily_statuses": frozen_daily_statuses,
         }
         supported_kwargs = {
             key: value for key, value in optional_kwargs.items() if accepts_kwargs or key in signature.parameters
@@ -18158,6 +18191,7 @@ class SimulationLifecycleScheduler:
         evidence = selection.evidence_by_package[binding.package_id]
         candidates = selection.package_results.get(binding.package_id, [])
         pre_trade_tradability = self._pre_trade_tradability_for_planning(
+            runtime_release=runtime_release,
             binding=binding,
             trade_date=trade_date,
             context=context,
@@ -18365,6 +18399,7 @@ class SimulationLifecycleScheduler:
     def _pre_trade_tradability_for_planning(
         self,
         *,
+        runtime_release: StrategyRuntimeRelease,
         binding: SimulationReleaseBinding,
         trade_date: date,
         context: SimulationRunContext,
@@ -18372,17 +18407,51 @@ class SimulationLifecycleScheduler:
         require_realtime_quote: bool | None = None,
         as_of_time: datetime | None = None,
     ) -> dict[str, dict[str, Any]]:
-        if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
-            # LocalSIM plan identity is broker-neutral.  Transient quote,
-            # suspend and limit state are consumed by the causal minute
-            # execution runtime and must not delete target deltas here.
-            return {}
         symbols = sorted(
             {
                 *context.current_positions.keys(),
                 *[str(symbol).strip() for symbol in candidate_symbols if str(symbol).strip()],
             }
         )
+        if not symbols:
+            return {}
+        daily_loader = getattr(self.context_provider, "load_daily_trading_context", None)
+        frozen_daily_statuses: dict[str, dict[str, Any]] = {}
+        if callable(daily_loader):
+            service = self.trading_calendar_service
+            if service is None:
+                raise DataUnavailableError(
+                    "simulation daily trading context requires Trading Calendar Service",
+                    context={"reason_code": "DAILY_TRADING_CONTEXT_CALENDAR_SERVICE_MISSING"},
+                )
+            calendar_snapshot = self._lifecycle_trading_day_status(service=service, trade_date=trade_date)
+            frozen_daily_statuses = daily_loader(
+                symbols=symbols,
+                trade_date=trade_date,
+                binding=binding,
+                runtime_release=runtime_release,
+                as_of_time=scheduler_time(as_of_time),
+                calendar_service_snapshot=calendar_snapshot,
+            )
+        if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+            if not frozen_daily_statuses:
+                # Static test providers may inject already-frozen evidence. The
+                # production provider must never silently bypass this boundary.
+                if context.pre_trade_tradability:
+                    frozen_statuses = {
+                        str(symbol): dict(status)
+                        for symbol, status in context.pre_trade_tradability.items()
+                        if isinstance(status, dict) and isinstance(status.get("daily_trading_context"), dict)
+                    }
+                    if frozen_statuses:
+                        return frozen_statuses
+                if getattr(self.context_provider, "provider_mode", None) == "production":
+                    raise DataUnavailableError(
+                        "LocalSIM production planning requires DailyTradingContextV1",
+                        context={"reason_code": "DAILY_TRADING_CONTEXT_PROVIDER_MISSING"},
+                    )
+                return {}
+            return frozen_daily_statuses
         loader = getattr(self.context_provider, "load_pre_trade_tradability", None)
         refresh_from_loader = require_realtime_quote is True and callable(loader)
         statuses = (
@@ -18399,6 +18468,7 @@ class SimulationLifecycleScheduler:
                 "market_data_source": context.market_data_source,
                 "require_realtime_quote": require_realtime_quote,
                 "as_of_time": as_of_time,
+                "frozen_daily_statuses": frozen_daily_statuses or None,
             }
             signature = inspect.signature(loader)
             accepts_kwargs = any(

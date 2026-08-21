@@ -18,7 +18,7 @@ from backend.services.paper_trading_v2.day_features import (
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
-from backend.tests.paper_trading_v2.test_market_data import make_raw_bars
+from backend.tests.paper_trading_v2.test_market_data import frozen_daily_fact, make_raw_bars
 
 
 class FakeAudit:
@@ -57,8 +57,22 @@ class StaticV25Provider(DbV25DayFeatureProvider):
 
     def _load_stock_daily_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
         if trade_date == date(2024, 1, 1):
-            return {"open_li": 7000, "high_li": 8500, "low_li": 6900, "close_li": 8000, "volume_hand": 80, "amount_li": 800_000}
-        return {"open_li": 9000, "high_li": 11000, "low_li": 8000, "close_li": 10000, "volume_hand": 100, "amount_li": 1_000_000}
+            return {
+                "open_li": 7000,
+                "high_li": 8500,
+                "low_li": 6900,
+                "close_li": 8000,
+                "volume_hand": 80,
+                "amount_li": 800_000,
+            }
+        return {
+            "open_li": 9000,
+            "high_li": 11000,
+            "low_li": 8000,
+            "close_li": 10000,
+            "volume_hand": 100,
+            "amount_li": 1_000_000,
+        }
 
     def _load_daily_basic_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
         return {"turnover_rate": 5.0, "turnover_rate_f": self.turnover_rate_f, "pb": 2.0}
@@ -158,7 +172,7 @@ def test_db_v25_day_feature_provider_still_fails_for_invalid_free_turnover(turno
     assert exc_info.value.context["fail_closed_policy"] == "exclude_symbol_for_trade_date"
 
 
-def test_market_data_includes_day_features_only_when_required() -> None:
+def test_live_market_data_forbids_v25_day_features_after_context_freeze() -> None:
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=FakeLimitProvider(),
         day_feature_provider=FakeDayProvider(),
@@ -170,15 +184,17 @@ def test_market_data_includes_day_features_only_when_required() -> None:
         trade_date=date(2024, 1, 3),
         source=MinuteDataSource.TDX_REALTIME,
         min_bars=31,
+        frozen_daily_fact=frozen_daily_fact(trade_date=date(2024, 1, 3)),
     )
-    with_features = provider.load_symbol_input(
-        symbol="000001.SZ",
-        trade_date=date(2024, 1, 3),
-        source=MinuteDataSource.TDX_REALTIME,
-        min_bars=31,
-        require_day_features=True,
-    )
+    with pytest.raises(DataUnavailableError) as exc_info:
+        provider.load_symbol_input(
+            symbol="000001.SZ",
+            trade_date=date(2024, 1, 3),
+            source=MinuteDataSource.TDX_REALTIME,
+            min_bars=31,
+            require_day_features=True,
+            frozen_daily_fact=frozen_daily_fact(trade_date=date(2024, 1, 3)),
+        )
 
     assert "day_features" not in without_features.market_context
-    assert with_features.market_context["day_features"] == [0.1] * 10
-    assert with_features.market_context["day_features_schema_version"] == V25_DAY_FEATURE_SCHEMA_VERSION
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_LIVE_DAY_FEATURES_FORBIDDEN"

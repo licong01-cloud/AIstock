@@ -36,6 +36,7 @@ from backend.services.trading_core.errors import (
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot
 
 from .models import (
+    DailyTradingContextV1,
     DailySelectionEvidence,
     ExecutionPathNotCanonicalError,
     ExecutionPlan,
@@ -182,17 +183,29 @@ class TargetPositionService:
             "release_id": runtime_release.release_id,
         }
         if selection_evidence.package_id != signal_snapshot.package_id:
-            raise InvalidStateTransitionError("selection evidence package does not match signal snapshot", context=context)
+            raise InvalidStateTransitionError(
+                "selection evidence package does not match signal snapshot", context=context
+            )
         if selection_evidence.package_id != runtime_release.package_id:
-            raise InvalidStateTransitionError("selection evidence package does not match runtime release", context=context)
+            raise InvalidStateTransitionError(
+                "selection evidence package does not match runtime release", context=context
+            )
         if selection_evidence.manifest_sha256 != signal_snapshot.manifest_sha256:
-            raise InvalidStateTransitionError("selection evidence manifest does not match signal snapshot", context=context)
+            raise InvalidStateTransitionError(
+                "selection evidence manifest does not match signal snapshot", context=context
+            )
         if selection_evidence.manifest_sha256 != runtime_release.manifest_sha256:
-            raise InvalidStateTransitionError("selection evidence manifest does not match runtime release", context=context)
+            raise InvalidStateTransitionError(
+                "selection evidence manifest does not match runtime release", context=context
+            )
         if selection_evidence.release_id and selection_evidence.release_id != runtime_release.release_id:
-            raise InvalidStateTransitionError("selection evidence release_id does not match runtime release", context=context)
+            raise InvalidStateTransitionError(
+                "selection evidence release_id does not match runtime release", context=context
+            )
         if selection_evidence.release_hash and selection_evidence.release_hash != runtime_release.release_hash:
-            raise InvalidStateTransitionError("selection evidence release_hash does not match runtime release", context=context)
+            raise InvalidStateTransitionError(
+                "selection evidence release_hash does not match runtime release", context=context
+            )
 
 
 class TradingRuleService:
@@ -232,10 +245,11 @@ class TradingRuleService:
                     reason_code=_tradability_reason_code(tradability_status),
                 )
             quote_evidence = tradability_status.get("quote_evidence")
-            blocked_sides = {
-                str(value).strip().upper()
-                for value in (quote_evidence.get("blocked_sides") or [])
-            } if isinstance(quote_evidence, dict) else set()
+            blocked_sides = (
+                {str(value).strip().upper() for value in (quote_evidence.get("blocked_sides") or [])}
+                if isinstance(quote_evidence, dict)
+                else set()
+            )
             if side_value.value in blocked_sides:
                 return self._build_decision(
                     symbol=symbol,
@@ -247,11 +261,7 @@ class TradingRuleService:
                     price_limit_rule=effective_price_limit_rule,
                     tplus1_available_quantity=available,
                     decision="REJECT",
-                    reason_code=(
-                        "LIMIT_UP_BUY_BLOCKED"
-                        if side_value == OrderSide.BUY
-                        else "LIMIT_DOWN_SELL_BLOCKED"
-                    ),
+                    reason_code=("LIMIT_UP_BUY_BLOCKED" if side_value == OrderSide.BUY else "LIMIT_DOWN_SELL_BLOCKED"),
                 )
 
         if requested <= 0:
@@ -512,7 +522,9 @@ class ExecutionPlanCompiler:
         tail_policy_payload: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
         self._validate_identity(runtime_release=runtime_release, binding=binding, selection_evidence=selection_evidence)
-        execution_policy = dict(execution_policy_payload or runtime_release.release_config_json.get("execution_policy") or {})
+        execution_policy = dict(
+            execution_policy_payload or runtime_release.release_config_json.get("execution_policy") or {}
+        )
         self._reject_paper_only_policy(execution_policy)
         if binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
             execution_policy = local_sim_twap_only_policy_snapshot()
@@ -533,7 +545,9 @@ class ExecutionPlanCompiler:
                 "ExecutionPlanCompiler requires every intent to reference a TradingRuleDecision",
                 context={"missing_trading_rule_decision_ids": missing},
             )
-        effective_portfolio_id = str(portfolio_id or (order_intents[0].portfolio_id if order_intents else binding.strategy_id)).strip()
+        effective_portfolio_id = str(
+            portfolio_id or (order_intents[0].portfolio_id if order_intents else binding.strategy_id)
+        ).strip()
         if not effective_portfolio_id:
             raise RuntimeConfigInvalidError(
                 "ExecutionPlanCompiler requires portfolio_id",
@@ -543,7 +557,9 @@ class ExecutionPlanCompiler:
         schedule_window = execution_policy.get("schedule_window")
         if not isinstance(schedule_window, dict):
             schedule_window = {"mode": "full_day", "source": runtime_release.execution_policy_version_id}
-        risk_context = execution_policy.get("risk_context") if isinstance(execution_policy.get("risk_context"), dict) else {}
+        risk_context = (
+            execution_policy.get("risk_context") if isinstance(execution_policy.get("risk_context"), dict) else {}
+        )
         quote_control = QuoteControlBindingV1.from_binding_config(binding.binding_config_json)
         if (
             binding.broker_backend is SimulationBrokerBackend.MINIQMT_SIM
@@ -634,6 +650,11 @@ class ExecutionPlanCompiler:
             )
         seed_intents.sort(key=lambda item: (item["symbol"], item["side"], item["intent_id"]))
         quote_assignments.sort(key=lambda item: str(item["parent_intent_id"]))
+        daily_trading_context = self._daily_trading_context_carrier(
+            binding=binding,
+            target_trade_date=selection_evidence.target_trade_date,
+            trading_rule_decisions=trading_rule_decisions,
+        )
         payload = {
             "schema_version": "execution_plan_v1",
             "strategy_id": binding.strategy_id,
@@ -667,6 +688,8 @@ class ExecutionPlanCompiler:
                 for decision in sorted(trading_rule_decisions, key=lambda item: item.decision_id)
             ],
         }
+        if daily_trading_context is not None:
+            payload["daily_trading_context"] = daily_trading_context
         if quote_control.explicitly_configured:
             payload["quote_control"] = {
                 "binding": quote_control.canonical_payload(),
@@ -726,6 +749,86 @@ class ExecutionPlanCompiler:
         )
 
     @staticmethod
+    def _daily_trading_context_carrier(
+        *,
+        binding: SimulationReleaseBinding,
+        target_trade_date: date,
+        trading_rule_decisions: list[TradingRuleDecision],
+    ) -> dict[str, Any] | None:
+        carriers: dict[str, dict[str, Any]] = {}
+        referenced_decisions = 0
+        for decision in trading_rule_decisions:
+            status = decision.price_limit_rule.get("pre_trade_tradability")
+            reference = status.get("daily_trading_context") if isinstance(status, dict) else None
+            if reference is None:
+                continue
+            referenced_decisions += 1
+            carrier = reference.get("context") if isinstance(reference, dict) else None
+            if not isinstance(reference, dict) or not isinstance(carrier, dict):
+                raise RuntimeConfigInvalidError(
+                    "LocalSIM trading decision is missing DailyTradingContextV1 evidence",
+                    context={
+                        "reason_code": "DAILY_TRADING_CONTEXT_DECISION_REFERENCE_MISSING",
+                        "binding_id": binding.binding_id,
+                        "symbol": decision.symbol,
+                        "decision_id": decision.decision_id,
+                    },
+                )
+            try:
+                context = DailyTradingContextV1.model_validate(carrier)
+            except Exception as exc:
+                raise RuntimeConfigInvalidError(
+                    "LocalSIM trading decision carries an invalid DailyTradingContextV1",
+                    context={
+                        "reason_code": "DAILY_TRADING_CONTEXT_DECISION_REFERENCE_INVALID",
+                        "binding_id": binding.binding_id,
+                        "symbol": decision.symbol,
+                    },
+                ) from exc
+            fact = context.symbols.get(decision.symbol)
+            if (
+                context.trade_date != target_trade_date
+                or fact is None
+                or reference.get("context_id") != context.context_id
+                or reference.get("context_hash") != context.context_hash
+                or reference.get("source") != "market.stk_limit"
+                or reference.get("stk_limit_row_hash") != fact.stk_limit_row_hash
+                or reference.get("symbol_fact") != fact.canonical_payload()
+            ):
+                raise RuntimeConfigInvalidError(
+                    "LocalSIM daily trading context does not close over the trading decision",
+                    context={
+                        "reason_code": "DAILY_TRADING_CONTEXT_DECISION_REFERENCE_CONFLICT",
+                        "binding_id": binding.binding_id,
+                        "symbol": decision.symbol,
+                        "context_id": context.context_id,
+                    },
+                )
+            carriers[context.context_hash] = context.carrier_payload()
+        if not trading_rule_decisions or referenced_decisions == 0:
+            return None
+        if referenced_decisions != len(trading_rule_decisions):
+            raise RuntimeConfigInvalidError(
+                "LocalSIM execution plan cannot mix frozen and unfrozen trading decisions",
+                context={
+                    "reason_code": "DAILY_TRADING_CONTEXT_PLAN_PARTIAL_COVERAGE",
+                    "binding_id": binding.binding_id,
+                    "decision_count": len(trading_rule_decisions),
+                    "referenced_decision_count": referenced_decisions,
+                },
+            )
+        if len(carriers) != 1:
+            raise RuntimeConfigInvalidError(
+                "LocalSIM execution plan requires exactly one DailyTradingContextV1",
+                context={
+                    "reason_code": "DAILY_TRADING_CONTEXT_PLAN_IDENTITY_CONFLICT",
+                    "binding_id": binding.binding_id,
+                    "context_hashes": sorted(carriers),
+                },
+            )
+        return next(iter(carriers.values()))
+
+    @staticmethod
     def _validate_identity(
         *,
         runtime_release: StrategyRuntimeRelease,
@@ -740,18 +843,22 @@ class ExecutionPlanCompiler:
         if binding.release_id != runtime_release.release_id or binding.release_hash != runtime_release.release_hash:
             raise InvalidStateTransitionError("simulation binding does not match runtime release", context=context)
         if selection_evidence.package_id != runtime_release.package_id:
-            raise InvalidStateTransitionError("selection evidence does not match runtime release package", context=context)
+            raise InvalidStateTransitionError(
+                "selection evidence does not match runtime release package", context=context
+            )
         if selection_evidence.release_id and selection_evidence.release_id != runtime_release.release_id:
-            raise InvalidStateTransitionError("selection evidence release_id does not match runtime release", context=context)
+            raise InvalidStateTransitionError(
+                "selection evidence release_id does not match runtime release", context=context
+            )
         if selection_evidence.release_hash and selection_evidence.release_hash != runtime_release.release_hash:
-            raise InvalidStateTransitionError("selection evidence release_hash does not match runtime release", context=context)
+            raise InvalidStateTransitionError(
+                "selection evidence release_hash does not match runtime release", context=context
+            )
 
     @staticmethod
     def _reject_paper_only_policy(policy: dict[str, Any]) -> None:
         policy_json = _immutable_execution_policy_json(policy)
-        algo_code = str(
-            policy_json.get("algo_code") or policy_json.get("policy_version_id") or ""
-        ).strip().lower()
+        algo_code = str(policy_json.get("algo_code") or policy_json.get("policy_version_id") or "").strip().lower()
         if bool(policy_json.get("paper_only")) or algo_code in {"paper_only", "selection_order_builder", "manual"}:
             raise RuntimeConfigInvalidError(
                 "ExecutionPlanCompiler only accepts validated execution policies, not paper-only or manual algorithms",
