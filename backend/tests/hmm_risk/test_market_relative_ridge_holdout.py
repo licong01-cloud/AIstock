@@ -10,6 +10,7 @@ import pytest
 
 from backend.services.hmm_risk import market_relative_ridge_holdout as subject
 from backend.services.hmm_risk.market_relative_jump_spike import MARKET_FEATURES, RELATIVE_FEATURES, Preprocessor
+from backend.services.hmm_risk.state_model_set import StateModelSetError
 from scripts.hmm_risk import run_market_relative_ridge_holdout as cli
 
 
@@ -1041,7 +1042,9 @@ def test_cli_request_preparation_failure_records_access_and_blocks_retry(
     def fail_loader(*args: object, **kwargs: object) -> None:
         nonlocal calls
         calls += 1
-        raise RuntimeError("source failed")
+        raise StateModelSetError(
+            "hmm_risk_stock_fact_provider_absence_unverified: 601969.SH/2026-01-30/market.moneyflow_ts"
+        )
 
     monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_loader)
     argv = [
@@ -1068,6 +1071,13 @@ def test_cli_request_preparation_failure_records_access_and_blocks_retry(
     assert failure["holdout_accessed"] is True
     assert failure["product_acceptance_performed"] is False
     assert failure["fit_count"] == 0
+    assert failure["failure_reason_code"] == subject.REASON_SOURCE
+    assert failure["failure_stage"] == "source_preflight"
+    assert failure["failure_evidence"] == {
+        "exception_type": "StateModelSetError",
+        "source_reason_code": "hmm_risk_stock_fact_provider_absence_unverified",
+        "error_message": ("hmm_risk_stock_fact_provider_absence_unverified: 601969.SH/2026-01-30/market.moneyflow_ts"),
+    }
     assert not request_path.exists()
     assert calls == 1
 

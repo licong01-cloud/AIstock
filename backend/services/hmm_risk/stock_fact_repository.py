@@ -27,6 +27,35 @@ from .stock_fact_observation import (
 CIRC_MV_LOOKBACK_CONTRACT_VERSION = "hmm_risk_causal_circ_mv_source_window_v1"
 
 
+def _full_day_suspension_exists_sql(*, trade_date: str, ts_code: str) -> str:
+    """Return the authoritative full-day suspension predicate for internal SQL aliases."""
+
+    allowed_identities = {
+        ("calendar_base.trade_date", "spans.ts_code"),
+        ("price.trade_date", "price.ts_code"),
+        ("c.trade_date", "c.ts_code"),
+    }
+    if (trade_date, ts_code) not in allowed_identities:
+        raise ValueError("unsupported full-day suspension SQL identity")
+    return f"""
+        EXISTS (
+          SELECT 1
+          FROM market.suspend_d suspension
+          WHERE suspension.trade_date={trade_date}
+            AND suspension.ts_code={ts_code}
+            AND suspension.suspend_type='S'
+            AND COALESCE(BTRIM(suspension.suspend_timing),'')=''
+            AND NOT EXISTS (
+              SELECT 1
+              FROM market.suspend_d resume
+              WHERE resume.trade_date=suspension.trade_date
+                AND resume.ts_code=suspension.ts_code
+                AND resume.suspend_type='R'
+            )
+        )
+    """
+
+
 @dataclass(frozen=True)
 class StockFactSourceSpec:
     universe_key: str
@@ -360,10 +389,7 @@ class PostgresStockFactReader:
                 SELECT 1 FROM market.kline_daily_raw price
                 WHERE price.trade_date=calendar_base.trade_date AND price.ts_code=spans.ts_code
               )
-                AND NOT EXISTS (
-                  SELECT 1 FROM market.suspend_d suspension
-                  WHERE suspension.trade_date=calendar_base.trade_date AND suspension.ts_code=spans.ts_code
-                )
+                AND NOT ({_full_day_suspension_exists_sql(trade_date="calendar_base.trade_date", ts_code="spans.ts_code")})
             ), mapping_source AS (
               SELECT missing_keys.trade_date,missing_keys.previous_trade_date,
                      missing_keys.ts_code,missing_keys.eligible_start,missing_keys.eligible_end,
@@ -541,9 +567,11 @@ class PostgresStockFactReader:
               FROM market.trading_calendar
               WHERE is_trading=true AND cal_date BETWEEN %s AND %s
             ), price_base AS (
-              SELECT DISTINCT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li
-              FROM market.kline_daily_raw
-              WHERE trade_date BETWEEN %s AND %s
+              SELECT DISTINCT price.trade_date,price.ts_code,price.open_li,price.high_li,price.low_li,
+                              price.close_li,price.volume_hand,price.amount_li
+              FROM market.kline_daily_raw price
+              WHERE price.trade_date BETWEEN %s AND %s
+                AND NOT ({_full_day_suspension_exists_sql(trade_date="price.trade_date", ts_code="price.ts_code")})
             ), price_history AS (
               SELECT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li,
                      lag(trade_date,1) OVER w previous_price_date,
@@ -1087,9 +1115,11 @@ class PostgresStockFactReader:
                      lag(trade_ordinal,1) OVER (ORDER BY trade_date) previous_trade_ordinal
               FROM calendar_ordinal
             ), price_base AS (
-              SELECT DISTINCT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li
-              FROM market.kline_daily_raw
-              WHERE trade_date BETWEEN %s AND %s
+              SELECT DISTINCT price.trade_date,price.ts_code,price.open_li,price.high_li,price.low_li,
+                              price.close_li,price.volume_hand,price.amount_li
+              FROM market.kline_daily_raw price
+              WHERE price.trade_date BETWEEN %s AND %s
+                AND NOT ({_full_day_suspension_exists_sql(trade_date="price.trade_date", ts_code="price.ts_code")})
             ), price_history AS (
               SELECT trade_date,ts_code,open_li,high_li,low_li,close_li,volume_hand,amount_li,
                      lag(trade_date,1) OVER w previous_price_date,
@@ -1407,10 +1437,7 @@ class PostgresStockFactReader:
             {circ_mv_join_sql}
             LEFT JOIN price_base p ON p.trade_date=c.trade_date AND p.ts_code=c.ts_code
             WHERE p.ts_code IS NULL
-              AND NOT EXISTS (
-                SELECT 1 FROM market.suspend_d sd
-                WHERE sd.trade_date=c.trade_date AND sd.ts_code=c.ts_code
-              )
+              AND NOT ({_full_day_suspension_exists_sql(trade_date="c.trade_date", ts_code="c.ts_code")})
             ORDER BY {order_by}
             """,
             (
