@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,8 @@ from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.model_binding_resolution import (
     AdvisoryModelBindingResolver,
     publish_program_model_descriptor,
+    rollback_program_model_descriptor,
+    rotate_program_model_descriptor,
 )
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 
@@ -69,7 +72,9 @@ def test_exact_program_descriptor_resolves_without_latest_scan(tmp_path) -> None
         model_root=tmp_path,
         program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
         active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
-        selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+        selection_run=SimpleNamespace(
+            manifest_sha256_by_package={"pkg_test": "a" * 64}
+        ),
     )
 
     assert resolution.package_id == "pkg_test"
@@ -77,7 +82,9 @@ def test_exact_program_descriptor_resolves_without_latest_scan(tmp_path) -> None
     assert resolution.bundle_id == "e" * 64
 
 
-def test_meta_label_descriptor_v2_resolves_exact_role_policy_and_weights(tmp_path) -> None:
+def test_meta_label_descriptor_v2_resolves_exact_role_policy_and_weights(
+    tmp_path,
+) -> None:
     path = tmp_path / "program_bindings" / "advp_test" / "advb_test.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(_meta_descriptor()), encoding="utf-8")
@@ -86,7 +93,9 @@ def test_meta_label_descriptor_v2_resolves_exact_role_policy_and_weights(tmp_pat
         model_root=tmp_path,
         program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
         active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
-        selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+        selection_run=SimpleNamespace(
+            manifest_sha256_by_package={"pkg_test": "a" * 64}
+        ),
     )
 
     assert resolution.model_role == "meta_label_take_skip_confidence"
@@ -97,7 +106,10 @@ def test_meta_label_descriptor_v2_resolves_exact_role_policy_and_weights(tmp_pat
 @pytest.mark.parametrize(
     ("mutation", "reason_code"),
     (
-        (lambda payload: payload.update(model_role="quality_reranker"), "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"),
+        (
+            lambda payload: payload.update(model_role="quality_reranker"),
+            "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+        ),
         (
             lambda payload: payload["candidate_projection"].update(
                 terminal_weights={"alpha_lstm": 0.6, "alpha_fund": 0.3}
@@ -106,7 +118,9 @@ def test_meta_label_descriptor_v2_resolves_exact_role_policy_and_weights(tmp_pat
         ),
     ),
 )
-def test_meta_label_descriptor_v2_rejects_role_or_weight_drift(tmp_path, mutation, reason_code) -> None:
+def test_meta_label_descriptor_v2_rejects_role_or_weight_drift(
+    tmp_path, mutation, reason_code
+) -> None:
     payload = _meta_descriptor()
     mutation(payload)
     payload["descriptor_sha256"] = canonical_json_sha256(
@@ -120,14 +134,21 @@ def test_meta_label_descriptor_v2_rejects_role_or_weight_drift(tmp_path, mutatio
         AdvisoryModelBindingResolver().resolve(
             model_root=tmp_path,
             program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
-            active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
-            selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+            active_binding={
+                "binding_version_id": "advb_test",
+                "package_ids": ["pkg_test"],
+            },
+            selection_run=SimpleNamespace(
+                manifest_sha256_by_package={"pkg_test": "a" * 64}
+            ),
         )
 
     assert error.value.reason_code == reason_code
 
 
-def test_missing_exact_descriptor_is_typed_unavailable_without_directory_scan(tmp_path) -> None:
+def test_missing_exact_descriptor_is_typed_unavailable_without_directory_scan(
+    tmp_path,
+) -> None:
     unrelated = tmp_path / "program_bindings" / "other" / "latest.json"
     unrelated.parent.mkdir(parents=True)
     unrelated.write_text(json.dumps(_descriptor()), encoding="utf-8")
@@ -136,14 +157,21 @@ def test_missing_exact_descriptor_is_typed_unavailable_without_directory_scan(tm
         AdvisoryModelBindingResolver().resolve(
             model_root=tmp_path,
             program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
-            active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
-            selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+            active_binding={
+                "binding_version_id": "advb_test",
+                "package_ids": ["pkg_test"],
+            },
+            selection_run=SimpleNamespace(
+                manifest_sha256_by_package={"pkg_test": "a" * 64}
+            ),
         )
 
     assert error.value.reason_code == "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE"
 
 
-def test_descriptor_rejects_unknown_schema_as_invalid_not_target_drift(tmp_path) -> None:
+def test_descriptor_rejects_unknown_schema_as_invalid_not_target_drift(
+    tmp_path,
+) -> None:
     payload = _descriptor()
     payload["schema_version"] = "advisory_program_model_binding_v999"
     payload["descriptor_sha256"] = canonical_json_sha256(
@@ -157,8 +185,13 @@ def test_descriptor_rejects_unknown_schema_as_invalid_not_target_drift(tmp_path)
         AdvisoryModelBindingResolver().resolve(
             model_root=tmp_path,
             program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
-            active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
-            selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+            active_binding={
+                "binding_version_id": "advb_test",
+                "package_ids": ["pkg_test"],
+            },
+            selection_run=SimpleNamespace(
+                manifest_sha256_by_package={"pkg_test": "a" * 64}
+            ),
         )
 
     assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
@@ -238,7 +271,9 @@ def test_descriptor_path_rejects_program_directory_symlink_escape(tmp_path) -> N
     assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
 
 
-def test_resolve_rejects_program_directory_symlink_before_descriptor_read(tmp_path) -> None:
+def test_resolve_rejects_program_directory_symlink_before_descriptor_read(
+    tmp_path,
+) -> None:
     binding_root = tmp_path / "program_bindings"
     binding_root.mkdir()
     outside = tmp_path.parent / f"{tmp_path.name}-resolve-outside"
@@ -253,8 +288,13 @@ def test_resolve_rejects_program_directory_symlink_before_descriptor_read(tmp_pa
         AdvisoryModelBindingResolver().resolve(
             model_root=tmp_path,
             program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
-            active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
-            selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+            active_binding={
+                "binding_version_id": "advb_test",
+                "package_ids": ["pkg_test"],
+            },
+            selection_run=SimpleNamespace(
+                manifest_sha256_by_package={"pkg_test": "a" * 64}
+            ),
         )
 
     assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
@@ -277,14 +317,21 @@ def test_descriptor_component_roles_and_hash_fail_closed(tmp_path) -> None:
         AdvisoryModelBindingResolver().resolve(
             model_root=tmp_path,
             program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
-            active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
-            selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+            active_binding={
+                "binding_version_id": "advb_test",
+                "package_ids": ["pkg_test"],
+            },
+            selection_run=SimpleNamespace(
+                manifest_sha256_by_package={"pkg_test": "a" * 64}
+            ),
         )
 
     assert error.value.reason_code == "ADVISORY_MODEL_CANDIDATE_PROJECTION_UNSUPPORTED"
 
 
-def test_descriptor_publish_is_atomic_idempotent_and_refuses_identity_overwrite(tmp_path) -> None:
+def test_descriptor_publish_is_atomic_idempotent_and_refuses_identity_overwrite(
+    tmp_path,
+) -> None:
     payload = _descriptor()
     payload.pop("descriptor_sha256")
 
@@ -303,6 +350,177 @@ def test_descriptor_publish_is_atomic_idempotent_and_refuses_identity_overwrite(
     assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
 
 
+def test_descriptor_rotation_uses_expected_hash_and_preserves_exact_snapshot(
+    tmp_path,
+) -> None:
+    initial = _descriptor()
+    initial.pop("descriptor_sha256")
+    target = publish_program_model_descriptor(model_root=tmp_path, payload=initial)
+    initial_bytes = target.read_bytes()
+    initial_sha256 = json.loads(initial_bytes)["descriptor_sha256"]
+    replacement = _meta_descriptor()
+    replacement.pop("descriptor_sha256")
+
+    receipt = rotate_program_model_descriptor(
+        model_root=tmp_path,
+        payload=replacement,
+        expected_current_descriptor_sha256=initial_sha256,
+    )
+
+    persisted = json.loads(target.read_text(encoding="utf-8"))
+    assert receipt.operation == "ROTATED"
+    assert receipt.previous_descriptor_sha256 == initial_sha256
+    assert receipt.descriptor_sha256 == persisted["descriptor_sha256"]
+    assert receipt.rollback_snapshot_path is not None
+    assert receipt.rollback_snapshot_path.read_bytes() == initial_bytes
+    assert (
+        AdvisoryModelBindingResolver()
+        .resolve(
+            model_root=tmp_path,
+            program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
+            active_binding={
+                "binding_version_id": "advb_test",
+                "package_ids": ["pkg_test"],
+            },
+            selection_run=SimpleNamespace(
+                manifest_sha256_by_package={"pkg_test": "a" * 64}
+            ),
+        )
+        .model_role
+        == "meta_label_take_skip_confidence"
+    )
+
+
+def test_descriptor_rotation_rejects_stale_expected_hash_without_mutation(
+    tmp_path,
+) -> None:
+    initial = _descriptor()
+    initial.pop("descriptor_sha256")
+    target = publish_program_model_descriptor(model_root=tmp_path, payload=initial)
+    initial_bytes = target.read_bytes()
+    replacement = _meta_descriptor()
+    replacement.pop("descriptor_sha256")
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        rotate_program_model_descriptor(
+            model_root=tmp_path,
+            payload=replacement,
+            expected_current_descriptor_sha256="0" * 64,
+        )
+
+    assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_CONFLICT"
+    assert target.read_bytes() == initial_bytes
+    assert not (target.parent / ".descriptor_history").exists()
+
+
+def test_descriptor_rollback_restores_snapshot_and_keeps_reverse_snapshot(
+    tmp_path,
+) -> None:
+    initial = _descriptor()
+    initial.pop("descriptor_sha256")
+    target = publish_program_model_descriptor(model_root=tmp_path, payload=initial)
+    initial_bytes = target.read_bytes()
+    initial_sha256 = json.loads(initial_bytes)["descriptor_sha256"]
+    replacement = _meta_descriptor()
+    replacement.pop("descriptor_sha256")
+    rotated = rotate_program_model_descriptor(
+        model_root=tmp_path,
+        payload=replacement,
+        expected_current_descriptor_sha256=initial_sha256,
+    )
+    replacement_bytes = target.read_bytes()
+
+    receipt = rollback_program_model_descriptor(
+        model_root=tmp_path,
+        program_id="advp_test",
+        binding_version_id="advb_test",
+        expected_current_descriptor_sha256=rotated.descriptor_sha256,
+        rollback_descriptor_sha256=initial_sha256,
+    )
+
+    assert receipt.operation == "ROLLED_BACK"
+    assert receipt.previous_descriptor_sha256 == rotated.descriptor_sha256
+    assert receipt.descriptor_sha256 == initial_sha256
+    assert target.read_bytes() == initial_bytes
+    assert receipt.rollback_snapshot_path is not None
+    assert receipt.rollback_snapshot_path.read_bytes() == replacement_bytes
+    assert (
+        AdvisoryModelBindingResolver()
+        .resolve(
+            model_root=tmp_path,
+            program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
+            active_binding={
+                "binding_version_id": "advb_test",
+                "package_ids": ["pkg_test"],
+            },
+            selection_run=SimpleNamespace(
+                manifest_sha256_by_package={"pkg_test": "a" * 64}
+            ),
+        )
+        .model_role
+        == "quality_reranker"
+    )
+
+
+def test_descriptor_rollback_rejects_missing_snapshot_without_mutation(
+    tmp_path,
+) -> None:
+    initial = _descriptor()
+    initial.pop("descriptor_sha256")
+    target = publish_program_model_descriptor(model_root=tmp_path, payload=initial)
+    initial_bytes = target.read_bytes()
+    initial_sha256 = json.loads(initial_bytes)["descriptor_sha256"]
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        rollback_program_model_descriptor(
+            model_root=tmp_path,
+            program_id="advp_test",
+            binding_version_id="advb_test",
+            expected_current_descriptor_sha256=initial_sha256,
+            rollback_descriptor_sha256="0" * 64,
+        )
+
+    assert (
+        error.value.reason_code
+        == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_ROLLBACK_UNAVAILABLE"
+    )
+    assert target.read_bytes() == initial_bytes
+
+
+def test_descriptor_rollback_rejects_corrupt_snapshot_without_mutation(
+    tmp_path,
+) -> None:
+    initial = _descriptor()
+    initial.pop("descriptor_sha256")
+    target = publish_program_model_descriptor(model_root=tmp_path, payload=initial)
+    initial_sha256 = json.loads(target.read_text(encoding="utf-8"))["descriptor_sha256"]
+    replacement = _meta_descriptor()
+    replacement.pop("descriptor_sha256")
+    rotated = rotate_program_model_descriptor(
+        model_root=tmp_path,
+        payload=replacement,
+        expected_current_descriptor_sha256=initial_sha256,
+    )
+    replacement_bytes = target.read_bytes()
+    assert rotated.rollback_snapshot_path is not None
+    rotated.rollback_snapshot_path.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        rollback_program_model_descriptor(
+            model_root=tmp_path,
+            program_id="advp_test",
+            binding_version_id="advb_test",
+            expected_current_descriptor_sha256=rotated.descriptor_sha256,
+            rollback_descriptor_sha256=initial_sha256,
+        )
+
+    assert (
+        error.value.reason_code
+        == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_ROLLBACK_UNAVAILABLE"
+    )
+    assert target.read_bytes() == replacement_bytes
+
+
 def test_meta_label_descriptor_v2_publish_is_atomic_and_resolvable(tmp_path) -> None:
     payload = _meta_descriptor()
     payload.pop("descriptor_sha256")
@@ -312,7 +530,9 @@ def test_meta_label_descriptor_v2_publish_is_atomic_and_resolvable(tmp_path) -> 
         model_root=tmp_path,
         program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
         active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
-        selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
+        selection_run=SimpleNamespace(
+            manifest_sha256_by_package={"pkg_test": "a" * 64}
+        ),
     )
 
     assert target.is_file()
@@ -320,7 +540,9 @@ def test_meta_label_descriptor_v2_publish_is_atomic_and_resolvable(tmp_path) -> 
     assert resolution.bundle_id == "e" * 64
 
 
-def test_descriptor_publish_rejects_invalid_component_projection_before_write(tmp_path) -> None:
+def test_descriptor_publish_rejects_invalid_component_projection_before_write(
+    tmp_path,
+) -> None:
     payload = _descriptor()
     payload.pop("descriptor_sha256")
     payload["candidate_projection"] = {
@@ -335,7 +557,9 @@ def test_descriptor_publish_rejects_invalid_component_projection_before_write(tm
     assert not (tmp_path / "program_bindings" / "advp_test" / "advb_test.json").exists()
 
 
-def test_descriptor_cli_requires_explicit_inputs_and_publishes_exact_path(tmp_path) -> None:
+def test_descriptor_cli_requires_explicit_inputs_and_publishes_exact_path(
+    tmp_path,
+) -> None:
     payload = _descriptor()
     payload.pop("descriptor_sha256")
     payload_path = tmp_path / "descriptor.json"
@@ -356,6 +580,147 @@ def test_descriptor_cli_requires_explicit_inputs_and_publishes_exact_path(tmp_pa
     )
 
     receipt = json.loads(completed.stdout)
-    target = tmp_path / "model-root" / "program_bindings" / "advp_test" / "advb_test.json"
+    target = (
+        tmp_path / "model-root" / "program_bindings" / "advp_test" / "advb_test.json"
+    )
     assert receipt == {"ok": True, "descriptor_path": str(target)}
     assert target.is_file()
+
+
+def test_descriptor_cli_rotates_and_rolls_back_with_verifiable_receipts(
+    tmp_path,
+) -> None:
+    model_root = tmp_path / "model-root"
+    initial = _descriptor()
+    initial.pop("descriptor_sha256")
+    target = publish_program_model_descriptor(model_root=model_root, payload=initial)
+    initial_bytes = target.read_bytes()
+    initial_sha256 = json.loads(initial_bytes)["descriptor_sha256"]
+    replacement = _meta_descriptor()
+    replacement.pop("descriptor_sha256")
+    replacement_path = tmp_path / "replacement.json"
+    replacement_path.write_text(json.dumps(replacement), encoding="utf-8")
+
+    rotated = subprocess.run(
+        [
+            sys.executable,
+            "scripts/advisory_publish_program_model_descriptor.py",
+            "--model-root",
+            str(model_root),
+            "--payload",
+            str(replacement_path),
+            "--expected-current-descriptor-sha256",
+            initial_sha256,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rotated_receipt = json.loads(rotated.stdout)
+    assert rotated_receipt["ok"] is True
+    assert rotated_receipt["operation"] == "ROTATED"
+    assert rotated_receipt["previous_descriptor_sha256"] == initial_sha256
+    replacement_sha256 = rotated_receipt["descriptor_sha256"]
+    assert Path(rotated_receipt["rollback_snapshot_path"]).read_bytes() == initial_bytes
+    replacement_bytes = target.read_bytes()
+
+    conflict = subprocess.run(
+        [
+            sys.executable,
+            "scripts/advisory_publish_program_model_descriptor.py",
+            "--model-root",
+            str(model_root),
+            "--payload",
+            str(replacement_path),
+            "--expected-current-descriptor-sha256",
+            initial_sha256,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    conflict_receipt = json.loads(conflict.stderr)
+    assert conflict.returncode == 2
+    assert conflict_receipt["status"] == "failed"
+    assert (
+        conflict_receipt["reason_code"] == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_CONFLICT"
+    )
+    assert target.read_bytes() == replacement_bytes
+
+    rolled_back = subprocess.run(
+        [
+            sys.executable,
+            "scripts/advisory_publish_program_model_descriptor.py",
+            "--model-root",
+            str(model_root),
+            "--expected-current-descriptor-sha256",
+            replacement_sha256,
+            "--rollback-descriptor-sha256",
+            initial_sha256,
+            "--program-id",
+            "advp_test",
+            "--binding-version-id",
+            "advb_test",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rollback_receipt = json.loads(rolled_back.stdout)
+    assert rollback_receipt["ok"] is True
+    assert rollback_receipt["operation"] == "ROLLED_BACK"
+    assert rollback_receipt["previous_descriptor_sha256"] == replacement_sha256
+    assert rollback_receipt["descriptor_sha256"] == initial_sha256
+    assert target.read_bytes() == initial_bytes
+
+
+def test_descriptor_rotation_serializes_competing_processes(tmp_path) -> None:
+    model_root = tmp_path / "model-root"
+    initial = _descriptor()
+    initial.pop("descriptor_sha256")
+    target = publish_program_model_descriptor(model_root=model_root, payload=initial)
+    initial_sha256 = json.loads(target.read_text(encoding="utf-8"))["descriptor_sha256"]
+    payload_paths: list[Path] = []
+    for index, bundle_id in enumerate(("7" * 64, "8" * 64)):
+        replacement = _meta_descriptor()
+        replacement.pop("descriptor_sha256")
+        replacement["bundle_id"] = bundle_id
+        path = tmp_path / f"replacement-{index}.json"
+        path.write_text(json.dumps(replacement), encoding="utf-8")
+        payload_paths.append(path)
+
+    processes = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "scripts/advisory_publish_program_model_descriptor.py",
+                "--model-root",
+                str(model_root),
+                "--payload",
+                str(payload_path),
+                "--expected-current-descriptor-sha256",
+                initial_sha256,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for payload_path in payload_paths
+    ]
+    completed = [
+        (*process.communicate(timeout=20), process.returncode) for process in processes
+    ]
+
+    assert sorted(return_code for _, _, return_code in completed) == [0, 2]
+    success = json.loads(
+        next(stdout for stdout, _, return_code in completed if return_code == 0)
+    )
+    conflict = json.loads(
+        next(stderr for _, stderr, return_code in completed if return_code == 2)
+    )
+    assert success["operation"] == "ROTATED"
+    assert conflict["reason_code"] == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_CONFLICT"
+    assert (
+        json.loads(target.read_text(encoding="utf-8"))["descriptor_sha256"]
+        == success["descriptor_sha256"]
+    )
