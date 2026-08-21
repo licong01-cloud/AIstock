@@ -1119,6 +1119,7 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py",
         "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
         "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+        "backend/tests/unified_engine/test_score_weighted_strategy_determinism.py",
         "backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py",
         "tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py",
         "-q",
