@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1128",
-  "closed_at": null,
+  "closed_at": "2026-08-22T08:39:19.655604Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -77,9 +77,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1128\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1128",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "4b5d3d0054193c8d55cd39d2731cfdbf764fb8bbca5fd1c4cc68ab1cd7e58724",
+      "contract_digest": "79f8c02c968dfad3f207cfcf5dc54c7f3790bfb8fdd3657111ee2b095f3d0234",
+      "expected_identity": "0645e9b8ba05b9dd927d76ee83df5861f3dae2ba",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-22T08:37:12.039364Z",
+      "mode": "read_only",
+      "observed_identity": "9ee30678cc67aff500c7396df2246d6897209465",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3bfc180beb7e34cd04149f361fb9d2595a962466f5b7401008493f671e14b5d4",
+      "receipt_sha256": "3a5e70596698e4a3a04cc5b42e300c011000a701928e48e4515189713d0b0a34",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a65acd2167baabf795506be65c2e1e36c0db6f64645a9f0563832aef8bd25ac6",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -89,7 +111,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -105,7 +127,8 @@
     "validation-receipt: id=e428110900784d38 commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=pytest plan=direct status=passed command=`rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`62 passed`",
     "validation-receipt: id=cbf0910b1725c76d commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=ruff plan=direct status=passed command=`rtk python -m ruff check backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`All checks passed`",
     "validation-receipt: id=7d25f944cc10796b commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`ok`",
-    "validation-receipt: id=f93e6cd78e31cf0a commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=compile plan=direct status=passed command=`rtk python -m py_compile backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`ok`"
+    "validation-receipt: id=f93e6cd78e31cf0a commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=compile plan=direct status=passed command=`rtk python -m py_compile backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`ok`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1128 --target backend-main --expected-identity 0645e9b8ba05b9dd927d76ee83df5861f3dae2ba -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
