@@ -1,7 +1,7 @@
 {
   "schema_version": "pit_v2_source_freeze_receipt_v2",
-  "observed_at": "2026-08-21T14:30:45.6673383Z",
-  "mode": "read_only_final_w6_source_freeze",
+  "observed_at": "2026-08-21T19:14:04.7963816Z",
+  "mode": "read_only_w7_source_audit_failure",
   "source": {
     "branch": "docs/qe-pit-v2-w6-source-freeze-20260821",
     "implementation_source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
@@ -132,16 +132,51 @@
       "process_controls": 0
     },
     "registered_worker": {
-      "instance_id": "dsw_e8b4483644e54bb084022c079af901ae",
+      "instance_id": "dsw_a138c86db2b94df5badfc6cd7b851c42",
       "status": "IDLE",
       "claim_kind": null,
       "claim_id": null,
-      "code_sha": "4d3d6e5f946a48320de693c5f30bc14786007e76",
+      "code_sha": "3593bb350ad2cc43007c41634d87db3af71696b7",
+      "execution_origin_main": "3593bb350ad2cc43007c41634d87db3af71696b7",
+      "origin_main_at_receipt_update": "8d82f9c7f91ee87e95248bbade50d3a993f97c21",
       "profile_config_digest": "65ad582a62b27c5c62476d71948741fdb88ca7410ee200c18f069507e07b3f8e",
-      "last_poll_at": "2026-08-21T14:31:01.758546+00:00",
-      "code_matches_source_freeze": false,
-      "restart_performed": false
+      "last_poll_at": "2026-08-21T18:44:02.659899+00:00",
+      "code_matches_source_freeze": true,
+      "code_matched_origin_main_at_execution": true,
+      "code_matches_origin_main_at_receipt_update": false,
+      "credential_location": "F:\\Dev\\AIstock\\.env",
+      "credential_values_recorded": false,
+      "restart_performed": true
     }
+  },
+  "w7_real_sample": {
+    "status": "BLOCKED_SOURCE_AUDIT_INCOMPLETE",
+    "submission_id": "dss_9ee507ff0e48bd4eb5826a20e4d97f3c",
+    "resolution_attempt_id": "dsra_b7fa30434f144c2dbf596627be118a93",
+    "run_id": null,
+    "release_id": null,
+    "plan_id": "pit_v2_initial_20260731_v1",
+    "plan_digest": "995a268c6e982d433737c661fddbbbed26d59852f37c716c42e940bc5323d442",
+    "fixed_cutoff": "2026-07-31",
+    "scope": "sample",
+    "candidate_only": true,
+    "worker_code_sha": "3593bb350ad2cc43007c41634d87db3af71696b7",
+    "source_audit_missing_dates": {
+      "trading_calendar": 1940,
+      "kline_minute_raw": 562,
+      "adj_factor": 1874,
+      "bak_basic": 1874,
+      "cyq_perf": 1878,
+      "margin_detail": 1873,
+      "index_daily": 2,
+      "sector_data": 1
+    },
+    "data_process_started": false,
+    "candidate_writes": 0,
+    "database_writes": 0,
+    "production_pointer_changes": 0,
+    "bug_id": "BUG-1150",
+    "github_issue": "https://github.com/licong01-cloud/AIstock/issues/3669"
   },
   "runtime_and_production_readback": {
     "backend": {
@@ -165,7 +200,7 @@
     "dataset_files_modified": 0,
     "production_database_writes": 0,
     "production_pointer_changes": 0,
-    "service_process_controls": 0
+    "service_process_controls": 2
   },
   "entry_gate": {
     "w6_source_ready": true,
@@ -173,25 +208,26 @@
     "profile_and_plan_loaded": true,
     "control_store_ready": true,
     "fresh_process_preflight_ready": true,
-    "registered_worker_source_identity_ready": false,
+    "registered_worker_source_identity_ready": true,
+    "source_data_audit_ready": false,
     "w7_sample_submission_allowed": false,
     "blocker": {
-      "code": "BLOCKED_STALE_REGISTERED_WORKER",
+      "code": "BLOCKED_SOURCE_AUDIT_INCOMPLETE",
       "expected_code_sha_policy": "equals_current_origin_main_at_execution",
       "minimum_required_ancestor": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
       "required_dependency_tree_digest": "786f8e1036a8425abb295f9b30fa9e776374853514d314a9b877b875e2337b7a",
-      "observed_code_sha": "4d3d6e5f946a48320de693c5f30bc14786007e76",
-      "required_owner_action": "restart_or_replace_dataset_release_worker_from_current_origin_main_then_readback_identity_and_dependency_digest",
-      "owner": "user",
-      "automatic_process_control_authorized": false
+      "observed_code_sha": "3593bb350ad2cc43007c41634d87db3af71696b7",
+      "required_owner_action": "fix BUG-1150, run separately authorized DEV audit seed apply/readback, then separately authorized production apply/readback before a fresh W7 sample",
+      "owner": "local_data",
+      "database_dml_authorized": false
     }
   },
   "exit_gate": {
     "consumer_inventory_unknown_count": 0,
     "historical_paths_read_only": true,
     "active_dataset_build_claims": 0,
-    "source_freeze_status": "PASS_W6_SOURCE_READY",
-    "w7_execution_status": "BLOCKED_STALE_REGISTERED_WORKER",
+    "source_freeze_status": "INVALIDATED_W7_SOURCE_AUDIT_INCOMPLETE",
+    "w7_execution_status": "BLOCKED_SOURCE_AUDIT_INCOMPLETE",
     "w8_status": "not_started",
     "production_activation": "not_requested"
   }

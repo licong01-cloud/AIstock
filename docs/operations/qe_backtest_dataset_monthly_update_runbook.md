@@ -90,6 +90,45 @@ API token 文件必须是绝对路径上的 plain local file，内容至少 32 �
 
 首次迁移不是可输入任意 cutoff/路径/证券的通用入口，只接受仓库登记的固定计划：
 
+首次真实 W7 前必须先完成全历史 source-readiness 审计闭环。该动作是独立的数据库 DML，绝不由
+`initial-migration`、Worker 或普通月更隐式执行。旧的 `seed_existing_rows` 记录不能替代
+dataset-release 已登记的 `physical_audit_seed` 权威。
+
+先对 DEV 做默认只读 plan；它只读取物理表、交易日历和现有 audit，不写数据库、不调用 provider：
+
+```powershell
+$DevPlanReceipt = 'X:\AIstock_dataset_release_control\operator_receipts\pit_v2_audit_seed_dev_plan_20260731.json'
+$DevApplyReceipt = 'X:\AIstock_dataset_release_control\operator_receipts\pit_v2_audit_seed_dev_apply_20260731.json'
+rtk python scripts/seed_dataset_refresh_audit.py --database dev --mode plan `
+  --end-date 2026-07-31 --receipt-path $DevPlanReceipt
+```
+
+plan 只有在全部 required dataset 的 `blocked_dates=0` 时才为 PASS。dense 数据集任何物理空日都会
+fail closed；只有仓库登记的稀疏数据集才可把无物理行交易日标记为 `empty_valid`。不得通过删数据集、
+缩日期、把 `seed_existing_rows` 改名或直接插入 success 绕过。
+
+DEV apply 需要本次 DEV DML 的非秘密授权引用；完成后必须保存并核对 apply receipt：
+
+```powershell
+rtk python scripts/seed_dataset_refresh_audit.py --database dev --mode apply `
+  --end-date 2026-07-31 --authorization-ref <DEV授权引用> --receipt-path $DevApplyReceipt
+```
+
+生产 apply 是另一项 target-specific DML 授权，并强制读取同 profile/contract 的成功 DEV apply receipt：
+
+```powershell
+$ProdReceipt = 'X:\AIstock_dataset_release_control\operator_receipts\pit_v2_audit_seed_prod_20260731.json'
+rtk python scripts/seed_dataset_refresh_audit.py --database production --mode apply `
+  --end-date 2026-07-31 --authorization-ref <生产授权引用> `
+  --dev-receipt $DevApplyReceipt --receipt-path $ProdReceipt
+```
+
+`apply` 先完成全范围计划再开始第一条写入；任一 dense 物理 gap 会整笔回滚。写入固定为
+`data_source=physical_audit_seed`，分批 upsert 后在同一事务精确 readback。receipt 只记录 `.env`
+凭据位置和数据库 identity digest，不记录密码或 token。DEV/生产两次 apply 及 readback 完成后，才可执行
+下面的 W7 sample；若 W7 再报 source audit blocker，不得重复 seed 或重复提交 sample，应先按 receipt
+中的 dataset/date 范围诊断。
+
 ```powershell
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration `
   --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only

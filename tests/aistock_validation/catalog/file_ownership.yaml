@@ -867,9 +867,11 @@ rules:
       - backend/tests/scripts/test_export_qe_qlib_candidate.py
       - backend/tests/test_deps_dataset_release.py
       - backend/tests/test_canonical_equity_pit.py
+      - backend/tests/test_dataset_refresh_audit.py
       - scripts/dataset_release_*.py
       - scripts/update_backtest_dataset_monthly.py
       - scripts/export_qe_qlib_candidate.py
+      - scripts/seed_dataset_refresh_audit.py
       - tests/aistock_validation/dataset_release_platform_smoke.py
       - configs/datasets/qe_backtest_monthly_v1.yaml
       - configs/datasets/qe_backtest_monthly_v2.yaml
