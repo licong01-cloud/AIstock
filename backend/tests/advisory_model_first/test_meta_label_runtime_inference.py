@@ -115,6 +115,7 @@ def _meta_bundle() -> dict[str, object]:
             "categorical_vocabulary": {"l2_code_id": [1, 2]},
         },
         "manifest_file_sha256": "f" * 64,
+        "shadow_policy_maturity_horizon_days": 20,
         "continuation_cutoff": "2026-02-02",
         "hmm_models": {"schema_version": "fresh_sector_hmm_bundle_v1", "models": {"1": {}}},
         "baselines": {"selection_top5": {"mean_net_excess_return_bps": 1.0}},
@@ -181,6 +182,8 @@ def test_meta_label_runtime_reorders_top20_entry_only_without_legacy_fallback(mo
 
     assert result["status"] == "EXPERIMENTAL_SHADOW"
     assert result["model_role"] == META_LABEL_MODEL_ROLE
+    assert result["shadow_policy_sha256"] == "1" * 64
+    assert result["shadow_policy_maturity_horizon_days"] == 20
     assert result["candidate_count"] == 20
     assert result["shortlist_count"] == 5
     assert result["candidates"][0]["symbol"] == "000020.SZ"

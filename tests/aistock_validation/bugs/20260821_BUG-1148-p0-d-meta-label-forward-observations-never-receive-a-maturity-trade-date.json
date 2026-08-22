@@ -1,0 +1,273 @@
+{
+  "actual": "After activating the approved P0-D meta-label descriptor, AdvisoryForwardService derives observation maturity only from legacy outcome-model horizons. The meta-label role intentionally returns typed outcome unavailable, so successful EXPERIMENTAL_SHADOW observations persist maturity_trade_date=null and can never enter future-OOS challenger win-rate evaluation. Fix must derive maturity from the exact shadow policy bound by shadow_policy_sha256, remain PIT-safe, preserve legacy quality-reranker maturity semantics, and add direct tests without changing formal baseline ranking.",
+  "allowed_write_scope": [
+    "backend/services/advisory_forward/service.py",
+    "backend/services/advisory_model_first/meta_label_bundle.py",
+    "backend/services/advisory_model_first/model_inference.py",
+    "backend/tests/advisory_model_first/test_forward_publication.py",
+    "backend/tests/advisory_model_first/test_meta_label_bundle.py",
+    "backend/tests/advisory_model_first/test_meta_label_runtime_inference.py",
+    "tests/aistock_validation/bugs/20260821_BUG-1148-p0-d-meta-label-forward-observations-never-receive-a-maturity-trade-date.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1148",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-21T18:57:45.938393Z",
+  "description": "After activating the approved P0-D meta-label descriptor, AdvisoryForwardService derives observation maturity only from legacy outcome-model horizons. The meta-label role intentionally returns typed outcome unavailable, so successful EXPERIMENTAL_SHADOW observations persist maturity_trade_date=null and can never enter future-OOS challenger win-rate evaluation. Fix must derive maturity from the exact shadow policy bound by shadow_policy_sha256, remain PIT-safe, preserve legacy quality-reranker maturity semantics, and add direct tests without changing formal baseline ranking.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260821-4e5fd1ebc62d",
+      "timestamp": "2026-08-21T18:57:45.938380Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/advisory_model_first/meta_label_bundle.py",
+      "backend/services/advisory_model_first/model_inference.py",
+      "backend/tests/advisory_model_first/test_forward_publication.py",
+      "backend/tests/advisory_model_first/test_meta_label_bundle.py",
+      "backend/tests/advisory_model_first/test_meta_label_runtime_inference.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_forward/service.py",
+        "backend/services/advisory_model_first/meta_label_bundle.py",
+        "backend/services/advisory_model_first/model_inference.py",
+        "backend/tests/advisory_model_first/test_forward_publication.py",
+        "backend/tests/advisory_model_first/test_meta_label_bundle.py",
+        "backend/tests/advisory_model_first/test_meta_label_runtime_inference.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "advisory.model_first"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_forward/service.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/advisory_model_first/meta_label_bundle.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/services/advisory_model_first/model_inference.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_forward_publication.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_meta_label_bundle.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_meta_label_runtime_inference.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_forward/service.py",
+        "backend/services/advisory_model_first/meta_label_bundle.py",
+        "backend/services/advisory_model_first/model_inference.py",
+        "backend/tests/advisory_model_first/test_forward_publication.py",
+        "backend/tests/advisory_model_first/test_meta_label_bundle.py",
+        "backend/tests/advisory_model_first/test_meta_label_runtime_inference.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_forward/service.py",
+      "backend/services/advisory_model_first/meta_label_bundle.py",
+      "backend/services/advisory_model_first/model_inference.py",
+      "backend/tests/advisory_model_first/test_forward_publication.py",
+      "backend/tests/advisory_model_first/test_meta_label_bundle.py",
+      "backend/tests/advisory_model_first/test_meta_label_runtime_inference.py"
+    ]
+  },
+  "first_seen_at": "2026-08-21T18:57:45.938393Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3668,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3668",
+  "last_seen_at": "2026-08-21T18:57:45.938393Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "validation_module_registry_l0",
+    "platform_api_backend",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/model-shadow?target_trade_date=2026-08-24",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "AIstock interpreter loaded exact P0-D bundle e555903e from git-tracked worktree source and read shadow_policy_maturity_horizon_days=20",
+      "AIstock interpreter loaded exact P0-D bundle e555903e and read frozen maturity horizon 20"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "P0-D meta-label forward observations never receive a maturity trade date",
+  "trigger_condition": {
+    "fingerprint": "4e5fd1ebc62d1abc160c5794",
+    "source_event_id": "FE-20260821-4e5fd1ebc62d"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
