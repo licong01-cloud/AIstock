@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 import json
 import os
@@ -507,6 +507,40 @@ def _connect_readonly(prefix: str):
     return conn, {"host": names["HOST"], "port": int(names["PORT"]), "dbname": names["NAME"]}
 
 
+def _normalized_database_identity(value: Mapping[str, Any], *, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise StateModelSetError(f"hmm_risk_source_database_identity_invalid: {label} must be a mapping")
+    host = str(value.get("host") or "").strip()
+    dbname = str(value.get("dbname") or "").strip()
+    port_value = value.get("port")
+    if not host or not dbname or isinstance(port_value, bool):
+        raise StateModelSetError(
+            f"hmm_risk_source_database_identity_invalid: {label} requires non-empty host/dbname and integer port"
+        )
+    try:
+        port = int(port_value)
+    except (TypeError, ValueError) as exc:
+        raise StateModelSetError(f"hmm_risk_source_database_identity_invalid: {label} port must be an integer") from exc
+    if port <= 0 or port > 65535:
+        raise StateModelSetError(f"hmm_risk_source_database_identity_invalid: {label} port is outside the valid range")
+    return {"host": host, "port": port, "dbname": dbname}
+
+
+def _require_database_identity_match(
+    actual: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized_actual = _normalized_database_identity(actual, label="actual database identity")
+    normalized_expected = _normalized_database_identity(expected, label="expected database identity")
+    if normalized_actual != normalized_expected:
+        raise StateModelSetError(
+            "hmm_risk_source_database_identity_mismatch: "
+            f"expected={json.dumps(normalized_expected, sort_keys=True, separators=(',', ':'))} "
+            f"actual={json.dumps(normalized_actual, sort_keys=True, separators=(',', ':'))}"
+        )
+    return normalized_actual
+
+
 def _load_calendar_and_benchmark(
     conn: Any, start: date, end: date
 ) -> tuple[list[date], dict[date, float], dict[str, Any]]:
@@ -878,6 +912,8 @@ def _load_l1_source_inputs(
     db_prefix: str,
     c010_diagnostic: bool = False,
     c010_formal: bool = False,
+    expected_database_identity: Mapping[str, Any] | None = None,
+    source_preflight_complete: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     if c010_diagnostic and c010_formal:
         raise StateModelSetError("C-010 diagnostic and formal policy modes are mutually exclusive")
@@ -897,6 +933,8 @@ def _load_l1_source_inputs(
     )
     conn, db_identity = _connect_readonly(db_prefix)
     try:
+        if expected_database_identity is not None:
+            _require_database_identity_match(db_identity, expected_database_identity)
         with conn.cursor() as cursor:
             cursor.execute("SET LOCAL cursor_tuple_fraction=1.0")
         reader = PostgresStockFactReader(
@@ -906,6 +944,8 @@ def _load_l1_source_inputs(
             provider_absence_manifest=provider_absence_manifest,
         )
         source_state = reader.validate_source()
+        if source_preflight_complete is not None:
+            source_preflight_complete()
         source_state["query_plan_contract"] = {
             "cursor_tuple_fraction": 1.0,
             "stock_fact_batching": "calendar_month_split_fact_stream_v1",
@@ -969,8 +1009,10 @@ def _load_l1_source_inputs(
                 "l2_aggregates": diagnostic_l2,
             }
     finally:
-        conn.rollback()
-        conn.close()
+        try:
+            conn.rollback()
+        finally:
+            conn.close()
     panel, feature_definition = build_l1_feature_panel(
         aggregates,
         trading_dates=calendar,

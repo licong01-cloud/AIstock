@@ -15,6 +15,10 @@ from backend.services.hmm_risk.state_model_set import StateModelSetError
 from scripts.hmm_risk import run_market_relative_ridge_holdout as cli
 
 
+def _database_identity() -> dict[str, object]:
+    return {"host": "canonical-db", "port": 5432, "dbname": "aistock"}
+
+
 def _receipt(body: dict[str, object]) -> dict[str, object]:
     return {**body, "receipt_sha256": subject.canonical_sha256(body)}
 
@@ -97,6 +101,7 @@ def _candidate_report() -> dict[str, object]:
         "completed_fit_count": 36,
         "planned_fit_count": 36,
         "candidate_attempt_index": 3,
+        "database_identity": _database_identity(),
         "request_identity": request_identity,
         "request_identity_sha256": subject.canonical_sha256(request_identity),
         "feature_formula_sha256": "4" * 64,
@@ -358,6 +363,7 @@ def _evaluation_fixture() -> tuple[dict[str, object], subject.FrozenCandidate, d
         }
     candidate_report = {
         "report_sha256": "c" * 64,
+        "database_identity": _database_identity(),
         "feature_formula_sha256": subject.canonical_sha256(
             {"L1": inputs["feature_definition"], "L2": inputs["l2_feature_definition"]}
         ),
@@ -1313,9 +1319,15 @@ def test_request_preparation_resolves_tail_from_calendar_only_and_closes_readonl
         def close(self) -> None:
             observed["close"] = True
 
-    monkeypatch.setattr(cli, "_connect_readonly", lambda prefix: (Connection(), {"prefix": prefix}))
+    monkeypatch.setattr(cli, "_connect_readonly", lambda prefix: (Connection(), _database_identity()))
 
-    assert cli._resolve_outcome_tail_end("P2_4_TEST") == rows[-1][0]
+    assert (
+        cli._resolve_outcome_tail_end(
+            "P2_4_TEST",
+            expected_database_identity=_database_identity(),
+        )
+        == rows[-1][0]
+    )
     assert "SELECT cal_date::date" in str(observed["query"])
     assert "pct_chg" not in str(observed["query"])
     assert observed["params"] == (subject.HOLDOUT_END, subject.OUTCOME_TAIL_TRADING_DAYS)
@@ -1348,10 +1360,13 @@ def test_outcome_tail_query_failure_is_typed_and_closes_readonly_connection(
         def close(self) -> None:
             observed["close"] = True
 
-    monkeypatch.setattr(cli, "_connect_readonly", lambda prefix: (Connection(), {"prefix": prefix}))
+    monkeypatch.setattr(cli, "_connect_readonly", lambda prefix: (Connection(), _database_identity()))
 
     with pytest.raises(subject.HoldoutAcceptanceError) as captured:
-        cli._resolve_outcome_tail_end("P2_4_TEST")
+        cli._resolve_outcome_tail_end(
+            "P2_4_TEST",
+            expected_database_identity=_database_identity(),
+        )
 
     assert captured.value.reason_code == subject.REASON_SOURCE
     assert captured.value.stage == "source_preflight"
@@ -1360,6 +1375,40 @@ def test_outcome_tail_query_failure_is_typed_and_closes_readonly_connection(
         "source_reason_code": cli.SOURCE_LOADER_FAILURE,
         "error_message": "database system is in recovery mode",
     }
+    assert observed == {"rollback": True, "close": True}
+
+
+def test_outcome_tail_database_identity_mismatch_stops_before_calendar_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, bool] = {}
+
+    class Connection:
+        def cursor(self) -> None:
+            observed["cursor_called"] = True
+            raise AssertionError("calendar query must not run after database identity mismatch")
+
+        def rollback(self) -> None:
+            observed["rollback"] = True
+
+        def close(self) -> None:
+            observed["close"] = True
+
+    monkeypatch.setattr(
+        cli,
+        "_connect_readonly",
+        lambda prefix: (Connection(), {"host": "wrong-db", "port": 5433, "dbname": "aistock_dev"}),
+    )
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        cli._resolve_outcome_tail_end(
+            "P2_4_TEST",
+            expected_database_identity=_database_identity(),
+        )
+
+    assert captured.value.reason_code == subject.REASON_SOURCE
+    assert captured.value.stage == "source_preflight"
+    assert captured.value.evidence["source_reason_code"] == "hmm_risk_source_database_identity_mismatch"
     assert observed == {"rollback": True, "close": True}
 
 
@@ -1438,6 +1487,9 @@ def test_cli_request_preparation_failure_records_access_and_blocks_retry(
     def fail_loader(*args: object, **kwargs: object) -> None:
         nonlocal calls
         calls += 1
+        callback = kwargs["source_preflight_complete"]
+        assert callable(callback)
+        callback()
         raise StateModelSetError(
             "hmm_risk_stock_fact_provider_absence_unverified: 601969.SH/2026-01-30/market.moneyflow_ts"
         )
@@ -1481,6 +1533,61 @@ def test_cli_request_preparation_failure_records_access_and_blocks_retry(
     assert calls == 1
 
 
+def test_cli_request_preparation_source_metadata_failure_does_not_consume_holdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, candidate, expected = _evaluation_fixture()
+    holdout_source = expected["holdout_source"]
+    assert isinstance(holdout_source, dict)
+    tail_end = date.fromisoformat(str(holdout_source["outcome_tail_end"]))
+    artifact_root = tmp_path / "artifacts"
+    request_path = artifact_root / "request.json"
+    candidate_path = tmp_path / "candidate.json"
+    _write_json(candidate_path, {"candidate": "patched fixture"})
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(cli, "_resolve_outcome_tail_end", lambda *args, **kwargs: tail_end)
+
+    def fail_source_metadata(*args: object, **kwargs: object) -> None:
+        assert kwargs["expected_database_identity"] == _database_identity()
+        assert callable(kwargs["source_preflight_complete"])
+        raise StateModelSetError("requested PIT universe state is missing")
+
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_source_metadata)
+    argv = [
+        "--prepare-request",
+        "--request",
+        str(request_path),
+        "--candidate",
+        str(candidate_path),
+        "--output",
+        str(artifact_root / "acceptance.json"),
+        "--model-output",
+        str(artifact_root / "model.json"),
+        "--ready-output",
+        str(artifact_root / "ready.json"),
+        "--child-dir",
+        str(artifact_root / "children"),
+        "--db-env-prefix",
+        "P2_4_TEST",
+    ]
+
+    assert cli.main(argv) == 1
+    failure = json.loads((artifact_root / "acceptance.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_reason_code"] == subject.REASON_SOURCE
+    assert failure["failure_stage"] == "source_preflight"
+    assert failure["failure_evidence"] == {
+        "exception_type": "StateModelSetError",
+        "source_reason_code": cli.SOURCE_LOADER_FAILURE,
+        "error_message": "requested PIT universe state is missing",
+    }
+    assert failure["holdout_accessed"] is False
+    assert failure["product_acceptance_performed"] is False
+    assert failure["model_write"] is False
+    assert failure["ready_write"] is False
+    assert not request_path.exists()
+
+
 def test_holdout_source_loader_uses_stable_reason_for_untyped_state_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1490,7 +1597,12 @@ def test_holdout_source_loader_uses_stable_reason_for_untyped_state_error(
     monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_loader)
 
     with pytest.raises(subject.HoldoutAcceptanceError) as captured:
-        cli._load_holdout_inputs({"holdout_source": {"source": {}}}, db_prefix="P2_4_TEST")
+        cli._load_holdout_inputs(
+            {"holdout_source": {"source": {}}},
+            db_prefix="P2_4_TEST",
+            expected_database_identity=_database_identity(),
+            source_preflight_complete=lambda: None,
+        )
 
     assert captured.value.reason_code == subject.REASON_SOURCE
     assert captured.value.stage == "source_preflight"
@@ -1510,7 +1622,12 @@ def test_holdout_source_loader_classifies_database_recovery_as_source_preflight(
     monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_loader)
 
     with pytest.raises(subject.HoldoutAcceptanceError) as captured:
-        cli._load_holdout_inputs({"holdout_source": {"source": {}}}, db_prefix="P2_4_TEST")
+        cli._load_holdout_inputs(
+            {"holdout_source": {"source": {}}},
+            db_prefix="P2_4_TEST",
+            expected_database_identity=_database_identity(),
+            source_preflight_complete=lambda: None,
+        )
 
     assert captured.value.reason_code == subject.REASON_SOURCE
     assert captured.value.stage == "source_preflight"
@@ -1573,6 +1690,9 @@ def test_child_loader_failure_records_holdout_access_without_claiming_acceptance
     monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
 
     def fail_loader(*args: object, **kwargs: object) -> None:
+        callback = kwargs["source_preflight_complete"]
+        assert callable(callback)
+        callback()
         raise RuntimeError("load")
 
     monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_loader)
@@ -1601,4 +1721,53 @@ def test_child_loader_failure_records_holdout_access_without_claiming_acceptance
     assert result == 1
     failure = json.loads((artifact_root / "children" / "p2_4_holdout_child_1.failure.json").read_text(encoding="utf-8"))
     assert failure["holdout_accessed"] is True
+    assert failure["product_acceptance_performed"] is False
+
+
+def test_child_source_preflight_failure_does_not_claim_holdout_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    report = _candidate_report()
+    request = _request(str(report["report_sha256"]), artifact_root=artifact_root)
+    request_path = tmp_path / "request.json"
+    candidate_path = tmp_path / "candidate.json"
+    _write_json(request_path, request)
+    _write_json(candidate_path, report)
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: _frozen(report))
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+
+    def fail_source_metadata(*args: object, **kwargs: object) -> None:
+        assert kwargs["expected_database_identity"] == _database_identity()
+        assert callable(kwargs["source_preflight_complete"])
+        raise StateModelSetError("requested PIT universe state is missing")
+
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_source_metadata)
+
+    result = cli.main(
+        [
+            "--request",
+            str(request_path),
+            "--candidate",
+            str(candidate_path),
+            "--output",
+            str(artifact_root / "acceptance.json"),
+            "--model-output",
+            str(artifact_root / "model.json"),
+            "--ready-output",
+            str(artifact_root / "ready.json"),
+            "--child-dir",
+            str(artifact_root / "children"),
+            "--db-env-prefix",
+            "P2_4_TEST",
+            "--child-index",
+            "1",
+        ]
+    )
+
+    assert result == 1
+    failure = json.loads((artifact_root / "children" / "p2_4_holdout_child_1.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_reason_code"] == subject.REASON_SOURCE
+    assert failure["failure_stage"] == "source_preflight"
+    assert failure["holdout_accessed"] is False
     assert failure["product_acceptance_performed"] is False

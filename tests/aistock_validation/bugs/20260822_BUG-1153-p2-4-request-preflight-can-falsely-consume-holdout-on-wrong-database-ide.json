@@ -2,7 +2,10 @@
   "actual": "The formal P2-4 request CLI accepts a db_env_prefix without binding the resulting host/port/dbname to the frozen candidate database_identity. _resolve_outcome_tail_end discards the connection identity and _prepare_request sets holdout_accessed=true before _load_l1_source_inputs has read any holdout feature or outcome. A wrong but reachable database therefore fails on missing PIT universe state and persists status=NOT_AVAILABLE with holdout_accessed=true, falsely consuming the one-logical-holdout contract. Fix must validate the exact candidate-authoritative database identity and required PIT source metadata before any holdout business read, preserve holdout_accessed=false for such preflight failures, retain typed evidence, and must not add retries, change model thresholds, reselect the candidate, or weaken fail-closed behavior.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260822_BUG-1153-p2-4-request-preflight-can-falsely-consume-holdout-on-wrong-database-ide.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1153",
@@ -20,13 +23,23 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260822-04f3f2122a24",
       "timestamp": "2026-08-22T08:07:56.828724Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Registered the exact P2-4 CLI, shared offline source loader, and direct test required to bind database identity and preserve the pre-business-read holdout boundary.",
+      "timestamp": "2026-08-22T08:11:55.465601Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +49,11 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py"
+    ]
   },
   "first_seen_at": "2026-08-22T08:07:56.828737Z",
   "fix_branch": null,
