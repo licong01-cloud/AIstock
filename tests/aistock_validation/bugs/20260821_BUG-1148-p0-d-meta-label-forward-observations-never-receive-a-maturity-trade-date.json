@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1148",
-  "closed_at": null,
+  "closed_at": "2026-08-22T13:08:53.240513Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -156,9 +156,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1148/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1148",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6244bb12a9bda61dd400affc367d6057c9af3a0f0f8b28450e3bf1eb0be376df",
+      "contract_digest": "3245e3b808b277f790274e637d72085ed8f25133ef924f29dbcaa5cb0e69336c",
+      "expected_identity": "5146f2041f31315ba246632844a3c799cfdb6e8d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-22T13:04:53.811101Z",
+      "mode": "read_only",
+      "observed_identity": "092a337412b79dcd0a62e72497d458d5a280aa03",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "13337006f67b265ad8669aa03a397b420faaeb5e7b147e62d1a1ec51c7a02f2a",
+      "receipt_sha256": "e03f760d1f9ea8b50453fcab6cc159f1b2daf06da0f79902a02bc69f78ebaa51",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0e53f433b0832dff1db352f1c72239e1c6fa51e07312923e59e9cd580d5d7373",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -168,7 +190,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory_modeling"
   ],
