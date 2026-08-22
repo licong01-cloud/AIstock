@@ -239,7 +239,11 @@ def _connect(config: DatabaseConfig) -> Any:
         password=config.password,
         dbname=config.dbname,
         application_name="AIstock-dataset-release-audit-seed",
-        options="-c client_encoding=utf8 -c statement_timeout=300000",
+        options=(
+            "-c client_encoding=utf8 "
+            "-c statement_timeout=300000 "
+            "-c max_parallel_workers_per_gather=0"
+        ),
     )
 
 
