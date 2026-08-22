@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from psycopg2 import Error as PsycopgError
 
@@ -47,7 +47,11 @@ from backend.services.hmm_risk.state_model_set import (  # noqa: E402
     canonical_json_bytes,
     canonical_sha256,
 )
-from scripts.hmm_risk.prepare_state_model_set import _connect_readonly, _load_l1_source_inputs  # noqa: E402
+from scripts.hmm_risk.prepare_state_model_set import (  # noqa: E402
+    _connect_readonly,
+    _load_l1_source_inputs,
+    _require_database_identity_match,
+)
 
 SOURCE_LOADER_FAILURE = "hmm_risk_p2_4_source_loader_failed"
 
@@ -122,10 +126,26 @@ def _source_preflight_error(exc: Exception) -> HoldoutAcceptanceError:
     )
 
 
-def _resolve_outcome_tail_end(db_prefix: str) -> date:
+def _candidate_database_identity(candidate: Any) -> dict[str, Any]:
+    value = candidate.report.get("database_identity")
+    if not isinstance(value, Mapping):
+        raise HoldoutAcceptanceError(
+            REASON_SOURCE,
+            "frozen candidate database identity is missing or invalid",
+            stage="source_preflight",
+        )
+    return dict(value)
+
+
+def _resolve_outcome_tail_end(
+    db_prefix: str,
+    *,
+    expected_database_identity: Mapping[str, Any],
+) -> date:
     try:
-        conn, _ = _connect_readonly(db_prefix)
+        conn, actual_database_identity = _connect_readonly(db_prefix)
         try:
+            _require_database_identity_match(actual_database_identity, expected_database_identity)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -162,12 +182,20 @@ def _resolve_outcome_tail_end(db_prefix: str) -> date:
     return values[-1]
 
 
-def _load_holdout_inputs(request: dict[str, Any], *, db_prefix: str) -> Any:
+def _load_holdout_inputs(
+    request: dict[str, Any],
+    *,
+    db_prefix: str,
+    expected_database_identity: Mapping[str, Any],
+    source_preflight_complete: Callable[[], None],
+) -> Any:
     try:
         return _load_l1_source_inputs(
             _loader_request(request),
             db_prefix=db_prefix,
             c010_formal=True,
+            expected_database_identity=expected_database_identity,
+            source_preflight_complete=source_preflight_complete,
         )
     except HoldoutAcceptanceError:
         raise
@@ -181,16 +209,26 @@ def _prepare_request(args: argparse.Namespace) -> int:
     holdout_accessed = False
     try:
         candidate = load_frozen_candidate(args.candidate.resolve())
+        expected_database_identity = _candidate_database_identity(candidate)
         producer = _producer_commit()
         outputs = _artifact_outputs(args)
         for path in (args.request.resolve(), *(Path(value) for value in outputs.values())):
             preflight_output(path, repository_root=ROOT)
-        outcome_tail_end = _resolve_outcome_tail_end(str(args.db_env_prefix))
+        outcome_tail_end = _resolve_outcome_tail_end(
+            str(args.db_env_prefix),
+            expected_database_identity=expected_database_identity,
+        )
         source = expected_holdout_source(outcome_tail_end=outcome_tail_end)
-        holdout_accessed = True
+
+        def mark_holdout_accessed() -> None:
+            nonlocal holdout_accessed
+            holdout_accessed = True
+
         inputs = _load_holdout_inputs(
             {"holdout_source": {"source": source}},
             db_prefix=str(args.db_env_prefix),
+            expected_database_identity=expected_database_identity,
+            source_preflight_complete=mark_holdout_accessed,
         )
         request = build_holdout_request(
             inputs,
@@ -354,11 +392,21 @@ def _child(args: argparse.Namespace) -> int:
     try:
         request = load_request(args.request.resolve())
         candidate = load_frozen_candidate(args.candidate.resolve())
+        expected_database_identity = _candidate_database_identity(candidate)
         validate_static_request(request, candidate)
         _validate_cli_outputs(args, request)
         producer = _producer_commit()
-        holdout_accessed = True
-        inputs = _load_holdout_inputs(request, db_prefix=str(args.db_env_prefix))
+
+        def mark_holdout_accessed() -> None:
+            nonlocal holdout_accessed
+            holdout_accessed = True
+
+        inputs = _load_holdout_inputs(
+            request,
+            db_prefix=str(args.db_env_prefix),
+            expected_database_identity=expected_database_identity,
+            source_preflight_complete=mark_holdout_accessed,
+        )
         report = evaluate_child(
             inputs,
             request,
