@@ -46,6 +46,12 @@ class DatasetSpec:
     trading_day_only: bool = False              # BY_DATE datasets that should iterate market trading days only
     create_table_script: Optional[str] = None    # operator-run DDL helper; engine never creates tables implicitly
     nullable_identity_columns: List[str] = field(default_factory=list)  # source identity fields that may be NULL
+    # Minimum plausible rows for one trading day. When set, a successful sync
+    # that persists 0 < rows < min_expected_rows is audited as
+    # quality_status="low_coverage" so the existing freshness-check ->
+    # retry-target -> 23:00 auto-retry chain re-fetches the day via upsert.
+    # None (default) keeps the historical behavior (any non-empty day is "ok").
+    min_expected_rows: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +268,9 @@ MARGIN_DETAIL = DatasetSpec(
     batch_sleep=0.2,
     rate_per_minute=500,
     trading_day_only=True,
+    # Full days observed at ~4350+ rows (2026-08); an SSE-only partial publish
+    # (e.g. unpublished SZSE Friday detail) lands at ~2000 rows.
+    min_expected_rows=4000,
 )
 
 CYQ_PERF = DatasetSpec(
@@ -291,6 +300,9 @@ CYQ_PERF = DatasetSpec(
     fetch_params={"limit": 4900, "max_pages": 3},
     trading_day_only=True,
     create_table_script="scripts/create_cyq_tables.py",
+    # Full days observed at 5522-5543 rows (2026-08); partial same-day
+    # publishes before the evening window landed at 49-3886 rows.
+    min_expected_rows=5000,
 )
 
 STK_LIMIT = DatasetSpec(
@@ -526,6 +538,9 @@ SW_DAILY = DatasetSpec(
     row_limit=4000,
     batch_sleep=0.2,
     rate_per_minute=300,
+    # SW L2 universe holds ~124-131 rows per day (2026); a partial publish
+    # (e.g. 2026-04-21) landed well below that.
+    min_expected_rows=100,
 )
 
 

@@ -1015,3 +1015,144 @@ def test_by_code_batched_warns_on_empty_upsert_with_local_history(monkeypatch):
     warnings = [args for args in logs if len(args) >= 4 and str(args[2]).lower() == "warning"]
     assert len(warnings) == 1
     assert "upstream returned no rows but local history exists" in warnings[0][3]
+
+
+class _CapturingAudit:
+    def __init__(self):
+        self.success_calls = []
+        self.failure_calls = []
+
+    def record_success(self, **kwargs):
+        self.success_calls.append(kwargs)
+
+    def record_failure(self, **kwargs):
+        self.failure_calls.append(kwargs)
+
+
+def _run_by_date_with_rows(monkeypatch, spec, count):
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    conn = _FakeConn()
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+    trade_date = dt.date(2026, 8, 21)
+    required = (set(spec.primary_keys) | {spec.date_column}) - set(spec.nullable_identity_columns)
+
+    def _row(i):
+        return {
+            col: ("20260821" if col == spec.date_column else f"{col}-{i}")
+            for col in required
+    }
+
+    rows = [_row(i) for i in range(count)]
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, fetched: len(fetched))
+    monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, spec, trade_date, trade_date, uuid.uuid4())
+    return result, audit
+
+
+def test_min_expected_rows_marks_partial_day_low_coverage_by_date(monkeypatch):
+    spec = replace(SUSPEND_D, min_expected_rows=5000)
+
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 100)
+
+    assert result.failed_batches == 0
+    assert len(audit.success_calls) == 1
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "low_coverage"
+    assert call["failure_category"] == "low_coverage"
+    assert call["expected_rows"] == 5000
+    assert call["coverage_ratio"] == pytest.approx(100 / 5000)
+    assert call["written_rows"] == 100
+
+
+def test_min_expected_rows_boundary_count_stays_ok(monkeypatch):
+    spec = replace(SUSPEND_D, min_expected_rows=100)
+
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 100)
+
+    assert result.failed_batches == 0
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "ok"
+    assert "expected_rows" not in call
+    assert "coverage_ratio" not in call
+    assert "failure_category" not in call
+
+
+def test_without_min_expected_rows_partial_day_stays_ok(monkeypatch):
+    spec = replace(SUSPEND_D, min_expected_rows=None)
+
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 3)
+
+    assert result.failed_batches == 0
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "ok"
+    assert "expected_rows" not in call
+
+
+def test_min_expected_rows_does_not_change_zero_row_semantics(monkeypatch):
+    spec = replace(SUSPEND_D, min_expected_rows=5000)
+
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 0)
+
+    assert result.failed_batches == 0
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "empty_valid"
+    assert "expected_rows" not in call
+
+
+def test_record_by_code_audit_marks_partial_day_low_coverage(monkeypatch):
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+    conn = _FakeConn()
+    spec = replace(SW_DAILY, min_expected_rows=100)
+    trade_date = dt.date(2026, 8, 21)
+    job_id = uuid.uuid4()
+    result = sync_engine.SyncResult(dataset=spec.name, mode="sync", job_id=job_id, success_batches=1)
+
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(engine, "_trading_dates_between", lambda _conn, start, end: [trade_date])
+    monkeypatch.setattr(engine, "_table_row_counts_by_date", lambda _conn, _spec, start, end: {trade_date: 42})
+
+    engine._record_by_code_audit(spec, trade_date, trade_date, job_id, result)
+
+    assert len(audit.success_calls) == 1
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "low_coverage"
+    assert call["failure_category"] == "low_coverage"
+    assert call["expected_rows"] == 100
+    assert call["coverage_ratio"] == pytest.approx(42 / 100)
+    assert call["written_rows"] == 42
+
+
+def test_record_by_code_audit_full_day_stays_ok(monkeypatch):
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+    conn = _FakeConn()
+    spec = replace(SW_DAILY, min_expected_rows=100)
+    trade_date = dt.date(2026, 8, 21)
+    job_id = uuid.uuid4()
+    result = sync_engine.SyncResult(dataset=spec.name, mode="sync", job_id=job_id, success_batches=1)
+
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(engine, "_trading_dates_between", lambda _conn, start, end: [trade_date])
+    monkeypatch.setattr(engine, "_table_row_counts_by_date", lambda _conn, _spec, start, end: {trade_date: 131})
+
+    engine._record_by_code_audit(spec, trade_date, trade_date, job_id, result)
+
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "ok"
+    assert "expected_rows" not in call
+
+
+def test_chip_and_margin_specs_carry_min_expected_rows():
+    from backend.services.tushare_dataset_specs import MARGIN_DETAIL
+
+    assert CYQ_PERF.min_expected_rows == 5000
+    assert MARGIN_DETAIL.min_expected_rows == 4000
+    assert SW_DAILY.min_expected_rows == 100
