@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1134",
-  "closed_at": null,
+  "closed_at": "2026-08-22T08:41:14.444342Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -155,9 +155,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1134\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1134",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "4b5d3d0054193c8d55cd39d2731cfdbf764fb8bbca5fd1c4cc68ab1cd7e58724",
+      "contract_digest": "823d7531f123d72eb47865ef04507a9c37ef664bc5b463260bcbc7cafc65e0b4",
+      "expected_identity": "970b7211f2ba3d3b08082b6dfbc3a26ba26508f6",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-22T08:37:12.054625Z",
+      "mode": "read_only",
+      "observed_identity": "9ee30678cc67aff500c7396df2246d6897209465",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3bfc180beb7e34cd04149f361fb9d2595a962466f5b7401008493f671e14b5d4",
+      "receipt_sha256": "323d4e322191d804c6bcddb5fda6b82467977fc00719ba3fd37f3c87bd5a48ae",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "8c92eda9bddd4dc08087d9059e383b759dd3d4588b48475ab4918d8c3c314aae",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -167,7 +189,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -187,7 +209,8 @@
     "validation-receipt: id=f1a1fc17637ec8e1 commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=paper_v2_backend status=passed command=`nox -s paper_v2_backend` result=`1115 passed, 3 skipped, 2 xfailed`",
     "validation-receipt: id=f1cdb7cd315ed0fb commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=nox plan=miniqmt_execution_runtime_l2 status=passed command=`nox -s miniqmt_execution_runtime_l2` result=`1503 passed, 82 skipped`",
     "validation-receipt: id=61019d13eec9104e commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=ruff plan=direct status=passed command=`ruff check backend/services/dataset_release/control_store.py backend/infra/qmt_client.py backend/infra/realtime_quote_subscriber.py backend/execution_algos/adaptive_is/contracts.py backend/tests/dataset_release/test_wsl_python310_datetime_compat.py` result=`All checks passed`",
-    "validation-receipt: id=1f8e5bdfed022ceb commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=compile plan=direct status=passed command=`python -m py_compile <5 changed files> and git diff --check` result=`passed`"
+    "validation-receipt: id=1f8e5bdfed022ceb commit=5c7a7e73cf85fbb08e229523e4654ab925c9d738 kind=compile plan=direct status=passed command=`python -m py_compile <5 changed files> and git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1134 --target backend-main --expected-identity 970b7211f2ba3d3b08082b6dfbc3a26ba26508f6 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
