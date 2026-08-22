@@ -1,108 +1,90 @@
 {
-  "actual": "PostgreSQL log: could not resize shared memory segment to 53739392 bytes: No space left on device while grouping market.kline_minute_raw; host/data volumes have ample free space and no receipt or DML is produced.",
+  "actual": "ModuleNotFoundError: No module named 'backend'，进程非零退出，公告元数据自 08-18 起断更",
   "allowed_write_scope": [
-    "scripts/seed_dataset_refresh_audit.py",
-    "backend/tests/test_dataset_refresh_audit.py",
-    "tests/aistock_validation/bugs/20260822_BUG-1152-pit-v2-audit-seeder-ignores-postgresql-parallel-shared-memory-bound.json",
+    "scripts/sync_eastmoney_anns_metadata.py",
+    "tests/aistock_validation/bugs/20260822_BUG-1155-anns-metadata-modulenotfounderror-backend.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1152",
-  "closed_at": "2026-08-22T08:41:46Z",
+  "bug_id": "BUG-1155",
+  "closed_at": "2026-08-22T11:34:21Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-22T08:00:52.197403Z",
-  "description": "PostgreSQL log: could not resize shared memory segment to 53739392 bytes: No space left on device while grouping market.kline_minute_raw; host/data volumes have ample free space and no receipt or DML is produced.",
+  "created_at": "2026-08-22T11:13:48.322437Z",
+  "description": "ModuleNotFoundError: No module named 'backend'，进程非零退出，公告元数据自 08-18 起断更",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260822-533429f068c6",
-      "timestamp": "2026-08-22T08:00:52.197387Z"
+      "note": "Promoted from IC-20260822-52a309dec497",
+      "timestamp": "2026-08-22T11:13:48.322421Z"
     }
   ],
-  "evidence_uris": [
-    "BUG-1150 DEV plan 2026-08-22 AUDIT_SEED_BLOCKED DiskFull; PostgreSQL /dev/shm=64MiB"
-  ],
-  "expected": "The offline audit connection enforces a code-owned, connection-local no-parallel bound without changing database configuration; full DEV plan remains read-only and can reach deterministic dataset-gap results under the supported container limits.",
+  "evidence_uris": [],
+  "expected": "脚本按仓库约定在 backend 导入前将 repo 根加入 sys.path，anns_metadata 每小时增量任务成功写入 market.anns",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "scripts/seed_dataset_refresh_audit.py",
-      "backend/tests/test_dataset_refresh_audit.py"
+      "scripts/sync_eastmoney_anns_metadata.py"
     ],
     "ownership": {
       "changed_files": [
-        "scripts/seed_dataset_refresh_audit.py",
-        "backend/tests/test_dataset_refresh_audit.py"
+        "scripts/sync_eastmoney_anns_metadata.py"
       ],
       "impacted_modules": [
-        "qlib_data",
-        "qe.core",
         "local_data",
-        "platform.api"
+        "selection_center",
+        "qe.core",
+        "paper_v2"
       ],
       "matched_rules": [
         {
-          "file": "scripts/seed_dataset_refresh_audit.py",
+          "file": "scripts/sync_eastmoney_anns_metadata.py",
           "impact_modules": [
+            "selection_center",
             "qe.core",
-            "local_data",
-            "platform.api"
+            "paper_v2"
           ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/test_dataset_refresh_audit.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
         }
       ],
       "risk_levels": [
-        "critical"
+        "high"
       ],
       "suggested_scope": [
-        "scripts/seed_dataset_refresh_audit.py",
-        "backend/tests/test_dataset_refresh_audit.py"
+        "scripts/sync_eastmoney_anns_metadata.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "scripts/seed_dataset_refresh_audit.py",
-      "backend/tests/test_dataset_refresh_audit.py"
+      "scripts/sync_eastmoney_anns_metadata.py"
     ]
   },
-  "first_seen_at": "2026-08-22T08:00:52.197403Z",
+  "first_seen_at": "2026-08-22T11:13:48.322437Z",
   "fix_branch": null,
-  "fix_commit": "3f591653d307344dbb7ada05ab958539994cadbd",
-  "fixed_at": "2026-08-22T08:41:46Z",
-  "github_issue_number": 3677,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3677",
-  "last_seen_at": "2026-08-22T08:00:52.197403Z",
+  "fix_commit": "9e01fc21246a2f05a45eb9536e5ece090008d6fa",
+  "fixed_at": "2026-08-22T11:34:21Z",
+  "github_issue_number": 3688,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3688",
+  "last_seen_at": "2026-08-22T11:13:48.322437Z",
   "module": "local_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3679",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3690",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python scripts/seed_dataset_refresh_audit.py --database dev --mode plan --end-date 2026-07-31 --env-file F:\\Dev\\AIstock\\.env --receipt-path X:\\AIstock_dataset_release_control\\operator_receipts\\pit_v2_audit_seed_dev_plan_20260731.json",
+  "reproduce_command": "python scripts/sync_anns_metadata_incremental.py --mode incremental --lookback-days 1",
   "required_verification": [
     "l0",
-    "qlib_data_backend"
+    "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -123,23 +105,26 @@
   "suspected_modules": [
     "local_data"
   ],
-  "title": "PIT v2 audit seeder ignores PostgreSQL parallel shared-memory bound",
+  "title": "anns_metadata 定时任务 ModuleNotFoundError: backend 导致公告元数据断更",
   "trigger_condition": {
-    "fingerprint": "533429f068c6e457e6bc6867",
-    "source_event_id": "FE-20260822-533429f068c6"
+    "fingerprint": "52a309dec497cf5d33c1a29c",
+    "source_event_id": "FE-20260822-52a309dec497"
   },
   "validation_evidence": [
-    "PR #3679 HEAD cca6e11121f7ea56011c7a395a2d972d5ad6624b CI -> 9 successful, 0 failing, 0 pending"
+    "python -m ruff check scripts/sync_eastmoney_anns_metadata.py -> passed",
+    "python -m pytest backend/tests/scripts/test_sync_eastmoney_anns_metadata.py -q -> 4 passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s data_sync_autonomy_backend -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
         "local_data",
-        "qlib_data"
+        "data_sync_autonomy"
       ],
       "plans": [
-        "qlib_data_backend"
+        "data_sync_autonomy_backend"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -194,10 +179,10 @@
       "deferred_nightly_verification": {
         "modules": [
           "local_data",
-          "qlib_data"
+          "data_sync_autonomy"
         ],
         "plans": [
-          "qlib_data_backend"
+          "data_sync_autonomy_backend"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
