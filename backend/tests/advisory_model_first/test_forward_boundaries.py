@@ -57,6 +57,9 @@ class _Repository:
     def pending_settlements(self, **_kwargs):
         return []
 
+    def pending_mature_model_observations(self, **_kwargs):
+        return []
+
     def retryable_model_observations(self, *, limit: int):
         assert limit == 1
         return []
@@ -172,6 +175,7 @@ def test_one_program_failure_does_not_block_another_program() -> None:
     service = _Service(
         repository=SimpleNamespace(
             pending_settlements=lambda **_kwargs: [],
+            pending_mature_model_observations=lambda **_kwargs: [],
             retryable_model_observations=lambda **_kwargs: [],
             list_runs=lambda **_kwargs: [],
         ),

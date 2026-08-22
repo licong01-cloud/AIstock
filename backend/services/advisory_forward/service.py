@@ -13,6 +13,13 @@ from backend.services.advisory_forward.models import (
     AdvisoryForwardRunV1,
     utcnow,
 )
+from backend.services.advisory_forward.evaluation import (
+    REASON_MARKET_UNAVAILABLE,
+    REASON_SEQUENCE_INCOMPLETE,
+    AdvisoryForwardEvaluationMarketSource,
+    build_forward_model_evaluation,
+)
+from backend.services.advisory_forward.errors import AdvisoryForwardModelEvaluationError
 from backend.services.advisory_forward.repository import (
     RETRYABLE_MODEL_OBSERVATION_REASON_CODES,
     AdvisoryForwardPGRepository,
@@ -65,12 +72,14 @@ class AdvisoryForwardService:
         now_provider: Any | None = None,
         after_close_hour: int | None = None,
         after_close_minute: int | None = None,
+        evaluation_market_source: AdvisoryForwardEvaluationMarketSource | Any | None = None,
     ) -> None:
         self.repository = repository or AdvisoryForwardPGRepository()
         self.program_service = program_service or AdvisoryProgramService()
         self.model_service = model_service or AdvisoryModelShadowService()
         self.model_resolver = model_resolver or AdvisoryModelBindingResolver()
         self.calendar = calendar or TradingCalendarStatusService()
+        self.evaluation_market_source = evaluation_market_source or AdvisoryForwardEvaluationMarketSource()
         self.now_provider = now_provider or (lambda: datetime.now(SHANGHAI_TZ))
         if after_close_hour is None and after_close_minute is None:
             self.after_close_hour, self.after_close_minute = _after_close_time()
@@ -118,6 +127,7 @@ class AdvisoryForwardService:
             except Exception as exc:
                 results.append(self._visible_failure(pending, stage="TARGET_OPEN_SETTLE", exc=exc))
                 blocked_program_ids.add(pending_program_id)
+        self._evaluate_mature_model_observations(results, on_or_before=now.date())
         if not self._publication_due(now):
             self._retry_one_model_observation(results)
             return {
@@ -166,6 +176,179 @@ class AdvisoryForwardService:
 
     def list_runs(self, *, program_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         return self.repository.list_runs(program_id=program_id, limit=limit)
+
+    def model_metrics(self, program_id: str) -> dict[str, Any]:
+        now = self.now_provider().astimezone(SHANGHAI_TZ)
+        return self.repository.model_metrics(program_id, as_of_date=now.date())
+
+    def _evaluate_mature_model_observations(
+        self,
+        results: list[dict[str, Any]],
+        *,
+        on_or_before: date,
+    ) -> None:
+        processed_program_ids: set[str] = set()
+        for pending in self.repository.pending_mature_model_observations(
+            on_or_before=on_or_before,
+            limit=20,
+        ):
+            program_id = str(pending["program_id"])
+            if program_id in processed_program_ids:
+                continue
+            processed_program_ids.add(program_id)
+            try:
+                results.append(self._evaluate_model_epoch(pending, on_or_before=on_or_before))
+            except Exception as exc:
+                reason_code = str(
+                    getattr(exc, "error_code", None)
+                    or getattr(exc, "reason_code", None)
+                    or "ADVISORY_FORWARD_MODEL_EVALUATION_FAILED"
+                )
+                waiting_data = reason_code in {REASON_MARKET_UNAVAILABLE, REASON_SEQUENCE_INCOMPLETE}
+                LOGGER.exception(
+                    "advisory forward model evaluation failed observation_id=%s reason_code=%s",
+                    pending.get("observation_id"),
+                    reason_code,
+                )
+                self.repository.mark_model_evaluation_failure(
+                    observation_id=str(pending["observation_id"]),
+                    reason_code=reason_code,
+                    error={"message": str(exc), "context": dict(getattr(exc, "context", {}) or {})},
+                    waiting_data=waiting_data,
+                )
+                results.append(
+                    {
+                        "program_id": program_id,
+                        "forward_run_id": pending.get("forward_run_id"),
+                        "observation_id": pending.get("observation_id"),
+                        "status": "WAITING_DATA" if waiting_data else "FAILED",
+                        "stage": "MODEL_EVALUATION",
+                        "reason_code": reason_code,
+                    }
+                )
+
+    def _evaluate_model_epoch(
+        self,
+        pending: Mapping[str, Any],
+        *,
+        on_or_before: date,
+    ) -> dict[str, Any]:
+        prediction = dict(pending.get("prediction_payload_json") or {})
+        program_id = str(pending["program_id"])
+        descriptor = str(pending.get("model_descriptor_sha256") or "")
+        bundle_id = str(pending.get("bundle_id") or "")
+        shadow_policy_sha256 = str(prediction.get("shadow_policy_sha256") or "")
+        cost_policy_sha256 = str(prediction.get("cost_policy_sha256") or "")
+        timeline = self.repository.model_forward_timeline(
+            program_id=program_id,
+            on_or_before=on_or_before,
+        )
+        anchor_index = next(
+            (
+                index
+                for index, row in enumerate(timeline)
+                if str(row.get("observation_id") or "") == str(pending["observation_id"])
+            ),
+            None,
+        )
+        if anchor_index is None:
+            raise RuntimeError("mature model evaluation observation is absent from the Program timeline")
+        epoch_identity = (descriptor, bundle_id, shadow_policy_sha256, cost_policy_sha256)
+        epoch_start = anchor_index
+        while epoch_start > 0 and _model_evaluation_epoch_identity(timeline[epoch_start - 1]) == epoch_identity:
+            epoch_start -= 1
+        epoch_end = anchor_index + 1
+        while epoch_end < len(timeline) and _model_evaluation_epoch_identity(timeline[epoch_end]) == epoch_identity:
+            epoch_end += 1
+        observations = timeline[epoch_start:epoch_end]
+        rank_contexts = timeline[epoch_start:]
+        if not observations or not rank_contexts:
+            raise RuntimeError("mature model evaluation epoch has no observations or rank context")
+        evaluation_as_of = rank_contexts[-1]["target_trade_date"]
+        existing = self.repository.get_model_evaluation(
+            program_id=program_id,
+            model_descriptor_sha256=descriptor,
+            first_observation_id=str(observations[0]["observation_id"]),
+            as_of_trade_date=evaluation_as_of,
+        )
+        if existing is not None:
+            return {
+                "program_id": program_id,
+                "observation_id": pending["observation_id"],
+                "evaluation_id": existing["evaluation_id"],
+                "status": "MODEL_EVALUATION_IDEMPOTENT_REPLAY",
+                "stage": "MODEL_EVALUATION",
+                "as_of_trade_date": evaluation_as_of.isoformat(),
+            }
+        selection_runs = {
+            str(row["selection_run_id"]): self.program_service.selection_service.get_run(
+                str(row["selection_run_id"])
+            )
+            for row in rank_contexts
+        }
+        symbols = sorted(
+            {
+                str(item.symbol).strip().upper()
+                for run in selection_runs.values()
+                for item in run.aggregate_results
+                if int(item.rank) <= 40
+            }
+        )
+        cost_policy = prediction.get("cost_policy")
+        benchmark = str(cost_policy.get("benchmark_instrument") or "") if isinstance(cost_policy, Mapping) else ""
+        self._require_evaluation_market_audit(evaluation_as_of)
+        market = self.evaluation_market_source.load(
+            symbols=symbols,
+            benchmark_instrument=benchmark,
+            start_trade_date=observations[0]["target_trade_date"],
+            end_trade_date=evaluation_as_of,
+        )
+        existing_outcome_ids = self.repository.model_outcome_observation_ids(
+            observation_ids=[str(row["observation_id"]) for row in observations],
+        )
+        built = build_forward_model_evaluation(
+            observations=observations,
+            rank_contexts=rank_contexts,
+            selection_runs=selection_runs,
+            market=market,
+            as_of_trade_date=evaluation_as_of,
+            existing_outcome_observation_ids=existing_outcome_ids,
+            existing_outcome_count=len(existing_outcome_ids),
+        )
+        committed = self.repository.commit_model_evaluation(
+            evaluation=built.evaluation,
+            outcomes=built.new_outcomes,
+            unresolved_observation_ids=built.unresolved_observation_ids,
+        )
+        return {
+            "program_id": program_id,
+            "observation_id": pending["observation_id"],
+            "evaluation_id": committed["evaluation_id"],
+            "status": "MODEL_EVALUATION_READY",
+            "stage": "MODEL_EVALUATION",
+            "as_of_trade_date": evaluation_as_of.isoformat(),
+            "new_outcome_count": len(built.new_outcomes),
+            "unresolved_outcome_count": len(built.unresolved_observation_ids),
+        }
+
+    def _require_evaluation_market_audit(self, trade_date: date) -> None:
+        refresh_audit = getattr(self.program_service.selection_service, "refresh_audit", None)
+        require_success = getattr(refresh_audit, "require_success", None)
+        if not callable(require_success):
+            raise AdvisoryForwardModelEvaluationError(
+                "forward model evaluation requires dataset refresh audit authority",
+                reason_code=REASON_MARKET_UNAVAILABLE,
+                context={"trade_date": trade_date.isoformat()},
+            )
+        for dataset in ("kline_daily_raw", "adj_factor", "stk_limit", "suspend_d", "index_daily"):
+            try:
+                require_success(dataset=dataset, trade_date=trade_date)
+            except Exception as exc:
+                raise AdvisoryForwardModelEvaluationError(
+                    "forward model evaluation dataset refresh audit is not successful",
+                    reason_code=REASON_MARKET_UNAVAILABLE,
+                    context={"dataset": dataset, "trade_date": trade_date.isoformat()},
+                ) from exc
 
     def _publication_due(self, now: datetime) -> bool:
         return self.calendar.is_trading_day(now.date()) and (
@@ -790,6 +973,24 @@ class AdvisoryForwardService:
 def _scheduled(program: AdvisoryProgram) -> bool:
     schedule = dict(program.review_schedule or {})
     return program.status == PROGRAM_STATUS_ENABLED and schedule.get("frequency") == "daily_after_close"
+
+
+def _model_evaluation_epoch_identity(row: Mapping[str, Any]) -> tuple[str, str, str, str] | None:
+    prediction = row.get("prediction_payload_json")
+    if (
+        row.get("status") != "EXPERIMENTAL_SHADOW"
+        or not isinstance(prediction, Mapping)
+        or prediction.get("model_role") != META_LABEL_MODEL_ROLE
+        or prediction.get("evaluation_contract_version") != "advisory_forward_model_evaluation_v1"
+    ):
+        return None
+    identity = (
+        str(row.get("model_descriptor_sha256") or ""),
+        str(row.get("bundle_id") or ""),
+        str(prediction.get("shadow_policy_sha256") or ""),
+        str(prediction.get("cost_policy_sha256") or ""),
+    )
+    return identity if all(identity) else None
 
 
 def _after_close_time() -> tuple[int, int]:

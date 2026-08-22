@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.advisory_forward.models import (
+    AdvisoryForwardModelEvaluationV1,
     AdvisoryForwardModelObservationV1,
+    AdvisoryForwardModelObservationOutcomeV1,
     AdvisoryForwardRunV1,
 )
 from backend.services.advisory_forward.errors import AdvisoryForwardActiveEpisodeStateConflictError
@@ -401,7 +403,18 @@ class AdvisoryForwardPGRepository:
                     (forward_run_id,),
                 )
                 observation = cur.fetchone()
-        return {"forward_run": dict(run), "model_observation": dict(observation) if observation else None}
+                outcome = None
+                if observation is not None:
+                    cur.execute(
+                        "SELECT * FROM app.advisory_forward_model_observation_outcome WHERE observation_id=%s",
+                        (observation["observation_id"],),
+                    )
+                    outcome = cur.fetchone()
+        return {
+            "forward_run": dict(run),
+            "model_observation": dict(observation) if observation else None,
+            "model_outcome": dict(outcome) if outcome else None,
+        }
 
     def list_runs(self, *, program_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         sql = "SELECT * FROM app.advisory_forward_run"
@@ -444,6 +457,411 @@ class AdvisoryForwardPGRepository:
                     (sorted(RETRYABLE_MODEL_OBSERVATION_REASON_CODES), int(limit)),
                 )
                 return [dict(row) for row in cur.fetchall()]
+
+    def pending_mature_model_observations(
+        self,
+        *,
+        on_or_before: date,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        if limit <= 0:
+            raise ValueError("mature model observation limit must be positive")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT observation.*, forward.selection_run_id,
+                           forward.review_run_id, forward.list_version_id
+                    FROM app.advisory_forward_model_observation AS observation
+                    JOIN app.advisory_forward_run AS forward
+                      ON forward.forward_run_id = observation.forward_run_id
+                    LEFT JOIN app.advisory_forward_model_observation_outcome AS outcome
+                      ON outcome.observation_id = observation.observation_id
+                    WHERE observation.status = 'EXPERIMENTAL_SHADOW'
+                      AND observation.maturity_trade_date IS NOT NULL
+                      AND observation.maturity_trade_date <= %s
+                      AND observation.prediction_payload_json->>'model_role' = 'meta_label_take_skip_confidence'
+                      AND observation.prediction_payload_json->>'evaluation_contract_version' = 'advisory_forward_model_evaluation_v1'
+                      AND outcome.observation_id IS NULL
+                    ORDER BY observation.maturity_trade_date, observation.target_trade_date,
+                             observation.program_id
+                    LIMIT %s
+                    """,
+                    (on_or_before, int(limit)),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
+    def model_epoch_observations(
+        self,
+        *,
+        program_id: str,
+        model_descriptor_sha256: str,
+        bundle_id: str,
+        shadow_policy_sha256: str,
+        cost_policy_sha256: str,
+        on_or_before: date,
+    ) -> list[dict[str, Any]]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT observation.*, forward.selection_run_id,
+                           forward.review_run_id, forward.list_version_id
+                    FROM app.advisory_forward_model_observation AS observation
+                    JOIN app.advisory_forward_run AS forward
+                      ON forward.forward_run_id = observation.forward_run_id
+                    WHERE observation.program_id = %s
+                      AND observation.status = 'EXPERIMENTAL_SHADOW'
+                      AND observation.model_descriptor_sha256 = %s
+                      AND observation.bundle_id = %s
+                      AND observation.target_trade_date <= %s
+                      AND observation.prediction_payload_json->>'model_role' = 'meta_label_take_skip_confidence'
+                      AND observation.prediction_payload_json->>'shadow_policy_sha256' = %s
+                      AND observation.prediction_payload_json->>'cost_policy_sha256' = %s
+                    ORDER BY observation.target_trade_date, observation.observation_id
+                    """,
+                    (
+                        program_id,
+                        model_descriptor_sha256,
+                        bundle_id,
+                        on_or_before,
+                        shadow_policy_sha256,
+                        cost_policy_sha256,
+                    ),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
+    def model_forward_timeline(
+        self,
+        *,
+        program_id: str,
+        on_or_before: date,
+    ) -> list[dict[str, Any]]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT forward.forward_run_id, forward.program_id,
+                           forward.binding_version_id, forward.decision_as_of_trade_date,
+                           forward.target_trade_date, forward.selection_run_id,
+                           forward.review_run_id, forward.list_version_id,
+                           observation.observation_id, observation.status,
+                           observation.maturity_trade_date,
+                           observation.model_descriptor_sha256, observation.bundle_id,
+                           observation.prediction_payload_json, observation.payload_sha256
+                    FROM app.advisory_forward_run AS forward
+                    LEFT JOIN app.advisory_forward_model_observation AS observation
+                      ON observation.forward_run_id = forward.forward_run_id
+                    WHERE forward.program_id=%s
+                      AND forward.publication_status='PUBLISHED'
+                      AND forward.target_trade_date <= %s
+                    ORDER BY forward.target_trade_date, forward.forward_run_id
+                    """,
+                    (program_id, on_or_before),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
+    def model_outcome_observation_ids(
+        self,
+        *,
+        observation_ids: Sequence[str],
+    ) -> set[str]:
+        if not observation_ids:
+            return set()
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT observation_id
+                    FROM app.advisory_forward_model_observation_outcome
+                    WHERE observation_id = ANY(%s)
+                    """,
+                    (list(observation_ids),),
+                )
+                return {str(row[0]) for row in cur.fetchall()}
+
+    def get_model_evaluation(
+        self,
+        *,
+        program_id: str,
+        model_descriptor_sha256: str,
+        first_observation_id: str,
+        as_of_trade_date: date,
+    ) -> dict[str, Any] | None:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM app.advisory_forward_model_evaluation
+                    WHERE program_id=%s AND model_descriptor_sha256=%s
+                      AND first_observation_id=%s AND as_of_trade_date=%s
+                    """,
+                    (program_id, model_descriptor_sha256, first_observation_id, as_of_trade_date),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    def commit_model_evaluation(
+        self,
+        *,
+        evaluation: AdvisoryForwardModelEvaluationV1,
+        outcomes: Sequence[AdvisoryForwardModelObservationOutcomeV1],
+        unresolved_observation_ids: Sequence[str],
+    ) -> dict[str, Any]:
+        payload_hash = evaluation.payload_sha256()
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                epoch_lock_key = (
+                    "advisory_forward_model_evaluation:"
+                    f"{evaluation.program_id}:{evaluation.model_descriptor_sha256}:"
+                    f"{evaluation.first_observation_id}"
+                )
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (epoch_lock_key,),
+                )
+                cur.execute(
+                    """
+                    SELECT * FROM app.advisory_forward_model_evaluation
+                    WHERE program_id=%s AND model_descriptor_sha256=%s
+                      AND first_observation_id=%s AND as_of_trade_date=%s
+                    FOR UPDATE
+                    """,
+                    (
+                        evaluation.program_id,
+                        evaluation.model_descriptor_sha256,
+                        evaluation.first_observation_id,
+                        evaluation.as_of_trade_date,
+                    ),
+                )
+                existing = cur.fetchone()
+                if existing is not None:
+                    if existing["payload_sha256"] != payload_hash:
+                        raise InvalidStateTransitionError(
+                            "forward model evaluation payload conflicts with the persisted fact",
+                            context={"evaluation_id": existing["evaluation_id"]},
+                        )
+                    return dict(existing)
+                cur.execute(
+                    """
+                    INSERT INTO app.advisory_forward_model_evaluation (
+                        evaluation_id, schema_version, program_id, model_descriptor_sha256,
+                        bundle_id, shadow_policy_sha256, cost_policy_sha256,
+                        first_observation_id, last_due_observation_id,
+                        first_target_trade_date, as_of_trade_date, last_due_maturity_trade_date,
+                        observation_count, due_observation_count, matured_outcome_count,
+                        observation_roster_sha256, selection_input_sha256, market_input_sha256,
+                        metrics_json, result_payload_json, payload_sha256, created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING *
+                    """,
+                    (
+                        evaluation.evaluation_id,
+                        evaluation.schema_version,
+                        evaluation.program_id,
+                        evaluation.model_descriptor_sha256,
+                        evaluation.bundle_id,
+                        evaluation.shadow_policy_sha256,
+                        evaluation.cost_policy_sha256,
+                        evaluation.first_observation_id,
+                        evaluation.last_due_observation_id,
+                        evaluation.first_target_trade_date,
+                        evaluation.as_of_trade_date,
+                        evaluation.last_due_maturity_trade_date,
+                        evaluation.observation_count,
+                        evaluation.due_observation_count,
+                        evaluation.matured_outcome_count,
+                        evaluation.observation_roster_sha256,
+                        evaluation.selection_input_sha256,
+                        evaluation.market_input_sha256,
+                        psycopg2.extras.Json(evaluation.metrics_json),
+                        psycopg2.extras.Json(evaluation.result_payload_json),
+                        payload_hash,
+                        evaluation.created_at,
+                    ),
+                )
+                saved = dict(cur.fetchone())
+                for outcome in outcomes:
+                    cur.execute(
+                        "SELECT payload_sha256 FROM app.advisory_forward_model_observation_outcome WHERE observation_id=%s FOR UPDATE",
+                        (outcome.observation_id,),
+                    )
+                    existing_outcome = cur.fetchone()
+                    outcome_hash = outcome.payload_sha256()
+                    if existing_outcome is not None:
+                        if existing_outcome["payload_sha256"] != outcome_hash:
+                            raise InvalidStateTransitionError(
+                                "forward model observation outcome conflicts with the persisted fact",
+                                context={"observation_id": outcome.observation_id},
+                            )
+                        continue
+                    cur.execute(
+                        """
+                        INSERT INTO app.advisory_forward_model_observation_outcome (
+                            outcome_id, schema_version, observation_id, evaluation_id,
+                            program_id, model_descriptor_sha256, bundle_id,
+                            target_trade_date, maturity_trade_date, status,
+                            entered_episode_count, exited_episode_count,
+                            completed_episode_hit_rate, mean_net_return_bps,
+                            outcome_payload_json, payload_sha256, created_at
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        """,
+                        (
+                            outcome.outcome_id,
+                            outcome.schema_version,
+                            outcome.observation_id,
+                            outcome.evaluation_id,
+                            outcome.program_id,
+                            outcome.model_descriptor_sha256,
+                            outcome.bundle_id,
+                            outcome.target_trade_date,
+                            outcome.maturity_trade_date,
+                            outcome.status,
+                            outcome.entered_episode_count,
+                            outcome.exited_episode_count,
+                            outcome.completed_episode_hit_rate,
+                            outcome.mean_net_return_bps,
+                            psycopg2.extras.Json(outcome.outcome_payload_json),
+                            outcome_hash,
+                            outcome.created_at,
+                        ),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE app.advisory_forward_model_observation
+                        SET evaluation_status='READY', evaluation_reason_code=NULL,
+                            evaluation_error_json=NULL, evaluated_at=NOW()
+                        WHERE observation_id=%s
+                        """,
+                        (outcome.observation_id,),
+                    )
+                if unresolved_observation_ids:
+                    cur.execute(
+                        """
+                        UPDATE app.advisory_forward_model_observation
+                        SET evaluation_status='WAITING_DATA',
+                            evaluation_reason_code='ADVISORY_FORWARD_MODEL_EVALUATION_EPISODE_CENSORED',
+                            evaluation_error_json=%s, evaluated_at=NULL
+                        WHERE observation_id = ANY(%s) AND evaluation_status <> 'READY'
+                        """,
+                        (
+                            psycopg2.extras.Json({"message": "one or more policy episodes remain active at the evaluation watermark"}),
+                            list(unresolved_observation_ids),
+                        ),
+                    )
+                return saved
+
+    def mark_model_evaluation_failure(
+        self,
+        *,
+        observation_id: str,
+        reason_code: str,
+        error: dict[str, Any],
+        waiting_data: bool,
+    ) -> None:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app.advisory_forward_model_observation
+                    SET evaluation_status=%s, evaluation_reason_code=%s,
+                        evaluation_error_json=%s, evaluated_at=NULL
+                    WHERE observation_id=%s AND evaluation_status <> 'READY'
+                    """,
+                    (
+                        "WAITING_DATA" if waiting_data else "FAILED",
+                        reason_code,
+                        psycopg2.extras.Json(error),
+                        observation_id,
+                    ),
+                )
+
+    def model_metrics(self, program_id: str, *, as_of_date: date) -> dict[str, Any]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT forward.target_trade_date, observation.observation_id,
+                           observation.status, observation.model_descriptor_sha256,
+                           observation.bundle_id, observation.maturity_trade_date,
+                           observation.evaluation_status,
+                           evaluation_reason_code, evaluation_error_json,
+                           prediction_payload_json
+                    FROM app.advisory_forward_run AS forward
+                    LEFT JOIN app.advisory_forward_model_observation AS observation
+                      ON observation.forward_run_id=forward.forward_run_id
+                    WHERE forward.program_id=%s AND forward.publication_status='PUBLISHED'
+                    ORDER BY forward.target_trade_date, forward.forward_run_id
+                    """,
+                    (program_id,),
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+                epoch: list[dict[str, Any]] = []
+                eligible_indexes = [index for index, row in enumerate(rows) if _model_evaluation_identity(row)]
+                trailing_row = rows[-1] if rows else None
+                trailing_gap = False
+                if eligible_indexes:
+                    latest_index = eligible_indexes[-1]
+                    latest_identity = _model_evaluation_identity(rows[latest_index])
+                    trailing_gap = latest_index != len(rows) - 1
+                    index = latest_index
+                    while index >= 0 and _model_evaluation_identity(rows[index]) == latest_identity:
+                        epoch.append(rows[index])
+                        index -= 1
+                    epoch.reverse()
+                evaluation = None
+                if epoch:
+                    cur.execute(
+                        """
+                        SELECT * FROM app.advisory_forward_model_evaluation
+                        WHERE program_id=%s AND first_observation_id=%s
+                        ORDER BY as_of_trade_date DESC, created_at DESC LIMIT 1
+                        """,
+                        (program_id, epoch[0]["observation_id"]),
+                    )
+                    evaluation = cur.fetchone()
+        due_rows = [row for row in epoch if row.get("maturity_trade_date") and row["maturity_trade_date"] <= as_of_date]
+        future_maturities = [row["maturity_trade_date"] for row in epoch if row.get("maturity_trade_date") and row["maturity_trade_date"] > as_of_date]
+        failure = next(
+            (
+                row
+                for row in due_rows
+                if row.get("evaluation_status") in {"WAITING_DATA", "FAILED"}
+            ),
+            None,
+        )
+        if trailing_gap and trailing_row is not None:
+            failure = trailing_row
+        due_count = len(due_rows)
+        if trailing_gap:
+            status = "FAILED" if trailing_row and trailing_row.get("status") == "FAILED" else "WAITING_DATA"
+        elif due_count == 0:
+            status = "EVIDENCE_IMMATURE"
+        elif failure is not None:
+            status = str(failure["evaluation_status"])
+        elif evaluation is not None:
+            status = "READY"
+        else:
+            status = "WAITING_DATA"
+        return {
+            "schema_version": "advisory_forward_model_metrics_response_v1",
+            "program_id": program_id,
+            "status": status,
+            "observation_count": len(epoch),
+            "due_observation_count": due_count,
+            "next_maturity_trade_date": min(future_maturities) if future_maturities else None,
+            "epoch_first_observation_id": epoch[0]["observation_id"] if epoch else None,
+            "model_descriptor_sha256": epoch[-1]["model_descriptor_sha256"] if epoch else None,
+            "bundle_id": epoch[-1]["bundle_id"] if epoch else None,
+            "reason_code": (
+                failure.get("evaluation_reason_code")
+                or (failure.get("prediction_payload_json") or {}).get("reason_code")
+                if failure
+                else None
+            ),
+            "error": dict(failure.get("evaluation_error_json") or {}) if failure else None,
+            "evaluation": dict(evaluation) if evaluation else None,
+        }
 
     def pending_settlements(self, *, on_or_before: date) -> list[dict[str, Any]]:
         with self._conn_factory() as conn:
@@ -618,6 +1036,24 @@ def _clear_observation_failure(cur: Any, forward_run_id: str) -> None:
         """,
         (forward_run_id,),
     )
+
+
+def _model_evaluation_identity(row: Mapping[str, Any]) -> tuple[str, str, str, str] | None:
+    prediction = row.get("prediction_payload_json")
+    if (
+        row.get("status") != "EXPERIMENTAL_SHADOW"
+        or not isinstance(prediction, Mapping)
+        or prediction.get("model_role") != "meta_label_take_skip_confidence"
+        or prediction.get("evaluation_contract_version") != "advisory_forward_model_evaluation_v1"
+    ):
+        return None
+    identity = (
+        str(row.get("model_descriptor_sha256") or ""),
+        str(row.get("bundle_id") or ""),
+        str(prediction.get("shadow_policy_sha256") or ""),
+        str(prediction.get("cost_policy_sha256") or ""),
+    )
+    return identity if all(identity) else None
 
 
 def _validate_observation_identity(

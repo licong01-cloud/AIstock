@@ -33,6 +33,18 @@ class _ForwardService:
         return {
             "forward_run": {"forward_run_id": forward_run_id, "publication_status": "PUBLISHED"},
             "model_observation": {"status": "UNAVAILABLE"},
+            "model_outcome": None,
+        }
+
+    def model_metrics(self, program_id: str):
+        assert program_id == "advp_test"
+        return {
+            "schema_version": "advisory_forward_model_metrics_response_v1",
+            "program_id": program_id,
+            "status": "EVIDENCE_IMMATURE",
+            "observation_count": 1,
+            "due_observation_count": 0,
+            "evaluation": None,
         }
 
 
@@ -51,6 +63,7 @@ def test_forward_api_exposes_status_run_once_history_and_detail(monkeypatch) -> 
         run = client.post("/api/v1/advisory/forward/run-once")
         history = client.get("/api/v1/advisory/programs/advp_test/forward-runs", params={"limit": 20})
         detail = client.get("/api/v1/advisory/forward-runs/advfwd_test")
+        metrics = client.get("/api/v1/advisory/programs/advp_test/forward-model-metrics")
     finally:
         app.dependency_overrides.pop(advisory_router.get_advisory_forward_service, None)
 
@@ -62,3 +75,5 @@ def test_forward_api_exposes_status_run_once_history_and_detail(monkeypatch) -> 
     assert history.json()["forward_runs"][0]["publication_status"] == "PUBLISHED"
     assert detail.status_code == 200
     assert detail.json()["model_observation"]["status"] == "UNAVAILABLE"
+    assert metrics.status_code == 200
+    assert metrics.json()["status"] == "EVIDENCE_IMMATURE"

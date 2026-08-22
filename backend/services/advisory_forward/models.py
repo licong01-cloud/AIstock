@@ -80,6 +80,67 @@ class AdvisoryForwardModelObservationV1:
         return canonical_json_sha256(payload)
 
 
+@dataclass(frozen=True)
+class AdvisoryForwardModelEvaluationV1:
+    program_id: str
+    model_descriptor_sha256: str
+    bundle_id: str
+    shadow_policy_sha256: str
+    cost_policy_sha256: str
+    first_observation_id: str
+    last_due_observation_id: str
+    first_target_trade_date: date
+    as_of_trade_date: date
+    last_due_maturity_trade_date: date
+    observation_count: int
+    due_observation_count: int
+    matured_outcome_count: int
+    observation_roster_sha256: str
+    selection_input_sha256: str
+    market_input_sha256: str
+    metrics_json: dict[str, Any]
+    result_payload_json: dict[str, Any]
+    evaluation_id: str = field(default_factory=lambda: f"adveval_{uuid4().hex}")
+    schema_version: str = "advisory_forward_model_evaluation_v1"
+    created_at: datetime = field(default_factory=utcnow)
+
+    def payload(self) -> dict[str, Any]:
+        return _json_ready(asdict(self))
+
+    def payload_sha256(self) -> str:
+        payload = self.payload()
+        payload.pop("created_at", None)
+        return canonical_json_sha256(payload)
+
+
+@dataclass(frozen=True)
+class AdvisoryForwardModelObservationOutcomeV1:
+    observation_id: str
+    evaluation_id: str
+    program_id: str
+    model_descriptor_sha256: str
+    bundle_id: str
+    target_trade_date: date
+    maturity_trade_date: date
+    status: str
+    entered_episode_count: int
+    exited_episode_count: int
+    completed_episode_hit_rate: float | None
+    mean_net_return_bps: float | None
+    outcome_payload_json: dict[str, Any]
+    outcome_id: str = field(default_factory=lambda: f"advout_{uuid4().hex}")
+    schema_version: str = "advisory_forward_model_observation_outcome_v1"
+    created_at: datetime = field(default_factory=utcnow)
+
+    def payload(self) -> dict[str, Any]:
+        return _json_ready(asdict(self))
+
+    def payload_sha256(self) -> str:
+        payload = self.payload()
+        payload.pop("created_at", None)
+        return canonical_json_sha256(payload)
+
+
 def _json_ready(value: Any) -> Any:
     if isinstance(value, (date, datetime)):
         return value.isoformat()

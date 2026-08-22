@@ -17,6 +17,7 @@ from backend.services.advisory_model_first.meta_label_bundle import (
     publish_meta_label_bundle,
     score_meta_label_bundle,
 )
+from backend.services.advisory_model_first.policy_contracts import AdvisoryPolicyCostV1
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 from backend.tests.advisory_model_first.test_meta_label_contracts import _request
 
@@ -43,10 +44,13 @@ def _shadow_policy() -> dict[str, object]:
     }
 
 
+def _cost_policy() -> AdvisoryPolicyCostV1:
+    return AdvisoryPolicyCostV1(buy_cost_bps=3.0, sell_cost_bps=13.0)
+
+
 def _publish(tmp_path, resource):
     policy = tmp_path / "policy"
     policy.mkdir(exist_ok=True)
-    (policy / "manifest.json").write_text("{}", encoding="utf-8")
     shadow_policy = _shadow_policy()
     policy_bundle = tmp_path / "policy_datasets" / ("1" * 64)
     policy_bundle.mkdir(parents=True, exist_ok=True)
@@ -57,6 +61,19 @@ def _publish(tmp_path, resource):
         policy_dataset_bundle_root=str(policy),
         output_root=str(tmp_path),
         shadow_policy_sha256=canonical_json_sha256(shadow_policy),
+        cost_policy_sha256=_cost_policy().policy_sha256,
+    )
+    cost_policy = _cost_policy().model_dump(mode="json")
+    (policy_bundle / "cost_policy.json").write_text(json.dumps(cost_policy), encoding="utf-8")
+    (policy / "manifest.json").write_text(
+        json.dumps(
+            {
+                "policy_dataset_bundle_id": "1" * 64,
+                "shadow_policy_sha256": canonical_json_sha256(shadow_policy),
+                "cost_policy_sha256": _cost_policy().policy_sha256,
+            }
+        ),
+        encoding="utf-8",
     )
     return publish_meta_label_bundle(
         request=request,
@@ -101,6 +118,7 @@ def test_meta_label_bundle_exact_request_reuse_and_hmm_jitter_are_deterministic(
         policy_dataset_bundle_root=str(tmp_path / "policy"),
         output_root=str(tmp_path),
         shadow_policy_sha256=canonical_json_sha256(_shadow_policy()),
+        cost_policy_sha256=_cost_policy().policy_sha256,
     )
     assert find_meta_label_bundle_for_request(request)[0] == first_id
     assert _stable_hmm_payload({"x": 0.5095992816185344}) == _stable_hmm_payload(
@@ -125,6 +143,7 @@ def test_meta_label_bundle_exact_request_rejects_multiple_claimants(tmp_path) ->
         policy_dataset_bundle_root=str(tmp_path / "policy"),
         output_root=str(tmp_path),
         shadow_policy_sha256=canonical_json_sha256(_shadow_policy()),
+        cost_policy_sha256=_cost_policy().policy_sha256,
     )
     with pytest.raises(AdvisoryModelFirstError) as excinfo:
         find_meta_label_bundle_for_request(request)
@@ -146,6 +165,7 @@ def test_exact_meta_label_runtime_loader_validates_manifest_and_hmm_cutoff(tmp_p
     assert loaded["manifest_file_sha256"] == manifest_sha256
     assert loaded["feature_schema"]["trained_feature_names"] == ["x"]
     assert loaded["shadow_policy_maturity_horizon_days"] == 20
+    assert loaded["cost_policy_sha256"] == _cost_policy().policy_sha256
 
 
 def test_exact_meta_label_runtime_loader_rejects_shadow_policy_drift(tmp_path) -> None:
@@ -155,6 +175,25 @@ def test_exact_meta_label_runtime_loader_rejects_shadow_policy_drift(tmp_path) -
     payload = _shadow_policy()
     payload["time_stop_days"] = 19
     policy_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AdvisoryModelFirstError) as excinfo:
+        load_exact_meta_label_runtime_bundle(
+            model_root=tmp_path,
+            bundle_id=bundle_id,
+            bundle_manifest_sha256=manifest_sha256,
+            load_booster=False,
+        )
+
+    assert excinfo.value.reason_code == "ADVISORY_META_LABEL_BUNDLE_INVALID"
+
+
+def test_exact_meta_label_runtime_loader_rejects_cost_policy_drift(tmp_path) -> None:
+    bundle_id, path, _ = _publish(tmp_path, 1)
+    manifest_sha256 = hashlib.sha256((path / "manifest.json").read_bytes()).hexdigest()
+    cost_path = tmp_path / "policy_datasets" / ("1" * 64) / "cost_policy.json"
+    payload = _cost_policy().model_dump(mode="json")
+    payload["sell_cost_bps"] = 99.0
+    cost_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(AdvisoryModelFirstError) as excinfo:
         load_exact_meta_label_runtime_bundle(
