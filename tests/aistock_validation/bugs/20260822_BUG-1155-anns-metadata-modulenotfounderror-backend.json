@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1155",
-  "closed_at": null,
+  "closed_at": "2026-08-22T11:34:21Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -68,8 +68,8 @@
   },
   "first_seen_at": "2026-08-22T11:13:48.322437Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9e01fc21246a2f05a45eb9536e5ece090008d6fa",
+  "fixed_at": "2026-08-22T11:34:21Z",
   "github_issue_number": 3688,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3688",
   "last_seen_at": "2026-08-22T11:13:48.322437Z",
@@ -77,6 +77,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3690",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -91,6 +92,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -98,7 +101,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -107,6 +110,12 @@
     "fingerprint": "52a309dec497cf5d33c1a29c",
     "source_event_id": "FE-20260822-52a309dec497"
   },
+  "validation_evidence": [
+    "python -m ruff check scripts/sync_eastmoney_anns_metadata.py -> passed",
+    "python -m pytest backend/tests/scripts/test_sync_eastmoney_anns_metadata.py -q -> 4 passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s data_sync_autonomy_backend -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
