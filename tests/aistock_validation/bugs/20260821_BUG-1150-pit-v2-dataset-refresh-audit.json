@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1150",
-  "closed_at": null,
+  "closed_at": "2026-08-22T05:26:47Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -58,11 +58,11 @@
       "scripts/seed_dataset_refresh_audit.py",
       "backend/tests/test_dataset_refresh_audit.py",
       "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
-      "tests/aistock_validation/pit_v2/source_freeze_receipt.json"
-      ,"docs/standards/aistock_runtime_targets_v1.yaml"
-      ,"backend/tests/scripts/test_aistock_issue_workflow.py"
-      ,"tests/aistock_validation/catalog/file_ownership.yaml"
-      ,"backend/tests/scripts/test_ci_change_classifier.py"
+      "tests/aistock_validation/pit_v2/source_freeze_receipt.json",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ],
     "ownership": {
       "changed_files": [
@@ -131,17 +131,17 @@
       "scripts/seed_dataset_refresh_audit.py",
       "backend/tests/test_dataset_refresh_audit.py",
       "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
-      "tests/aistock_validation/pit_v2/source_freeze_receipt.json"
-      ,"docs/standards/aistock_runtime_targets_v1.yaml"
-      ,"backend/tests/scripts/test_aistock_issue_workflow.py"
-      ,"tests/aistock_validation/catalog/file_ownership.yaml"
-      ,"backend/tests/scripts/test_ci_change_classifier.py"
+      "tests/aistock_validation/pit_v2/source_freeze_receipt.json",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ]
   },
   "first_seen_at": "2026-08-21T18:59:47.959768Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "272ce3b1c17db7a319c5cf575f7e4fbfd02a21cf",
+  "fixed_at": "2026-08-22T05:26:47Z",
   "github_issue_number": 3669,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3669",
   "last_seen_at": "2026-08-21T18:59:47.959768Z",
@@ -149,6 +149,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3672",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -163,6 +164,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -170,7 +173,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -179,6 +182,9 @@
     "fingerprint": "079efc1a16724042941abaac",
     "source_event_id": "FE-20260821-079efc1a1672"
   },
+  "validation_evidence": [
+    "PR #3672 HEAD 06e92225b152eaa6e2dca42b1e021aa56989af37 CI -> 10 successful, 0 failing, 0 pending"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
