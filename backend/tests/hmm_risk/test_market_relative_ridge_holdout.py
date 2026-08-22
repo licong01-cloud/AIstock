@@ -12,11 +12,24 @@ from psycopg2 import OperationalError
 from backend.services.hmm_risk import market_relative_ridge_holdout as subject
 from backend.services.hmm_risk.market_relative_jump_spike import MARKET_FEATURES, RELATIVE_FEATURES, Preprocessor
 from backend.services.hmm_risk.state_model_set import StateModelSetError
+from scripts.hmm_risk import prepare_state_model_set as prepare_cli
 from scripts.hmm_risk import run_market_relative_ridge_holdout as cli
 
 
 def _database_identity() -> dict[str, object]:
     return {"host": "canonical-db", "port": 5432, "dbname": "aistock"}
+
+
+def _source_preflight_request() -> dict[str, object]:
+    return {
+        "source": {
+            "source_start": "2022-01-04",
+            "source_end": "2026-04-30",
+            "circ_mv_history_start": "2022-01-04",
+            "universe_key": subject.EXPECTED_UNIVERSE_KEY,
+            "universe_rule_version": subject.EXPECTED_UNIVERSE_RULE_VERSION,
+        }
+    }
 
 
 def _receipt(body: dict[str, object]) -> dict[str, object]:
@@ -1410,6 +1423,163 @@ def test_outcome_tail_database_identity_mismatch_stops_before_calendar_query(
     assert captured.value.stage == "source_preflight"
     assert captured.value.evidence["source_reason_code"] == "hmm_risk_source_database_identity_mismatch"
     assert observed == {"rollback": True, "close": True}
+
+
+def test_shared_source_loader_database_identity_mismatch_stops_before_sql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, bool] = {}
+
+    class Connection:
+        def cursor(self) -> None:
+            observed["cursor_called"] = True
+            raise AssertionError("source SQL must not run after database identity mismatch")
+
+        def rollback(self) -> None:
+            observed["rollback"] = True
+
+        def close(self) -> None:
+            observed["close"] = True
+
+    monkeypatch.setattr(prepare_cli, "_load_security_identity_manifest", lambda source: object())
+    monkeypatch.setattr(prepare_cli, "_load_provider_absence_manifest", lambda source: object())
+    monkeypatch.setattr(
+        prepare_cli,
+        "_connect_readonly",
+        lambda prefix: (Connection(), {"host": "wrong-db", "port": 5433, "dbname": "aistock_dev"}),
+    )
+    monkeypatch.setattr(
+        prepare_cli,
+        "PostgresStockFactReader",
+        lambda *args, **kwargs: pytest.fail("reader must not be constructed after database identity mismatch"),
+    )
+    preflight_completed = False
+
+    def mark_preflight_complete() -> None:
+        nonlocal preflight_completed
+        preflight_completed = True
+
+    with pytest.raises(StateModelSetError, match="hmm_risk_source_database_identity_mismatch"):
+        prepare_cli._load_l1_source_inputs(
+            _source_preflight_request(),
+            db_prefix="P2_4_TEST",
+            expected_database_identity=_database_identity(),
+            source_preflight_complete=mark_preflight_complete,
+        )
+
+    assert preflight_completed is False
+    assert observed == {"rollback": True, "close": True}
+
+
+def test_shared_source_loader_marks_access_only_after_source_metadata_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Cursor:
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute(self, query: str) -> None:
+            assert query == "SET LOCAL cursor_tuple_fraction=1.0"
+            events.append("session_configured")
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def rollback(self) -> None:
+            events.append("rollback")
+
+        def close(self) -> None:
+            events.append("close")
+
+    class Reader:
+        def validate_source(self) -> dict[str, object]:
+            events.append("source_metadata_validated")
+            return {}
+
+        def load_classification_lookup(self) -> None:
+            events.append("business_read_started")
+            raise StateModelSetError("stop after callback ordering evidence")
+
+    monkeypatch.setattr(prepare_cli, "_load_security_identity_manifest", lambda source: object())
+    monkeypatch.setattr(prepare_cli, "_load_provider_absence_manifest", lambda source: object())
+    monkeypatch.setattr(prepare_cli, "_connect_readonly", lambda prefix: (Connection(), _database_identity()))
+    monkeypatch.setattr(prepare_cli, "PostgresStockFactReader", lambda *args, **kwargs: Reader())
+
+    def mark_preflight_complete() -> None:
+        events.append("holdout_accessed")
+
+    with pytest.raises(StateModelSetError, match="stop after callback ordering evidence"):
+        prepare_cli._load_l1_source_inputs(
+            _source_preflight_request(),
+            db_prefix="P2_4_TEST",
+            expected_database_identity=_database_identity(),
+            source_preflight_complete=mark_preflight_complete,
+        )
+
+    assert events == [
+        "session_configured",
+        "source_metadata_validated",
+        "holdout_accessed",
+        "business_read_started",
+        "rollback",
+        "close",
+    ]
+
+
+def test_shared_source_loader_metadata_failure_does_not_mark_holdout_accessed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Cursor:
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute(self, query: str) -> None:
+            assert query == "SET LOCAL cursor_tuple_fraction=1.0"
+            events.append("session_configured")
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def rollback(self) -> None:
+            events.append("rollback")
+
+        def close(self) -> None:
+            events.append("close")
+
+    class Reader:
+        def validate_source(self) -> dict[str, object]:
+            events.append("source_metadata_failed")
+            raise StateModelSetError("requested PIT universe state is missing")
+
+    monkeypatch.setattr(prepare_cli, "_load_security_identity_manifest", lambda source: object())
+    monkeypatch.setattr(prepare_cli, "_load_provider_absence_manifest", lambda source: object())
+    monkeypatch.setattr(prepare_cli, "_connect_readonly", lambda prefix: (Connection(), _database_identity()))
+    monkeypatch.setattr(prepare_cli, "PostgresStockFactReader", lambda *args, **kwargs: Reader())
+
+    def mark_preflight_complete() -> None:
+        events.append("holdout_accessed")
+
+    with pytest.raises(StateModelSetError, match="requested PIT universe state is missing"):
+        prepare_cli._load_l1_source_inputs(
+            _source_preflight_request(),
+            db_prefix="P2_4_TEST",
+            expected_database_identity=_database_identity(),
+            source_preflight_complete=mark_preflight_complete,
+        )
+
+    assert events == ["session_configured", "source_metadata_failed", "rollback", "close"]
 
 
 def test_request_preparation_classifies_database_recovery_before_holdout_access(
