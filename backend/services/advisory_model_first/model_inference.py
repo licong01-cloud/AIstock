@@ -438,6 +438,10 @@ class AdvisoryModelShadowService:
             "style_profile_hash": resolution.style_profile_hash,
             "model_descriptor_sha256": resolution.descriptor_sha256,
             "model_role": resolution.model_role,
+            "shadow_policy_sha256": resolution.shadow_policy_sha256,
+            "shadow_policy_maturity_horizon_days": (
+                bundle["shadow_policy_maturity_horizon_days"] if is_meta_label else None
+            ),
             "decision_as_of_trade_date": decision_date.isoformat(),
             "target_trade_date": target_trade_date.isoformat(),
             "selection_runtime_semantics_hash": resolution.selection_runtime_semantics_hash,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 from backend.services.advisory_forward.service import (
@@ -9,6 +9,12 @@ from backend.services.advisory_forward.service import (
     _build_publication_list,
 )
 from backend.services.advisory_program import ACTION_HOLD, ACTION_WAITING, AdvisoryCandidate, AdvisoryProgram
+
+
+class _DailyCalendar:
+    def next_trading_day(self, value: date, *, inclusive: bool = False) -> date:
+        assert not inclusive
+        return value + timedelta(days=1)
 
 
 def _program() -> AdvisoryProgram:
@@ -136,3 +142,129 @@ def test_forward_freezes_meta_label_role_policy_and_projection_identity() -> Non
     assert frozen["model_role"] == "meta_label_take_skip_confidence"
     assert frozen["shadow_policy_sha256"] == "e" * 64
     assert frozen["terminal_weights"] == {"alpha_lstm": 0.7, "alpha_fund": 0.3}
+
+
+def test_meta_label_forward_observation_uses_frozen_policy_maturity() -> None:
+    descriptor_sha256 = "c" * 64
+    bundle_id = "d" * 64
+    policy_sha256 = "e" * 64
+    service = AdvisoryForwardService(
+        repository=SimpleNamespace(),
+        program_service=SimpleNamespace(),
+        model_service=SimpleNamespace(
+            model_shadow_for_forward=lambda **_: {
+                "status": "EXPERIMENTAL_SHADOW",
+                "model_role": "meta_label_take_skip_confidence",
+                "model_descriptor_sha256": descriptor_sha256,
+                "bundle_id": bundle_id,
+                "shadow_policy_sha256": policy_sha256,
+                "shadow_policy_maturity_horizon_days": 20,
+                "candidate_count": 20,
+                "shortlist_count": 5,
+                "outcome": {"status": "OUTCOME_UNAVAILABLE"},
+                "price_range": {"status": "PRICE_RANGE_UNAVAILABLE"},
+            }
+        ),
+        calendar=_DailyCalendar(),
+    )
+
+    observation = service._model_observation(
+        forward_run_id="advfwd-test",
+        program=_program(),
+        binding_version_id="advb-test",
+        decision_date=date(2026, 8, 14),
+        target_date=date(2026, 8, 17),
+        frozen_resolution={
+            "status": "CONFIGURED",
+            "descriptor_sha256": descriptor_sha256,
+            "bundle_id": bundle_id,
+            "model_role": "meta_label_take_skip_confidence",
+            "shadow_policy_sha256": policy_sha256,
+        },
+        selection_run_id="sel-test",
+        review_run_id="review-test",
+        list_version_id="list-test",
+    )
+
+    assert observation.status == "EXPERIMENTAL_SHADOW"
+    assert observation.maturity_trade_date == date(2026, 9, 6)
+
+
+def test_legacy_forward_observation_keeps_outcome_horizon_maturity() -> None:
+    descriptor_sha256 = "c" * 64
+    bundle_id = "d" * 64
+    service = AdvisoryForwardService(
+        repository=SimpleNamespace(),
+        program_service=SimpleNamespace(),
+        model_service=SimpleNamespace(
+            model_shadow_for_forward=lambda **_: {
+                "status": "EXPERIMENTAL_SHADOW",
+                "model_role": "quality_reranker",
+                "model_descriptor_sha256": descriptor_sha256,
+                "bundle_id": bundle_id,
+                "candidate_count": 20,
+                "shortlist_count": 5,
+                "outcome": {"status": "EXPERIMENTAL_SHADOW", "horizons": [2]},
+                "price_range": {"status": "PRICE_RANGE_UNAVAILABLE"},
+            }
+        ),
+        calendar=_DailyCalendar(),
+    )
+
+    observation = service._model_observation(
+        forward_run_id="advfwd-test",
+        program=_program(),
+        binding_version_id="advb-test",
+        decision_date=date(2026, 8, 14),
+        target_date=date(2026, 8, 17),
+        frozen_resolution={
+            "status": "CONFIGURED",
+            "descriptor_sha256": descriptor_sha256,
+            "bundle_id": bundle_id,
+        },
+        selection_run_id="sel-test",
+        review_run_id="review-test",
+        list_version_id="list-test",
+    )
+
+    assert observation.maturity_trade_date == date(2026, 8, 19)
+
+
+def test_meta_label_forward_observation_rejects_missing_runtime_role() -> None:
+    service = AdvisoryForwardService(
+        repository=SimpleNamespace(),
+        program_service=SimpleNamespace(),
+        model_service=SimpleNamespace(
+            model_shadow_for_forward=lambda **_: {
+                "status": "EXPERIMENTAL_SHADOW",
+                "model_descriptor_sha256": "c" * 64,
+                "bundle_id": "d" * 64,
+                "candidate_count": 20,
+                "shortlist_count": 5,
+            }
+        ),
+        calendar=_DailyCalendar(),
+    )
+
+    try:
+        service._model_observation(
+            forward_run_id="advfwd-test",
+            program=_program(),
+            binding_version_id="advb-test",
+            decision_date=date(2026, 8, 14),
+            target_date=date(2026, 8, 17),
+            frozen_resolution={
+                "status": "CONFIGURED",
+                "descriptor_sha256": "c" * 64,
+                "bundle_id": "d" * 64,
+                "model_role": "meta_label_take_skip_confidence",
+                "shadow_policy_sha256": "e" * 64,
+            },
+            selection_run_id="sel-test",
+            review_run_id="review-test",
+            list_version_id="list-test",
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "model inference role differs from the publication-frozen descriptor"
+    else:
+        raise AssertionError("missing runtime model role must fail closed")
