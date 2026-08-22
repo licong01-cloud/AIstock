@@ -174,9 +174,36 @@ def test_dataset_release_audit_seed_specs_match_registered_source_authority():
 
     assert set(audit_seed.SPECS) == dated
     assert all(audit_seed.AUTHORITY in spec.eligible_sources for spec in audit_seed.SPECS.values())
+    assert all(
+        set(audit_seed.SPECS[source.audit_dataset].non_null_columns)
+        == set(source.non_null_value_columns).intersection(source.value_columns)
+        for source in audit_seed.PRODUCTION_QUERY_SPECS.values()
+        if source.audit_dataset is not None
+    )
     assert audit_seed.SPECS["kline_minute_raw"].start_policy == "minute"
     assert audit_seed.SPECS["suspend_d"].sparse_ok is True
     assert audit_seed.SPECS["trading_calendar"].table_identity == "market.trading_calendar"
+
+
+def test_dataset_release_audit_seed_excludes_derived_values_from_physical_checks():
+    day = dt.date(2026, 7, 31)
+    source = audit_seed.PRODUCTION_QUERY_SPECS["sector_data"]
+    conn = _FakeConn(fetchall_result=[(day, 100, None, 0)])
+    profile = SimpleNamespace(indices=(), source_date_chunk_months=3)
+
+    counts = audit_seed._physical_counts(
+        conn,
+        audit_seed.SPECS["sector_data"],
+        day,
+        day,
+        profile=profile,
+    )
+
+    assert source.derived_value_columns == ("l2_code_id",)
+    assert source.non_null_value_columns == ("l2_code_id",)
+    assert audit_seed.SPECS["sector_data"].non_null_columns == ()
+    assert "l2_code_id" not in conn.executed[0][0]
+    assert counts == {day: 100}
 
 
 def test_dataset_release_audit_seed_connection_disables_parallel_gather(monkeypatch):

@@ -164,6 +164,9 @@ def _registered_specs() -> Mapping[str, AuditSeedSpec]:
         dataset = str(source.audit_dataset)
         if dataset in result:
             raise AuditSeedError(f"{dataset}: duplicate source-audit registration")
+        physical_non_null_columns = tuple(
+            column for column in source.non_null_value_columns if column in source.value_columns
+        )
         if not all(
             _IDENTIFIER.fullmatch(value)
             for value in (
@@ -171,7 +174,7 @@ def _registered_specs() -> Mapping[str, AuditSeedSpec]:
                 source.schema_name,
                 source.table_name,
                 source.query_id,
-                *source.non_null_value_columns,
+                *physical_non_null_columns,
             )
         ):
             raise AuditSeedError("source-audit registration contains an unsafe identifier")
@@ -185,7 +188,7 @@ def _registered_specs() -> Mapping[str, AuditSeedSpec]:
             date_expression=str(source.date_expression),
             start_policy=str(source.start_policy),
             sparse_ok=dataset in _SPARSE_DATASETS,
-            non_null_columns=tuple(source.non_null_value_columns),
+            non_null_columns=physical_non_null_columns,
             code_policy=source.code_policy,
             eligible_sources=tuple(source.audit_eligible_sources),
             eligible_quality_statuses=tuple(source.audit_eligible_quality_statuses),
