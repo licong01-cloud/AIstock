@@ -30,10 +30,18 @@ import psycopg2.extras as pgx
 import requests
 from dotenv import load_dotenv
 
-from backend.services.announcements.title_classifier import verify_announcement_issuer
-
-
+# BUG-1155: the scheduler launches the anns chain as a plain subprocess
+# (``python scripts/sync_anns_metadata_incremental.py``) without cwd/PYTHONPATH
+# overrides, so sys.path only contains scripts/ and ``backend`` is not
+# importable. Follow the repo convention and bootstrap the repo root before any
+# ``backend.*`` import (see advisory_*_prepare_request.py).
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.services.announcements.title_classifier import verify_announcement_issuer  # noqa: E402
+
+
 load_dotenv(ROOT / ".env", override=True)
 
 DB_CFG = dict(
