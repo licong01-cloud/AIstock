@@ -179,6 +179,30 @@ def test_dataset_release_audit_seed_specs_match_registered_source_authority():
     assert audit_seed.SPECS["trading_calendar"].table_identity == "market.trading_calendar"
 
 
+def test_dataset_release_audit_seed_connection_disables_parallel_gather(monkeypatch):
+    captured = {}
+    sentinel = object()
+
+    def fake_connect(**kwargs):
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(audit_seed.psycopg2, "connect", fake_connect)
+    config = audit_seed.DatabaseConfig(
+        target="dev",
+        host="127.0.0.1",
+        port=5433,
+        user="dev_user",
+        password="",
+        dbname="aistock_dev",
+        credential_location="F:/Dev/AIstock/.env",
+    )
+
+    assert audit_seed._connect(config) is sentinel
+    assert "-c max_parallel_workers_per_gather=0" in captured["options"]
+    assert captured["application_name"] == "AIstock-dataset-release-audit-seed"
+
+
 def test_dense_physical_gap_blocks_but_registered_sparse_gap_is_empty_valid():
     day1 = dt.date(2026, 7, 30)
     day2 = dt.date(2026, 7, 31)
