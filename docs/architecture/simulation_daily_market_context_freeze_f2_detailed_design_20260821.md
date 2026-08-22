@@ -1,11 +1,12 @@
 # AIstock 模拟盘每日交易事实冻结与盘中行情热路径 F2 详细设计
 
 > 文档类型：F2 跨模块实施级详细设计
-> 文档状态：`design_ready_pending_user_merge_approval`
+> 文档状态：`implementation_merged_runtime_gate_passed_normal_trading_day_receipt_pending`
 > 日期：2026-08-21
+> 状态更新：2026-08-22
 > 上位权威：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)
 > 适用范围：LocalSIM、MiniQMT SIM、Paper Trading v2、Simulation Runtime、Trading Core
-> 不代表：源码已实现、生产已生效、数据库已迁移或正常交易日验收已完成
+> 当前事实：设计 PR #3651、BUG-1143 PR #3657 与 BUG-1144 PR #3662 已合入，用户重启后的 runtime identity/business-smoke gate 已通过；不代表正常交易日验收已完成，且本切片无生产 DDL/DML、依赖、配置或 broker 变更
 
 ## 1. Background / 背景、结论与不可变约束
 
@@ -330,14 +331,14 @@ P0-A 与 P0-B 影响同一 plan/runtime contract，必须按顺序合入；P0-C 
 
 | Gate | 本文状态 | 后续要求 |
 | --- | --- | --- |
-| source merge | pending user approval | 本轮只准备文档 PR，不自行合入 |
+| source merge | merged | 设计 PR #3651、BUG-1143 PR #3657、BUG-1144 PR #3662 已合入；close-sync PR #3666/#3667 已合入 |
 | backend dependency | noop | 当前文档不改依赖 |
 | frontend dependency | noop | 当前文档不改前端 |
 | production DDL | noop | 若源码证明需要 additive schema，必须 DEV-first 后另获授权 |
 | production DML | noop | 不修改历史 plan/run/行情数据 |
 | config/binding/broker | noop | 不改运行配置、策略 binding 或 broker |
-| backend restart | noop / user-owned | 文档合入无需重启；后续 runtime 源码由用户决定重启 |
-| runtime verification | not_started | 源码合入并由用户重启后才执行正常交易日 readback |
+| backend restart | completed by user | runtime 已加载 BUG-1143/BUG-1144 source merge 的主线后继；本次状态文档合入无需再次重启 |
+| runtime verification | identity/business-smoke passed；normal-day pending | post-restart identity 与 scheduler business-smoke 已通过；按 §9.3 在下一正常交易日收集 query/log-rate、TDX-only 与订单/成交语义 receipt |
 
 ## 17. 合入条件
 
