@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from psycopg2 import OperationalError
 
 from backend.services.hmm_risk import market_relative_ridge_holdout as subject
 from backend.services.hmm_risk.market_relative_jump_spike import MARKET_FEATURES, RELATIVE_FEATURES, Preprocessor
@@ -1322,6 +1323,102 @@ def test_request_preparation_resolves_tail_from_calendar_only_and_closes_readonl
     assert observed["close"] is True
 
 
+def test_outcome_tail_query_failure_is_typed_and_closes_readonly_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, bool] = {}
+
+    class Cursor:
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute(self, query: str, params: tuple[object, ...]) -> None:
+            raise OperationalError("database system is in recovery mode")
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def rollback(self) -> None:
+            observed["rollback"] = True
+
+        def close(self) -> None:
+            observed["close"] = True
+
+    monkeypatch.setattr(cli, "_connect_readonly", lambda prefix: (Connection(), {"prefix": prefix}))
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        cli._resolve_outcome_tail_end("P2_4_TEST")
+
+    assert captured.value.reason_code == subject.REASON_SOURCE
+    assert captured.value.stage == "source_preflight"
+    assert captured.value.evidence == {
+        "exception_type": "OperationalError",
+        "source_reason_code": cli.SOURCE_LOADER_FAILURE,
+        "error_message": "database system is in recovery mode",
+    }
+    assert observed == {"rollback": True, "close": True}
+
+
+def test_request_preparation_classifies_database_recovery_before_holdout_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, candidate, _ = _evaluation_fixture()
+    artifact_root = tmp_path / "artifacts"
+    request_path = artifact_root / "request.json"
+    candidate_path = tmp_path / "candidate.json"
+    _write_json(candidate_path, {"candidate": "patched fixture"})
+    monkeypatch.setattr(cli, "load_frozen_candidate", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    calls = 0
+
+    def fail_connect(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise OperationalError("database system is in recovery mode")
+
+    monkeypatch.setattr(cli, "_connect_readonly", fail_connect)
+    argv = [
+        "--prepare-request",
+        "--request",
+        str(request_path),
+        "--candidate",
+        str(candidate_path),
+        "--output",
+        str(artifact_root / "acceptance.json"),
+        "--model-output",
+        str(artifact_root / "model.json"),
+        "--ready-output",
+        str(artifact_root / "ready.json"),
+        "--child-dir",
+        str(artifact_root / "children"),
+        "--db-env-prefix",
+        "P2_4_TEST",
+    ]
+
+    assert cli.main(argv) == 1
+    failure = json.loads((artifact_root / "acceptance.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_reason_code"] == subject.REASON_SOURCE
+    assert failure["failure_stage"] == "source_preflight"
+    assert failure["failure_evidence"] == {
+        "exception_type": "OperationalError",
+        "source_reason_code": cli.SOURCE_LOADER_FAILURE,
+        "error_message": "database system is in recovery mode",
+    }
+    assert failure["holdout_accessed"] is False
+    assert failure["product_acceptance_performed"] is False
+    assert failure["model_write"] is False
+    assert failure["ready_write"] is False
+    assert not request_path.exists()
+    assert calls == 1
+
+    assert cli.main(argv) == 2
+    assert calls == 1
+
+
 def test_cli_request_preparation_failure_records_access_and_blocks_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1401,6 +1498,26 @@ def test_holdout_source_loader_uses_stable_reason_for_untyped_state_error(
         "exception_type": "StateModelSetError",
         "source_reason_code": cli.SOURCE_LOADER_FAILURE,
         "error_message": "source failed without typed reason",
+    }
+
+
+def test_holdout_source_loader_classifies_database_recovery_as_source_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_loader(*args: object, **kwargs: object) -> None:
+        raise OperationalError("database system is in recovery mode")
+
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", fail_loader)
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        cli._load_holdout_inputs({"holdout_source": {"source": {}}}, db_prefix="P2_4_TEST")
+
+    assert captured.value.reason_code == subject.REASON_SOURCE
+    assert captured.value.stage == "source_preflight"
+    assert captured.value.evidence == {
+        "exception_type": "OperationalError",
+        "source_reason_code": cli.SOURCE_LOADER_FAILURE,
+        "error_message": "database system is in recovery mode",
     }
 
 

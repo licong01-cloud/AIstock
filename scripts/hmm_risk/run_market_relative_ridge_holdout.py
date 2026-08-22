@@ -10,6 +10,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
+from psycopg2 import Error as PsycopgError
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -100,24 +102,51 @@ def _artifact_outputs(args: argparse.Namespace) -> dict[str, str]:
     }
 
 
+def _source_preflight_error(exc: Exception) -> HoldoutAcceptanceError:
+    message = str(exc)
+    candidate_reason = message.partition(":")[0].strip()
+    source_reason_code = (
+        candidate_reason
+        if candidate_reason.startswith("hmm_risk_") and candidate_reason.replace("_", "").isalnum()
+        else SOURCE_LOADER_FAILURE
+    )
+    return HoldoutAcceptanceError(
+        REASON_SOURCE,
+        message,
+        stage="source_preflight",
+        evidence={
+            "exception_type": type(exc).__name__,
+            "source_reason_code": source_reason_code,
+            "error_message": message,
+        },
+    )
+
+
 def _resolve_outcome_tail_end(db_prefix: str) -> date:
-    conn, _ = _connect_readonly(db_prefix)
     try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT cal_date::date
-                FROM market.trading_calendar
-                WHERE is_trading=true AND cal_date > %s
-                ORDER BY cal_date
-                LIMIT %s
-                """,
-                (HOLDOUT_END, OUTCOME_TAIL_TRADING_DAYS),
-            )
-            rows = cursor.fetchall()
-    finally:
-        conn.rollback()
-        conn.close()
+        conn, _ = _connect_readonly(db_prefix)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT cal_date::date
+                    FROM market.trading_calendar
+                    WHERE is_trading=true AND cal_date > %s
+                    ORDER BY cal_date
+                    LIMIT %s
+                    """,
+                    (HOLDOUT_END, OUTCOME_TAIL_TRADING_DAYS),
+                )
+                rows = cursor.fetchall()
+        finally:
+            try:
+                conn.rollback()
+            finally:
+                conn.close()
+    except HoldoutAcceptanceError:
+        raise
+    except (PsycopgError, StateModelSetError) as exc:
+        raise _source_preflight_error(exc) from exc
     values = tuple(row[0] for row in rows)
     if (
         len(values) != OUTCOME_TAIL_TRADING_DAYS
@@ -140,24 +169,10 @@ def _load_holdout_inputs(request: dict[str, Any], *, db_prefix: str) -> Any:
             db_prefix=db_prefix,
             c010_formal=True,
         )
-    except StateModelSetError as exc:
-        message = str(exc)
-        candidate_reason = message.partition(":")[0].strip()
-        source_reason_code = (
-            candidate_reason
-            if candidate_reason.startswith("hmm_risk_") and candidate_reason.replace("_", "").isalnum()
-            else SOURCE_LOADER_FAILURE
-        )
-        raise HoldoutAcceptanceError(
-            REASON_SOURCE,
-            message,
-            stage="source_preflight",
-            evidence={
-                "exception_type": type(exc).__name__,
-                "source_reason_code": source_reason_code,
-                "error_message": message,
-            },
-        ) from exc
+    except HoldoutAcceptanceError:
+        raise
+    except (PsycopgError, StateModelSetError) as exc:
+        raise _source_preflight_error(exc) from exc
 
 
 def _prepare_request(args: argparse.Namespace) -> int:
