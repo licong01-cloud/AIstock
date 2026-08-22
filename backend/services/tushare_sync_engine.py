@@ -974,6 +974,9 @@ class TushareSyncEngine:
                         "treating as not ready for audit/self-healing"
                     )
                 quality_status = "empty_valid" if inserted == 0 else "ok"
+                audit_quality: Dict[str, Any] = {"quality_status": quality_status}
+                if inserted > 0:
+                    audit_quality = self._audit_quality_for_rows(spec, inserted)
                 self._refresh_audit.record_success(
                     dataset=spec.name,
                     trade_date=d,
@@ -982,8 +985,8 @@ class TushareSyncEngine:
                     data_source="tushare",
                     metadata={"tushare_api": spec.tushare_api, "mode": spec.query_mode.value},
                     written_rows=inserted,
-                    quality_status=quality_status,
                     conn=conn,
+                    **audit_quality,
                 )
                 self._record_sync_attempt(
                     target_id,
@@ -991,7 +994,7 @@ class TushareSyncEngine:
                     job_id=job_id,
                     rows_written=inserted,
                     rows_observed=inserted,
-                    context={"quality_status": quality_status},
+                    context={"quality_status": audit_quality["quality_status"]},
                 )
                 result.inserted_rows += inserted
                 result.success_batches += 1
@@ -1206,6 +1209,24 @@ class TushareSyncEngine:
             )
             return {row[0]: int(row[1]) for row in cur.fetchall()}
 
+    def _audit_quality_for_rows(self, spec: DatasetSpec, rows: int) -> Dict[str, Any]:
+        """Audit kwargs for a successfully synced day with ``rows`` > 0 persisted.
+
+        When the spec declares ``min_expected_rows`` and the day landed below it,
+        mark the audit row ``low_coverage`` so the freshness check flags the day
+        and the 23:00 auto-retry re-fetches it via upsert. Otherwise the day is
+        a plain ``ok`` and no extra fields are sent.
+        """
+        threshold = spec.min_expected_rows
+        if threshold is None or rows >= threshold:
+            return {"quality_status": "ok"}
+        return {
+            "quality_status": "low_coverage",
+            "failure_category": "low_coverage",
+            "expected_rows": threshold,
+            "coverage_ratio": rows / threshold,
+        }
+
     def _record_by_code_audit(
         self,
         spec: DatasetSpec,
@@ -1235,8 +1256,8 @@ class TushareSyncEngine:
                         data_source="tushare",
                         metadata=metadata,
                         written_rows=row_count,
-                        quality_status="ok",
                         conn=conn,
+                        **self._audit_quality_for_rows(spec, row_count),
                     )
                 else:
                     failure_category = "empty_invalid" if row_count <= 0 else "partial_code_failure"
