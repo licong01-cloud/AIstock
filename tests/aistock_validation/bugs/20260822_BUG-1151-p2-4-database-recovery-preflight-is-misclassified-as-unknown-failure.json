@@ -2,7 +2,9 @@
   "actual": "During the authorized P2-4 request preparation, psycopg2 OperationalError from _resolve_outcome_tail_end escaped the source-preflight boundary. The durable receipt incorrectly recorded failure_reason_code=hmm_risk_p2_4_unknown_execution_failure and failure_stage=unknown instead of a typed source-preflight failure, although holdout_accessed/product_acceptance/model/READY/DB/runtime remained false. Fix must preserve fail-closed behavior, one-logical-holdout boundary, exact failure evidence, and must not retry or read holdout.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260822_BUG-1151-p2-4-database-recovery-preflight-is-misclassified-as-unknown-failure.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+    "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1151",
@@ -20,23 +22,60 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260822-7a5f9a2a660e",
       "timestamp": "2026-08-22T05:38:11.070844Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Registered the exact P2-4 CLI and direct test files required to fix both database source-preflight boundaries.",
+      "timestamp": "2026-08-22T05:58:47.998944Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py"
+    ]
   },
   "first_seen_at": "2026-08-22T05:38:11.070860Z",
   "fix_branch": null,
@@ -183,5 +222,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }
