@@ -42,6 +42,7 @@ class FakeSnapshotSession:
         self.revision = "v1"
         self.query_revisions: dict[str, str] = {}
         self.audit_revisions: dict[str, str] = {}
+        self.audit_quality_overrides: dict[str, str] = {}
         self.pit_exit = date(2026, 7, 31)
         self.missing: str | None = None
         self.large_query: str | None = None
@@ -206,7 +207,7 @@ class FakeSnapshotSession:
                     "written_rows": 1,
                     "expected_rows": 1,
                     "coverage_ratio": "1",
-                    "quality_status": "ok",
+                    "quality_status": self.audit_quality_overrides.get(dataset, "ok"),
                     "failure_category": None,
                     "metadata_json": json.dumps(
                         {"opaque": self.audit_secret} if self.audit_secret is not None else {},
@@ -1266,5 +1267,32 @@ def test_refresh_audit_missing_or_failed_blocks_partition_reuse(
     else:
         fake.audit_fail = "kline_minute_raw"
     authority, _cas = _authority(dataset_profile, tmp_path, fake)
+    with pytest.raises(SourceAuditIncomplete):
+        authority.freeze(cutoff=date(2026, 7, 31))
+
+
+@pytest.mark.parametrize("dataset", ("index_daily", "stk_limit"))
+def test_candidate_repairable_audit_is_limited_to_registered_candidate_providers(
+    dataset_profile,
+    tmp_path,
+    dataset,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.audit_quality_overrides[dataset] = "candidate_repairable"
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
+    snapshot = authority.freeze(cutoff=date(2026, 7, 31))
+
+    assert snapshot.source_content_root
+
+
+def test_candidate_repairable_audit_cannot_relax_dense_daily_source(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.audit_quality_overrides["kline_daily_raw"] = "candidate_repairable"
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
     with pytest.raises(SourceAuditIncomplete):
         authority.freeze(cutoff=date(2026, 7, 31))

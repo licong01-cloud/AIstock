@@ -73,9 +73,17 @@ class MinuteProviderTerminal(MinuteOverlayError):
 
 
 class MinuteProviderRateLimitTerminal(MinuteProviderTerminal):
-    """Tushare code 40203 is terminal for the current provider window."""
+    """Tushare 40203 pauses the durable run until the provider window resets."""
 
-    code = "BLOCKED_PROVIDER_TERMINAL_40203"
+    code = "WAITING_PROVIDER_RATE_LIMIT_40203"
+    retryable = True
+
+
+class MinuteProviderUnavailable(MinuteProviderTerminal):
+    """Both bounded provider calls failed for a transient availability reason."""
+
+    code = "WAITING_MINUTE_PROVIDER_UNAVAILABLE"
+    retryable = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,7 +271,7 @@ class MinuteOverlayBuilder:
                     "request is terminal for the current provider window"
                 ) from exc
             attempts.append(_failed_attempt("tushare", exc))
-            raise MinuteProviderTerminal(
+            raise MinuteProviderUnavailable(
                 f"both minute providers failed for {gap.ts_code} {gap.trade_date}; "
                 f"attempts={[item.as_dict() for item in attempts]}"
             ) from exc

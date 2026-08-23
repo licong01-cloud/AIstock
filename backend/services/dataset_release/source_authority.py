@@ -218,6 +218,7 @@ class SourceQuerySpec:
             *self.non_null_value_columns,
             *((self.audit_dataset,) if self.audit_dataset is not None else ()),
             *self.audit_eligible_sources,
+            *self.audit_eligible_quality_statuses,
         )
         if any(not _IDENTIFIER.fullmatch(value) for value in identifiers):
             raise ValueError("source query spec contains a non-allowlist identifier")
@@ -350,6 +351,7 @@ def _query(
     derived_values: Sequence[str] = (),
     audit_dataset: str | None = None,
     audit_eligible_sources: Sequence[str] = (),
+    audit_eligible_quality_statuses: Sequence[str] = ("ok", "empty_valid"),
     code_column: str | None = None,
     code_policy: str | None = None,
 ) -> SourceQuerySpec:
@@ -376,6 +378,7 @@ def _query(
         ),
         audit_dataset=audit_dataset,
         audit_eligible_sources=tuple(audit_eligible_sources),
+        audit_eligible_quality_statuses=tuple(audit_eligible_quality_statuses),
         code_column=code_column,
         code_policy=code_policy,
     )
@@ -531,6 +534,7 @@ _QUERY_SPECS = (
         date_expression="source_row.trade_date",
         audit_dataset="stk_limit",
         audit_eligible_sources=("physical_audit_seed", "tushare"),
+        audit_eligible_quality_statuses=("ok", "candidate_repairable"),
     ),
     _query(
         "suspend_d",
@@ -662,6 +666,7 @@ _QUERY_SPECS = (
         date_expression="source_row.trade_date",
         audit_dataset="index_daily",
         audit_eligible_sources=("physical_audit_seed", "tushare"),
+        audit_eligible_quality_statuses=("ok", "candidate_repairable"),
         code_column="ts_code",
         code_policy="profile_index_codes",
     ),

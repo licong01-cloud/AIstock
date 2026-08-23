@@ -11,10 +11,12 @@ Safety defaults:
 * ``--mode plan`` is read-only and is the default;
 * every database target is explicit (``dev`` or ``production``);
 * ``apply`` requires a non-secret authorization reference;
-* production ``apply`` additionally requires a matching successful DEV apply
-  receipt;
-* the complete requested range is planned before the first write, and any
-  dense physical gap blocks the whole transaction;
+* ``validate-dml`` exercises one DEV upsert/readback and always rolls back;
+* production ``apply`` additionally requires a matching successful DEV DML
+  validation receipt (legacy full DEV apply receipts remain readable);
+* the complete requested range is planned before the first production write;
+  sparse legal empties and registered candidate-local repairs do not become
+  false hard blockers;
 * writes use the one registered ``physical_audit_seed`` authority and are
   followed by exact readback in the same transaction.
 """
@@ -29,6 +31,7 @@ import os
 import re
 import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -55,8 +58,12 @@ MAX_EXPECTED_DATES = 10_000
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 _AUTHORIZATION_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/#-]{2,255}$")
 _TARGETS = {"dev", "production"}
-_MODES = {"plan", "apply", "verify"}
-_SPARSE_DATASETS = frozenset({"suspend_d"})
+_MODES = {"plan", "apply", "verify", "validate-dml"}
+_SPARSE_DATASETS = frozenset({"bak_basic", "suspend_d"})
+_CANDIDATE_REPAIRABLE_DATASETS = frozenset({"index_daily", "stk_limit"})
+DEV_DML_CONTRACT_DIGEST = hashlib.sha256(
+    b"dataset_refresh_audit_dev_transactional_readback_v1"
+).hexdigest()
 
 
 class AuditSeedError(RuntimeError):
@@ -96,6 +103,7 @@ class AuditSeedSpec:
     date_expression: str
     start_policy: str
     sparse_ok: bool
+    candidate_repairable: bool
     non_null_columns: tuple[str, ...]
     code_policy: str | None
     eligible_sources: tuple[str, ...]
@@ -122,6 +130,17 @@ class PlannedAuditRow:
             "quality_status": self.quality_status,
             "table_identity": self.table_identity,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalDayObservation:
+    row_count: int
+    invalid_rows: int = 0
+    missing_required_codes: tuple[str, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return self.row_count > 0 and self.invalid_rows == 0 and not self.missing_required_codes
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +207,7 @@ def _registered_specs() -> Mapping[str, AuditSeedSpec]:
             date_expression=str(source.date_expression),
             start_policy=str(source.start_policy),
             sparse_ok=dataset in _SPARSE_DATASETS,
+            candidate_repairable=dataset in _CANDIDATE_REPAIRABLE_DATASETS,
             non_null_columns=physical_non_null_columns,
             code_policy=source.code_policy,
             eligible_sources=tuple(source.audit_eligible_sources),
@@ -274,7 +294,7 @@ def _physical_counts(
     end: dt.date,
     *,
     profile: Any,
-) -> Mapping[dt.date, int]:
+) -> Mapping[dt.date, PhysicalDayObservation]:
     if spec.query_id == "kline_minute_raw":
         predicate = "source_row.trade_time >= %s::date AND source_row.trade_time < %s::date"
     else:
@@ -295,6 +315,25 @@ def _physical_counts(
             GROUP BY ({spec.date_expression})::date
             ORDER BY ({spec.date_expression})::date
         """
+    elif spec.code_policy in {"pit_stock_codes", "pit_minute_code_batch"}:
+        sql = f"""
+            SELECT ({spec.date_expression})::date AS trade_date,
+                   COUNT(*)::bigint,
+                   NULL::text[],
+                   COUNT(*) FILTER (WHERE {invalid_expression})::bigint
+            FROM {spec.table_identity} AS source_row
+            WHERE {predicate}
+              AND EXISTS (
+                  SELECT 1
+                  FROM market.stock_universe_pit_spans AS pit
+                  WHERE pit.universe_key = %s
+                    AND pit.ts_code = source_row.ts_code
+                    AND ({spec.date_expression})::date
+                        BETWEEN pit.eligible_start AND pit.eligible_end
+              )
+            GROUP BY ({spec.date_expression})::date
+            ORDER BY ({spec.date_expression})::date
+        """
     else:
         sql = f"""
             SELECT ({spec.date_expression})::date AS trade_date,
@@ -306,7 +345,7 @@ def _physical_counts(
             GROUP BY ({spec.date_expression})::date
             ORDER BY ({spec.date_expression})::date
         """
-    result: dict[dt.date, int] = {}
+    result: dict[dt.date, PhysicalDayObservation] = {}
     chunk_months = int(profile.source_date_chunk_months)
     if not 1 <= chunk_months <= 3:
         raise AuditSeedError("profile source date chunk exceeds the audit seed hard boundary")
@@ -316,6 +355,12 @@ def _physical_counts(
                 chunk_start,
                 chunk_end + dt.timedelta(days=1),
                 [value.daily_code for value in profile.indices],
+            )
+        elif spec.code_policy in {"pit_stock_codes", "pit_minute_code_batch"}:
+            parameters = (
+                chunk_start,
+                chunk_end + dt.timedelta(days=1),
+                profile.universe_key,
             )
         else:
             parameters = (chunk_start, chunk_end + dt.timedelta(days=1))
@@ -327,17 +372,17 @@ def _physical_counts(
         for trade_date, row_count, observed_codes, invalid_count in rows:
             if trade_date in result:
                 raise AuditSeedError(f"{spec.dataset}: chunked physical counts overlap")
-            if int(invalid_count) > 0:
-                result[trade_date] = 0
-                continue
+            missing_required_codes: tuple[str, ...] = ()
             if spec.code_policy == "profile_index_codes":
                 required = {
                     value.daily_code for value in profile.indices if value.required_from <= trade_date
                 }
-                if not required.issubset(set(observed_codes or ())):
-                    result[trade_date] = 0
-                    continue
-            result[trade_date] = int(row_count)
+                missing_required_codes = tuple(sorted(required.difference(set(observed_codes or ()))))
+            result[trade_date] = PhysicalDayObservation(
+                row_count=int(row_count),
+                invalid_rows=int(invalid_count),
+                missing_required_codes=missing_required_codes,
+            )
     return result
 
 
@@ -387,7 +432,7 @@ def _build_dataset_plan(
     start: dt.date,
     end: dt.date,
     expected_dates: Sequence[dt.date],
-    physical_counts: Mapping[dt.date, int],
+    physical_counts: Mapping[dt.date, PhysicalDayObservation | int],
     existing_ready_dates: Iterable[dt.date],
 ) -> DatasetPlan:
     ready = frozenset(existing_ready_dates)
@@ -396,18 +441,35 @@ def _build_dataset_plan(
     for trade_date in expected_dates:
         if trade_date in ready:
             continue
-        count = int(physical_counts.get(trade_date, 0))
-        if count > 0:
+        raw_observation = physical_counts.get(trade_date, 0)
+        observation = (
+            raw_observation
+            if isinstance(raw_observation, PhysicalDayObservation)
+            else PhysicalDayObservation(row_count=int(raw_observation))
+        )
+        if observation.complete:
             planned.append(
                 PlannedAuditRow(
                     dataset=spec.dataset,
                     trade_date=trade_date,
-                    row_count=count,
+                    row_count=observation.row_count,
                     quality_status="ok",
                     table_identity=spec.table_identity,
                 )
             )
-        elif spec.sparse_ok:
+        elif spec.candidate_repairable and (
+            spec.dataset == "stk_limit" or observation.invalid_rows == 0
+        ):
+            planned.append(
+                PlannedAuditRow(
+                    dataset=spec.dataset,
+                    trade_date=trade_date,
+                    row_count=observation.row_count,
+                    quality_status="candidate_repairable",
+                    table_identity=spec.table_identity,
+                )
+            )
+        elif spec.sparse_ok and observation.row_count == 0 and observation.invalid_rows == 0:
             planned.append(
                 PlannedAuditRow(
                     dataset=spec.dataset,
@@ -504,21 +566,52 @@ def _require_apply_authorization(
     if target != "production":
         return
     if dev_receipt is None:
-        raise AuditSeedError("production apply requires --dev-receipt from a successful DEV apply")
+        raise AuditSeedError("production apply requires --dev-receipt from successful DEV DML validation")
     value = json.loads(dev_receipt.resolve(strict=True).read_text(encoding="utf-8"))
-    if (
+    common = (
         value.get("schema_version") != RECEIPT_SCHEMA_VERSION
-        or value.get("mode") != "apply"
         or value.get("database_target") != "dev"
         or value.get("status") != "PASS"
         or value.get("profile") != profile.profile
         or value.get("profile_config_digest") != profile.config_digest
         or value.get("semantic_profile_digest") != profile.semantic_profile_digest
-        or value.get("end_date") != end_date.isoformat()
-        or value.get("dataset_names") != list(datasets)
         or value.get("required_failures") != 0
-    ):
+    )
+    legacy_full_apply = (
+        value.get("mode") == "apply"
+        and value.get("end_date") == end_date.isoformat()
+        and value.get("dataset_names") == list(datasets)
+    )
+    transactional_validation = (
+        value.get("mode") == "validate-dml"
+        and value.get("dev_dml_contract_digest") == DEV_DML_CONTRACT_DIGEST
+        and value.get("transaction_rolled_back") is True
+        and value.get("rows_changed") == 1
+    )
+    if common or not (legacy_full_apply or transactional_validation):
         raise AuditSeedError("DEV receipt does not authorize this production contract")
+
+
+def _dev_validation_row(conn: Any, *, end_date: dt.date) -> PlannedAuditRow:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT MAX(cal_date)::date
+            FROM market.trading_calendar
+            WHERE is_trading = TRUE AND cal_date <= %s
+            """,
+            (end_date,),
+        )
+        row = cursor.fetchone()
+    if row is None or row[0] is None:
+        raise AuditSeedError("DEV DML validation has no trading-calendar row")
+    return PlannedAuditRow(
+        dataset="trading_calendar",
+        trade_date=row[0],
+        row_count=1,
+        quality_status="ok",
+        table_identity="market.trading_calendar",
+    )
 
 
 def _apply_rows(conn: Any, rows: Sequence[PlannedAuditRow], *, metadata: Mapping[str, Any]) -> int:
@@ -636,14 +729,17 @@ def _receipt(
         "coverage_ready_before_apply": planned == 0 and blocked == 0,
         "blocked_dates": blocked,
         "rows_changed": rows_changed,
+        "committed_rows_changed": 0 if mode == "validate-dml" else rows_changed,
         "required_failures": required_failures,
+        "dev_dml_contract_digest": DEV_DML_CONTRACT_DIGEST if mode == "validate-dml" else None,
+        "transaction_rolled_back": mode == "validate-dml",
         "datasets": [plan.summary() for plan in plans],
         "safety": {
             "candidate_writes": 0,
             "production_pointer_changes": 0,
             "source_table_writes": 0,
-            "audit_table_rows_changed": rows_changed,
-            "database_dml_executed": mode == "apply",
+            "audit_table_rows_changed": 0 if mode == "validate-dml" else rows_changed,
+            "database_dml_executed": mode in {"apply", "validate-dml"},
             "provider_calls": 0,
             "service_process_controls": 0,
         },
@@ -695,7 +791,9 @@ def main(
     end_date = dt.date.fromisoformat(args.end_date)
     datasets = tuple(args.dataset or sorted(SPECS))
     target = _load_database_config(args.database, Path(args.env_file))
-    if args.mode == "apply":
+    if args.mode in {"apply", "validate-dml"}:
+        if args.mode == "validate-dml" and args.database != "dev":
+            raise AuditSeedError("validate-dml is restricted to the existing DEV database")
         _require_apply_authorization(
             target=args.database,
             authorization_ref=args.authorization_ref,
@@ -709,12 +807,49 @@ def main(
     rows_changed = 0
     required_failures = 0
     try:
-        conn.set_session(readonly=args.mode != "apply", autocommit=False)
-        plans = build_plan(conn, profile=profile, end_date=end_date, datasets=datasets)
+        conn.set_session(readonly=args.mode not in {"apply", "validate-dml"}, autocommit=False)
+        if args.mode == "validate-dml":
+            validation_row = _dev_validation_row(conn, end_date=end_date)
+            validation_spec = SPECS["trading_calendar"]
+            plans = (
+                DatasetPlan(
+                    spec=validation_spec,
+                    start_date=validation_row.trade_date,
+                    end_date=validation_row.trade_date,
+                    expected_dates=1,
+                    existing_ready_dates=0,
+                    planned_rows=(validation_row,),
+                    blocked_dates=(),
+                ),
+            )
+        else:
+            plans = build_plan(conn, profile=profile, end_date=end_date, datasets=datasets)
         digest = _plan_digest(profile, end_date, plans)
         blocked = sum(len(plan.blocked_dates) for plan in plans)
         rows = _all_planned_rows(plans)
-        if args.mode == "apply":
+        if args.mode == "validate-dml":
+            rows_changed = _apply_rows(
+                conn,
+                rows,
+                metadata={
+                    "schema_version": SCHEMA_VERSION,
+                    "mode": "dev_transactional_dml_validation",
+                    "profile": profile.profile,
+                    "profile_config_digest": profile.config_digest,
+                    "semantic_profile_digest": profile.semantic_profile_digest,
+                    "dev_dml_contract_digest": DEV_DML_CONTRACT_DIGEST,
+                    "validation_run_id": uuid.uuid4().hex,
+                    "database_target": target.target,
+                    "database_identity_digest": target.identity_digest,
+                    "authorization_ref": args.authorization_ref,
+                    "script": "scripts/seed_dataset_refresh_audit.py",
+                },
+            )
+            required_failures = _verify_rows(conn, rows)
+            if rows_changed != 1 or required_failures:
+                raise AuditSeedError("DEV transactional DML validation readback differs")
+            conn.rollback()
+        elif args.mode == "apply":
             if blocked:
                 raise AuditSeedError("physical source gaps block the entire audit seed transaction")
             rows_changed = _apply_rows(

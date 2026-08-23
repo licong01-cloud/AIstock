@@ -94,38 +94,42 @@ API token 文件必须是绝对路径上的 plain local file，内容至少 32 �
 `initial-migration`、Worker 或普通月更隐式执行。旧的 `seed_existing_rows` 记录不能替代
 dataset-release 已登记的 `physical_audit_seed` 权威。
 
-先对 DEV 做默认只读 plan；它只读取物理表、交易日历和现有 audit，不写数据库、不调用 provider：
+DEV 不要求复制八年生产数据。先用单行事务验证现有 DEV 表的 upsert/readback 机制；该模式执行后强制
+rollback，不留下 audit 行变化，也不调用 provider：
 
 ```powershell
-$DevPlanReceipt = 'X:\AIstock_dataset_release_control\operator_receipts\pit_v2_audit_seed_dev_plan_20260731.json'
-$DevApplyReceipt = 'X:\AIstock_dataset_release_control\operator_receipts\pit_v2_audit_seed_dev_apply_20260731.json'
-rtk python scripts/seed_dataset_refresh_audit.py --database dev --mode plan `
-  --end-date 2026-07-31 --receipt-path $DevPlanReceipt
+$DevDmlReceipt = 'X:\AIstock_dataset_release_control\operator_receipts\pit_v2_audit_seed_dev_dml_validation_20260731.json'
+rtk python scripts/seed_dataset_refresh_audit.py --database dev --mode validate-dml `
+  --end-date 2026-07-31 --authorization-ref <DEV事务验证授权引用> --receipt-path $DevDmlReceipt
 ```
 
-plan 只有在全部 required dataset 的 `blocked_dates=0` 时才为 PASS。dense 数据集任何物理空日都会
-fail closed；只有仓库登记的稀疏数据集才可把无物理行交易日标记为 `empty_valid`。不得通过删数据集、
-缩日期、把 `seed_existing_rows` 改名或直接插入 success 绕过。
+receipt 必须为 `mode=validate-dml`、`status=PASS`、`transaction_rolled_back=true`、`rows_changed=1`，并绑定
+固定 `dev_dml_contract_digest`。这只证明 DML 机制，不证明 DEV 拥有生产全历史数据。
 
-DEV apply 需要本次 DEV DML 的非秘密授权引用；完成后必须保存并核对 apply receipt：
+然后对生产目标执行全范围只读 plan。它只读取生产物理表、PIT、交易日历和现有 audit，不写数据库：
 
 ```powershell
-rtk python scripts/seed_dataset_refresh_audit.py --database dev --mode apply `
-  --end-date 2026-07-31 --authorization-ref <DEV授权引用> --receipt-path $DevApplyReceipt
+$ProdPlanReceipt = 'X:\AIstock_dataset_release_control\operator_receipts\pit_v2_audit_seed_prod_plan_20260731.json'
+rtk python scripts/seed_dataset_refresh_audit.py --database production --mode plan `
+  --end-date 2026-07-31 --receipt-path $ProdPlanReceipt
 ```
 
-生产 apply 是另一项 target-specific DML 授权，并强制读取同 profile/contract 的成功 DEV apply receipt：
+plan 的 PIT 股票类查询只统计权威 PIT 代码，不能让 ETF、北交所或池外证券污染结果。`bak_basic` 合法空日
+记为 `empty_valid`；`index_daily` 精确缺失键和 `stk_limit` 缺失/不完整键记为
+`candidate_repairable`，交给候选内 provider/规则层闭环；其他 required dense 内部缺口仍硬阻断。
+
+生产 apply 是独立 target-specific DML 授权，并强制读取成功 DEV transactional receipt：
 
 ```powershell
 $ProdReceipt = 'X:\AIstock_dataset_release_control\operator_receipts\pit_v2_audit_seed_prod_20260731.json'
 rtk python scripts/seed_dataset_refresh_audit.py --database production --mode apply `
   --end-date 2026-07-31 --authorization-ref <生产授权引用> `
-  --dev-receipt $DevApplyReceipt --receipt-path $ProdReceipt
+  --dev-receipt $DevDmlReceipt --receipt-path $ProdReceipt
 ```
 
-`apply` 先完成全范围计划再开始第一条写入；任一 dense 物理 gap 会整笔回滚。写入固定为
+`apply` 先在生产目标完成全范围计划再开始第一条写入；任一真实硬阻断会整笔回滚。写入固定为
 `data_source=physical_audit_seed`，分批 upsert 后在同一事务精确 readback。receipt 只记录 `.env`
-凭据位置和数据库 identity digest，不记录密码或 token。DEV/生产两次 apply 及 readback 完成后，才可执行
+凭据位置和数据库 identity digest，不记录密码或 token。DEV rollback 验证和生产 apply/readback 完成后，才可执行
 下面的 W7 sample；若 W7 再报 source audit blocker，不得重复 seed 或重复提交 sample，应先按 receipt
 中的 dataset/date 范围诊断。
 
@@ -293,15 +297,26 @@ backend 重启不应丢任务；control catalog 和 Worker heartbeat 是 authori
   `20→10→5`；“先返回无界结果再切批”不合规；
 - canonical v2 只为历史 D/P 股票扫描/保留日线子集；缺口按股票以 Tushare `pro_bar` 一次有界窗口请求，
   转换到 DB 的厘/手单位后只写 candidate CAS overlay。数据库重叠键逐字段不一致、overlay 仍缺键或单股票
-  返回超过 3,000 行均 fail closed；不会把八年全市场 panel 保留在内存；
+  返回超过 3,000 行均 fail closed；若 provider 仍无数据，只允许最后一根权威 bar 之后、直到 terminal PIT
+  span 结束的严格连续尾段作为 non-trading coverage，不伪造 OHLCV；内部断点、活跃证券尾部或尾段后又有
+  权威 bar 仍硬阻断。不会把八年全市场 panel 保留在内存；
 - canonical PIT v2 内的 `stk_limit` 缺口不使用 NaN、补零或“不可交易”替代。artifact-ready 阶段按版本化
-  沪深主板/创业板/科创板规则，以 raw 前收和 `adj_prev/adj_current` 生成 missing-only candidate CAS overlay；
-  DB 行不得覆盖。overlay 绑定精确股票代码和月份，首次采用只生成这些代码的 full-history override，禁止
+  沪深主板/创业板/科创板规则，以 raw 前收和 `adj_prev/adj_current` 生成 missing-or-incomplete candidate CAS overlay；
+  完整 DB 行不得覆盖；不完整 DB 行只在全部既有非空字段与派生值分币一致时补全。overlay 绑定精确股票代码和月份，首次采用只生成这些代码的 full-history override，禁止
   把稀疏缺口误分类为普通 tail 或全市场重导；未知板块、无涨跌幅日、缺参考输入或 unresolved 键均阻断；
 - 在没有可信 DB partition revision ledger 时，初次 source freeze 与 publish 前 DB-only recheck 仍可能分别做一次截止日内的全值扫描；MVCC/provenance watermark 不能替代内容一致性；
 - 因此“候选只重写新增/失效部分”不等于“整条月更只读取新增月份”；等待、DB read、provider、compute、validation 时间必须分项报告；
 - fixture/synthetic benchmark 只证明算法复杂度和内存上限，不能宣称真实全量耗时；真实 full/new-cutoff telemetry 只能在未来数据更新另获授权后产生；
 - 若未来要消除两次全值扫描，需要新的可信 revision-ledger F2、DEV 验证和 production DDL/DML 目标授权，本实现不暗中创建该账本。
+
+### 8.1 阻断治理
+
+- 自动处理：`bak_basic` 合法空日、精确指数缺键、`stk_limit` 缺失/不完整键、合规 terminal daily 尾段。
+- 可重试：provider 限流、网络错误、上游数据尚未发布；保留 intent/checkpoint，不改写为永久合同失败。
+- 硬阻断：权威值冲突、PIT/日期/identity 损坏、内部日线断点、必要推导输入缺失、越权写入/激活、
+  无依据扩大为全量构建或资源安全越界。
+- 未来新增或扩大硬阻断前，必须先向用户提交触发条件、发生概率、误阻成本、准确性风险和替代方案，
+  经用户批准后才可实现；不得用测试或文档先行制造新门禁。
 
 外部 Qlib toolchain 也是 hard gate：Ubuntu、conda `rdagent-gpu`、`dump_bin.py` Windows/WSL path、repo guardian/runner
 以及冻结 SHA 必须与 profile 完全一致。零执行 `--preflight` 验证 Windows 侧冻结文件内容和 WSL 路径配置，

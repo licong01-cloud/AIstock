@@ -35,6 +35,10 @@ class _FakeConn:
         self.executed = []
         self.fetchone_result = fetchone_result
         self.fetchall_result = list(fetchall_result or [])
+        self.session_calls = []
+        self.rollbacks = 0
+        self.commits = 0
+        self.closed = False
 
     def __enter__(self):
         return self
@@ -44,6 +48,18 @@ class _FakeConn:
 
     def cursor(self, *args, **kwargs):
         return _FakeCursor(self)
+
+    def set_session(self, **kwargs):
+        self.session_calls.append(kwargs)
+
+    def rollback(self):
+        self.rollbacks += 1
+
+    def commit(self):
+        self.commits += 1
+
+    def close(self):
+        self.closed = True
 
 
 def test_record_success_writes_enhanced_audit_fields():
@@ -181,7 +197,10 @@ def test_dataset_release_audit_seed_specs_match_registered_source_authority():
         if source.audit_dataset is not None
     )
     assert audit_seed.SPECS["kline_minute_raw"].start_policy == "minute"
+    assert audit_seed.SPECS["bak_basic"].sparse_ok is True
     assert audit_seed.SPECS["suspend_d"].sparse_ok is True
+    assert audit_seed.SPECS["index_daily"].candidate_repairable is True
+    assert audit_seed.SPECS["stk_limit"].candidate_repairable is True
     assert audit_seed.SPECS["trading_calendar"].table_identity == "market.trading_calendar"
 
 
@@ -189,7 +208,11 @@ def test_dataset_release_audit_seed_excludes_derived_values_from_physical_checks
     day = dt.date(2026, 7, 31)
     source = audit_seed.PRODUCTION_QUERY_SPECS["sector_data"]
     conn = _FakeConn(fetchall_result=[(day, 100, None, 0)])
-    profile = SimpleNamespace(indices=(), source_date_chunk_months=3)
+    profile = SimpleNamespace(
+        indices=(),
+        source_date_chunk_months=3,
+        universe_key="aistock_equity_pit_canonical_v2",
+    )
 
     counts = audit_seed._physical_counts(
         conn,
@@ -203,7 +226,8 @@ def test_dataset_release_audit_seed_excludes_derived_values_from_physical_checks
     assert source.non_null_value_columns == ("l2_code_id",)
     assert audit_seed.SPECS["sector_data"].non_null_columns == ()
     assert "l2_code_id" not in conn.executed[0][0]
-    assert counts == {day: 100}
+    assert counts[day].row_count == 100
+    assert counts[day].complete is True
 
 
 def test_dataset_release_audit_seed_connection_disables_parallel_gather(monkeypatch):
@@ -259,6 +283,39 @@ def test_dense_physical_gap_blocks_but_registered_sparse_gap_is_empty_valid():
     ]
 
 
+def test_candidate_repairable_gap_is_admitted_for_candidate_local_repair():
+    day = dt.date(2026, 7, 31)
+    observation = audit_seed.PhysicalDayObservation(
+        row_count=5000,
+        invalid_rows=92,
+    )
+    plan = audit_seed._build_dataset_plan(
+        audit_seed.SPECS["stk_limit"],
+        start=day,
+        end=day,
+        expected_dates=(day,),
+        physical_counts={day: observation},
+        existing_ready_dates=(),
+    )
+
+    assert plan.blocked_dates == ()
+    assert [(row.row_count, row.quality_status) for row in plan.planned_rows] == [
+        (5000, "candidate_repairable")
+    ]
+
+    invalid_index = audit_seed._build_dataset_plan(
+        audit_seed.SPECS["index_daily"],
+        start=day,
+        end=day,
+        expected_dates=(day,),
+        physical_counts={
+            day: audit_seed.PhysicalDayObservation(row_count=5000, invalid_rows=1)
+        },
+        existing_ready_dates=(),
+    )
+    assert invalid_index.blocked_dates == (day,)
+
+
 def test_existing_registered_authority_is_reused_without_seed_rewrite():
     day = dt.date(2026, 7, 31)
     plan = audit_seed._build_dataset_plan(
@@ -300,8 +357,35 @@ def test_index_physical_seed_requires_every_profile_index_for_the_day():
         profile=profile,
     )
 
-    assert incomplete_counts[day] == 0
-    assert complete_counts[day] == 30
+    assert incomplete_counts[day].row_count == 20
+    assert incomplete_counts[day].missing_required_codes == ("399006.SZ",)
+    assert incomplete_counts[day].complete is False
+    assert complete_counts[day].row_count == 30
+    assert complete_counts[day].complete is True
+
+
+def test_stock_physical_audit_is_scoped_to_the_canonical_pit_universe():
+    day = dt.date(2026, 7, 31)
+    conn = _FakeConn(fetchall_result=[(day, 5000, None, 0)])
+    profile = SimpleNamespace(
+        indices=(),
+        source_date_chunk_months=3,
+        universe_key="aistock_equity_pit_canonical_v2",
+    )
+
+    audit_seed._physical_counts(
+        conn,
+        audit_seed.SPECS["stk_limit"],
+        day,
+        day,
+        profile=profile,
+    )
+
+    sql, params = conn.executed[0]
+    assert "market.stock_universe_pit_spans" in sql
+    assert "pit.ts_code = source_row.ts_code" in sql
+    assert "BETWEEN pit.eligible_start AND pit.eligible_end" in sql
+    assert params[-1] == profile.universe_key
 
 
 def test_physical_count_chunks_never_exceed_profile_three_month_boundary():
@@ -321,7 +405,11 @@ def test_physical_count_chunks_never_exceed_profile_three_month_boundary():
 def test_required_non_null_violation_blocks_physical_seed_date():
     day = dt.date(2026, 7, 31)
     conn = _FakeConn(fetchall_result=[(day, 5000, None, 1)])
-    profile = SimpleNamespace(indices=(), source_date_chunk_months=3)
+    profile = SimpleNamespace(
+        indices=(),
+        source_date_chunk_months=3,
+        universe_key="aistock_equity_pit_canonical_v2",
+    )
 
     counts = audit_seed._physical_counts(
         conn,
@@ -331,7 +419,8 @@ def test_required_non_null_violation_blocks_physical_seed_date():
         profile=profile,
     )
 
-    assert counts[day] == 0
+    assert counts[day].invalid_rows == 1
+    assert counts[day].complete is False
 
 
 def test_apply_requires_authorization_and_production_requires_matching_dev_receipt(tmp_path):
@@ -384,6 +473,33 @@ def test_apply_requires_authorization_and_production_requires_matching_dev_recei
         profile=profile,
         end_date=dt.date(2026, 7, 31),
         datasets=("adj_factor",),
+    )
+
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema_version": audit_seed.RECEIPT_SCHEMA_VERSION,
+                "mode": "validate-dml",
+                "database_target": "dev",
+                "status": "PASS",
+                "profile": profile.profile,
+                "profile_config_digest": profile.config_digest,
+                "semantic_profile_digest": profile.semantic_profile_digest,
+                "dev_dml_contract_digest": audit_seed.DEV_DML_CONTRACT_DIGEST,
+                "transaction_rolled_back": True,
+                "rows_changed": 1,
+                "required_failures": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit_seed._require_apply_authorization(
+        target="production",
+        authorization_ref="ISSUE-3700",
+        dev_receipt=receipt,
+        profile=profile,
+        end_date=dt.date(2026, 7, 31),
+        datasets=("adj_factor", "stk_limit"),
     )
 
 
@@ -447,3 +563,61 @@ def test_cli_defaults_to_read_only_plan_mode():
     assert args.mode == "plan"
     assert args.authorization_ref is None
     assert args.dev_receipt is None
+
+
+def test_dev_validate_dml_executes_readback_and_rolls_back(monkeypatch, capsys):
+    day = dt.date(2026, 7, 31)
+    profile = SimpleNamespace(
+        profile="qe_hmm_full_v2",
+        config_digest="a" * 64,
+        semantic_profile_digest="b" * 64,
+    )
+    target = audit_seed.DatabaseConfig(
+        target="dev",
+        host="127.0.0.1",
+        port=5433,
+        user="dev_user",
+        password="",
+        dbname="aistock_dev",
+        credential_location="F:/Dev/AIstock/.env",
+    )
+    conn = _FakeConn()
+    monkeypatch.setattr(audit_seed, "load_dataset_profile", lambda _path: profile)
+    monkeypatch.setattr(audit_seed, "_load_database_config", lambda *_args: target)
+    monkeypatch.setattr(
+        audit_seed,
+        "_dev_validation_row",
+        lambda *_args, **_kwargs: audit_seed.PlannedAuditRow(
+            dataset="trading_calendar",
+            trade_date=day,
+            row_count=1,
+            quality_status="ok",
+            table_identity="market.trading_calendar",
+        ),
+    )
+    monkeypatch.setattr(audit_seed, "_apply_rows", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(audit_seed, "_verify_rows", lambda *_args, **_kwargs: 0)
+
+    assert audit_seed.main(
+        [
+            "--database",
+            "dev",
+            "--mode",
+            "validate-dml",
+            "--end-date",
+            day.isoformat(),
+            "--authorization-ref",
+            "ISSUE-3700",
+        ],
+        connection_factory=lambda _target: conn,
+    ) == 0
+
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "PASS"
+    assert receipt["transaction_rolled_back"] is True
+    assert receipt["committed_rows_changed"] == 0
+    assert receipt["safety"]["audit_table_rows_changed"] == 0
+    assert receipt["dev_dml_contract_digest"] == audit_seed.DEV_DML_CONTRACT_DIGEST
+    assert conn.commits == 0
+    assert conn.rollbacks >= 1
+    assert conn.closed is True

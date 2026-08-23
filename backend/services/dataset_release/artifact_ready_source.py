@@ -47,6 +47,7 @@ from .minute_overlay import (
     MinuteOverlayBuilder,
     MinuteProviderRateLimitTerminal,
     MinuteProviderTerminal,
+    MinuteProviderUnavailable,
     MinuteSourceConflict,
     normalize_database_rows,
 )
@@ -70,7 +71,7 @@ ARTIFACT_READY_MINUTE_COVERAGE_SCHEMA = "dataset_release_artifact_ready_minute_c
 ARTIFACT_READY_INDEX_CHUNK_SCHEMA = "dataset_release_artifact_ready_index_chunk_v1"
 ARTIFACT_READY_ADJ_COVERAGE_SCHEMA = "dataset_release_artifact_ready_adj_factor_coverage_v1"
 ARTIFACT_READY_FACTOR_OVERLAY_SCHEMA = "dataset_release_artifact_ready_factor_overlay_coverage_v1"
-ARTIFACT_READY_DAILY_COVERAGE_SCHEMA = "dataset_release_artifact_ready_daily_coverage_v1"
+ARTIFACT_READY_DAILY_COVERAGE_SCHEMA = "dataset_release_artifact_ready_daily_coverage_v2"
 ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA = STK_LIMIT_RULE_OVERLAY_SCHEMA
 ARTIFACT_READY_RECHECK_SCHEMA = "dataset_release_artifact_ready_recheck_v1"
 ARTIFACT_READY_EFFECTIVE_SCHEMA = "dataset_release_artifact_ready_effective_v1"
@@ -143,6 +144,11 @@ class ArtifactReadySourceError(DatasetReleaseError):
 
 class ArtifactReadyProviderTerminal(ArtifactReadySourceError):
     code = "BLOCKED_PROVIDER_TERMINAL"
+
+
+class ArtifactReadyProviderUnavailable(ArtifactReadySourceError):
+    code = "WAITING_PROVIDER_UNAVAILABLE"
+    retryable = True
 
 
 class ArtifactReadyMinuteConflict(ArtifactReadySourceError):
@@ -1294,7 +1300,9 @@ class ArtifactReadySourceBuilder:
         Only canonical v2 uses this path. The scan retains rows for historical
         D/P codes only, so memory is bounded by that subset rather than the
         full market panel. Provider rows may fill missing keys but can never
-        override a database key.
+        override a database key.  A provider-unavailable trailing suffix after
+        the last authoritative bar is represented as terminal non-trading
+        coverage; interior gaps remain unresolved.
         """
 
         if self.profile.pit_authority_status != "ACTIVE_CANONICAL":
@@ -1303,6 +1311,8 @@ class ArtifactReadySourceBuilder:
                 "historical_terminal_codes": 0,
                 "provider_fill_rows": 0,
                 "provider_override_rows": 0,
+                "terminal_suffix_omitted_keys": 0,
+                "terminal_suffix_codes": 0,
             }, frozenset()
         terminal_codes: set[str] = set()
         for descriptor in view.descriptors("stock_basic"):
@@ -1328,6 +1338,7 @@ class ArtifactReadySourceBuilder:
                 min(snapshot.official_cutoff, date.fromisoformat(match.group("end"))),
             )
         expected_by_partition: dict[str, set[tuple[str, date]]] = {key: set() for key in partition_ranges}
+        terminal_ranges_by_code: dict[str, list[tuple[date, date]]] = {}
         trading = tuple(trading_dates)
         partition_for_day: dict[date, str] = {}
         for day in trading:
@@ -1339,6 +1350,14 @@ class ArtifactReadySourceBuilder:
             code = str(span.ts_code).upper()
             if code not in terminal_codes:
                 continue
+            if str(span.exit_reason or "").lower() in {
+                "delisted",
+                "delisting_confirmed",
+                "terminal",
+            }:
+                if code not in terminal_ranges_by_code:
+                    terminal_ranges_by_code[code] = []
+                terminal_ranges_by_code[code].append((span.eligible_start, span.eligible_end))
             left = bisect_left(trading, span.eligible_start)
             right = bisect_right(trading, span.eligible_end)
             for day in trading[left:right]:
@@ -1366,18 +1385,20 @@ class ArtifactReadySourceBuilder:
             key: expected.difference(database_keys_by_partition[key])
             for key, expected in expected_by_partition.items()
         }
-        missing_codes = sorted({code for values in missing_by_partition.values() for code, _day in values})
+        missing_days_by_code: dict[str, set[date]] = {}
+        for values in missing_by_partition.values():
+            for code, day in values:
+                if code not in missing_days_by_code:
+                    missing_days_by_code[code] = set()
+                missing_days_by_code[code].add(day)
+        missing_codes = sorted(missing_days_by_code)
         overlay_by_partition: dict[str, list[dict[str, Any]]] = {key: [] for key in partition_ranges}
+        provider_days_by_code: dict[str, set[date]] = {code: set() for code in missing_codes}
         provider_refs: list[CASRef] = []
         overlap_rows_verified = 0
         provider_rows_observed = 0
         for code in missing_codes:
-            required = sorted(
-                day
-                for values in missing_by_partition.values()
-                for missing_code, day in values
-                if missing_code == code
-            )
+            required = sorted(missing_days_by_code[code])
             try:
                 rows = tuple(
                     self._provider_call(
@@ -1414,6 +1435,7 @@ class ArtifactReadySourceBuilder:
                         )
                     overlap_rows_verified += 1
             provider_rows_observed += len(normalized)
+            provider_days_by_code[code].update(normalized)
             required_set = set(required)
             relevant_rows = [
                 row
@@ -1432,15 +1454,39 @@ class ArtifactReadySourceBuilder:
                 }
             )
             provider_refs.append(provider_ref)
-            for partition_key, missing in missing_by_partition.items():
-                for missing_code, day in sorted(missing):
-                    if missing_code != code:
-                        continue
-                    row = normalized.get(day)
-                    if row is None:
-                        continue
-                    overlay_by_partition[partition_key].append(row)
+            for day in required:
+                row = normalized.get(day)
+                if row is not None:
+                    overlay_by_partition[partition_for_day[day]].append(row)
             checkpoint()
+
+        unresolved_by_partition: dict[str, set[tuple[str, date]]] = {}
+        for partition_key, missing in missing_by_partition.items():
+            overlay_keys = {
+                (row["ts_code"], _as_date(row["trade_date"], field="daily overlay date"))
+                for row in overlay_by_partition[partition_key]
+            }
+            unresolved_by_partition[partition_key] = missing.difference(overlay_keys)
+        unresolved_by_code: dict[str, set[date]] = {}
+        for values in unresolved_by_partition.values():
+            for code, day in values:
+                if code not in unresolved_by_code:
+                    unresolved_by_code[code] = set()
+                unresolved_by_code[code].add(day)
+        accepted_terminal_suffixes: set[tuple[str, date]] = set()
+        for code, unresolved_days in sorted(unresolved_by_code.items()):
+            observed_days = set(database_by_code[code]).union(provider_days_by_code.get(code, ()))
+            if not observed_days:
+                continue
+            last_observed = max(observed_days)
+            expected_suffix = {
+                day for day in missing_days_by_code[code] if day > last_observed
+            }
+            if unresolved_days == expected_suffix and all(
+                any(start <= day <= end for start, end in terminal_ranges_by_code.get(code, ()))
+                for day in unresolved_days
+            ):
+                accepted_terminal_suffixes.update((code, day) for day in unresolved_days)
 
         entries: list[Mapping[str, Any]] = []
         derived_refs: list[CASRef] = []
@@ -1453,8 +1499,9 @@ class ArtifactReadySourceBuilder:
             )
             if len(overlay_rows) > MAX_DAILY_OVERLAY_ROWS_PER_PARTITION:
                 raise ArtifactReadyCoverageIncomplete("daily provider overlay partition exceeds row bound")
-            overlay_keys = {(row["ts_code"], _as_date(row["trade_date"], field="daily overlay date")) for row in overlay_rows}
-            unresolved.extend(sorted(missing_by_partition[partition_key].difference(overlay_keys)))
+            partition_unresolved = unresolved_by_partition[partition_key]
+            accepted_partition_suffix = sorted(partition_unresolved.intersection(accepted_terminal_suffixes))
+            unresolved.extend(sorted(partition_unresolved.difference(accepted_terminal_suffixes)))
             body = {
                 "schema_version": ARTIFACT_READY_DAILY_COVERAGE_SCHEMA,
                 "raw_partition_identity": _identity(descriptor),
@@ -1463,6 +1510,11 @@ class ArtifactReadySourceBuilder:
                 "expected_terminal_keys": len(expected_by_partition[partition_key]),
                 "provider_fill_rows": len(overlay_rows),
                 "provider_override_rows": 0,
+                "terminal_suffix_omitted_keys": len(accepted_partition_suffix),
+                "terminal_suffix_digest": digest_named_fields(
+                    "dataset_release_terminal_daily_suffix_v1",
+                    {"keys": [(code, day.isoformat()) for code, day in accepted_partition_suffix]},
+                ),
                 "safety": dict(_ZERO_SAFETY),
             }
             content_root = digest_named_fields(ARTIFACT_READY_DAILY_COVERAGE_SCHEMA, body)
@@ -1472,7 +1524,7 @@ class ArtifactReadySourceBuilder:
                 _derived_entry(
                     dataset="daily_coverage",
                     partition_key=partition_key,
-                    role="database_tushare_missing_only",
+                    role="database_tushare_then_terminal_suffix_v2",
                     row_count=len(overlay_rows),
                     reference=reference,
                     content_digest=content_root,
@@ -1487,13 +1539,15 @@ class ArtifactReadySourceBuilder:
                 subject=json.dumps({"count": len(unresolved), "sample": sample}, sort_keys=True),
             )
         summary = {
-            "source_precedence": "database_then_tushare_pro_bar_missing_only_v1",
+            "source_precedence": "database_then_tushare_then_terminal_suffix_v2",
             "historical_terminal_codes": len(terminal_codes),
             "provider_requested_codes": len(missing_codes),
             "provider_rows_observed": provider_rows_observed,
             "provider_fill_rows": sum(len(rows) for rows in overlay_by_partition.values()),
             "provider_override_rows": 0,
             "overlap_rows_verified": overlap_rows_verified,
+            "terminal_suffix_omitted_keys": len(accepted_terminal_suffixes),
+            "terminal_suffix_codes": len({code for code, _day in accepted_terminal_suffixes}),
             "unresolved_keys": 0,
         }
         overlay_keys = frozenset(
@@ -1595,6 +1649,7 @@ class ArtifactReadySourceBuilder:
                 "expected_pit_keys": 0,
                 "database_rows": 0,
                 "rule_derived_rows": 0,
+                "database_completion_rows": 0,
                 "database_override_rows": 0,
                 "unresolved_keys": 0,
                 "peak_code_partition_rows": 0,
@@ -1611,11 +1666,12 @@ class ArtifactReadySourceBuilder:
         derived_refs: list[CASRef] = []
         state: Mapping[str, LimitReferencePoint] = {}
         totals: dict[str, Any] = {
-            "source_precedence": "database_then_rule_derived_missing_only_v1",
+            "source_precedence": "database_then_rule_derived_missing_or_incomplete_v2",
             "rule_version": PRICE_LIMIT_RULE_VERSION,
             "expected_pit_keys": 0,
             "database_rows": 0,
             "rule_derived_rows": 0,
+            "database_completion_rows": 0,
             "database_override_rows": 0,
             "unresolved_keys": 0,
             "peak_code_partition_rows": 0,
@@ -1687,11 +1743,12 @@ class ArtifactReadySourceBuilder:
                 pit_snapshot_digest=snapshot.pit_snapshot_digest,
             )
             effective_root = digest_named_fields(
-                "dataset_release_stk_limit_rule_effective_partition_v1",
+                "dataset_release_stk_limit_rule_effective_partition_v2",
                 {
                     "partition_key": partition_key,
                     "pit_snapshot_digest": snapshot.pit_snapshot_digest,
                     "rule_version": result.rule_version,
+                    "database_completion_rows": result.database_completion_rows,
                     "overlay_rows": overlay_rows,
                 },
             )
@@ -1708,6 +1765,7 @@ class ArtifactReadySourceBuilder:
                 "expected_pit_keys": result.expected_pit_keys,
                 "database_rows": result.database_rows,
                 "rule_derived_rows": result.rule_derived_rows,
+                "database_completion_rows": result.database_completion_rows,
                 "database_override_rows": result.database_override_rows,
                 "unresolved_keys": result.unresolved_keys,
                 "peak_code_partition_rows": result.peak_code_partition_rows,
@@ -1721,7 +1779,7 @@ class ArtifactReadySourceBuilder:
                 _derived_entry(
                     dataset="stk_limit_rule_coverage",
                     partition_key=partition_key,
-                    role="database_rule_derived_missing_only",
+                    role="database_rule_derived_missing_or_incomplete",
                     row_count=result.rule_derived_rows,
                     reference=reference,
                     content_digest=effective_root,
@@ -1736,6 +1794,7 @@ class ArtifactReadySourceBuilder:
             totals["expected_pit_keys"] += result.expected_pit_keys
             totals["database_rows"] += result.database_rows
             totals["rule_derived_rows"] += result.rule_derived_rows
+            totals["database_completion_rows"] += result.database_completion_rows
             totals["peak_code_partition_rows"] = max(
                 int(totals["peak_code_partition_rows"]),
                 result.peak_code_partition_rows,
@@ -1860,7 +1919,7 @@ class ArtifactReadySourceBuilder:
                     self._raise_provider_failure(
                         exc,
                         code=(
-                            "BLOCKED_PROVIDER_TERMINAL_40203"
+                            "WAITING_PROVIDER_RATE_LIMIT_40203"
                             if _is_40203(exc)
                             else ArtifactReadyCoverageIncomplete.code
                         ),
@@ -1902,7 +1961,9 @@ class ArtifactReadySourceBuilder:
                 for code in missing:
                     if (code, day) not in provider_fill:
                         self._raise_provider_failure(
-                            ArtifactReadyCoverageIncomplete("Tushare adj_factor left required keys missing"),
+                            ArtifactReadyCoverageIncomplete(
+                                "Tushare adj_factor left required keys missing"
+                            ),
                             code=ArtifactReadyCoverageIncomplete.code,
                             stage="adj_factor_coverage",
                             subject=f"{code}:{day.isoformat()}",
@@ -2256,7 +2317,7 @@ class ArtifactReadySourceBuilder:
                 except MinuteProviderRateLimitTerminal as exc:
                     self._raise_provider_failure(
                         exc,
-                        code="BLOCKED_PROVIDER_TERMINAL_40203",
+                        code="WAITING_PROVIDER_RATE_LIMIT_40203",
                         stage="minute_provider",
                         subject=code,
                     )
@@ -2450,7 +2511,7 @@ class ArtifactReadySourceBuilder:
                     except IndexProviderRateLimitTerminal as exc:
                         self._raise_provider_failure(
                             exc,
-                            code="BLOCKED_PROVIDER_TERMINAL_40203",
+                            code="WAITING_PROVIDER_RATE_LIMIT_40203",
                             stage="index_provider",
                             subject=code,
                         )
@@ -2643,14 +2704,17 @@ class ArtifactReadySourceBuilder:
         subject: str,
     ) -> None:
         status = getattr(exc, "status_code", getattr(exc, "status", None))
+        retryable = bool(getattr(exc, "retryable", False)) or _is_40203(exc)
+        effective_code = str(getattr(exc, "code", code)) if retryable else code
         receipt = self.cas.put_json(
             {
                 "schema_version": PROVIDER_FAILURE_SCHEMA,
                 "stage": stage,
                 "subject": subject,
-                "error_code": code,
+                "error_code": effective_code,
                 "exception_type": type(exc).__name__,
                 "http_status": status if type(status) is int else None,
+                "retryable": retryable,
                 "message_sha256": hashlib.sha256(
                     f"{type(exc).__name__}\0{exc}".encode("utf-8", errors="replace")
                 ).hexdigest(),
@@ -2659,7 +2723,8 @@ class ArtifactReadySourceBuilder:
         )
         raise ArtifactReadySourceError(
             "artifact-ready provider evidence failed",
-            code=code,
+            code=effective_code,
+            retryable=retryable,
             context={"failure_receipt_ref": receipt.as_dict()},
         ) from exc
 
@@ -2752,7 +2817,7 @@ class ArtifactReadySourceBuilder:
         except Exception as exc:
             if _is_40203(exc):
                 raise MinuteProviderRateLimitTerminal("Tushare minute request reached terminal 40203") from exc
-            raise MinuteProviderTerminal("Tushare minute request failed") from exc
+            raise MinuteProviderUnavailable("Tushare minute request failed") from exc
 
     def _fetch_tushare_index_rows(
         self, definition: IndexDefinition, start: date, end: date
@@ -2798,7 +2863,9 @@ class ArtifactReadySourceBuilder:
         except Exception as exc:
             if _is_40203(exc):
                 raise ArtifactReadyProviderTerminal("Tushare adj_factor request reached terminal 40203") from exc
-            raise ArtifactReadyProviderTerminal("Tushare adj_factor request failed") from exc
+            if isinstance(exc, ArtifactReadyProviderTerminal):
+                raise
+            raise ArtifactReadyProviderUnavailable("Tushare adj_factor request failed") from exc
 
     def _fetch_tushare_daily_rows(self, ts_code: str, start: date, end: date) -> Sequence[Mapping[str, Any]]:
         provider = self._tushare.provider()
@@ -2831,7 +2898,7 @@ class ArtifactReadySourceBuilder:
                 raise ArtifactReadyProviderTerminal("Tushare daily request reached terminal 40203") from exc
             if isinstance(exc, ArtifactReadyProviderTerminal):
                 raise
-            raise ArtifactReadyProviderTerminal("Tushare daily request failed") from exc
+            raise ArtifactReadyProviderUnavailable("Tushare daily request failed") from exc
 
 
 def _bounded_tushare_records(
@@ -3445,7 +3512,7 @@ def _validate_limit_overlay_manifest_contract(
         for item in partitions
         if isinstance(item, Mapping)
         and item.get("dataset") == "stk_limit_rule_coverage"
-        and item.get("role") == "database_rule_derived_missing_only"
+        and item.get("role") == "database_rule_derived_missing_or_incomplete"
     }
     effective_raw = [item for item in effective if isinstance(item, Mapping) and item.get("dataset") == "stk_limit"]
     effective_coverage = {
@@ -3461,6 +3528,8 @@ def _validate_limit_overlay_manifest_contract(
         or effective_coverage != coverage_keys
         or not isinstance(summary, Mapping)
         or summary.get("rule_version") != PRICE_LIMIT_RULE_VERSION
+        or not isinstance(summary.get("database_completion_rows"), int)
+        or summary.get("database_completion_rows", -1) < 0
         or summary.get("database_override_rows") != 0
         or summary.get("unresolved_keys") != 0
     ):
