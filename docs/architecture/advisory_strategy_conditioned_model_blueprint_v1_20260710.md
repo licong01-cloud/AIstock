@@ -1,14 +1,14 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.3
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.4
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-23
+> 修订日期：2026-08-24
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0D_FORWARD_EVALUATION_MERGED_HISTORICAL_FORWARD_VALIDATED_PENDING_PR`
+> 当前状态：`P0E_RETURN_AWARE_CHALLENGER_DESIGN_ACCEPTED_IMPLEMENTATION_PENDING`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线 shadow 推理；自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
-> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity 修复和 forward evaluation 已进入 `main`；本修订开发基线为 `origin/main=c27928a2714077e04e3e39c1c05270f2b129c0e8`，历史虚拟前向仍在独立分支、尚未合入。P0-D bundle 保持 `EXPERIMENTAL_MODEL/UNCALIBRATED`，只作为 challenger，不替换 baseline
+> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity 修复、forward evaluation 和历史虚拟前向已进入 `main`；本修订开发基线为 `origin/main=4fb896744e1739bd92a571614ff9e4a5e8fdb591`。P0-D bundle 保持 `EXPERIMENTAL_MODEL/UNCALIBRATED`，只作为 challenger，不替换 baseline
 > 当前生产前向状态：截至 2026-08-23，两个 ENABLED Program 各有7个 forward run；最新 `decision=2026-08-21 -> target=2026-08-24` 均为 `PUBLISHED/NOT_DUE`。该已持久化 run 冻结的是切换前 legacy quality-reranker；第一条自然 P0-D observation 只能在 2026-08-24 收盘后的下一目标交易日运行中形成，禁止回填
 > 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`。源码合入不等于 descriptor 接入或 bundle 激活
-> 演进方向：P0-D 历史虚拟前向已对24个成熟决策日完成同 policy 真实验证：胜率高于 matched Selection Top5 9.74pp，但累计净收益低2.54pp、最大回撤差5.63pp且换手更高，因此不激活。下一步优先针对收益幅度和换手失败训练新 challenger，并用未消费窗口或降级为 `HISTORICAL_REPLAY` 的已消费窗口做诚实比较；自然 future OOS 继续独立积累
+> 演进方向：P0-D 历史虚拟前向已对24个成熟决策日完成同 policy 真实验证：胜率高于 matched Selection Top5 9.74pp，但累计净收益低2.54pp、最大回撤差5.63pp且换手更高，因此不激活。逐episode归因进一步证明 P0-D 的平均亏损并未比 Selection 更深，主要失败是二分类概率与收益幅度相关性仅约0.10、30次入场中22次提升Selection rank 6..20并错失大盈利，同时多使用9次replacement budget。下一步固定为P0-E收益幅度加权meta-label，不开展开放式调参；已消费窗口只能作 `HISTORICAL_REPLAY`，自然future OOS继续独立积累
 > 历史验证执行方向：44 日 A/B/C v6 golden 已冻结；P0-D 历史虚拟前向复用正式 scorer 与 shared policy kernel，24决策日+20日tail的权威 artifact 为 `fbf072f0d8c4a637a48aa8c2ed63c3b61c245abd08ac4e1417b2a0fcc8eb59a9`。该窗口现已被 P0-D 质量判断消费，不得在后续调模后继续标为新的 OOT
 > 当前双轨目标：模型线使用批量历史虚拟前向快速淘汰无效 challenger，并以自然 future OOS 作最终独立证据；H0 继续处理更广泛的实盘单日/历史批量同核执行优化，两者不互相阻断
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
@@ -25,9 +25,10 @@ M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。�
 2. P0-B 同期解除单一目标常量，用 Program active binding 动态解析 exact bundle。
 3. P0-C 直接读取现有 QE H5/Parquet/Qlib Bin 和目标策略包预测 PKL，构造 Top5 shadow policy episode 标签与 purged rolling/CPCV 评价。
 4. P0-D 在 WSL Conda 训练真实 meta-label 模型并进入 challenger 前向发布；正式预测只读取数据库 decision-cutoff 输入。
-5. 前向 residual 自然成熟后执行 P1-A，自有两个以上兼容包的独立 bundle 后执行 P1-B；长期趋势包就绪后执行 P2。
-6. H0 在当前已授权 44 日 A/B/C 回放结果完整冻结后，以该结果作为 golden baseline，实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复 raw 计算，不改变逐日业务逻辑。
-7. 上述真实功能和 H0 均不自动解禁历史补账、历史归档、ModelOps、旧任务清理或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
+5. P0-E 复用P0-C连续净超额收益，在每条CPCV path内用train-only幅度统计训练收益感知meta-label；模型选择只用冻结validation，已消费历史窗口只作回放诊断。
+6. 前向 residual 自然成熟后执行 P1-A，自有两个以上兼容包的独立 bundle 后执行 P1-B；长期趋势包就绪后执行 P2。
+7. H0 在当前已授权 44 日 A/B/C 回放结果完整冻结后，以该结果作为 golden baseline，实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复 raw 计算，不改变逐日业务逻辑。
+8. 上述真实功能和 H0 均不自动解禁历史补账、历史归档、ModelOps、旧任务清理或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
 
 以下内容不再是模型训练、模型推理、页面展示或模型启用的前置条件；H0 也不得借此恢复无界历史平台建设：
 
