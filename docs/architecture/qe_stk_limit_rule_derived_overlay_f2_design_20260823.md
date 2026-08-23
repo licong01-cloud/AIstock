@@ -59,7 +59,7 @@ Trading 或 MiniQMT 执行层的静默 fallback。
   `csv_overrides`，不得把稀疏修复扩大为全市场或全量数据集重导。
 - F-017：月度 Skill、增量复用参考和 operator runbook 必须统一写明 `stk_limit` 缺失处理、
   fail-closed 条件和精确选择性重建语义，后续月更不得依赖聊天记录。
-- F-018：changed-file runtime contract 必须把本功能的七个 artifact/planner 模块精确登记为
+- F-018：changed-file runtime contract 必须把本功能的十个 Worker 闭包模块精确登记为
   `worker-scheduler`，不得要求无关 backend-main 重启，也不得把整个 dataset_release 目录宽泛改类。
 - F-019：source audit 使用三层状态：合法空值/候选内可修复自动继续，provider 暂时不可用进入可重试，
   只有权威冲突、PIT/身份损坏、必要推导输入缺失或安全越界才硬阻断。新增硬阻断前必须先分析触发条件、
@@ -253,7 +253,7 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 | F-015 | 零写入 safety、无真实导出 | `backend/tests/dataset_release/test_artifact_ready_source.py`; `python -m pytest backend/tests/dataset_release -q -p no:cacheprovider` | verified | none |
 | F-016 | overlay 携带受影响代码，首次历史缺口只生成精确代码 override | `backend/services/dataset_release/component_artifact_manifest.py`; `backend/services/dataset_release/mixed_planner.py`; `backend/tests/dataset_release/test_component_artifact_manifest.py` | verified | none |
 | F-017 | Skill/reference/runbook 固化统一缺失处理流程 | `.codex/skills/update-backtest-dataset/SKILL.md`; `.codex/skills/update-backtest-dataset/references/fingerprint-and-reuse.md`; `.codex/skills/update-backtest-dataset/references/monthly-workflow.md`; `docs/operations/qe_backtest_dataset_monthly_update_runbook.md`; `python -m nox -s l0` | verified | none |
-| F-018 | 七个精确源文件登记为 dataset Worker runtime | `docs/standards/aistock_runtime_targets_v1.yaml`; `backend/tests/scripts/test_aistock_issue_workflow.py::test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker` | verified | none |
+| F-018 | 十个精确源文件登记为 dataset Worker runtime | `docs/standards/aistock_runtime_targets_v1.yaml`; `backend/tests/scripts/test_aistock_issue_workflow.py::test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker` | verified | none |
 | F-019 | 三层缺失/重试/硬阻断治理与先批准原则 | `scripts/seed_dataset_refresh_audit.py`; `.codex/skills/update-backtest-dataset/SKILL.md`; `backend/tests/test_dataset_refresh_audit.py` | verified | none |
 
 ## 14. DESIGN-COMPLIANCE-001
@@ -274,6 +274,6 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 | R5 | 用派生分区替换原始身份会让首次采用被误判为多年重建 | 始终保留 raw `stk_limit`；只为非空缺失月份增加 overlay 身份和月叶 | resolved |
 | R6 | mixed planner 会把首次历史 overlay 当普通 tail，既可能写错月份，也可能扩大到全 PIT 股票 | overlay 绑定精确代码；新增历史 sparse-addition 分类并只生成对应代码 override | resolved |
 | R7 | 仅修改代码会使下月 operator/Claude/Codex 仍按旧缺口说明执行 | 更新唯一 Codex Skill 主源、两个按需 reference 和正式 runbook；Claude wrapper 继续引用同一主源 | resolved |
-| R8 | 通用 backend fail-closed 分类会遗漏常驻 dataset Worker 的代码重载要求 | 只登记本功能实际进入 Worker 闭包的七个文件为 `worker-scheduler`；保留其他 backend/dataset_release 文件原分类 | resolved |
+| R8 | 通用 backend fail-closed 分类会遗漏常驻 dataset Worker 的代码重载要求 | 只登记本功能实际进入 Worker 闭包的十个文件为 `worker-scheduler`；保留其他 backend/dataset_release 文件原分类 | resolved |
 | R9 | 每月分区内保存全部股票的 limit 键虽有界但仍高于必要峰值 | limit/daily/adj 三路按代码流式归并；内存仅保留 PIT 滚动状态、单代码单月行及受硬上限约束的实际 overlay | resolved |
 | R10 | 全 DEV 历史镜像、合法空日和候选可补缺口被误当成永久阻断 | DEV 改为事务内单行 DML 回滚验证；生产全范围只读 plan；引入自动/可重试/硬阻断三层语义 | resolved |

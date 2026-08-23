@@ -1753,7 +1753,10 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
         "backend/services/dataset_release/artifact_ready_source.py",
         "backend/services/dataset_release/component_artifact_manifest.py",
         "backend/services/dataset_release/component_manifest_producer.py",
+        "backend/services/dataset_release/index_sources.py",
+        "backend/services/dataset_release/minute_overlay.py",
         "backend/services/dataset_release/mixed_planner.py",
+        "backend/services/dataset_release/source_authority.py",
         "backend/services/dataset_release/stk_limit_overlay.py",
     ]
 
