@@ -81,12 +81,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest#bounded_read=true,execution_started_by_cli=false",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "fresh_process_evidence": [
       "A fresh Python test process imported the patched dataset-release source/audit/overlay closure and passed the 119-test BUG-1157 matrix; the exact runtime classifier test proved the changed closure maps only to worker-scheduler."
     ],
-    "health_ref": "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest#worker_health.state=healthy",
-    "identity_ref": "worker_heartbeats/{worker_health.instance_id}.json#identity.code_sha=merged_commit",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "not_required",
