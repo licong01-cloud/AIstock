@@ -2,14 +2,14 @@
 
 - 设计层级：F2
 - 设计状态：`DESIGN_READY_FOR_PARALLEL_IMPLEMENTATION`
-- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.7+
+- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.9
 - 适用范围：QE-only、candidate-only、文件数据面
 - 创建日期：2026-08-13
 - 设计目的：允许 Claude Code 在不阻塞、不改写当前 P0 三联诊断的前提下，并行完成概念板块 PIT 数据本地化与概念因子研发。
 
 ## 1. Background / 背景与当前结论
 
-当前策略演进的唯一 P0 仍是更优多 Alpha 策略包。MA-E16 完整矩阵、model-age/refit、四格 sector oracle 与 benchmark/Brinson 由主线继续推进；概念板块数据与因子是独立的 P2 并行候选生产线，不是 P0/P1 的人工前置门禁。
+当前策略演进的唯一 P0 仍是更优多 Alpha 策略包。父蓝图 v6.9 已把主线更新为 MA-E19A/B 9/12 部分 canary 后的 MA-E19R 完整确定性复验，再依次执行四格 sector oracle 与 benchmark/Brinson；概念板块数据与因子是独立的 P2 并行候选生产线，不是 P0/P1 的人工前置门禁。
 
 概念板块对 A 股题材轮动、龙头扩散、成员参与度和跨概念传播具有潜在增量价值，但当前文件数据面只有稳定的申万 L2 行业键，尚无可证明的概念成员 PIT 资产。没有 PIT 有效区间的当前成员快照不能回填历史并冒充可部署结论。
 
@@ -28,7 +28,7 @@
 2. 以同一冻结数据身份开发低成本、可解释的概念板块因子候选。
 3. 明确每个因子的 `DIRECT_ALPHA`、`CONDITIONING_STATE`、`RELATION_PRIOR` 或 `NEGATIVE_CONTROL` 主角色。
 4. 形成可供后续 QE matched trial 消费的文件、代码、manifest、指标与限制说明。
-5. 保持当前 P0 三联诊断、MA-E16 归因和既有多 Alpha 运行链完全独立。
+5. 保持当前 P0 三联诊断、MA-E19R 完整确定性复验和既有多 Alpha 运行链完全独立。
 
 ### 2.2 本阶段包含
 
@@ -52,7 +52,7 @@
 
 ## 3. Non-Goals / 非目标与禁止事项
 
-1. 不修改或替代 MA-E16、P0-D1、P0-D2、P0-D3 的实验设计、任务或结果。
+1. 不修改或替代 MA-E19R、P0-D1、P0-D2、P0-D3 的实验设计、任务或结果。
 2. 不修改多 Alpha 编排、QE composer、远端分发、UI、Archive、schema 或历史物化。
 3. 不执行正式 QE 模型训练、HIST/HATS/GAT/超图/MASTER 接入或策略包 promotion。
 4. 不读取数据库构建回测数据，不从数据库补齐缺失概念关系，不在实验运行时访问数据库。
@@ -69,7 +69,7 @@
 当前主线继续拥有：
 
 - `docs/analysis/sector_rotation_factors_develop_spec_20260710.md`；
-- MA-E16 完整归因与 P0-D1/D2/D3 设计、实验和结果；
+- MA-E19R 完整确定性复验、P0-D2/D3 设计、实验和结果；
 - `backend/services/quantevolver/**`、`backend/services/multi_alpha/**` 中与当前 P0 有关的修改；
 - WSL GPU 与远端节点的正式 QE 资源安排。
 
@@ -420,7 +420,7 @@ I1 不得反向修改 PR-A 的历史 candidate，也不得把未授权的 compos
 
 1. **禁止简化交付**：设计覆盖真实 PIT/代理分层、数据获取、candidate、六个因子、证据、并行所有权、失败语义和后续接入；不把静态快照、fixture、单因子或空 manifest 声称为完整数据/因子交付。
 2. **禁止静默错误**：缺区间、晚到、orphan、代码失败、hash 漂移、coverage 缺失和 DB 调用都有明确 failure/quality 语义；无成员和历史不足使用 NaN，不以 0 或当前快照回填。
-3. **禁止改变业务逻辑**：当前 P0、MA-E16、QE 策略、标签、成本、资源合同和多 Alpha 编排均不改变；概念结果以后只能通过独立 I1 matched trial 加入演进。
+3. **禁止改变业务逻辑**：当前 P0、MA-E19R/D2/D3、QE 策略、标签、成本、资源合同和多 Alpha 编排均不改变；概念结果以后只能通过独立 I1 matched trial 加入演进。
 4. **禁止私增门禁审批**：PIT/identity/hash 是数据正确性合同，不是收益门禁；IC、相关性和论文方法只记录证据，不引入人工 PASS/KILL、二次 promotion 或历史平台前置。
 
 ## 16. Risks / 风险与失败模式
