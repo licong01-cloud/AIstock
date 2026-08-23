@@ -5,8 +5,7 @@
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
     "backend/services/qmt_strategy_ledger/lot_availability.py",
-    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
-    "backend/tests/qmt_strategy_ledger/test_lot_availability.py"
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1158",
@@ -29,14 +28,11 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [
-      "backend/tests/qmt_strategy_ledger/test_lot_availability.py"
-    ],
+    "added_files": [],
     "changed_files": [
       "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
       "backend/services/qmt_strategy_ledger/lot_availability.py",
-      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
-      "backend/tests/qmt_strategy_ledger/test_lot_availability.py"
+      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py"
     ],
     "ownership": {
       "changed_files": [],
@@ -50,8 +46,7 @@
     "scope_files": [
       "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
       "backend/services/qmt_strategy_ledger/lot_availability.py",
-      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
-      "backend/tests/qmt_strategy_ledger/test_lot_availability.py"
+      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py"
     ]
   },
   "first_seen_at": "2026-08-23T14:49:15.392353Z",
@@ -81,7 +76,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh pytest process loaded commit 4b12af53907b756641e681face9dbee83f2813d1 code content and passed the direct MiniQMT product-evidence plus frozen T+1 matrix: 71 passed; no broker, scheduler, backend, or database side effects.",
+      "Fresh pytest process loaded the tracked BUG-1158 MiniQMT product-evidence plus frozen T+1 matrix: 72 passed; no broker, scheduler, backend, or database side effects.",
       "Fresh nox process loaded commit 4b12af53907b756641e681face9dbee83f2813d1 code content and passed miniqmt_execution_runtime_l2: 1513 passed, 82 skipped; no production process control.",
       "Fresh nox process loaded commit 4b12af53907b756641e681face9dbee83f2813d1 code content and passed platform_api_backend: 13 passed; no production process control.",
       "Fresh nox MiniQMT L2 process loaded tracked BUG-1158 source and passed 1513 tests with 82 explicit skips; no production process control."

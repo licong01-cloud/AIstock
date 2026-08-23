@@ -109,7 +109,9 @@ from backend.services.qmt_strategy_ledger.models import (
     VirtualAccount,
     VirtualAccountStatus,
 )
+from backend.services.qmt_strategy_ledger.lot_availability import tplus1_unlocked
 from backend.services.strategy_package.execution_policy import compute_execution_policy_sha256
+from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.models import OrderSide
 from backend.tests.miniqmt_execution_runtime.test_kernel_delivery import _worker_facts
 from backend.tests.miniqmt_execution_runtime.test_hot_market_data_boundary import (
@@ -785,6 +787,39 @@ class _CalendarCursor:
 
     def fetchone(self):
         return self.row
+
+
+class _FrozenPredicate:
+    def __init__(self, result: object) -> None:
+        self.result = result
+        self.calls: list[tuple[date, date]] = []
+
+    def tplus1_unlocked(self, open_date: date, as_of_date: date) -> object:
+        self.calls.append((open_date, as_of_date))
+        return self.result
+
+    @staticmethod
+    def is_trading_day(_trade_date: date) -> bool:
+        raise AssertionError("frozen authority must not query a trading-day calendar")
+
+    @staticmethod
+    def next_trading_day_after(_trade_date: date) -> date:
+        raise AssertionError("frozen authority must not query a successor trading day")
+
+
+def test_lot_availability_uses_frozen_predicate_without_calendar_fallback() -> None:
+    open_date = date(2026, 8, 21)
+    as_of_date = date(2026, 8, 24)
+    authority = _FrozenPredicate(True)
+
+    assert tplus1_unlocked(open_date, as_of_date, authority) is True
+    assert authority.calls == [(open_date, as_of_date)]
+
+
+@pytest.mark.parametrize("malformed", [1, None, "true"])
+def test_lot_availability_rejects_non_boolean_frozen_authority(malformed: object) -> None:
+    with pytest.raises(DataUnavailableError, match="strict boolean"):
+        tplus1_unlocked(date(2026, 8, 21), date(2026, 8, 24), _FrozenPredicate(malformed))
 
 
 def test_frozen_session_calendar_exposes_exact_tplus1_without_historical_query() -> None:
