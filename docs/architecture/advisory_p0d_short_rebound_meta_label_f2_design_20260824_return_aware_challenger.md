@@ -315,7 +315,7 @@ episode归因显示 P0-E 平均盈利 `675.41 bps`、平均亏损 `-573.01 bps`�
 | F-708 | WSL CLI and bundle | artifact: `cb9e61e9.../resource_report.json`; exact retry `EXISTING_BUNDLE` | pass | none |
 | F-709 | historical replay CLI | artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0e_return_aware_replay_20260824/p0d-historical-forward/6bba37f8804af38f4357c3939a380cca3be2bc915a62149108518b6d4948dba4.json` | pass | none |
 | F-710 | import/scope/diff review | `tests/aistock_validation/catalog/file_ownership.yaml`; validation-receipt: `nox -s l0` pass，0 HIGH finding | pass | none |
-| F-711 | complete diff | `backend/tests/advisory_model_first/`; validation-receipt: F2 validator and three review rounds | pending | final gate |
+| F-711 | complete diff | `backend/tests/advisory_model_first/`; validation-receipt: F2 validator pass、`364 passed, 8 skipped`、L0 pass and three review rounds | pass | none |
 
 ## 17. DESIGN-COMPLIANCE-001
 
