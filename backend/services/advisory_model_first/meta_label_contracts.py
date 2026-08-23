@@ -136,6 +136,15 @@ def build_frozen_meta_label_request(**values: Any) -> FrozenAdvisoryMetaLabelTra
     values = dict(values)
     created_at = str(values.pop("created_at", datetime.now(timezone.utc).isoformat()))
     schema_version = str(values.pop("schema_version", META_LABEL_REQUEST_V2))
+    if "family_specs" in values:
+        values["family_specs"] = tuple(
+            item if isinstance(item, MetaLabelFamilySpecV1) else MetaLabelFamilySpecV1.model_validate(item)
+            for item in values["family_specs"]
+        )
+    if values.get("outcome_weighting") is not None and not isinstance(
+        values["outcome_weighting"], MetaLabelOutcomeWeightingV1
+    ):
+        values["outcome_weighting"] = MetaLabelOutcomeWeightingV1.model_validate(values["outcome_weighting"])
     seed = FrozenAdvisoryMetaLabelTrainingRequestV1.model_construct(
         schema_version=schema_version,
         request_id="pending",

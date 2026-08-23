@@ -5,7 +5,7 @@
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.4
 > 直接父产物：P0-C bundle `81e2c9bac5ce1f8e2fdc5a6174bc948dfbe984cf5028726c89ea72eb59fc69bd`
 > 参考模型：P0-D bundle `e555903ec928fd39ea09180133401a6490a4e6d5440e3ef63642909e1329e03a`
-> 当前阶段：`DESIGN_ACCEPTED_IMPLEMENTATION_PENDING`
+> 当前阶段：`REAL_EXPERIMENT_COMPLETE_NEGATIVE_NOT_ACTIVATED_FINAL_REVIEW_PENDING`
 > 适用范围：学术研究与模拟荐股观察，不构成实时投资建议，不连接实盘交易或下单执行
 
 ## 1. Background / 真实失败归因
@@ -163,6 +163,40 @@ F:/Dev/AIstock_model_artifacts/advisory_p0e_return_aware_replay_20260824
 
 隔离 root 只复制 exact P0-C policy dataset、发布新 bundle 和实验 descriptor。不得旋转 `F:/Dev/AIstock_model_artifacts/advisory_model_first` 中当前 descriptor，不得改变生产 active binding。
 
+### 8.1 Real WSL Result / 真实训练结果
+
+| item | result |
+|---|---|
+| repository commit | `3fedd1ac8da723cd62c125e684219cd4f5ffbb1b` |
+| request | `advmetareq_49042f2c766a6d32bb801439` / `49042f2c766a6d32bb801439713d5a6f14669cbbc862b9f5e62c68dc7d332b97` |
+| bundle | `a222a1a4999e465b13d48000e024f885b6276801ac92d34ca34d497841daa34e` |
+| trial matrix | 2 families × 3 seeds × 28 paths = 168 rows；6 trials × 8 blocks |
+| winner | `FAMILY_CORE_HMM / 20260817`；4 boost rounds |
+| candidate metric | mean daily net excess `18.9626236037 bps`；Selection lift `+3.1825697785 bps`；Selection path win rate `57.14%` |
+| exact P0-D reference | `19.4356787838 bps`；candidate lift `-0.4730551801 bps`；candidate path win rate `35.71%`；`research_improvement=false` |
+| candidate diagnostics | ROC-AUC `0.5159415721`；Brier `0.2523798050` |
+| PBO | `0.8142857143`，比 P0-D 的 `0.40` 明显恶化 |
+| outcome weighting | full refit scale `335.7896 bps`；train mean weight `1.0`；weight range `0.42999..2.14820` |
+| resource | `363.412s`；peak RSS `2,835,582,976 bytes`，低于8GB |
+| exact retry | `4.7s`；返回同一 bundle；`EXISTING_BUNDLE/activated=false` |
+
+冻结 CPCV 结论为负面：幅度权重仍优于 Selection，但没有超过当前 P0-D，且稳定性/PBO恶化。按预注册规则不追加 family、cap、阈值或 blend，不激活该 bundle。
+
+### 8.2 HISTORICAL_REPLAY Result / 已消费窗口诊断
+
+隔离 descriptor `debed6e7e...` 对同一24个决策日+20日tail完成100% resolved回放，artifact 为 `c7f6ec1388adf8e8b7b13aa20aff35047919558b4d833091f1bf1311c9067934`，exact retry 返回同hash。证据分类为 `HISTORICAL_REPLAY`，不参与选模。
+
+| metric | P0-E weighted | Selection Top5 | 原P0-D | P0-E vs Selection |
+|---|---:|---:|---:|---:|
+| completed episode | 26 | 26 | 30 | 0 |
+| hit rate | 23.08% | 26.92% | 36.67% | -3.85pp |
+| mean episode net return | -284.91 bps | -345.35 bps | -352.59 bps | +60.43 bps |
+| cumulative net return | -13.39% | -16.90% | -19.45% | +3.52pp |
+| maximum drawdown | -14.92% | -16.90% | -22.54% | +1.98pp |
+| mean turnover | 29.71% | 34.67% | 40.00% | -4.95pp |
+
+episode归因显示 P0-E 平均盈利 `675.41 bps`、平均亏损 `-573.01 bps`，相对原P0-D的 `349.17/-758.87 bps` 修复了该窗口中的幅度结构；但冻结 CPCV 的配对结果没有稳定复现，因此不能用这份已消费窗口的改善覆盖正式负面结论。
+
 ## 9. API / UI / Database / Runtime impact
 
 - API/UI：none。
@@ -272,15 +306,15 @@ F:/Dev/AIstock_model_artifacts/advisory_p0e_return_aware_replay_20260824
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-701 | 本设计 §1；artifact `fbf072...` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0d_historical_forward_replay_20260823/p0d-historical-forward/fbf072f0d8c4a637a48aa8c2ed63c3b61c245abd08ac4e1417b2a0fcc8eb59a9.json` | pass | none |
-| F-702 | `meta_label_contracts.py` | `backend/tests/advisory_model_first/test_meta_label_contracts.py` | pending | implementation |
-| F-703 | `meta_label_training.py` | `backend/tests/advisory_model_first/test_meta_label_training.py` | pending | implementation |
-| F-704 | request/pipeline | `backend/tests/advisory_model_first/test_meta_label_pipeline.py`; artifact: real trial matrix | pending | implementation |
-| F-705 | existing scorer/evaluator | `backend/tests/advisory_model_first/test_meta_label_bundle.py`; `backend/tests/advisory_model_first/test_meta_label_portfolio.py` | pending | regression evidence |
-| F-706 | `meta_label_pipeline.py` | `backend/tests/advisory_model_first/test_meta_label_pipeline.py`; artifact: real comparison receipt | pending | implementation |
-| F-707 | `meta_label_bundle.py` | `backend/tests/advisory_model_first/test_meta_label_bundle.py` | pending | implementation |
-| F-708 | WSL CLI and bundle | artifact: real resource report and exact retry receipt | pending | execution |
-| F-709 | historical replay CLI | artifact: HISTORICAL_REPLAY result | pending | execution |
-| F-710 | import/scope/diff review | `tests/aistock_validation/catalog/file_ownership.yaml`; validation-receipt: L0 scope gate | pending | final gate |
+| F-702 | `meta_label_contracts.py` | `backend/tests/advisory_model_first/test_meta_label_contracts.py` | pass | none |
+| F-703 | `meta_label_training.py` | `backend/tests/advisory_model_first/test_meta_label_training.py` | pass | none |
+| F-704 | request/pipeline | `backend/tests/advisory_model_first/test_meta_label_pipeline.py`; artifact: `a222a1a4.../cpcv_trial_metrics.parquet` | pass | none |
+| F-705 | existing scorer/evaluator | `backend/tests/advisory_model_first/test_meta_label_bundle.py`; `backend/tests/advisory_model_first/test_meta_label_portfolio.py` | pass | none |
+| F-706 | `meta_label_pipeline.py` | `backend/tests/advisory_model_first/test_meta_label_pipeline.py`; artifact: `a222a1a4.../reference_challenger_comparison.json` | pass | none |
+| F-707 | `meta_label_bundle.py` | `backend/tests/advisory_model_first/test_meta_label_bundle.py` | pass | none |
+| F-708 | WSL CLI and bundle | artifact: `a222a1a4.../resource_report.json`; exact retry `EXISTING_BUNDLE` | pass | none |
+| F-709 | historical replay CLI | artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0e_return_aware_replay_20260824/p0d-historical-forward/c7f6ec1388adf8e8b7b13aa20aff35047919558b4d833091f1bf1311c9067934.json` | pass | none |
+| F-710 | import/scope/diff review | `tests/aistock_validation/catalog/file_ownership.yaml`; validation-receipt: `nox -s l0` pass，0 HIGH finding | pass | none |
 | F-711 | complete diff | `backend/tests/advisory_model_first/`; validation-receipt: F2 validator and three review rounds | pending | final gate |
 
 ## 17. DESIGN-COMPLIANCE-001
@@ -289,6 +323,12 @@ F:/Dev/AIstock_model_artifacts/advisory_p0e_return_aware_replay_20260824
 2. **无静默错误**：缺失/非有限收益、非法scale、reference不匹配、trial/path缺失、dirty source或artifact冲突全部fail closed。
 3. **无业务偏移**：只改变训练sample weight；候选召回、Selection rank、退出、policy、成本、运行时概率合同和生产baseline均不变。
 4. **无额外门禁审批**：研究胜负标准在训练前固定但不构成生产审批；源码合入按用户本任务授权，生产激活仍需独立授权。
+
+审核记录：
+
+- Round 1（设计/泄漏）：基于真实 episode 归因否决开放式双头与调参搜索，冻结为单一 train-only magnitude weighting；实际旧 v2 request `0451bd...` 以原 hash 成功解析。
+- Round 2（代码/身份）：314个 `advisory_model_first` 直接测试通过；正式 reference 168行 readback、WSL 168 trial-path、bundle exact retry和隔离 replay exact retry通过。发现测试 helper 传 dict 时产生 Pydantic serializer warning，已在 builder 入口正规化 nested contracts并针对性复测。
+- Round 3（结果/生产隔离）：模块 L2 `364 passed, 8 skipped`，L0 pass；生产 descriptor仍为 `f98f2ded... -> e555903e...`，实验 descriptor为独立root `debed6e7... -> a222a1a4...`。负面CPCV与正向已消费回放并列披露，不用后者覆盖前者。
 
 ## 18. Completion definition / 完成定义
 
