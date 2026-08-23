@@ -1,4 +1,4 @@
-"""P2-4 untouched-holdout acceptance for the frozen P2-3C candidate.
+"""P2-4 and C-012 rotation-L1 untouched-holdout acceptance.
 
 The module is deliberately offline-only.  It never fits or selects a model.
 It validates one immutable P2-3C candidate, applies its frozen parameters to
@@ -46,6 +46,19 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (
     P2_3C_MARKET_COMPONENT_SCHEMA_VERSION,
     P2_3C_REPORT_SCHEMA_VERSION,
     P2_3C_COMPONENT_SCHEMA_VERSION,
+    RL1_ALGORITHM_VERSION,
+    RL1_CANDIDATE_PAYLOAD_KEYS,
+    RL1_COMPONENT_SCHEMA_VERSION,
+    RL1_CONTRACT_VERSION,
+    RL1_DEVELOPMENT_END,
+    RL1_HOLDOUT_END,
+    RL1_HOLDOUT_START,
+    RL1_MARKET_COMPONENT_SCHEMA_VERSION,
+    RL1_MEDIAN_RANK_IC_MINIMUM,
+    RL1_MEDIAN_SPREAD_MINIMUM,
+    RL1_NEWEY_WEST_LAG,
+    RL1_NEWEY_WEST_T_MINIMUM,
+    RL1_REPORT_SCHEMA_VERSION,
     RidgeFit,
     STATE_FRACTION,
     STATE_TIE_TOLERANCE,
@@ -96,6 +109,25 @@ REASON_COLLISION = "hmm_risk_p2_4_output_collision"
 REASON_READBACK = "hmm_risk_p2_4_readback_mismatch"
 REASON_UNEXPECTED = "hmm_risk_p2_4_unknown_execution_failure"
 
+RL1_HOLDOUT_REQUEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_holdout_request_v1"
+RL1_HOLDOUT_CHILD_SCHEMA_VERSION = "hmm_risk_rotation_l1_holdout_child_v1"
+RL1_HOLDOUT_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_holdout_acceptance_v1"
+RL1_CAPABILITY_BUNDLE_SCHEMA_VERSION = "hmm_risk_capability_bundle_v1"
+RL1_OUTCOME_TAIL_TRADING_DAYS = 10
+RL1_CANONICAL_SECTOR_COUNT = 31
+RL1_MINIMUM_DAILY_COUNT = 28
+RL1_DAILY_COVERAGE_RATIO = 0.90
+RL1_SECTOR_COVERAGE_RATIO = 0.80
+REASON_RL1_INPUT = "hmm_risk_rotation_l1_input_identity_mismatch"
+REASON_RL1_HOLDOUT_NOT_READY = "hmm_risk_rotation_l1_new_holdout_not_ready"
+REASON_RL1_HOLDOUT = "hmm_risk_rotation_l1_holdout_access_forbidden"
+REASON_RL1_METRIC = "hmm_risk_rotation_l1_metric_unavailable"
+REASON_RL1_COVERAGE = "hmm_risk_rotation_l1_coverage_insufficient"
+REASON_RL1_REPRODUCIBILITY = "hmm_risk_rotation_l1_fresh_process_mismatch"
+REASON_RL1_COLLISION = "hmm_risk_rotation_l1_output_collision"
+REASON_RL1_READBACK = "hmm_risk_rotation_l1_readback_mismatch"
+REASON_RL1_UNEXPECTED = "hmm_risk_rotation_l1_unexpected_error"
+
 
 def expected_holdout_source(*, outcome_tail_end: date) -> dict[str, Any]:
     return {
@@ -134,6 +166,14 @@ class FrozenCandidate:
     report: dict[str, Any]
     market: dict[str, Any]
     levels: dict[str, dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class RotationL1Candidate:
+    report: dict[str, Any]
+    payload: dict[str, Any]
+    market: dict[str, Any]
+    rotation_l1: dict[str, Any]
 
 
 def _fail(
@@ -1751,11 +1791,8 @@ def write_once(path: Path, value: Mapping[str, Any], *, repository_root: Path) -
     except Exception:
         output.unlink(missing_ok=True)
         raise
-    try:
-        readback = json.loads(output.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
-        raise _fail(REASON_READBACK, "artifact readback failed", stage="writer") from exc
-    if readback != dict(value):
+    readback = _load_json(output, reason=REASON_READBACK, label="written artifact")
+    if canonical_json_bytes(readback) != canonical_json_bytes(dict(value)):
         raise _fail(REASON_READBACK, "artifact readback mismatch", stage="writer")
     return output
 
@@ -1800,5 +1837,1211 @@ def failure_receipt(
         "ready_sha256": ready_sha256,
         "database_write": False,
         "runtime_action": False,
+    }
+    return {**body, "report_sha256": canonical_sha256(body)}
+
+
+def load_rotation_l1_candidate(path: Path, *, expected_sha256: str) -> RotationL1Candidate:
+    report = _load_json(path, reason=REASON_RL1_INPUT, label="rotation L1 candidate")
+    report_hash = _require_sha256(report.get("report_sha256"), "candidate.report_sha256", reason=REASON_RL1_INPUT)
+    if (
+        report_hash != expected_sha256
+        or canonical_sha256({key: value for key, value in report.items() if key != "report_sha256"}) != report_hash
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 candidate hash is invalid", stage="preflight")
+    expected_report_keys = {
+        "schema_version",
+        "contract_version",
+        "algorithm_version",
+        "model_origin",
+        "record_type",
+        "status",
+        "producer_commit",
+        "request_sha256",
+        "child_report_sha256s",
+        "reproducibility_payload",
+        "reproducibility_payload_sha256",
+        "planned_fit_count",
+        "completed_fit_count",
+        "selection_performed",
+        "parameter_search_performed",
+        "holdout_accessed",
+        "product_acceptance_performed",
+        "candidate_receipt_write",
+        "failure_receipt_write",
+        "model_write",
+        "bundle_write",
+        "ready_write",
+        "database_write",
+        "runtime_action",
+        "report_sha256",
+    }
+    if (
+        set(report) != expected_report_keys
+        or report.get("schema_version") != RL1_REPORT_SCHEMA_VERSION
+        or report.get("contract_version") != RL1_CONTRACT_VERSION
+        or report.get("algorithm_version") != RL1_ALGORITHM_VERSION
+        or report.get("record_type") != "candidate"
+        or report.get("status") != "ROTATION_L1_CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT"
+        or report.get("planned_fit_count") != 24
+        or report.get("completed_fit_count") != 24
+        or report.get("selection_performed") is not False
+        or report.get("parameter_search_performed") is not False
+        or report.get("holdout_accessed") is not False
+        or report.get("product_acceptance_performed") is not False
+        or report.get("candidate_receipt_write") is not True
+        or report.get("failure_receipt_write") is not False
+        or report.get("model_write") is not False
+        or report.get("bundle_write") is not False
+        or report.get("ready_write") is not False
+        or report.get("database_write") is not False
+        or report.get("runtime_action") is not False
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 candidate identity is invalid", stage="preflight")
+    payload = report.get("reproducibility_payload")
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != RL1_CANDIDATE_PAYLOAD_KEYS
+        or canonical_sha256(payload) != report.get("reproducibility_payload_sha256")
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 candidate payload hash is invalid", stage="preflight")
+    child_hashes = report.get("child_report_sha256s")
+    if not isinstance(child_hashes, list) or len(child_hashes) != 2:
+        raise _fail(REASON_RL1_INPUT, "rotation L1 candidate child identities are incomplete", stage="preflight")
+    for index, value in enumerate(child_hashes):
+        _require_sha256(value, f"candidate.child_report_sha256s[{index}]", reason=REASON_RL1_INPUT)
+    if (
+        payload.get("contract_version") != RL1_CONTRACT_VERSION
+        or payload.get("algorithm_version") != RL1_ALGORITHM_VERSION
+        or payload.get("model_origin") != "rotation_l1_market_conditioned_ridge_v1"
+        or payload.get("producer_commit") != report.get("producer_commit")
+        or payload.get("process_fit_count") != 12
+        or payload.get("selection_performed") is not False
+        or payload.get("parameter_search_performed") is not False
+        or payload.get("holdout_accessed") is not False
+        or payload.get("model_write") is not False
+        or payload.get("bundle_write") is not False
+        or payload.get("ready_write") is not False
+        or payload.get("database_write") is not False
+        or payload.get("runtime_action") is not False
+        or payload.get("capabilities")
+        != {
+            "rotation_L1": "CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT",
+            "rotation_L2": "NOT_AVAILABLE",
+            "risk_L1": "NOT_AVAILABLE",
+            "risk_L2": "NOT_AVAILABLE",
+        }
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 candidate payload authority is invalid", stage="preflight")
+    request_identity = payload.get("request_identity")
+    folds = payload.get("folds")
+    fold_hashes = payload.get("fold_receipt_sha256s")
+    attempts = payload.get("fit_attempts")
+    development_acceptance = payload.get("development_acceptance")
+    if (
+        not isinstance(request_identity, Mapping)
+        or canonical_sha256(request_identity) != payload.get("request_identity_sha256")
+        or report.get("request_sha256") != request_identity.get("request_sha256")
+        or not isinstance(folds, list)
+        or len(folds) != 5
+        or not isinstance(fold_hashes, list)
+        or len(fold_hashes) != 5
+        or any(
+            not isinstance(item, Mapping)
+            or item.get("receipt_sha256") != fold_hashes[index]
+            or canonical_sha256({key: value for key, value in item.items() if key != "receipt_sha256"})
+            != item.get("receipt_sha256")
+            for index, item in enumerate(folds)
+        )
+        or not isinstance(attempts, list)
+        or len(attempts) != 12
+        or canonical_sha256(attempts) != payload.get("fit_attempts_sha256")
+        or not isinstance(development_acceptance, Mapping)
+        or development_acceptance.get("accepted") is not True
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 candidate development closure is invalid", stage="preflight")
+    _require_canonical_receipt(
+        development_acceptance,
+        label="rotation L1 development acceptance",
+        reason=REASON_RL1_INPUT,
+    )
+    market = payload.get("market")
+    rotation = payload.get("rotation_L1")
+    if not isinstance(market, dict) or not isinstance(rotation, dict):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 candidate components are missing", stage="preflight")
+    _require_canonical_receipt(market, label="rotation L1 market", reason=REASON_RL1_INPUT)
+    _require_canonical_receipt(rotation, label="rotation L1 component", reason=REASON_RL1_INPUT)
+    if (
+        market.get("schema_version") != RL1_MARKET_COMPONENT_SCHEMA_VERSION
+        or market.get("fixed_jump_penalty") != P2_3C_FIXED_JUMP_PENALTY
+        or market.get("fixed_seed") != 42
+        or rotation.get("schema_version") != RL1_COMPONENT_SCHEMA_VERSION
+        or rotation.get("component") != "rotation_L1"
+        or rotation.get("level") != "L1"
+        or rotation.get("selected_alpha") != 100.0
+        or rotation.get("canonical_sector_count") != RL1_CANONICAL_SECTOR_COUNT
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 candidate component identity drifted", stage="preflight")
+    return RotationL1Candidate(report=report, payload=payload, market=market, rotation_l1=rotation)
+
+
+def _rotation_l1_holdout_dates(inputs: Mapping[str, Any]) -> tuple[tuple[date, ...], tuple[date, ...]]:
+    calendar = tuple(inputs.get("trading_dates") or ())
+    if not calendar or any(type(day) is not date for day in calendar) or calendar != tuple(sorted(set(calendar))):
+        raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 holdout calendar is invalid", stage="preflight")
+    state_dates = tuple(day for day in calendar if RL1_HOLDOUT_START <= day <= RL1_HOLDOUT_END)
+    if not state_dates or state_dates[0] != RL1_HOLDOUT_START or state_dates[-1] != RL1_HOLDOUT_END:
+        raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 holdout state window is incomplete", stage="preflight")
+    positions = {day: index for index, day in enumerate(calendar)}
+    tail = calendar[positions[RL1_HOLDOUT_END] + 1 : positions[RL1_HOLDOUT_END] + 1 + RL1_OUTCOME_TAIL_TRADING_DAYS]
+    if len(tail) != RL1_OUTCOME_TAIL_TRADING_DAYS:
+        raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 outcome tail is incomplete", stage="preflight")
+    return state_dates, tail
+
+
+def _rotation_l1_c010_identity(inputs: Mapping[str, Any]) -> dict[str, Any]:
+    c010 = inputs.get("c010_diagnostic")
+    if not isinstance(c010, Mapping):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 C-010 formal evidence is missing", stage="source_preflight")
+    keys = ("eligibility", "aggregate_evidence", "l1_cross_section_evidence", "l1_feature_definition")
+    values = {key: c010.get(key) for key in keys}
+    if any(not isinstance(value, Mapping) or not value for value in values.values()):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 C-010 formal evidence is incomplete", stage="source_preflight")
+    for field in ("provider_absence_manifest", "security_identity_manifest"):
+        value = inputs.get(field)
+        if not isinstance(value, Mapping) or not value:
+            raise _fail(REASON_RL1_INPUT, f"rotation L1 {field} is missing", stage="source_preflight")
+    for key in keys[:3]:
+        receipt = values[key]
+        receipt_hash = _require_sha256(
+            receipt.get("receipt_sha256"), f"c010.{key}.receipt_sha256", reason=REASON_RL1_INPUT
+        )
+        if (
+            canonical_sha256({name: value for name, value in receipt.items() if name != "receipt_sha256"})
+            != receipt_hash
+        ):
+            raise _fail(REASON_RL1_INPUT, f"rotation L1 C-010 {key} receipt is invalid", stage="source_preflight")
+    body = {
+        "eligibility_receipt_sha256": values["eligibility"]["receipt_sha256"],
+        "aggregate_receipt_sha256": values["aggregate_evidence"]["receipt_sha256"],
+        "l1_cross_section_receipt_sha256": values["l1_cross_section_evidence"]["receipt_sha256"],
+        "l1_feature_definition_sha256": canonical_sha256(values["l1_feature_definition"]),
+        "provider_absence_manifest_sha256": canonical_sha256(inputs.get("provider_absence_manifest")),
+        "security_identity_manifest_sha256": canonical_sha256(inputs.get("security_identity_manifest")),
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def build_rotation_l1_holdout_request(
+    inputs: Mapping[str, Any],
+    candidate: RotationL1Candidate,
+    *,
+    source: Mapping[str, Any],
+    artifact_outputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    state_dates, tail_dates = _rotation_l1_holdout_dates(inputs)
+    source_payload = dict(source)
+    development_source = candidate.payload.get("request_identity", {}).get("source_sha256")
+    development_revision = candidate.payload.get("request_identity", {}).get("source", {}).get("source_revision")
+    if (
+        source_payload.get("source_end") != tail_dates[-1].isoformat()
+        or not isinstance(source_payload.get("source_revision"), str)
+        or not source_payload["source_revision"]
+        or source_payload.get("development_end") != RL1_DEVELOPMENT_END.isoformat()
+        or source_payload.get("state_start") != RL1_HOLDOUT_START.isoformat()
+        or source_payload.get("state_end") != RL1_HOLDOUT_END.isoformat()
+        or source_payload.get("development_source_sha256") != development_source
+        or source_payload.get("source_revision") == development_revision
+    ):
+        raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 source revision is incomplete", stage="preflight")
+    required_outputs = {
+        "acceptance_output",
+        "acceptance_failure_output",
+        "component_output",
+        "bundle_output",
+        "child_1_output",
+        "child_1_failure_output",
+        "child_2_output",
+        "child_2_failure_output",
+    }
+    outputs = dict(artifact_outputs)
+    if set(outputs) != required_outputs or any(not Path(str(value)).is_absolute() for value in outputs.values()):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 artifact outputs are incomplete", stage="preflight")
+    if len(set(str(value) for value in outputs.values())) != len(outputs):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 artifact outputs are not unique", stage="preflight")
+    dataset = inputs.get("dataset_manifest")
+    mapping = inputs.get("mapping_manifest")
+    if not isinstance(dataset, Mapping) or not isinstance(mapping, (Mapping, list)):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 holdout manifests are missing", stage="preflight")
+    c010 = _rotation_l1_c010_identity(inputs)
+    holdout_source = {
+        "source": source_payload,
+        "state_start": RL1_HOLDOUT_START.isoformat(),
+        "state_end": RL1_HOLDOUT_END.isoformat(),
+        "state_trading_day_count": len(state_dates),
+        "state_date_set_sha256": canonical_sha256([day.isoformat() for day in state_dates]),
+        "outcome_tail_end": tail_dates[-1].isoformat(),
+        "outcome_tail_trading_day_count": len(tail_dates),
+        "outcome_tail_date_set_sha256": canonical_sha256([day.isoformat() for day in tail_dates]),
+        "dataset_manifest_sha256": canonical_sha256(dataset),
+        "mapping_manifest_sha256": canonical_sha256(mapping),
+        "calendar_manifest_sha256": canonical_sha256(dataset.get("calendar_benchmark")),
+        "feature_formula_sha256": canonical_sha256(inputs.get("feature_definition")),
+        "security_identity_manifest_sha256": canonical_sha256(inputs.get("security_identity_manifest")),
+        "provider_absence_manifest_sha256": canonical_sha256(inputs.get("provider_absence_manifest")),
+        "c010_formal_evidence_sha256": c010["receipt_sha256"],
+    }
+    evaluation_id = canonical_sha256(
+        {
+            "contract_version": RL1_CONTRACT_VERSION,
+            "candidate_report_sha256": candidate.report["report_sha256"],
+            "state_date_set_sha256": holdout_source["state_date_set_sha256"],
+        }
+    )
+    body = {
+        "schema_version": RL1_HOLDOUT_REQUEST_SCHEMA_VERSION,
+        "contract_version": RL1_CONTRACT_VERSION,
+        "algorithm_version": RL1_ALGORITHM_VERSION,
+        "candidate_report_sha256": candidate.report["report_sha256"],
+        "candidate_producer_commit": candidate.report["producer_commit"],
+        "holdout_evaluation_id": evaluation_id,
+        "holdout_source": holdout_source,
+        "artifact_outputs": outputs,
+        "fit_count": 0,
+        "selection_performed": False,
+        "parameter_search_performed": False,
+    }
+    request = {**body, "request_sha256": canonical_sha256(body)}
+    validate_rotation_l1_holdout_request(request, candidate)
+    validate_rotation_l1_loaded_source(inputs, request, candidate)
+    return request
+
+
+def validate_rotation_l1_holdout_request(request: Mapping[str, Any], candidate: RotationL1Candidate) -> dict[str, Any]:
+    expected_request_keys = {
+        "schema_version",
+        "contract_version",
+        "algorithm_version",
+        "candidate_report_sha256",
+        "candidate_producer_commit",
+        "holdout_evaluation_id",
+        "holdout_source",
+        "artifact_outputs",
+        "fit_count",
+        "selection_performed",
+        "parameter_search_performed",
+        "request_sha256",
+    }
+    if (
+        set(request) != expected_request_keys
+        or request.get("schema_version") != RL1_HOLDOUT_REQUEST_SCHEMA_VERSION
+        or request.get("contract_version") != RL1_CONTRACT_VERSION
+        or request.get("algorithm_version") != RL1_ALGORITHM_VERSION
+        or request.get("candidate_report_sha256") != candidate.report["report_sha256"]
+        or request.get("candidate_producer_commit") != candidate.report["producer_commit"]
+        or request.get("fit_count") != 0
+        or request.get("selection_performed") is not False
+        or request.get("parameter_search_performed") is not False
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 holdout request identity is invalid", stage="preflight")
+    request_hash = _require_sha256(request.get("request_sha256"), "request.request_sha256", reason=REASON_RL1_INPUT)
+    if canonical_sha256({key: value for key, value in request.items() if key != "request_sha256"}) != request_hash:
+        raise _fail(REASON_RL1_INPUT, "rotation L1 holdout request hash is invalid", stage="preflight")
+    holdout = request.get("holdout_source")
+    expected_holdout_keys = {
+        "source",
+        "state_start",
+        "state_end",
+        "state_trading_day_count",
+        "state_date_set_sha256",
+        "outcome_tail_end",
+        "outcome_tail_trading_day_count",
+        "outcome_tail_date_set_sha256",
+        "dataset_manifest_sha256",
+        "mapping_manifest_sha256",
+        "calendar_manifest_sha256",
+        "feature_formula_sha256",
+        "security_identity_manifest_sha256",
+        "provider_absence_manifest_sha256",
+        "c010_formal_evidence_sha256",
+    }
+    if not isinstance(holdout, Mapping) or (
+        set(holdout) != expected_holdout_keys
+        or holdout.get("state_start") != RL1_HOLDOUT_START.isoformat()
+        or holdout.get("state_end") != RL1_HOLDOUT_END.isoformat()
+        or not isinstance(holdout.get("state_trading_day_count"), int)
+        or int(holdout["state_trading_day_count"]) <= 0
+        or holdout.get("outcome_tail_trading_day_count") != RL1_OUTCOME_TAIL_TRADING_DAYS
+    ):
+        raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 holdout boundary is invalid", stage="preflight")
+    source = holdout.get("source")
+    development_source = candidate.payload.get("request_identity", {}).get("source_sha256")
+    development_revision = candidate.payload.get("request_identity", {}).get("source", {}).get("source_revision")
+    if (
+        not isinstance(source, Mapping)
+        or source.get("source_end") != holdout.get("outcome_tail_end")
+        or not isinstance(source.get("source_revision"), str)
+        or not source.get("source_revision")
+        or source.get("source_revision") == development_revision
+        or source.get("development_end") != RL1_DEVELOPMENT_END.isoformat()
+        or source.get("state_start") != RL1_HOLDOUT_START.isoformat()
+        or source.get("state_end") != RL1_HOLDOUT_END.isoformat()
+        or source.get("development_source_sha256") != development_source
+    ):
+        raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 source revision is invalid", stage="preflight")
+    try:
+        tail_end = date.fromisoformat(str(holdout.get("outcome_tail_end") or ""))
+    except ValueError as exc:
+        raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 outcome tail end is invalid", stage="preflight") from exc
+    if tail_end <= RL1_HOLDOUT_END:
+        raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 outcome tail does not extend holdout", stage="preflight")
+    for field in (
+        "state_date_set_sha256",
+        "outcome_tail_date_set_sha256",
+        "dataset_manifest_sha256",
+        "mapping_manifest_sha256",
+        "calendar_manifest_sha256",
+        "feature_formula_sha256",
+        "security_identity_manifest_sha256",
+        "provider_absence_manifest_sha256",
+        "c010_formal_evidence_sha256",
+    ):
+        _require_sha256(holdout.get(field), f"holdout_source.{field}", reason=REASON_RL1_INPUT)
+    expected_evaluation = canonical_sha256(
+        {
+            "contract_version": RL1_CONTRACT_VERSION,
+            "candidate_report_sha256": candidate.report["report_sha256"],
+            "state_date_set_sha256": holdout["state_date_set_sha256"],
+        }
+    )
+    if request.get("holdout_evaluation_id") != expected_evaluation:
+        raise _fail(REASON_RL1_INPUT, "rotation L1 holdout evaluation identity is invalid", stage="preflight")
+    outputs = request.get("artifact_outputs")
+    required_outputs = {
+        "acceptance_output",
+        "acceptance_failure_output",
+        "component_output",
+        "bundle_output",
+        "child_1_output",
+        "child_1_failure_output",
+        "child_2_output",
+        "child_2_failure_output",
+    }
+    if (
+        not isinstance(outputs, Mapping)
+        or set(outputs) != required_outputs
+        or any(not Path(str(value)).is_absolute() for value in outputs.values())
+        or len({str(value) for value in outputs.values()}) != len(outputs)
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 artifact output authority is invalid", stage="preflight")
+    return {"request_sha256": request_hash, "holdout_evaluation_id": expected_evaluation}
+
+
+def validate_rotation_l1_loaded_source(
+    inputs: Mapping[str, Any], request: Mapping[str, Any], candidate: RotationL1Candidate
+) -> tuple[tuple[date, ...], tuple[date, ...], dict[str, Any]]:
+    validate_rotation_l1_holdout_request(request, candidate)
+    state_dates, tail_dates = _rotation_l1_holdout_dates(inputs)
+    holdout = request["holdout_source"]
+    c010 = _rotation_l1_c010_identity(inputs)
+    actual = {
+        "state_trading_day_count": len(state_dates),
+        "state_date_set_sha256": canonical_sha256([day.isoformat() for day in state_dates]),
+        "outcome_tail_trading_day_count": len(tail_dates),
+        "outcome_tail_date_set_sha256": canonical_sha256([day.isoformat() for day in tail_dates]),
+        "dataset_manifest_sha256": canonical_sha256(inputs.get("dataset_manifest")),
+        "mapping_manifest_sha256": canonical_sha256(inputs.get("mapping_manifest")),
+        "calendar_manifest_sha256": canonical_sha256(inputs.get("dataset_manifest", {}).get("calendar_benchmark")),
+        "feature_formula_sha256": canonical_sha256(inputs.get("feature_definition")),
+        "security_identity_manifest_sha256": canonical_sha256(inputs.get("security_identity_manifest")),
+        "provider_absence_manifest_sha256": canonical_sha256(inputs.get("provider_absence_manifest")),
+        "c010_formal_evidence_sha256": c010["receipt_sha256"],
+    }
+    drift = {
+        key: {"expected": holdout.get(key), "actual": value}
+        for key, value in actual.items()
+        if holdout.get(key) != value
+    }
+    if drift or holdout.get("outcome_tail_end") != tail_dates[-1].isoformat():
+        raise _fail(
+            REASON_RL1_HOLDOUT_NOT_READY,
+            "rotation L1 holdout source identity drifted",
+            stage="source_preflight",
+            evidence={"drift": drift},
+        )
+    development_c010 = candidate.payload.get("c010_formal_evidence")
+    stable_fields = (
+        "l1_feature_definition_sha256",
+        "provider_absence_manifest_sha256",
+        "security_identity_manifest_sha256",
+    )
+    if not isinstance(development_c010, Mapping) or any(
+        c010.get(field) != development_c010.get(field) for field in stable_fields
+    ):
+        raise _fail(
+            REASON_RL1_INPUT, "rotation L1 C-010 policy identity differs from development", stage="source_preflight"
+        )
+    return state_dates, tail_dates, c010
+
+
+def _rotation_l1_market_states(
+    panel: pd.DataFrame,
+    calendar: Sequence[date],
+    state_dates: Sequence[date],
+    candidate: RotationL1Candidate,
+) -> tuple[dict[date, str], dict[str, Any]]:
+    market = candidate.market
+    preprocessor = _preprocessor(
+        market["preprocess"], expected_features=MARKET_FEATURES, expected_hash=str(market["preprocess_sha256"])
+    )
+    component = prepare_component(
+        panel,
+        component="market",
+        level="L2",
+        feature_names=MARKET_FEATURES,
+        calendar=calendar,
+        start=RL1_HOLDOUT_START,
+        end=RL1_HOLDOUT_END,
+        expected_days=len(state_dates),
+        expected_sector_count=131,
+        minimum_daily_count=118,
+        relative=False,
+        preprocessor=preprocessor,
+    )
+    centers = np.asarray(market.get("centers"), dtype="<f8")
+    mapping_raw = market.get("semantic_mapping")
+    if (
+        centers.shape != (2, len(MARKET_FEATURES))
+        or not np.isfinite(centers).all()
+        or market.get("centers_sha256") != sha256_bytes(centers.tobytes())
+        or not isinstance(mapping_raw, Mapping)
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 market authority is invalid", stage="preflight")
+    mapping = {int(key): str(value) for key, value in mapping_raw.items()}
+    if set(mapping) != {0, 1} or set(mapping.values()) != {"risk_on", "risk_off"}:
+        raise _fail(REASON_RL1_INPUT, "rotation L1 market semantic mapping is invalid", stage="preflight")
+    try:
+        paths = causal_states(component, centers, P2_3C_FIXED_JUMP_PENALTY)
+    except Exception as exc:
+        raise _fail(
+            REASON_RL1_METRIC,
+            "rotation L1 causal market inference failed",
+            stage="market_state",
+            evidence={"exception_type": type(exc).__name__},
+        ) from exc
+    output: dict[date, str] = {}
+    rows: list[list[str]] = []
+    for sequence, path in zip(component.sequences, paths, strict=True):
+        for day, raw_state in zip(sequence.dates, path, strict=True):
+            label = mapping.get(int(raw_state))
+            if label is None or day in output:
+                raise _fail(REASON_RL1_METRIC, "rotation L1 market state identity is invalid", stage="market_state")
+            output[day] = label
+            rows.append([day.isoformat(), label])
+    if set(output) != set(state_dates):
+        raise _fail(REASON_RL1_METRIC, "rotation L1 market state coverage is incomplete", stage="market_state")
+    body = {"state_rows": rows, "state_rows_sha256": canonical_sha256(rows), "fit_count": 0}
+    return output, {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _rotation_l1_level_states(
+    panel: pd.DataFrame,
+    calendar: Sequence[date],
+    market_states: Mapping[date, str],
+    candidate: RotationL1Candidate,
+) -> tuple[dict[tuple[str, date], float], dict[tuple[str, date], str], dict[str, Any]]:
+    authority = candidate.rotation_l1
+    preprocessor = _preprocessor(
+        authority["preprocess"], expected_features=RELATIVE_FEATURES, expected_hash=str(authority["preprocess_sha256"])
+    )
+    component = prepare_component(
+        panel,
+        component="rotation_L1",
+        level="L1",
+        feature_names=RELATIVE_FEATURES,
+        calendar=calendar,
+        start=RL1_HOLDOUT_START,
+        end=RL1_HOLDOUT_END,
+        expected_days=len(market_states),
+        expected_sector_count=RL1_CANONICAL_SECTOR_COUNT,
+        minimum_daily_count=RL1_MINIMUM_DAILY_COUNT,
+        relative=True,
+        preprocessor=preprocessor,
+    )
+    conditioned = _condition_component(component, market_states, fold="new-holdout", phase="holdout")
+    fit = _ridge_fit(authority)
+    scores, score_receipt = predict_scores(conditioned.component, fit)
+    states, state_receipt = project_daily_states(scores, level="L1", minimum_daily_count=RL1_MINIMUM_DAILY_COUNT)
+    if any(not math.isfinite(value) for value in scores.values()):
+        raise _fail(REASON_RL1_METRIC, "rotation L1 score is non-finite", stage="score")
+    body = {
+        "canonical_sector_count": len(component.canonical_codes),
+        "canonical_sector_sha256": canonical_sha256(list(component.canonical_codes)),
+        "conditioned_receipt_sha256": conditioned.receipt["receipt_sha256"],
+        "score_receipt": score_receipt,
+        "state_receipt": state_receipt,
+        "unavailable_items": list(component.unavailable_items),
+        "fit_count": 0,
+        "selection_performed": False,
+    }
+    return scores, states, {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _rotation_l1_outcomes(
+    panel: pd.DataFrame,
+    benchmark: Mapping[date, float],
+    calendar: Sequence[date],
+    state_dates: Sequence[date],
+) -> dict[tuple[str, date], float]:
+    returns = _panel_returns(panel)
+    positions = {day: index for index, day in enumerate(calendar)}
+    codes = sorted({code for code, _ in returns})
+    result: dict[tuple[str, date], float] = {}
+    for day in state_dates:
+        future_dates = tuple(calendar[positions[day] + 1 : positions[day] + 1 + PRIMARY_HORIZON])
+        if len(future_dates) != PRIMARY_HORIZON or any(next_day not in benchmark for next_day in future_dates):
+            continue
+        benchmark_value = _future_cumulative([benchmark[next_day] for next_day in future_dates])
+        raw: dict[str, float] = {}
+        for code in codes:
+            values = [returns.get((code, next_day)) for next_day in future_dates]
+            if any(value is None for value in values):
+                continue
+            raw[code] = _future_cumulative([float(value) for value in values]) - benchmark_value
+        if raw:
+            center = math.fsum(raw.values()) / len(raw)
+            result.update({(code, day): value - center for code, value in raw.items()})
+    return result
+
+
+def rotation_l1_product_metrics(
+    scores: Mapping[tuple[str, date], float],
+    states: Mapping[tuple[str, date], str],
+    outcomes: Mapping[tuple[str, date], float],
+    state_dates: Sequence[date],
+) -> dict[str, Any]:
+    ic_rows: list[list[Any]] = []
+    spread_rows: list[list[Any]] = []
+    unavailable: list[dict[str, Any]] = []
+    date_authority = set(state_dates)
+    if any(day not in date_authority for _code, day in (*scores, *states, *outcomes)):
+        raise _fail(REASON_RL1_METRIC, "rotation L1 metric input contains an out-of-window identity", stage="metric")
+    allowed_states = {"fading", "neutral", "trending"}
+    for day in state_dates:
+        score_codes = {code for code, score_day in scores if score_day == day}
+        state_codes = {code for code, state_day in states if state_day == day}
+        outcome_codes = {code for code, outcome_day in outcomes if outcome_day == day}
+        if score_codes != state_codes or score_codes != outcome_codes:
+            unavailable.append(
+                {
+                    "trade_date": day.isoformat(),
+                    "reason_code": REASON_RL1_METRIC,
+                    "score_count": len(score_codes),
+                    "state_count": len(state_codes),
+                    "outcome_count": len(outcome_codes),
+                }
+            )
+            continue
+        observations = sorted(
+            (code, float(scores[(code, day)]), float(outcomes[(code, day)]), states[(code, day)])
+            for code in score_codes
+        )
+        if any(
+            not math.isfinite(score) or not math.isfinite(outcome) or state not in allowed_states
+            for _code, score, outcome, state in observations
+        ):
+            unavailable.append({"trade_date": day.isoformat(), "reason_code": REASON_RL1_METRIC})
+            continue
+        ic = _spearman([item[1] for item in observations], [item[2] for item in observations])
+        trending = [item[2] for item in observations if item[3] == "trending"]
+        fading = [item[2] for item in observations if item[3] == "fading"]
+        if ic is None or len(trending) < 5 or len(fading) < 5:
+            unavailable.append({"trade_date": day.isoformat(), "reason_code": REASON_RL1_METRIC})
+            continue
+        spread = math.fsum(trending) / len(trending) - math.fsum(fading) / len(fading)
+        if not math.isfinite(spread):
+            unavailable.append({"trade_date": day.isoformat(), "reason_code": REASON_RL1_METRIC})
+            continue
+        ic_rows.append([day.isoformat(), ic])
+        spread_rows.append([day.isoformat(), spread])
+    eligible = list(state_dates)
+    required = math.ceil(0.80 * len(eligible))
+    ic_nw = newey_west_t([float(row[1]) for row in ic_rows], lag=RL1_NEWEY_WEST_LAG)
+    spread_nw = newey_west_t([float(row[1]) for row in spread_rows], lag=RL1_NEWEY_WEST_LAG)
+    quarters: list[dict[str, Any]] = []
+    for year, quarter in ((2026, 2), (2026, 3)):
+        quarter_dates = [day for day in eligible if day.year == year and (day.month - 1) // 3 + 1 == quarter]
+        date_set = set(quarter_dates)
+        ic_values = [float(row[1]) for row in ic_rows if date.fromisoformat(str(row[0])) in date_set]
+        spread_values = [float(row[1]) for row in spread_rows if date.fromisoformat(str(row[0])) in date_set]
+        quarter_required = math.ceil(0.80 * len(quarter_dates))
+        quarters.append(
+            {
+                "quarter": f"{year}-Q{quarter}",
+                "eligible_date_count": len(quarter_dates),
+                "required_date_count": quarter_required,
+                "rank_ic_available_date_count": len(ic_values),
+                "spread_available_date_count": len(spread_values),
+                "mean_rank_ic": math.fsum(ic_values) / len(ic_values) if ic_values else None,
+                "mean_spread": math.fsum(spread_values) / len(spread_values) if spread_values else None,
+                "coverage_passed": bool(quarter_dates)
+                and len(ic_values) >= quarter_required
+                and len(spread_values) >= quarter_required,
+            }
+        )
+    mean_ic = math.fsum(float(row[1]) for row in ic_rows) / len(ic_rows) if ic_rows else None
+    mean_spread = math.fsum(float(row[1]) for row in spread_rows) / len(spread_rows) if spread_rows else None
+    passed = bool(
+        eligible
+        and len(ic_rows) >= required
+        and len(spread_rows) >= required
+        and mean_ic is not None
+        and mean_ic >= RL1_MEDIAN_RANK_IC_MINIMUM
+        and mean_spread is not None
+        and mean_spread >= RL1_MEDIAN_SPREAD_MINIMUM
+        and ic_nw.get("metric_valid") is True
+        and float(ic_nw["t_stat"]) >= RL1_NEWEY_WEST_T_MINIMUM
+        and spread_nw.get("metric_valid") is True
+        and float(spread_nw["t_stat"]) >= RL1_NEWEY_WEST_T_MINIMUM
+        and all(
+            row["coverage_passed"] is True
+            and row["mean_rank_ic"] is not None
+            and row["mean_rank_ic"] > 0.0
+            and row["mean_spread"] is not None
+            and row["mean_spread"] > 0.0
+            for row in quarters
+        )
+    )
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_product_metrics_v1",
+        "eligible_date_count": len(eligible),
+        "required_date_count": required,
+        "daily_rank_ic": ic_rows,
+        "daily_spread": spread_rows,
+        "mean_rank_ic": mean_ic,
+        "mean_spread": mean_spread,
+        "rank_ic_newey_west": ic_nw,
+        "spread_newey_west": spread_nw,
+        "quarter_metrics": quarters,
+        "unavailable": unavailable,
+        "product_metrics_passed": passed,
+        "reason_code": None if passed else REASON_RL1_METRIC,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def rotation_l1_coverage(
+    *,
+    state_dates: Sequence[date],
+    canonical_codes: Sequence[str],
+    prediction_available: set[tuple[str, date]],
+    outcome_available: set[tuple[str, date]],
+    product_metrics_passed: bool,
+    c010_identity: Mapping[str, Any],
+) -> dict[str, Any]:
+    raw_codes = tuple(str(code) for code in canonical_codes)
+    codes = tuple(sorted(raw_codes))
+    dates = tuple(state_dates)
+    if (
+        len(codes) != RL1_CANONICAL_SECTOR_COUNT
+        or len(set(codes)) != len(codes)
+        or not dates
+        or dates != tuple(sorted(set(dates)))
+    ):
+        raise _fail(REASON_RL1_COVERAGE, "rotation L1 canonical denominator is not 31", stage="coverage")
+    daily = [
+        {
+            "trade_date": day.isoformat(),
+            "available_count": sum((code, day) in prediction_available for code in codes),
+            "denominator": RL1_CANONICAL_SECTOR_COUNT,
+        }
+        for day in dates
+    ]
+    sector = [
+        {
+            "sector_code": code,
+            "available_date_count": (count := sum((code, day) in prediction_available for day in dates)),
+            "date_denominator": len(dates),
+            "availability_ratio": count / len(dates),
+            "minimum_passed": count / len(dates) >= RL1_SECTOR_COVERAGE_RATIO,
+        }
+        for code in codes
+    ]
+    full = all(row["available_count"] == RL1_CANONICAL_SECTOR_COUNT for row in daily)
+    daily_pass_count = sum(row["available_count"] >= RL1_MINIMUM_DAILY_COUNT for row in daily)
+    coverage_available = bool(
+        dates
+        and daily_pass_count / len(dates) >= RL1_DAILY_COVERAGE_RATIO
+        and all(row["minimum_passed"] for row in sector)
+    )
+    coverage_status = (
+        "FULL_COVERAGE" if full else "COVERAGE_AVAILABLE" if coverage_available else "INSUFFICIENT_COVERAGE"
+    )
+    bundle_status = "CAPABILITY_AVAILABLE" if product_metrics_passed and coverage_available else "NOT_AVAILABLE"
+    universe = {(code, day) for code in codes for day in dates}
+    invalid_prediction = sorted(prediction_available - universe, key=lambda item: (item[1], item[0]))
+    invalid_outcome = sorted(outcome_available - universe, key=lambda item: (item[1], item[0]))
+    if invalid_prediction or invalid_outcome:
+        raise _fail(REASON_RL1_COVERAGE, "rotation L1 availability contains non-canonical identities", stage="coverage")
+    prediction_only = sorted(prediction_available - outcome_available, key=lambda item: (item[1], item[0]))
+    outcome_only = sorted(outcome_available - prediction_available, key=lambda item: (item[1], item[0]))
+    both_unavailable = sorted(universe - prediction_available - outcome_available, key=lambda item: (item[1], item[0]))
+
+    def identity_rows(values: Sequence[tuple[str, date]]) -> list[list[str]]:
+        return [[day.isoformat(), code] for code, day in values]
+
+    prediction_only_rows = identity_rows(prediction_only)
+    outcome_only_rows = identity_rows(outcome_only)
+    both_unavailable_rows = identity_rows(both_unavailable)
+    body = {
+        "coverage_status": coverage_status,
+        "bundle_status": bundle_status,
+        "product_metrics_passed": product_metrics_passed,
+        "daily": daily,
+        "daily_pass_count": daily_pass_count,
+        "daily_denominator": len(dates),
+        "daily_coverage_ratio": daily_pass_count / len(dates),
+        "sector": sector,
+        "prediction_only_count": len(prediction_only_rows),
+        "prediction_only_sha256": canonical_sha256(prediction_only_rows),
+        "outcome_only_count": len(outcome_only_rows),
+        "outcome_only_sha256": canonical_sha256(outcome_only_rows),
+        "both_unavailable_count": len(both_unavailable_rows),
+        "both_unavailable_sha256": canonical_sha256(both_unavailable_rows),
+        "abstention_count": len(universe - prediction_available),
+        "abstention_denominator": len(universe),
+        "abstention_rate": len(universe - prediction_available) / len(universe) if universe else None,
+        "c010_formal_evidence": dict(c010_identity),
+        "c010_identity_match": True,
+        "reason_code": (
+            None
+            if bundle_status == "CAPABILITY_AVAILABLE"
+            else REASON_RL1_METRIC
+            if not product_metrics_passed
+            else REASON_RL1_COVERAGE
+        ),
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def evaluate_rotation_l1_child(
+    inputs: Mapping[str, Any],
+    request: Mapping[str, Any],
+    candidate: RotationL1Candidate,
+    *,
+    process_index: int,
+    producer_commit: str,
+) -> dict[str, Any]:
+    if process_index not in (1, 2):
+        raise _fail(REASON_RL1_REPRODUCIBILITY, "rotation L1 child index is invalid", stage="preflight")
+    state_dates, tail_dates, c010 = validate_rotation_l1_loaded_source(inputs, request, candidate)
+    calendar = tuple(inputs["trading_dates"])
+    market_states, market_receipt = _rotation_l1_market_states(inputs["l2_panel"], calendar, state_dates, candidate)
+    scores, states, state_receipt = _rotation_l1_level_states(inputs["panel"], calendar, market_states, candidate)
+    outcomes = _rotation_l1_outcomes(
+        inputs["panel"], _benchmark_returns(inputs["dataset_manifest"]), calendar, state_dates
+    )
+    metrics = rotation_l1_product_metrics(scores, states, outcomes, state_dates)
+    canonical_codes = tuple(sorted({code for code, _ in scores}))
+    coverage = rotation_l1_coverage(
+        state_dates=state_dates,
+        canonical_codes=canonical_codes,
+        prediction_available=set(states),
+        outcome_available=set(outcomes),
+        product_metrics_passed=metrics["product_metrics_passed"] is True,
+        c010_identity=c010,
+    )
+    payload = {
+        "candidate_report_sha256": candidate.report["report_sha256"],
+        "holdout_evaluation_id": request["holdout_evaluation_id"],
+        "holdout_source_sha256": canonical_sha256(request["holdout_source"]),
+        "state_date_set_sha256": canonical_sha256([day.isoformat() for day in state_dates]),
+        "outcome_tail_date_set_sha256": canonical_sha256([day.isoformat() for day in tail_dates]),
+        "market_receipt": market_receipt,
+        "rotation_l1_state": state_receipt,
+        "rotation_l1_metrics": metrics,
+        "coverage": coverage,
+        "runtime_versions": runtime_versions(),
+        "fit_count": 0,
+        "selection_performed": False,
+        "parameter_search_performed": False,
+        "database_write": False,
+        "runtime_action": False,
+    }
+    body = {
+        "schema_version": RL1_HOLDOUT_CHILD_SCHEMA_VERSION,
+        "contract_version": RL1_CONTRACT_VERSION,
+        "algorithm_version": RL1_ALGORITHM_VERSION,
+        "status": "child_complete",
+        "process_index": process_index,
+        "producer_commit": producer_commit,
+        "holdout_accessed": True,
+        "product_acceptance_performed": True,
+        "reproducibility_payload": payload,
+        "reproducibility_payload_sha256": canonical_sha256(payload),
+        "model_write": False,
+        "bundle_write": False,
+        "ready_write": False,
+    }
+    return {**body, "report_sha256": canonical_sha256(body)}
+
+
+def close_rotation_l1_children(
+    first: Mapping[str, Any], second: Mapping[str, Any], *, request: Mapping[str, Any], producer_commit: str
+) -> dict[str, Any]:
+    holdout_source = request.get("holdout_source")
+    if not isinstance(holdout_source, Mapping):
+        raise _fail(REASON_RL1_REPRODUCIBILITY, "rotation L1 request source is invalid", stage="closure")
+    expected_child_keys = {
+        "schema_version",
+        "contract_version",
+        "algorithm_version",
+        "status",
+        "process_index",
+        "producer_commit",
+        "holdout_accessed",
+        "product_acceptance_performed",
+        "reproducibility_payload",
+        "reproducibility_payload_sha256",
+        "model_write",
+        "bundle_write",
+        "ready_write",
+        "report_sha256",
+    }
+    expected_payload_keys = {
+        "candidate_report_sha256",
+        "holdout_evaluation_id",
+        "holdout_source_sha256",
+        "state_date_set_sha256",
+        "outcome_tail_date_set_sha256",
+        "market_receipt",
+        "rotation_l1_state",
+        "rotation_l1_metrics",
+        "coverage",
+        "runtime_versions",
+        "fit_count",
+        "selection_performed",
+        "parameter_search_performed",
+        "database_write",
+        "runtime_action",
+    }
+    for index, child in enumerate((first, second), start=1):
+        if (
+            set(child) != expected_child_keys
+            or child.get("schema_version") != RL1_HOLDOUT_CHILD_SCHEMA_VERSION
+            or child.get("contract_version") != RL1_CONTRACT_VERSION
+            or child.get("algorithm_version") != RL1_ALGORITHM_VERSION
+            or child.get("status") != "child_complete"
+            or child.get("process_index") != index
+            or child.get("producer_commit") != producer_commit
+            or child.get("holdout_accessed") is not True
+            or child.get("product_acceptance_performed") is not True
+            or child.get("model_write") is not False
+            or child.get("bundle_write") is not False
+            or child.get("ready_write") is not False
+        ):
+            raise _fail(REASON_RL1_REPRODUCIBILITY, "rotation L1 child identity is invalid", stage="closure")
+        report_hash = _require_sha256(
+            child.get("report_sha256"), "child.report_sha256", reason=REASON_RL1_REPRODUCIBILITY
+        )
+        payload = child.get("reproducibility_payload")
+        if (
+            canonical_sha256({key: value for key, value in child.items() if key != "report_sha256"}) != report_hash
+            or not isinstance(payload, Mapping)
+            or set(payload) != expected_payload_keys
+            or canonical_sha256(payload) != child.get("reproducibility_payload_sha256")
+            or payload.get("candidate_report_sha256") != request.get("candidate_report_sha256")
+            or payload.get("holdout_evaluation_id") != request.get("holdout_evaluation_id")
+            or payload.get("holdout_source_sha256") != canonical_sha256(holdout_source)
+            or payload.get("state_date_set_sha256") != holdout_source.get("state_date_set_sha256")
+            or payload.get("outcome_tail_date_set_sha256") != holdout_source.get("outcome_tail_date_set_sha256")
+            or payload.get("fit_count") != 0
+            or payload.get("selection_performed") is not False
+            or payload.get("parameter_search_performed") is not False
+            or payload.get("database_write") is not False
+            or payload.get("runtime_action") is not False
+            or not isinstance(payload.get("runtime_versions"), Mapping)
+        ):
+            raise _fail(REASON_RL1_REPRODUCIBILITY, "rotation L1 child payload is invalid", stage="closure")
+        for field in ("market_receipt", "rotation_l1_state", "rotation_l1_metrics", "coverage"):
+            receipt = payload.get(field)
+            if not isinstance(receipt, Mapping):
+                raise _fail(REASON_RL1_REPRODUCIBILITY, f"rotation L1 {field} is invalid", stage="closure")
+            _require_canonical_receipt(receipt, label=field, reason=REASON_RL1_REPRODUCIBILITY)
+        metrics = payload["rotation_l1_metrics"]
+        coverage = payload["coverage"]
+        if (
+            not isinstance(metrics.get("product_metrics_passed"), bool)
+            or coverage.get("product_metrics_passed") != metrics.get("product_metrics_passed")
+            or coverage.get("coverage_status") not in {"FULL_COVERAGE", "COVERAGE_AVAILABLE", "INSUFFICIENT_COVERAGE"}
+            or coverage.get("bundle_status") not in {"CAPABILITY_AVAILABLE", "NOT_AVAILABLE"}
+            or (
+                coverage.get("bundle_status") == "CAPABILITY_AVAILABLE"
+                and (
+                    metrics.get("product_metrics_passed") is not True
+                    or coverage.get("coverage_status") == "INSUFFICIENT_COVERAGE"
+                )
+            )
+            or (
+                coverage.get("bundle_status") == "NOT_AVAILABLE"
+                and metrics.get("product_metrics_passed") is True
+                and coverage.get("coverage_status") != "INSUFFICIENT_COVERAGE"
+            )
+        ):
+            raise _fail(REASON_RL1_REPRODUCIBILITY, "rotation L1 metric/coverage authority is invalid", stage="closure")
+    if first.get("reproducibility_payload_sha256") != second.get("reproducibility_payload_sha256") or first.get(
+        "reproducibility_payload"
+    ) != second.get("reproducibility_payload"):
+        raise _fail(REASON_RL1_REPRODUCIBILITY, "rotation L1 child payloads differ", stage="closure")
+    payload = dict(first["reproducibility_payload"])
+    coverage = payload["coverage"]
+    status = str(coverage["bundle_status"])
+    core = {
+        "schema_version": RL1_HOLDOUT_ACCEPTANCE_SCHEMA_VERSION,
+        "contract_version": RL1_CONTRACT_VERSION,
+        "algorithm_version": RL1_ALGORITHM_VERSION,
+        "status": status,
+        "producer_commit": producer_commit,
+        "candidate_report_sha256": payload["candidate_report_sha256"],
+        "holdout_evaluation_id": payload["holdout_evaluation_id"],
+        "holdout_source_sha256": payload["holdout_source_sha256"],
+        "state_date_set_sha256": payload["state_date_set_sha256"],
+        "outcome_tail_date_set_sha256": payload["outcome_tail_date_set_sha256"],
+        "child_report_sha256s": [first["report_sha256"], second["report_sha256"]],
+        "reproducibility_payload_sha256": first["reproducibility_payload_sha256"],
+        "rotation_l1_metrics": payload["rotation_l1_metrics"],
+        "coverage": coverage,
+        "capabilities": {
+            "rotation_L1": "AVAILABLE" if status == "CAPABILITY_AVAILABLE" else "NOT_AVAILABLE",
+            "rotation_L2": "NOT_AVAILABLE",
+            "risk_L1": "NOT_AVAILABLE",
+            "risk_L2": "NOT_AVAILABLE",
+        },
+        "ready": False,
+        "fit_count": 0,
+        "selection_performed": False,
+        "parameter_search_performed": False,
+        "holdout_accessed": True,
+        "product_acceptance_performed": True,
+        "component_write_required": status == "CAPABILITY_AVAILABLE",
+        "bundle_write_required": status == "CAPABILITY_AVAILABLE",
+        "ready_write_required": False,
+        "database_write": False,
+        "runtime_action": False,
+    }
+    return {**core, "acceptance_core_sha256": canonical_sha256(core)}
+
+
+def rotation_l1_component_artifact(acceptance: Mapping[str, Any], candidate: RotationL1Candidate) -> dict[str, Any]:
+    if acceptance.get("status") != "CAPABILITY_AVAILABLE":
+        raise _fail(REASON_RL1_COVERAGE, "NOT_AVAILABLE cannot write rotation L1 component", stage="writer")
+    body = {
+        "schema_version": RL1_COMPONENT_SCHEMA_VERSION,
+        "algorithm_version": RL1_ALGORITHM_VERSION,
+        "candidate_report_sha256": candidate.report["report_sha256"],
+        "acceptance_core_sha256": acceptance["acceptance_core_sha256"],
+        "component": "rotation_L1",
+        "availability": "AVAILABLE",
+        "market": candidate.market,
+        "rotation_L1": candidate.rotation_l1,
+        "state_projection": {
+            "method": "daily_cross_section_top_bottom_fraction",
+            "state_fraction": STATE_FRACTION,
+            "minimum_extreme_count": MINIMUM_EXTREME_COUNT,
+            "tie_tolerance": STATE_TIE_TOLERANCE,
+            "semantic_order": ["fading", "neutral", "trending"],
+            "missing_policy": "typed_unavailable_no_neutral_fill",
+        },
+        "ready": False,
+        "database_write": False,
+        "runtime_action": False,
+    }
+    return {**body, "component_sha256": canonical_sha256(body)}
+
+
+def rotation_l1_capability_bundle(acceptance: Mapping[str, Any], component: Mapping[str, Any]) -> dict[str, Any]:
+    if acceptance.get("status") != "CAPABILITY_AVAILABLE" or component.get("availability") != "AVAILABLE":
+        raise _fail(REASON_RL1_COVERAGE, "rotation L1 capability bundle is not available", stage="writer")
+    body = {
+        "schema_version": RL1_CAPABILITY_BUNDLE_SCHEMA_VERSION,
+        "algorithm_version": RL1_ALGORITHM_VERSION,
+        "acceptance_core_sha256": acceptance["acceptance_core_sha256"],
+        "component_sha256": component["component_sha256"],
+        "status": "CAPABILITY_AVAILABLE",
+        "capabilities": {
+            "rotation_L1": {"status": "AVAILABLE", "component_sha256": component["component_sha256"]},
+            "rotation_L2": {"status": "NOT_AVAILABLE", "reason_code": "hmm_risk_rotation_l2_not_implemented"},
+            "risk_L1": {"status": "NOT_AVAILABLE", "reason_code": "hmm_risk_risk_l1_not_implemented"},
+            "risk_L2": {"status": "NOT_AVAILABLE", "reason_code": "hmm_risk_risk_l2_not_implemented"},
+        },
+        "coverage": acceptance["coverage"],
+        "ready": False,
+        "database_write": False,
+        "runtime_action": False,
+    }
+    return {**body, "bundle_sha256": canonical_sha256(body)}
+
+
+def finalize_rotation_l1_acceptance(
+    draft: Mapping[str, Any], *, component_sha256: str | None, bundle_sha256: str | None
+) -> dict[str, Any]:
+    required = draft.get("status") == "CAPABILITY_AVAILABLE"
+    if required != (component_sha256 is not None) or required != (bundle_sha256 is not None):
+        raise _fail(REASON_RL1_READBACK, "rotation L1 artifact closure is incomplete", stage="writer")
+    core_hash = _require_sha256(
+        draft.get("acceptance_core_sha256"), "acceptance_core_sha256", reason=REASON_RL1_READBACK
+    )
+    core = {key: value for key, value in draft.items() if key != "acceptance_core_sha256"}
+    if canonical_sha256(core) != core_hash:
+        raise _fail(REASON_RL1_READBACK, "rotation L1 acceptance core hash is invalid", stage="writer")
+    body = {
+        **core,
+        "acceptance_core_sha256": core_hash,
+        "finalized": True,
+        "component_write": component_sha256 is not None,
+        "component_sha256": component_sha256,
+        "bundle_write": bundle_sha256 is not None,
+        "bundle_sha256": bundle_sha256,
+        "ready_write": False,
+        "ready_sha256": None,
+    }
+    return {**body, "report_sha256": canonical_sha256(body)}
+
+
+def validate_rotation_l1_artifact_bundle(
+    acceptance: Mapping[str, Any], *, component: Mapping[str, Any] | None, bundle: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    report_hash = _require_sha256(
+        acceptance.get("report_sha256"), "acceptance.report_sha256", reason=REASON_RL1_READBACK
+    )
+    if canonical_sha256({key: value for key, value in acceptance.items() if key != "report_sha256"}) != report_hash:
+        raise _fail(REASON_RL1_READBACK, "rotation L1 final acceptance hash is invalid", stage="writer")
+    required = acceptance.get("status") == "CAPABILITY_AVAILABLE"
+    expected_capabilities = {
+        "rotation_L1": "AVAILABLE" if required else "NOT_AVAILABLE",
+        "rotation_L2": "NOT_AVAILABLE",
+        "risk_L1": "NOT_AVAILABLE",
+        "risk_L2": "NOT_AVAILABLE",
+    }
+    if (
+        acceptance.get("schema_version") != RL1_HOLDOUT_ACCEPTANCE_SCHEMA_VERSION
+        or acceptance.get("contract_version") != RL1_CONTRACT_VERSION
+        or acceptance.get("algorithm_version") != RL1_ALGORITHM_VERSION
+        or acceptance.get("status") not in {"CAPABILITY_AVAILABLE", "NOT_AVAILABLE"}
+        or acceptance.get("finalized") is not True
+        or acceptance.get("ready") is not False
+        or acceptance.get("ready_write") is not False
+        or acceptance.get("ready_sha256") is not None
+        or acceptance.get("fit_count") != 0
+        or acceptance.get("selection_performed") is not False
+        or acceptance.get("parameter_search_performed") is not False
+        or acceptance.get("holdout_accessed") is not True
+        or acceptance.get("product_acceptance_performed") is not True
+        or acceptance.get("capabilities") != expected_capabilities
+        or acceptance.get("component_write") is not required
+        or acceptance.get("bundle_write") is not required
+        or acceptance.get("database_write") is not False
+        or acceptance.get("runtime_action") is not False
+        or (component is not None) is not required
+        or (bundle is not None) is not required
+    ):
+        raise _fail(REASON_RL1_READBACK, "rotation L1 final state is invalid", stage="writer")
+    if component is not None and bundle is not None:
+        component_hash = _require_sha256(
+            component.get("component_sha256"), "component.component_sha256", reason=REASON_RL1_READBACK
+        )
+        bundle_hash = _require_sha256(bundle.get("bundle_sha256"), "bundle.bundle_sha256", reason=REASON_RL1_READBACK)
+        if (
+            canonical_sha256({key: value for key, value in component.items() if key != "component_sha256"})
+            != component_hash
+            or canonical_sha256({key: value for key, value in bundle.items() if key != "bundle_sha256"}) != bundle_hash
+            or acceptance.get("component_sha256") != component_hash
+            or acceptance.get("bundle_sha256") != bundle_hash
+            or component.get("acceptance_core_sha256") != acceptance.get("acceptance_core_sha256")
+            or bundle.get("acceptance_core_sha256") != acceptance.get("acceptance_core_sha256")
+            or bundle.get("component_sha256") != component_hash
+            or component.get("schema_version") != RL1_COMPONENT_SCHEMA_VERSION
+            or component.get("algorithm_version") != RL1_ALGORITHM_VERSION
+            or component.get("candidate_report_sha256") != acceptance.get("candidate_report_sha256")
+            or component.get("component") != "rotation_L1"
+            or component.get("availability") != "AVAILABLE"
+            or component.get("ready") is not False
+            or component.get("database_write") is not False
+            or component.get("runtime_action") is not False
+            or bundle.get("schema_version") != RL1_CAPABILITY_BUNDLE_SCHEMA_VERSION
+            or bundle.get("algorithm_version") != RL1_ALGORITHM_VERSION
+            or bundle.get("status") != "CAPABILITY_AVAILABLE"
+            or bundle.get("coverage") != acceptance.get("coverage")
+            or bundle.get("capabilities")
+            != {
+                "rotation_L1": {"status": "AVAILABLE", "component_sha256": component_hash},
+                "rotation_L2": {
+                    "status": "NOT_AVAILABLE",
+                    "reason_code": "hmm_risk_rotation_l2_not_implemented",
+                },
+                "risk_L1": {"status": "NOT_AVAILABLE", "reason_code": "hmm_risk_risk_l1_not_implemented"},
+                "risk_L2": {"status": "NOT_AVAILABLE", "reason_code": "hmm_risk_risk_l2_not_implemented"},
+            }
+            or bundle.get("ready") is not False
+            or bundle.get("database_write") is not False
+            or bundle.get("runtime_action") is not False
+        ):
+            raise _fail(REASON_RL1_READBACK, "rotation L1 component/bundle closure is invalid", stage="writer")
+    body = {
+        "acceptance_report_sha256": report_hash,
+        "component_sha256": acceptance.get("component_sha256"),
+        "bundle_sha256": acceptance.get("bundle_sha256"),
+        "ready_sha256": None,
+        "status": acceptance["status"],
+        "bundle_valid": True,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def rotation_l1_failure_receipt(
+    *,
+    request: Mapping[str, Any],
+    producer_commit: str,
+    error: Exception,
+    holdout_accessed: bool | None,
+    product_acceptance_performed: bool | None = False,
+    component_sha256: str | None = None,
+    bundle_sha256: str | None = None,
+    process_index: int | None = None,
+) -> dict[str, Any]:
+    if isinstance(error, HoldoutAcceptanceError):
+        reason = error.reason_code if error.reason_code.startswith("hmm_risk_rotation_l1_") else REASON_RL1_UNEXPECTED
+        stage = error.stage
+        evidence = {"source_reason_code": error.reason_code, **error.evidence}
+    else:
+        reason = REASON_RL1_UNEXPECTED
+        stage = "unknown"
+        evidence = {"exception_type": type(error).__name__, "error_message": str(error)}
+    evidence.setdefault("exception_type", type(error).__name__)
+    evidence.setdefault("error_message", str(error))
+    body = {
+        "schema_version": RL1_HOLDOUT_ACCEPTANCE_SCHEMA_VERSION,
+        "contract_version": RL1_CONTRACT_VERSION,
+        "algorithm_version": RL1_ALGORITHM_VERSION,
+        "status": "NOT_AVAILABLE",
+        "producer_commit": producer_commit,
+        "holdout_evaluation_id": request.get("holdout_evaluation_id"),
+        "failure_reason_code": reason,
+        "failure_stage": stage,
+        "failure_evidence": evidence,
+        "holdout_accessed": holdout_accessed,
+        "product_acceptance_performed": product_acceptance_performed,
+        "fit_count": 0,
+        "selection_performed": False,
+        "parameter_search_performed": False,
+        "component_write": component_sha256 is not None,
+        "component_sha256": component_sha256,
+        "bundle_write": bundle_sha256 is not None,
+        "bundle_sha256": bundle_sha256,
+        "ready_write": False,
+        "ready_sha256": None,
+        "database_write": False,
+        "runtime_action": False,
+        "process_index": process_index,
     }
     return {**body, "report_sha256": canonical_sha256(body)}
