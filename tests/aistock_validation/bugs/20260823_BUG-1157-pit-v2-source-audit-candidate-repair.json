@@ -27,7 +27,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1157",
-  "closed_at": null,
+  "closed_at": "2026-08-23T20:22:02.806050Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -61,8 +61,8 @@
   },
   "first_seen_at": "2026-08-23T06:12:20.508346Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4fb896744e1739bd92a571614ff9e4a5e8fdb591",
+  "fixed_at": "2026-08-23T18:13:22Z",
   "github_issue_number": 3700,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3700",
   "last_seen_at": "2026-08-23T06:12:20.508346Z",
@@ -70,6 +70,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3706",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -92,8 +93,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "not_required",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1157/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1157",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "1942f6b91fbd7ed2b1db05b209a4d485169c827d0a184acb9b4cdfb5367ff3fd",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "4fb896744e1739bd92a571614ff9e4a5e8fdb591",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-23T20:21:06.815335Z",
+      "mode": "read_only",
+      "observed_identity": "4fb896744e1739bd92a571614ff9e4a5e8fdb591",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "728a26cd8df41b587df28f43f756c2d2e0796faa8f23958eb591320257decfd5",
+      "receipt_sha256": "c3a678f7c8ba186eb46a6f0cf3392c9faddcc1ce70d3e92b7cdfe113dc200aa5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "970d3920e5b8fb23edcbd3853dc0ded2c4203156cf32a5dc88275942dd0bb937",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -103,7 +127,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -112,6 +136,10 @@
     "fingerprint": "d27cfd80acead55dd899b428",
     "source_event_id": "FE-20260823-d27cfd80acea"
   },
+  "validation_evidence": [
+    "pytest targeted BUG-1157 matrix -> 128 passed",
+    "PR #3706 CI -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
