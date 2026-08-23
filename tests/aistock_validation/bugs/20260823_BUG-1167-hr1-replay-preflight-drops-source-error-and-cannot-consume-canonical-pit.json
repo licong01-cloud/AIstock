@@ -2,7 +2,12 @@
   "actual": "C-012-RL1-HR1 formal request preparation stops at 0 fits. The typed failure receipt preserves only StateModelSetError type and drops the actionable message requested PIT universe state is missing. The CLI source-authority parser only accepts the deprecated C-010 source object, while current DEV authority is aistock_equity_pit_canonical_v2/shsz_a_252td_st_delist_asof_v2. Fix must preserve exact HR1 model/threshold/output contracts, accept and verify the tracked canonical PIT v2 authority without auto-selecting latest state, persist the underlying safe error message, add direct tests, and perform no fit/DB write/runtime action.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260823_BUG-1167-hr1-replay-preflight-drops-source-error-and-cannot-consume-canonical-pit.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
+    "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "backend/services/hmm_risk/stock_fact_repository.py",
+    "backend/tests/hmm_risk/test_stock_fact_repository.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1167",
@@ -20,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260823-2bbc7dc3839b",
       "timestamp": "2026-08-23T18:37:32.968240Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Expanded through the BUG-1167 fix workflow after canonical PIT v2 preflight exposed the same root cause in the formal stock-fact mapping reader; scope remains limited to the HR1 CLI/tests/design and direct hmm_risk repository/tests.",
+      "timestamp": "2026-08-23T19:17:33.473552Z"
     }
   ],
   "evidence_uris": [],
