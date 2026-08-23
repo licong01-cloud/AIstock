@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import subprocess
 from datetime import date, timedelta
@@ -1718,6 +1719,100 @@ def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
     assert request["source"]["source_end"] == "2026-03-31"
     assert request["expected_producer_commit"] == "a" * 40
     assert request["outputs"]["acceptance_core_path"].endswith("acceptance.core.json")
+
+
+def test_c012_rl1_source_authority_accepts_only_verified_canonical_pit_v2_profile(tmp_path: Path) -> None:
+    config = cli.ROOT / "configs/datasets/qe_backtest_monthly_v2.yaml"
+    receipt = {
+        "schema_version": "pit_v2_source_freeze_receipt_v2",
+        "profiles": {
+            "canonical_v2": {
+                "path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+                "file_sha256": hashlib.sha256(config.read_bytes()).hexdigest(),
+                "universe_key": "aistock_equity_pit_canonical_v2",
+                "rule_version": "shsz_a_252td_st_delist_asof_v2",
+                "declared_target_authority_status": "ACTIVE_CANONICAL",
+            }
+        },
+    }
+    path = tmp_path / "pit-v2-source.json"
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    source = cli._source_authority(path)
+    assert source["universe_key"] == "aistock_equity_pit_canonical_v2"
+    assert source["universe_rule_version"] == "shsz_a_252td_st_delist_asof_v2"
+    assert source["source_end"] == "2026-03-31"
+    assert source["security_identity_manifest_sha256"] == subject.canonical_sha256(
+        json.loads((cli.ROOT / source["security_identity_manifest_path"]).read_text(encoding="utf-8"))
+    )
+
+    drifted = json.loads(path.read_text(encoding="utf-8"))
+    drifted["profiles"]["canonical_v2"]["universe_key"] = "latest"
+    path.write_text(json.dumps(drifted), encoding="utf-8")
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        cli._source_authority(path)
+    assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+
+def test_c012_rl1_request_preflight_persists_safe_source_error_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = cli.ROOT / "configs/datasets/qe_backtest_monthly_v2.yaml"
+    receipt = {
+        "schema_version": "pit_v2_source_freeze_receipt_v2",
+        "profiles": {
+            "canonical_v2": {
+                "path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+                "file_sha256": hashlib.sha256(config.read_bytes()).hexdigest(),
+                "universe_key": "aistock_equity_pit_canonical_v2",
+                "rule_version": "shsz_a_252td_st_delist_asof_v2",
+                "declared_target_authority_status": "ACTIVE_CANONICAL",
+            }
+        },
+    }
+    source_path = tmp_path / "pit-v2-source.json"
+    source_path.write_text(json.dumps(receipt), encoding="utf-8")
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            cli.StateModelSetError("requested PIT universe state is missing")
+        ),
+    )
+    result = cli.main(
+        [
+            "--candidate-mode",
+            "c012-rl1",
+            "--prepare-request",
+            "--source-authority",
+            str(source_path),
+            "--request",
+            str(tmp_path / "request.json"),
+            "--output",
+            str(tmp_path / "acceptance.json"),
+            "--child-dir",
+            str(tmp_path / "children"),
+            "--acceptance-core-output",
+            str(tmp_path / "acceptance.core.json"),
+            "--model-output",
+            str(tmp_path / "rotation_l1.component.json"),
+            "--bundle-output",
+            str(tmp_path / "capability_bundle.json"),
+            "--db-env-prefix",
+            "UNIT",
+        ]
+    )
+    assert result == 1
+    failure = json.loads((tmp_path / "acceptance.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_stage"] == "source_preflight"
+    assert failure["failure_evidence"] == {
+        "exception_type": "StateModelSetError",
+        "error_message": "requested PIT universe state is missing",
+    }
+    assert failure["completed_fit_count"] == 0
+    assert failure["database_write"] is False
+    assert failure["runtime_action"] is False
 
 
 def test_c012_rl1_cli_finalization_failure_records_partial_artifact_writes(
