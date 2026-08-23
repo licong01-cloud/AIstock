@@ -19,7 +19,10 @@ from backend.services.advisory_model_first.meta_label_bundle import (
 )
 from backend.services.advisory_model_first.policy_contracts import AdvisoryPolicyCostV1
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
-from backend.tests.advisory_model_first.test_meta_label_contracts import _request
+from backend.tests.advisory_model_first.test_meta_label_contracts import (
+    _request,
+    _return_aware_request,
+)
 
 
 class _Booster:
@@ -48,16 +51,15 @@ def _cost_policy() -> AdvisoryPolicyCostV1:
     return AdvisoryPolicyCostV1(buy_cost_bps=3.0, sell_cost_bps=13.0)
 
 
-def _publish(tmp_path, resource):
+def _publish(tmp_path, resource, *, return_aware: bool = False):
     policy = tmp_path / "policy"
     policy.mkdir(exist_ok=True)
     shadow_policy = _shadow_policy()
     policy_bundle = tmp_path / "policy_datasets" / ("1" * 64)
     policy_bundle.mkdir(parents=True, exist_ok=True)
-    (policy_bundle / "shadow_policy.json").write_text(
-        json.dumps(shadow_policy), encoding="utf-8"
-    )
-    request = _request(
+    (policy_bundle / "shadow_policy.json").write_text(json.dumps(shadow_policy), encoding="utf-8")
+    request_factory = _return_aware_request if return_aware else _request
+    request = request_factory(
         policy_dataset_bundle_root=str(policy),
         output_root=str(tmp_path),
         shadow_policy_sha256=canonical_json_sha256(shadow_policy),
@@ -98,6 +100,14 @@ def _publish(tmp_path, resource):
         baseline_comparison={"selection": 1.0},
         training_log={"wall": resource},
         resource_report={"peak": resource},
+        reference_challenger_comparison=(
+            {
+                "schema_version": "advisory_meta_label_reference_comparison_v1",
+                "candidate_minus_reference_mean_primary_metric_bps": 1.25,
+            }
+            if return_aware
+            else None
+        ),
     )
 
 
@@ -112,6 +122,15 @@ def test_meta_label_bundle_identity_ignores_dynamic_resource_report(tmp_path) ->
         load_meta_label_bundle(path, expected_bundle_id=first_id, load_booster=False)
 
 
+def test_return_aware_bundle_freezes_training_objective_and_reference_receipt(tmp_path) -> None:
+    bundle_id, path, manifest = _publish(tmp_path, 1, return_aware=True)
+    assert manifest["bundle_id"] == bundle_id
+    assert manifest["training_objective"] == "OUTCOME_MAGNITUDE_WEIGHTED_BINARY_V1"
+    assert "reference_challenger_comparison.json" in manifest["identity_files"]
+    receipt = json.loads((path / "reference_challenger_comparison.json").read_text(encoding="utf-8"))
+    assert receipt["candidate_minus_reference_mean_primary_metric_bps"] == 1.25
+
+
 def test_meta_label_bundle_exact_request_reuse_and_hmm_jitter_are_deterministic(tmp_path) -> None:
     first_id, path, _ = _publish(tmp_path, 1)
     request = _request(
@@ -121,9 +140,7 @@ def test_meta_label_bundle_exact_request_reuse_and_hmm_jitter_are_deterministic(
         cost_policy_sha256=_cost_policy().policy_sha256,
     )
     assert find_meta_label_bundle_for_request(request)[0] == first_id
-    assert _stable_hmm_payload({"x": 0.5095992816185344}) == _stable_hmm_payload(
-        {"x": 0.509599281618536}
-    )
+    assert _stable_hmm_payload({"x": 0.5095992816185344}) == _stable_hmm_payload({"x": 0.509599281618536})
     assert _stable_hmm_payload({"final_log_likelihood_delta": 7.871711386542302e-05}) == {
         "final_log_likelihood_status": "NON_REGRESSING"
     }
@@ -228,9 +245,7 @@ def test_exact_meta_label_runtime_loader_rejects_bundle_root_symlink_escape(tmp_
     model_root = tmp_path / "model-root"
     model_root.mkdir()
     try:
-        (model_root / "meta_label_bundles").symlink_to(
-            outside / "meta_label_bundles", target_is_directory=True
-        )
+        (model_root / "meta_label_bundles").symlink_to(outside / "meta_label_bundles", target_is_directory=True)
     except OSError as exc:
         pytest.skip(f"directory symlinks unavailable: {type(exc).__name__}")
 
@@ -307,8 +322,7 @@ class _InspectingBooster:
 
 def test_meta_label_scorer_marks_unseen_category_missing_instead_of_silent_nan(tmp_path) -> None:
     (tmp_path / "feature_schema.json").write_text(
-        '{"trained_feature_names":["l2_code_id","l2_code_id__missing"],'
-        '"categorical_vocabulary":{"l2_code_id":[1,2]}}',
+        '{"trained_feature_names":["l2_code_id","l2_code_id__missing"],"categorical_vocabulary":{"l2_code_id":[1,2]}}',
         encoding="utf-8",
     )
     booster = _InspectingBooster()

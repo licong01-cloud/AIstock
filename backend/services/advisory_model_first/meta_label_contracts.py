@@ -10,6 +10,19 @@ from backend.services.strategy_package.runtime_variant import canonical_json_sha
 
 
 META_LABEL_SEEDS = (20260813, 20260817, 20260823)
+META_LABEL_REQUEST_V2 = "frozen_advisory_meta_label_training_request_v2"
+META_LABEL_REQUEST_V3 = "frozen_advisory_meta_label_training_request_v3"
+
+
+class MetaLabelOutcomeWeightingV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["advisory_meta_label_outcome_weighting_v1"] = "advisory_meta_label_outcome_weighting_v1"
+    mode: Literal["ABS_NET_EXCESS_TRAIN_MEDIAN_V1"] = "ABS_NET_EXCESS_TRAIN_MEDIAN_V1"
+    scale_statistic: Literal["MEDIAN_ABSOLUTE_NET_EXCESS_BPS"] = "MEDIAN_ABSOLUTE_NET_EXCESS_BPS"
+    base_weight: Literal[1.0] = 1.0
+    relative_cap: Literal[4.0] = 4.0
+    normalization: Literal["TRAIN_MEAN_ONE"] = "TRAIN_MEAN_ONE"
 
 
 class MetaLabelFamilySpecV1(BaseModel):
@@ -39,9 +52,10 @@ class MetaLabelFamilySpecV1(BaseModel):
 class FrozenAdvisoryMetaLabelTrainingRequestV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["frozen_advisory_meta_label_training_request_v2"] = (
-        "frozen_advisory_meta_label_training_request_v2"
-    )
+    schema_version: Literal[
+        "frozen_advisory_meta_label_training_request_v2",
+        "frozen_advisory_meta_label_training_request_v3",
+    ] = META_LABEL_REQUEST_V2
     request_id: str
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at: str
@@ -73,6 +87,10 @@ class FrozenAdvisoryMetaLabelTrainingRequestV1(BaseModel):
     tie_break: Literal["family_id_seed_ascending"] = "family_id_seed_ascending"
     probability_threshold: Literal[0.5] = 0.5
     resource_max_rss_bytes: int = Field(default=8 * 1024**3, gt=0)
+    outcome_weighting: MetaLabelOutcomeWeightingV1 | None = None
+    reference_meta_label_bundle_root: str | None = None
+    reference_meta_label_bundle_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reference_meta_label_manifest_file_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def validate_identity(self) -> "FrozenAdvisoryMetaLabelTrainingRequestV1":
@@ -81,6 +99,16 @@ class FrozenAdvisoryMetaLabelTrainingRequestV1(BaseModel):
             raise ValueError("meta-label request must contain the exact approved family order")
         if self.seed_roster != META_LABEL_SEEDS:
             raise ValueError("meta-label seed roster differs from the approved roster")
+        reference_values = (
+            self.reference_meta_label_bundle_root,
+            self.reference_meta_label_bundle_id,
+            self.reference_meta_label_manifest_file_sha256,
+        )
+        if self.schema_version == META_LABEL_REQUEST_V2:
+            if self.outcome_weighting is not None or any(value is not None for value in reference_values):
+                raise ValueError("meta-label v2 request cannot contain outcome weighting or reference identity")
+        elif self.outcome_weighting is None or any(value is None for value in reference_values):
+            raise ValueError("meta-label v3 request requires outcome weighting and exact reference identity")
         datetime.fromisoformat(self.factor_data_cutoff)
         expected = canonical_json_sha256(self.functional_payload())
         if expected != self.request_sha256:
@@ -93,6 +121,7 @@ class FrozenAdvisoryMetaLabelTrainingRequestV1(BaseModel):
         return self.model_dump(
             mode="json",
             exclude={"request_id", "request_sha256", "created_at", "output_root"},
+            exclude_none=True,
         )
 
     def write_json(self, path: str | Path) -> None:
@@ -106,8 +135,18 @@ class FrozenAdvisoryMetaLabelTrainingRequestV1(BaseModel):
 def build_frozen_meta_label_request(**values: Any) -> FrozenAdvisoryMetaLabelTrainingRequestV1:
     values = dict(values)
     created_at = str(values.pop("created_at", datetime.now(timezone.utc).isoformat()))
+    schema_version = str(values.pop("schema_version", META_LABEL_REQUEST_V2))
+    if "family_specs" in values:
+        values["family_specs"] = tuple(
+            item if isinstance(item, MetaLabelFamilySpecV1) else MetaLabelFamilySpecV1.model_validate(item)
+            for item in values["family_specs"]
+        )
+    if values.get("outcome_weighting") is not None and not isinstance(
+        values["outcome_weighting"], MetaLabelOutcomeWeightingV1
+    ):
+        values["outcome_weighting"] = MetaLabelOutcomeWeightingV1.model_validate(values["outcome_weighting"])
     seed = FrozenAdvisoryMetaLabelTrainingRequestV1.model_construct(
-        schema_version="frozen_advisory_meta_label_training_request_v2",
+        schema_version=schema_version,
         request_id="pending",
         request_sha256="0" * 64,
         created_at=created_at,
@@ -115,12 +154,25 @@ def build_frozen_meta_label_request(**values: Any) -> FrozenAdvisoryMetaLabelTra
     )
     digest = canonical_json_sha256(seed.functional_payload())
     return FrozenAdvisoryMetaLabelTrainingRequestV1(
-        schema_version="frozen_advisory_meta_label_training_request_v2",
+        schema_version=schema_version,
         request_id=f"advmetareq_{digest[:24]}",
         request_sha256=digest,
         created_at=created_at,
         **values,
     )
+
+
+def build_return_aware_meta_label_request(
+    **values: Any,
+) -> FrozenAdvisoryMetaLabelTrainingRequestV1:
+    values = dict(values)
+    values["schema_version"] = META_LABEL_REQUEST_V3
+    values.setdefault("outcome_weighting", approved_meta_label_outcome_weighting())
+    return build_frozen_meta_label_request(**values)
+
+
+def approved_meta_label_outcome_weighting() -> MetaLabelOutcomeWeightingV1:
+    return MetaLabelOutcomeWeightingV1()
 
 
 def approved_meta_label_families() -> tuple[MetaLabelFamilySpecV1, ...]:
