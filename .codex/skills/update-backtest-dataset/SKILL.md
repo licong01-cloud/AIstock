@@ -63,8 +63,8 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 - 默认始终 `candidate-only`。不得覆盖或原地追加现有 candidate；不得切 production pointer/symlink。
 - 不自动初始化/迁移真实 control root，不启动、停止、重启或注册 backend、Worker、scheduler、QE、RDAgent、WSL task 或 node1。
 - planner/source acquisition 只读 DB。provider 只进入 candidate-local immutable CAS/overlay，不写 DB；DB repair 是独立动作。
-- 历史 D/P 日线缺口使用 candidate-local Tushare `pro_bar` missing-only overlay；价格转厘、成交量转手、amount 千元转厘，DB/provider 重叠必须完全一致。分钟缺口固定 TDX 优先、Tushare 次级；只补 missing keys。重叠冲突、重复、required NULL/非有限、非 240 根或 Tushare `40203` 都 fail closed。
-- canonical PIT v2 内缺失 `stk_limit` 不填 NaN、不补零、也不直接标记不可交易：使用唯一版本化 A 股规则计算器，按沪深主板/创业板/科创板、交易日和 PIT ST 状态，以 `previous_raw_close × adj_prev / adj_current` 计算 raw 前收，再按 0.01 元和 `ROUND_HALF_UP` 生成 missing-only candidate CAS overlay。真实 DB 行永远优先且不得覆盖；未知板块、无涨跌幅日、参考价/复权缺失、重复或 unresolved 键全部 fail closed。首次历史稀疏 overlay 必须携带精确 affected instruments，只允许对应股票的 `SELECTIVE_REBUILD`，不得扩大为全市场导出。
+- 历史 D/P 日线缺口使用 candidate-local Tushare `pro_bar` missing-only overlay；价格转厘、成交量转手、amount 千元转厘，DB/provider 重叠必须完全一致。若 Tushare 仍无数据，只允许最后权威 bar 后的严格 terminal PIT 连续尾段作为 non-trading coverage；内部断点或活跃证券尾部仍阻断。分钟缺口固定 TDX 优先、Tushare 次级；只补 missing keys。
+- canonical PIT v2 内缺失或不完整 `stk_limit` 不填 NaN、不补零、也不直接标记不可交易：使用唯一版本化 A 股规则计算器，按沪深主板/创业板/科创板、交易日和 PIT ST 状态，以 `previous_raw_close × adj_prev / adj_current` 计算 raw 前收，再按 0.01 元和 `ROUND_HALF_UP` 生成 candidate CAS overlay。完整 DB 行永远优先且不得覆盖；不完整行仅在全部既有非空字段分币一致时补全。未知板块、无涨跌幅日、参考价/复权缺失、非空冲突、重复或 unresolved 键全部 fail closed。首次历史稀疏 overlay 必须携带精确 affected instruments，只允许对应股票的 `SELECTIVE_REBUILD`，不得扩大为全市场导出。
 - 股票 universe 使用冻结 PIT spans；candidate 保存 canonical snapshot/hash。不得用当前 ST 列表、实验黑名单或 max-date/count 代替。
 - v2 PIT 仅接受 `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`：252 个交易所交易日 IPO 暖机、历史退市股生命周期、公告 as-of 终止风险与 ST snapshot gap 闭环必须同时满足；rolling 与 frozen snapshot 必须同 rule/digest。
 - DB 外 moneyflow 固定 `tushare_moneyflow_shares_yuan_v1`：量=股、额=元；`mf_total_net_*` 来自 canonical `net_mf_*`。
@@ -79,6 +79,14 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 - re-attest、cancel、resume、publish recovery 都必须使用 durable identity/lease/fence；不要删除 lock、staging、receipt、candidate 或失败证据来“恢复”。
 - 被 QE、训练、审计、正式发布或 production 引用的历史 release 必须保留完整不可变数据集；`all.txt` 只是索引证据，不能替代 daily/minute、H5/static、指数、PIT 和 receipts。未引用失败候选也只可登记为 cleanup candidate，Skill 不自动删除。
 - 真实数据导出、生产激活、DB DDL/DML、进程控制和 cleanup 各自需要明确授权。
+
+## 阻断设计治理
+
+- 自动处理：登记的合法 sparse 空日（含 `bak_basic`）、精确指数候选补齐、`stk_limit` 规则补全、合规 terminal daily 尾段。
+- 可重试：provider 限流/网络/尚未发布；保留 durable intent/checkpoint，不把暂态失败升级为永久合同阻断。
+- 仅以下类别可硬阻断：权威值冲突；PIT/日期/identity 损坏；内部 required gap；必要推导输入缺失；越权覆盖/激活；无依据扩大重建范围；资源或安全合同违反。
+- 不得自行新增或扩大硬阻断。任何新阻断设计必须先向用户报告触发条件、发生概率、误阻代价、准确性风险与替代方案，获得明确批准后才实施。
+- DEV 只验证 DML 机制：`validate-dml` 单行 upsert/readback 后强制 rollback；不得要求 DEV 复制八年生产历史。生产仍需全范围只读 plan、目标明确的 DML 授权及 readback。
 
 ## 按需读取 references
 

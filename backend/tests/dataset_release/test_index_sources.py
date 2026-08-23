@@ -90,7 +90,7 @@ def test_index_source_rejects_non_tabular_provider() -> None:
         source.provider_rows(DOMESTIC_INDEX_DEFINITIONS[0], date(2026, 7, 30), date(2026, 7, 31))
 
 
-def test_index_source_treats_tushare_40203_as_terminal() -> None:
+def test_index_source_treats_tushare_40203_as_retryable_waiting() -> None:
     class TerminalProvider:
         def index_daily(self, **_kwargs):
             error = RuntimeError("provider code=40203 request window exhausted")
@@ -100,5 +100,5 @@ def test_index_source_treats_tushare_40203_as_terminal() -> None:
     source = DatabaseTushareIndexSource(FakePool(), provider_factory=TerminalProvider)
     with pytest.raises(IndexProviderRateLimitTerminal) as raised:
         source.provider_rows(DOMESTIC_INDEX_DEFINITIONS[0], date(2026, 7, 30), date(2026, 7, 31))
-    assert raised.value.code == "BLOCKED_PROVIDER_TERMINAL_40203"
-    assert raised.value.retryable is False
+    assert raised.value.code == "WAITING_PROVIDER_RATE_LIMIT_40203"
+    assert raised.value.retryable is True

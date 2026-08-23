@@ -15,6 +15,7 @@ from backend.services.dataset_release.minute_overlay import (
     MinuteProviderInvalid,
     MinuteProviderRateLimitTerminal,
     MinuteProviderTerminal,
+    MinuteProviderUnavailable,
     MinuteSourceConflict,
     canonical_session_times,
     normalize_database_rows,
@@ -212,7 +213,7 @@ def test_duplicate_nonfinite_and_non240_rows_are_never_accepted() -> None:
         normalize_database_rows(database, gap)
 
 
-def test_tushare_40203_is_terminal_and_not_retried() -> None:
+def test_tushare_40203_is_retryable_without_busy_loop() -> None:
     class RateLimited(RuntimeError):
         code = 40203
 
@@ -227,8 +228,10 @@ def test_tushare_40203_is_terminal_and_not_retried() -> None:
         fetch_tushare_rows=rate_limited,
         policy=POLICY,
     )
-    with pytest.raises(MinuteProviderRateLimitTerminal, match="40203"):
+    with pytest.raises(MinuteProviderRateLimitTerminal, match="40203") as raised:
         builder.build_one(MinuteGap(CODE, DAY), _database())
+    assert raised.value.code == "WAITING_PROVIDER_RATE_LIMIT_40203"
+    assert raised.value.retryable is True
     assert calls == ["tushare"]
 
 
@@ -240,6 +243,36 @@ def test_both_invalid_providers_fail_closed() -> None:
     )
     with pytest.raises(MinuteProviderTerminal, match="invalid"):
         builder.build_one(MinuteGap(CODE, DAY), _database())
+
+
+def test_both_provider_transport_failures_are_retryable() -> None:
+    def unavailable(*_args):
+        raise ConnectionError("provider unavailable")
+
+    builder = MinuteOverlayBuilder(
+        fetch_tdx_rows=unavailable,
+        fetch_tushare_rows=unavailable,
+        policy=POLICY,
+    )
+    with pytest.raises(MinuteProviderUnavailable) as raised:
+        builder.build_one(MinuteGap(CODE, DAY), _database())
+    assert raised.value.code == "WAITING_MINUTE_PROVIDER_UNAVAILABLE"
+    assert raised.value.retryable is True
+
+
+def test_tushare_fetch_terminal_error_is_not_reclassified_as_retryable() -> None:
+    builder = MinuteOverlayBuilder(
+        fetch_tdx_rows=lambda *_args: _tdx_rows()[:-1],
+        fetch_tushare_rows=lambda *_args: (_ for _ in ()).throw(
+            MinuteProviderTerminal("invalid bounded provider payload")
+        ),
+        policy=POLICY,
+    )
+
+    with pytest.raises(MinuteProviderTerminal) as raised:
+        builder.build_one(MinuteGap(CODE, DAY), _database())
+
+    assert raised.value.retryable is False
 
 
 def test_provider_concurrency_has_no_bypass_parameter() -> None:
