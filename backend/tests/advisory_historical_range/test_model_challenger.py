@@ -9,7 +9,14 @@ import pandas as pd
 import pytest
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
-from backend.services.advisory_model_first.feature_schema_v1 import MODEL_FEATURE_COLUMNS
+from backend.services.advisory_model_first.feature_schema_v1 import (
+    CATEGORICAL_FEATURE_COLUMNS,
+    MODEL_FEATURE_COLUMNS,
+)
+from backend.services.advisory_model_first.model_binding_resolution import (
+    META_LABEL_MODEL_ROLE,
+    AdvisoryModelBindingResolutionV1,
+)
 from backend.services.advisory_model_first.model_bundle import LoadedAdvisoryModelBundle
 from backend.services.advisory_model_first.quality_contracts import (
     ENSEMBLE_SCORE_POLICY,
@@ -24,6 +31,7 @@ from backend.services.advisory_model_first.target_binding import (
 )
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
 from backend.services.advisory_historical_range.model_challenger import (
+    HistoricalMetaLabelChallenger,
     HistoricalModelChallengerArtifactV1,
     HistoricalModelChallenger,
     REASON_MODEL_OUTPUT_INVALID,
@@ -78,9 +86,75 @@ def test_historical_model_challenger_scores_raw_parent_without_mutation() -> Non
     assert artifact.candidate_count == 20
     assert artifact.shortlist_count == 5
     assert [item.model_rank for item in artifact.candidates] == list(range(1, 21))
-    assert [item.selection_rank for item in artifact.candidates] == list(range(20, 0, -1))
+    assert [item.selection_rank for item in artifact.candidates] == list(
+        range(20, 0, -1)
+    )
     assert artifact.artifact_hash == canonical_json_sha256(
         artifact.model_dump(mode="json", exclude={"artifact_hash"})
+    )
+
+
+def test_historical_meta_label_challenger_reuses_exact_runtime_contract() -> None:
+    parent = _parent()
+    challenger = HistoricalMetaLabelChallenger(
+        feature_source=_FeatureSource(),
+        descriptor_resolver=_MetaDescriptorResolver(),
+        bundle_loader=lambda **_: _meta_bundle(),
+        feature_builder=_meta_feature_builder,
+        scorer=_meta_scorer,
+    )
+
+    artifact = challenger.score_day(
+        parent=parent,
+        parent_candidate_artifact_hash=digest("parent-artifact"),
+        target_trade_date=date(2026, 5, 18),
+        model_root="/research-model-root",
+        program_id="advp_test",
+        binding_version_id="advb_test",
+        producer_implementation_sha256=digest("meta-producer"),
+    )
+
+    assert artifact.candidate_count == 20
+    assert artifact.shortlist_count == 5
+    assert artifact.model_descriptor_sha256 == digest("descriptor")
+    assert artifact.maturity_horizon_trade_days == 20
+    assert [item.entry_priority_rank for item in artifact.candidates] == list(
+        range(1, 21)
+    )
+    assert [item.selection_effective_rank for item in artifact.candidates] == list(
+        range(20, 0, -1)
+    )
+    assert artifact.artifact_hash == canonical_json_sha256(
+        artifact.model_dump(mode="json", exclude={"artifact_hash"})
+    )
+
+
+def test_historical_meta_label_challenger_artifact_store_is_exact_retryable(
+    tmp_path: Path,
+) -> None:
+    artifact = HistoricalMetaLabelChallenger(
+        feature_source=_FeatureSource(),
+        descriptor_resolver=_MetaDescriptorResolver(),
+        bundle_loader=lambda **_: _meta_bundle(),
+        feature_builder=_meta_feature_builder,
+        scorer=_meta_scorer,
+    ).score_day(
+        parent=_parent(),
+        parent_candidate_artifact_hash=digest("parent-artifact"),
+        target_trade_date=date(2026, 5, 18),
+        model_root="/research-model-root",
+        program_id="advp_test",
+        binding_version_id="advb_test",
+        producer_implementation_sha256=digest("meta-producer"),
+    )
+    store = HistoricalComparisonArtifactStore(root=(tmp_path / "comparison").resolve())
+
+    first = store.publish_meta_label_challenger(artifact)
+    second = store.publish_meta_label_challenger(artifact)
+
+    assert first == second
+    assert (
+        store.load_meta_label_challenger(first).artifact_hash == artifact.artifact_hash
     )
 
 
@@ -139,7 +213,9 @@ def test_historical_model_challenger_rejects_malformed_scorer_output(
     assert raised.value.reason_code == REASON_MODEL_OUTPUT_INVALID
 
 
-def test_challenger_artifact_store_is_immutable_and_exact_retryable(tmp_path: Path) -> None:
+def test_challenger_artifact_store_is_immutable_and_exact_retryable(
+    tmp_path: Path,
+) -> None:
     parent = _parent()
     challenger = HistoricalModelChallenger(
         feature_source=_FeatureSource(),
@@ -223,7 +299,9 @@ def test_paired_daily_delta_uses_only_shared_sample_days() -> None:
     assert delta["win_rate_difference"] == 0.0
 
 
-def test_matched_lifecycle_uses_model_rank_for_entry_and_selection_rank_for_exit() -> None:
+def test_matched_lifecycle_uses_model_rank_for_entry_and_selection_rank_for_exit() -> (
+    None
+):
     def candidate(symbol: str, rank: int, mark: float) -> AdvisoryTransitionCandidateV1:
         return AdvisoryTransitionCandidateV1(
             symbol=symbol,
@@ -306,7 +384,9 @@ def _parent() -> HistoricalRangeCandidateArtifactPayloadV2:
         }
         candidates.append(
             HistoricalRangeCandidateFactV1(
-                candidate_id=derive_prefixed_id("ahc", {"day_run_id": "day_1", "symbol": symbol}),
+                candidate_id=derive_prefixed_id(
+                    "ahc", {"day_run_id": "day_1", "symbol": symbol}
+                ),
                 day_run_id="day_1",
                 symbol=symbol,
                 membership_status="INCLUDED",
@@ -337,7 +417,12 @@ def _parent() -> HistoricalRangeCandidateArtifactPayloadV2:
             "output_count": 20,
             "excluded_count": 0,
         }
-        for name in ("alpha_raw", "hmm_adjusted", "risk_policy_adjusted", "selection_effective")
+        for name in (
+            "alpha_raw",
+            "hmm_adjusted",
+            "risk_policy_adjusted",
+            "selection_effective",
+        )
     }
     return HistoricalRangeCandidateArtifactPayloadV2(
         range_run_id="range_1",
@@ -423,18 +508,24 @@ def _feature_builder(**kwargs: object) -> SimpleNamespace:
     candidates = kwargs["candidates"]
     assert isinstance(candidates, pd.DataFrame)
     return SimpleNamespace(
-        coverage=pd.DataFrame([{"status": "available", "required_missing_columns": []}]),
+        coverage=pd.DataFrame(
+            [{"status": "available", "required_missing_columns": []}]
+        ),
         features=pd.DataFrame(
             {
                 "instrument": candidates["instrument"].tolist(),
-                "selection_effective_rank": candidates["selection_effective_rank"].tolist(),
+                "selection_effective_rank": candidates[
+                    "selection_effective_rank"
+                ].tolist(),
                 "parent_combined_score": candidates["combined_score"].tolist(),
             }
         ),
     )
 
 
-def _scorer(_bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[dict[str, object]]:
+def _scorer(
+    _bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame
+) -> list[dict[str, object]]:
     result = []
     for row in features.itertuples(index=False):
         model_rank = 21 - int(row.selection_effective_rank)
@@ -455,3 +546,126 @@ def _scorer(_bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[
             }
         )
     return sorted(result, key=lambda item: int(item["advisory_model_rank"]))
+
+
+class _MetaDescriptorResolver:
+    def resolve(self, **_: object) -> AdvisoryModelBindingResolutionV1:
+        return AdvisoryModelBindingResolutionV1(
+            program_id="advp_test",
+            binding_version_id="advb_test",
+            package_id=PACKAGE_ID,
+            manifest_sha256=MANIFEST_SHA256,
+            style_profile_id="style-test",
+            style_profile_hash=digest("style"),
+            selection_runtime_semantics_hash=RUNTIME_SEMANTICS_HASH,
+            feature_schema_version="advisory_feature_schema_v1",
+            feature_schema_hash=digest("feature-schema"),
+            bundle_id=BUNDLE_ID,
+            bundle_manifest_sha256=digest("meta-bundle-manifest"),
+            component_roles={"lstm": LSTM_LEG_ID, "fund": FUND_LEG_ID},
+            descriptor_sha256=digest("descriptor"),
+            model_role=META_LABEL_MODEL_ROLE,
+            shadow_policy_sha256=canonical_json_sha256(_meta_bundle()["shadow_policy"]),
+            terminal_weights=dict(TERMINAL_WEIGHTS),
+        )
+
+
+def _meta_bundle() -> dict[str, object]:
+    shadow_policy = {
+        "target_count": 5,
+        "rank_enter_threshold": 5,
+        "rank_exit_threshold": 40,
+        "rank_exit_confirm_days": 2,
+        "daily_replacement_budget": 5,
+        "stop_loss_bps": 800,
+        "take_profit_bps": 1800,
+        "trailing_stop_bps": 700,
+        "time_stop_days": 20,
+        "take_profit_mode": "trailing",
+        "entry_price_basis": "next_open_executable",
+        "exit_price_basis": "next_open_executable",
+    }
+    return {
+        "manifest": {
+            "schema_version": "advisory_meta_label_bundle_v1",
+            "model_role": META_LABEL_MODEL_ROLE,
+            "status": "EXPERIMENTAL_MODEL",
+            "calibration_state": "UNCALIBRATED",
+            "program_id": "advp_test",
+            "binding_version_id": "advb_test",
+            "package_id": PACKAGE_ID,
+            "manifest_sha256": MANIFEST_SHA256,
+            "style_profile_id": "style-test",
+            "style_profile_hash": digest("style"),
+            "shadow_policy_sha256": canonical_json_sha256(shadow_policy),
+            "feature_schema_version": "advisory_feature_schema_v1",
+            "feature_schema_hash": digest("feature-schema"),
+            "bundle_id": BUNDLE_ID,
+        },
+        "feature_schema": {
+            "schema_version": "advisory_feature_schema_v1",
+            "feature_schema_hash": digest("feature-schema"),
+            "trained_feature_names": list(MODEL_FEATURE_COLUMNS),
+            "categorical_vocabulary": {
+                column: [1, 2] for column in CATEGORICAL_FEATURE_COLUMNS
+            },
+        },
+        "manifest_file_sha256": digest("meta-bundle-manifest"),
+        "continuation_cutoff": "2026-03-10",
+        "hmm_models": {},
+        "shadow_policy": shadow_policy,
+        "cost_policy": {
+            "schema_version": "advisory_policy_cost_v1",
+            "buy_cost_bps": 3.0,
+            "sell_cost_bps": 13.0,
+            "benchmark_instrument": "000300.SH",
+        },
+        "cost_policy_sha256": canonical_json_sha256(
+            {
+                "schema_version": "advisory_policy_cost_v1",
+                "buy_cost_bps": 3.0,
+                "sell_cost_bps": 13.0,
+                "benchmark_instrument": "000300.SH",
+            }
+        ),
+        "shadow_policy_maturity_horizon_days": 20,
+    }
+
+
+def _meta_feature_builder(**kwargs: object) -> SimpleNamespace:
+    candidates = kwargs["candidates"]
+    assert isinstance(candidates, pd.DataFrame)
+    return SimpleNamespace(
+        coverage=pd.DataFrame(
+            [{"status": "available", "required_missing_columns": []}]
+        ),
+        features=pd.DataFrame(
+            {
+                "instrument": candidates["instrument"].tolist(),
+                "decision_as_of_trade_date": candidates[
+                    "decision_as_of_trade_date"
+                ].tolist(),
+                "target_trade_date": candidates["target_trade_date"].tolist(),
+                "selection_effective_rank": candidates[
+                    "selection_effective_rank"
+                ].tolist(),
+                "parent_combined_score": candidates["combined_score"].tolist(),
+            }
+        ),
+    )
+
+
+def _meta_scorer(_bundle: object, features: pd.DataFrame) -> pd.DataFrame:
+    output = (
+        features.copy()
+        .sort_values("selection_effective_rank", ascending=False)
+        .reset_index(drop=True)
+    )
+    output["take_probability"] = [0.51 + index / 1000.0 for index in range(len(output))]
+    output["skip_probability"] = 1.0 - output["take_probability"]
+    output["advisory_model_confidence"] = abs(output["take_probability"] - 0.5) * 2.0
+    output["entry_priority_rank"] = range(1, len(output) + 1)
+    output["selection_exit_rank"] = output["selection_effective_rank"]
+    output["model_status"] = "EXPERIMENTAL_MODEL"
+    output["calibration_state"] = "UNCALIBRATED"
+    return output
