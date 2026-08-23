@@ -35,6 +35,6 @@ Use this as the lightweight entry for broad or unclear AIstock work. The sole de
 - Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) use a registered BUG/feature/docs workflow.
 - Temporary exchange notes use `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
 - BUG fixes select the smallest safe pre-merge gate and delegate broad daily regression to Validation Center/CI/nightly.
-- Runtime BUGs use the task card's lazy `runtime_contract`; changed-file inference cannot be downgraded, unknown/conflict/multi-target blocks completion, runtime BUG batches are rejected, and frontend activation, client reload, database migration, and backend restart remain separate states.
+- Runtime BUGs use the task card's lazy `runtime_contract`; changed-file inference cannot be downgraded, unknown/conflict/multi-target blocks completion, and frontend activation, client reload, database migration, and backend restart remain separate states. Only `backend_restart_required=true` or post-restart receipt work is single-issue; non-restart records may batch when the workflow's close-sync compatibility signature matches module, risk, required verification, runtime/activation policy, production/dependency gates, and one shared source PR.
 
 Report the selected lane, then continue when execution is requested.

@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: ec3705a65feaa302e0776e296d46e197747f3d6c2a960aafd63796b98022c04a
+source_sha256: 9122afbab4d6e4c15d88b72f22509314bb2cf62537f62914ea1051eb0bdb8641
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-13"
@@ -538,7 +538,7 @@ rules:
 
   - rule_id: ISSUE-BATCH-CONTEXT-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-issue-batch-context-001
-    title: Same-module related issues should use batch worktree and batch context when safe
+    title: Compatible related issues should use batch context while preserving per-issue state
     severity: P1
     category: agent_efficiency
     enabled: true
@@ -551,8 +551,10 @@ rules:
         - batch_id_or_split_reason
         - per_issue_commit_map
         - shared_validation_matrix
+        - close_sync_compatibility_signature
+        - per_issue_evidence_and_issue_sync
     baseline_policy: manual_review_only
-    remediation: Group same-module same-validation issues in one branch while preserving per-issue commits and closure records.
+    remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates.
 
   - rule_id: PROD-DEPENDENCY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-dependency-001
