@@ -24,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260823-b509c3241c8d",
       "timestamp": "2026-08-23T18:19:55.634092Z"
+    },
+    {
+      "action": "runtime_contract_classified",
+      "actor": "codex",
+      "note": "The delivered source is an operator-invoked maintenance CLI that is not imported by backend-main; merge requires no restart and this PR does not execute production DML.",
+      "timestamp": "2026-08-23T18:30:00Z"
     }
   ],
   "evidence_uris": [
@@ -121,7 +127,9 @@
   "last_seen_at": "2026-08-23T18:19:55.634109Z",
   "module": "simulation_runtime",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not execute production DML in this source PR; production apply requires a separate exact BUG-1165 authorization and a digest-pinned dry-run from merged immutable source.",
+    "Do not delete historical runs, orders, trades, execution plans, releases, or bindings."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -138,7 +146,7 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
-    "runtime_impact": "unknown",
+    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
     "target_ids": []
