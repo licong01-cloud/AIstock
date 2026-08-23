@@ -12,7 +12,11 @@ from backend.services.advisory_forward.models import (
     AdvisoryForwardModelObservationOutcomeV1,
     AdvisoryForwardRunV1,
 )
-from backend.services.advisory_forward.errors import AdvisoryForwardActiveEpisodeStateConflictError
+from backend.services.advisory_forward.errors import (
+    REASON_MODEL_EVALUATION_IDENTITY_CONFLICT,
+    AdvisoryForwardActiveEpisodeStateConflictError,
+    AdvisoryForwardModelEvaluationError,
+)
 from backend.services.advisory_program import (
     ACTION_EXIT,
     PRICE_BASIS_NEXT_OPEN,
@@ -470,64 +474,29 @@ class AdvisoryForwardPGRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT observation.*, forward.selection_run_id,
-                           forward.review_run_id, forward.list_version_id
-                    FROM app.advisory_forward_model_observation AS observation
-                    JOIN app.advisory_forward_run AS forward
-                      ON forward.forward_run_id = observation.forward_run_id
-                    LEFT JOIN app.advisory_forward_model_observation_outcome AS outcome
-                      ON outcome.observation_id = observation.observation_id
-                    WHERE observation.status = 'EXPERIMENTAL_SHADOW'
-                      AND observation.maturity_trade_date IS NOT NULL
-                      AND observation.maturity_trade_date <= %s
-                      AND observation.prediction_payload_json->>'model_role' = 'meta_label_take_skip_confidence'
-                      AND observation.prediction_payload_json->>'evaluation_contract_version' = 'advisory_forward_model_evaluation_v1'
-                      AND outcome.observation_id IS NULL
-                    ORDER BY observation.maturity_trade_date, observation.target_trade_date,
-                             observation.program_id
+                    WITH earliest_by_program AS (
+                        SELECT DISTINCT ON (observation.program_id)
+                               observation.*, forward.selection_run_id,
+                               forward.review_run_id, forward.list_version_id
+                        FROM app.advisory_forward_model_observation AS observation
+                        JOIN app.advisory_forward_run AS forward
+                          ON forward.forward_run_id = observation.forward_run_id
+                        LEFT JOIN app.advisory_forward_model_observation_outcome AS outcome
+                          ON outcome.observation_id = observation.observation_id
+                        WHERE observation.status = 'EXPERIMENTAL_SHADOW'
+                          AND observation.maturity_trade_date IS NOT NULL
+                          AND observation.maturity_trade_date <= %s
+                          AND observation.prediction_payload_json->>'model_role' = 'meta_label_take_skip_confidence'
+                          AND observation.prediction_payload_json->>'evaluation_contract_version' = 'advisory_forward_model_evaluation_v1'
+                          AND outcome.observation_id IS NULL
+                        ORDER BY observation.program_id, observation.maturity_trade_date,
+                                 observation.target_trade_date, observation.observation_id
+                    )
+                    SELECT * FROM earliest_by_program
+                    ORDER BY maturity_trade_date, target_trade_date, program_id
                     LIMIT %s
                     """,
                     (on_or_before, int(limit)),
-                )
-                return [dict(row) for row in cur.fetchall()]
-
-    def model_epoch_observations(
-        self,
-        *,
-        program_id: str,
-        model_descriptor_sha256: str,
-        bundle_id: str,
-        shadow_policy_sha256: str,
-        cost_policy_sha256: str,
-        on_or_before: date,
-    ) -> list[dict[str, Any]]:
-        with self._conn_factory() as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT observation.*, forward.selection_run_id,
-                           forward.review_run_id, forward.list_version_id
-                    FROM app.advisory_forward_model_observation AS observation
-                    JOIN app.advisory_forward_run AS forward
-                      ON forward.forward_run_id = observation.forward_run_id
-                    WHERE observation.program_id = %s
-                      AND observation.status = 'EXPERIMENTAL_SHADOW'
-                      AND observation.model_descriptor_sha256 = %s
-                      AND observation.bundle_id = %s
-                      AND observation.target_trade_date <= %s
-                      AND observation.prediction_payload_json->>'model_role' = 'meta_label_take_skip_confidence'
-                      AND observation.prediction_payload_json->>'shadow_policy_sha256' = %s
-                      AND observation.prediction_payload_json->>'cost_policy_sha256' = %s
-                    ORDER BY observation.target_trade_date, observation.observation_id
-                    """,
-                    (
-                        program_id,
-                        model_descriptor_sha256,
-                        bundle_id,
-                        on_or_before,
-                        shadow_policy_sha256,
-                        cost_policy_sha256,
-                    ),
                 )
                 return [dict(row) for row in cur.fetchall()]
 
@@ -592,7 +561,8 @@ class AdvisoryForwardPGRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT * FROM app.advisory_forward_model_evaluation
+                    SELECT evaluation_id, payload_sha256
+                    FROM app.advisory_forward_model_evaluation
                     WHERE program_id=%s AND model_descriptor_sha256=%s
                       AND first_observation_id=%s AND as_of_trade_date=%s
                     """,
@@ -637,8 +607,9 @@ class AdvisoryForwardPGRepository:
                 existing = cur.fetchone()
                 if existing is not None:
                     if existing["payload_sha256"] != payload_hash:
-                        raise InvalidStateTransitionError(
+                        raise AdvisoryForwardModelEvaluationError(
                             "forward model evaluation payload conflicts with the persisted fact",
+                            reason_code=REASON_MODEL_EVALUATION_IDENTITY_CONFLICT,
                             context={"evaluation_id": existing["evaluation_id"]},
                         )
                     return dict(existing)
@@ -690,8 +661,9 @@ class AdvisoryForwardPGRepository:
                     outcome_hash = outcome.payload_sha256()
                     if existing_outcome is not None:
                         if existing_outcome["payload_sha256"] != outcome_hash:
-                            raise InvalidStateTransitionError(
+                            raise AdvisoryForwardModelEvaluationError(
                                 "forward model observation outcome conflicts with the persisted fact",
+                                reason_code=REASON_MODEL_EVALUATION_IDENTITY_CONFLICT,
                                 context={"observation_id": outcome.observation_id},
                             )
                         continue
@@ -786,7 +758,15 @@ class AdvisoryForwardPGRepository:
                            observation.bundle_id, observation.maturity_trade_date,
                            observation.evaluation_status,
                            evaluation_reason_code, evaluation_error_json,
-                           prediction_payload_json
+                           observation.prediction_payload_json->>'model_role' AS model_role,
+                           observation.prediction_payload_json->>'evaluation_contract_version'
+                             AS evaluation_contract_version,
+                           observation.prediction_payload_json->>'shadow_policy_sha256'
+                             AS shadow_policy_sha256,
+                           observation.prediction_payload_json->>'cost_policy_sha256'
+                             AS cost_policy_sha256,
+                           observation.prediction_payload_json->>'reason_code'
+                             AS prediction_reason_code
                     FROM app.advisory_forward_run AS forward
                     LEFT JOIN app.advisory_forward_model_observation AS observation
                       ON observation.forward_run_id=forward.forward_run_id
@@ -813,11 +793,22 @@ class AdvisoryForwardPGRepository:
                 if epoch:
                     cur.execute(
                         """
-                        SELECT * FROM app.advisory_forward_model_evaluation
+                        SELECT evaluation_id, schema_version, program_id,
+                               model_descriptor_sha256, bundle_id,
+                               shadow_policy_sha256, cost_policy_sha256,
+                               first_observation_id, last_due_observation_id,
+                               first_target_trade_date, as_of_trade_date,
+                               last_due_maturity_trade_date, observation_count,
+                               due_observation_count, matured_outcome_count,
+                               observation_roster_sha256, selection_input_sha256,
+                               market_input_sha256, metrics_json, payload_sha256,
+                               created_at
+                        FROM app.advisory_forward_model_evaluation
                         WHERE program_id=%s AND first_observation_id=%s
+                          AND as_of_trade_date <= %s
                         ORDER BY as_of_trade_date DESC, created_at DESC LIMIT 1
                         """,
-                        (program_id, epoch[0]["observation_id"]),
+                        (program_id, epoch[0]["observation_id"], as_of_date),
                     )
                     evaluation = cur.fetchone()
         due_rows = [row for row in epoch if row.get("maturity_trade_date") and row["maturity_trade_date"] <= as_of_date]
@@ -855,7 +846,7 @@ class AdvisoryForwardPGRepository:
             "bundle_id": epoch[-1]["bundle_id"] if epoch else None,
             "reason_code": (
                 failure.get("evaluation_reason_code")
-                or (failure.get("prediction_payload_json") or {}).get("reason_code")
+                or failure.get("prediction_reason_code")
                 if failure
                 else None
             ),
@@ -1039,19 +1030,17 @@ def _clear_observation_failure(cur: Any, forward_run_id: str) -> None:
 
 
 def _model_evaluation_identity(row: Mapping[str, Any]) -> tuple[str, str, str, str] | None:
-    prediction = row.get("prediction_payload_json")
     if (
         row.get("status") != "EXPERIMENTAL_SHADOW"
-        or not isinstance(prediction, Mapping)
-        or prediction.get("model_role") != "meta_label_take_skip_confidence"
-        or prediction.get("evaluation_contract_version") != "advisory_forward_model_evaluation_v1"
+        or row.get("model_role") != "meta_label_take_skip_confidence"
+        or row.get("evaluation_contract_version") != "advisory_forward_model_evaluation_v1"
     ):
         return None
     identity = (
         str(row.get("model_descriptor_sha256") or ""),
         str(row.get("bundle_id") or ""),
-        str(prediction.get("shadow_policy_sha256") or ""),
-        str(prediction.get("cost_policy_sha256") or ""),
+        str(row.get("shadow_policy_sha256") or ""),
+        str(row.get("cost_policy_sha256") or ""),
     )
     return identity if all(identity) else None
 

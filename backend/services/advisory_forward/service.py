@@ -188,10 +188,31 @@ class AdvisoryForwardService:
         on_or_before: date,
     ) -> None:
         processed_program_ids: set[str] = set()
-        for pending in self.repository.pending_mature_model_observations(
-            on_or_before=on_or_before,
-            limit=20,
-        ):
+        try:
+            pending_observations = self.repository.pending_mature_model_observations(
+                on_or_before=on_or_before,
+                limit=20,
+            )
+        except Exception as exc:
+            reason_code = str(
+                getattr(exc, "error_code", None)
+                or getattr(exc, "reason_code", None)
+                or "ADVISORY_FORWARD_MODEL_EVALUATION_DISCOVERY_FAILED"
+            )
+            LOGGER.exception(
+                "advisory forward model evaluation discovery failed reason_code=%s",
+                reason_code,
+            )
+            results.append(
+                {
+                    "program_id": None,
+                    "status": "FAILED",
+                    "stage": "MODEL_EVALUATION_DISCOVERY",
+                    "reason_code": reason_code,
+                }
+            )
+            return
+        for pending in pending_observations:
             program_id = str(pending["program_id"])
             if program_id in processed_program_ids:
                 continue
@@ -210,12 +231,20 @@ class AdvisoryForwardService:
                     pending.get("observation_id"),
                     reason_code,
                 )
-                self.repository.mark_model_evaluation_failure(
-                    observation_id=str(pending["observation_id"]),
-                    reason_code=reason_code,
-                    error={"message": str(exc), "context": dict(getattr(exc, "context", {}) or {})},
-                    waiting_data=waiting_data,
-                )
+                failure_recorded = True
+                try:
+                    self.repository.mark_model_evaluation_failure(
+                        observation_id=str(pending["observation_id"]),
+                        reason_code=reason_code,
+                        error={"message": str(exc), "context": dict(getattr(exc, "context", {}) or {})},
+                        waiting_data=waiting_data,
+                    )
+                except Exception:
+                    failure_recorded = False
+                    LOGGER.exception(
+                        "advisory forward model evaluation failure state could not be persisted observation_id=%s",
+                        pending.get("observation_id"),
+                    )
                 results.append(
                     {
                         "program_id": program_id,
@@ -224,6 +253,7 @@ class AdvisoryForwardService:
                         "status": "WAITING_DATA" if waiting_data else "FAILED",
                         "stage": "MODEL_EVALUATION",
                         "reason_code": reason_code,
+                        "failure_recorded": failure_recorded,
                     }
                 )
 

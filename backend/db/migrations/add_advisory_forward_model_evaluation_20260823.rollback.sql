@@ -19,6 +19,7 @@ END $$;
 
 DROP TABLE IF EXISTS app.advisory_forward_model_observation_outcome;
 DROP TABLE IF EXISTS app.advisory_forward_model_evaluation;
+DROP FUNCTION IF EXISTS app.reject_advisory_forward_model_evaluation_fact_mutation();
 
 ALTER TABLE app.advisory_forward_model_observation
     DROP CONSTRAINT IF EXISTS advisory_forward_model_observation_evaluation_status_check,

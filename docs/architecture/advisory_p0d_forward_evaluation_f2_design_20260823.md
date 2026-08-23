@@ -119,6 +119,7 @@ P0-D `prediction_payload_json` 新增：
    - 保存该 observation 当日触发的 entered/exited episode、净收益、hit rate、coverage 与 exact evaluation snapshot。
 
 insert 前锁定 observation；已有 payload hash 相同为 exact retry，不同则 conflict。不得 UPDATE 成功结果。表与 baseline `advisory_episode_return`、`advisory_program_metric_snapshot` 完全隔离。
+两张事实表同时安装数据库级 `BEFORE UPDATE OR DELETE` 拒绝触发器；不可变性不只依赖 repository 调用约定。迁移 readback 必须校验表、列、索引、全部约束、触发器、函数与新列注释。
 
 ### 5.5 Metrics
 
@@ -138,12 +139,13 @@ GET /api/v1/advisory/programs/{program_id}/forward-model-metrics
 ```
 
 返回：`EVIDENCE_IMMATURE | READY | WAITING_DATA | FAILED`、epoch identity、first/last target、last maturity、due/matured observation counts、portfolio metrics 和最近失败 reason。现有 forward detail 增加该 observation 的 `model_outcome`（没有成熟结果时为 `null`）。
+指标 API 只投影摘要列与 `metrics_json`，不得把累计 daily/episode replay evidence 返回给页面。
 
 荐股中心“每日前向”区域展示独立的“模型前向效果”卡片。它不得使用 baseline leaderboard metrics；未成熟显示等待日期与样本数，不显示 `0%`。
 
 ## 7. Scheduler / Failure Semantics
 
-- `run_once()` 在既有 target-open settlement 后、当日 publication 前推进模型 evaluation；每 Program/epoch 只处理最新可成熟水位一次。
+- `run_once()` 在既有 target-open settlement 后、当日 publication 前推进模型 evaluation；pending 查询每 Program 最多返回一条最早未结 observation，每 Program/epoch 只处理最新可成熟水位一次，避免单一 Program 占满批次。
 - evaluation `WAITING_DATA/FAILED` 作为独立结果加入 `results`，不把 baseline Program 加入 blocked set，也不阻断 publication/settlement。
 - typed reason 至少包括：
   - `ADVISORY_FORWARD_MODEL_EVIDENCE_IMMATURE`
@@ -229,7 +231,7 @@ GET /api/v1/advisory/programs/{program_id}/forward-model-metrics
 | F-805 | `backend/services/advisory_forward/evaluation.py`; `backend/services/advisory_forward/service.py` | `backend/tests/advisory_model_first/test_forward_model_evaluation.py`; `backend/tests/advisory_model_first/test_forward_model_evaluation_dev_db.py` | pass | none |
 | F-806 | `backend/db/migrations/add_advisory_forward_model_evaluation_20260823.sql`; `backend/services/advisory_forward/repository.py` | `backend/tests/advisory_model_first/test_forward_model_evaluation_repository.py`; `backend/tests/advisory_model_first/test_forward_model_evaluation_dev_db.py` | pass | none |
 | F-807 | `backend/services/advisory_forward/evaluation.py` | `backend/tests/advisory_model_first/test_forward_model_evaluation.py::test_forward_model_evaluation_replays_exact_top5_policy_and_builds_mature_outcomes` | pass | none |
-| F-808 | `backend/services/advisory_forward/service.py` | `backend/tests/advisory_model_first/test_forward_model_evaluation.py::test_forward_service_advances_mature_evaluation_without_publication_side_effects`; `backend/tests/advisory_model_first/test_forward_model_evaluation.py::test_forward_service_keeps_missing_market_audit_visible_without_running_market_query` | pass | none |
+| F-808 | `backend/services/advisory_forward/service.py`; distinct-Program pending query | `backend/tests/advisory_model_first/test_forward_model_evaluation.py`; `backend/tests/advisory_model_first/test_forward_model_evaluation_repository.py` | pass | none |
 | F-809 | `backend/routers/advisory.py`; `frontend/src/lib/api/advisory.ts`; `frontend/src/app/paper-v2/advisory/page.tsx` | `backend/tests/advisory_model_first/test_forward_api.py`; `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | pass | none |
 | F-810 | `backend/db/migrations/add_advisory_forward_model_evaluation_20260823.sql`; rollback migration | `backend/tests/advisory_model_first/test_forward_model_evaluation_dev_db.py`; `AISTOCK_RUN_ADVISORY_FORWARD_EVALUATION_DEV_DB=1 python -m pytest backend/tests/advisory_model_first/test_forward_model_evaluation_dev_db.py -q` | pass | none |
 | F-811 | changed-file boundary and review record | `python -m nox -s advisory_modeling_backend`; `python -m nox -s platform_api_backend`; `python -m nox -s validation_module_registry_l0`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0d_forward_evaluation_f2_design_20260823.md --tier F2` | pass | none |

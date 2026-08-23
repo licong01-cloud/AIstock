@@ -595,6 +595,7 @@ async function mockAdvisoryApis(page: Page, options: {
   forwardRunsByProgramId?: Record<string, JsonObject[]>;
   forwardDetailsById?: Record<string, JsonObject>;
   forwardModelMetricsByProgramId?: Record<string, JsonObject>;
+  forwardModelMetricsDelayMs?: number;
   leaderboardDelayMs?: number;
   detailDelayMs?: number;
 } = {}) {
@@ -724,6 +725,7 @@ async function mockAdvisoryApis(page: Page, options: {
       return json(route, { ok: true, forward_runs: options.forwardRunsByProgramId?.[currentRouteProgramId] || [] });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/forward-model-metrics`) && method === "GET") {
+      await wait(options.forwardModelMetricsDelayMs);
       return json(route, {
         ok: true,
         schema_version: "advisory_forward_model_metrics_response_v1",
@@ -2172,6 +2174,7 @@ test("Advisory forward panel renders the frozen observation instead of the on-de
   };
   await mockShellApis(page);
   await mockAdvisoryApis(page, {
+    forwardModelMetricsDelayMs: 1500,
     forwardRunsByProgramId: { [PROGRAM_ID]: [forwardRun] },
     forwardDetailsById: {
       advfwd_ui_20260813: {
@@ -2223,6 +2226,8 @@ test("Advisory forward panel renders the frozen observation instead of the on-de
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/paper-v2/advisory");
   await expect(page.getByTestId("advisory-forward-latest")).toContainText("目标日 2026-08-13");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).toContainText("LOADING");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).not.toContainText("EVIDENCE_IMMATURE");
   await expect(page.getByTestId("advisory-forward-model-identity")).toContainText("Top5 2/2");
   await expect(page.getByTestId("advisory-forward-child-status")).toContainText("收益/周期 EXPERIMENTAL_SHADOW");
   await expect(page.getByTestId("advisory-forward-prediction-row")).toHaveCount(2);

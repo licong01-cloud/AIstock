@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 
 import psycopg2
@@ -11,6 +12,7 @@ from dotenv import load_dotenv
 from backend.services.advisory_forward.errors import AdvisoryForwardModelEvaluationError
 from backend.services.advisory_forward.evaluation import AdvisoryForwardEvaluationMarketSource
 from backend.services.advisory_forward.evaluation import REASON_MARKET_UNAVAILABLE
+from backend.services.advisory_forward.repository import AdvisoryForwardPGRepository
 
 
 pytestmark = pytest.mark.skipif(
@@ -49,7 +51,16 @@ def _execute(connection, path: Path) -> None:
         cursor.execute(path.read_text(encoding="utf-8"))
 
 
-def _readback(connection) -> tuple[int, int, int]:
+@contextmanager
+def _connection_factory(config: dict[str, object]):
+    connection = psycopg2.connect(**config, connect_timeout=10)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def _readback(connection) -> tuple[int, int, int, int, int]:
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -78,7 +89,42 @@ def _readback(connection) -> tuple[int, int, int]:
             """
         )
         indexes = int(cursor.fetchone()[0])
-    return int(bool(tables[0])) + int(bool(tables[1])), columns, indexes
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM pg_trigger
+            WHERE NOT tgisinternal AND tgname IN (
+              'trg_reject_advisory_forward_model_evaluation_mutation',
+              'trg_reject_advisory_forward_model_outcome_mutation'
+            )
+            """
+        )
+        triggers = int(cursor.fetchone()[0])
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM pg_attribute attribute
+            JOIN pg_class relation ON relation.oid=attribute.attrelid
+            JOIN pg_namespace namespace ON namespace.oid=relation.relnamespace
+            JOIN pg_description description
+              ON description.objoid=relation.oid AND description.objsubid=attribute.attnum
+            WHERE namespace.nspname='app' AND attribute.attnum > 0
+              AND (
+                relation.relname IN (
+                  'advisory_forward_model_evaluation',
+                  'advisory_forward_model_observation_outcome'
+                )
+                OR (
+                  relation.relname='advisory_forward_model_observation'
+                  AND attribute.attname IN (
+                    'evaluation_status','evaluation_reason_code',
+                    'evaluation_error_json','evaluated_at'
+                  )
+                )
+              )
+            """
+        )
+        comments = int(cursor.fetchone()[0])
+    return int(bool(tables[0])) + int(bool(tables[1])), columns, indexes, triggers, comments
 
 
 def test_forward_model_evaluation_migration_apply_retry_rollback_and_reapply_on_dev() -> None:
@@ -98,13 +144,15 @@ def test_forward_model_evaluation_migration_apply_retry_rollback_and_reapply_on_
         assert int(connection.get_dsn_parameters()["port"]) == int(dev["port"])
 
         _execute(connection, MIGRATION)
-        assert _readback(connection) == (2, 4, 3)
+        assert _readback(connection) == (2, 4, 3, 2, 43)
         _execute(connection, MIGRATION)
-        assert _readback(connection) == (2, 4, 3)
+        assert _readback(connection) == (2, 4, 3, 2, 43)
         _execute(connection, ROLLBACK)
-        assert _readback(connection) == (0, 0, 0)
+        assert _readback(connection) == (0, 0, 0, 0, 0)
         _execute(connection, MIGRATION)
-        assert _readback(connection) == (2, 4, 3)
+        assert _readback(connection) == (2, 4, 3, 2, 43)
+        repository = AdvisoryForwardPGRepository(conn_factory=lambda: _connection_factory(dev))
+        repository.pending_mature_model_observations(on_or_before=date.today(), limit=2)
     finally:
         connection.close()
 
@@ -180,15 +228,7 @@ def test_forward_model_evaluation_market_source_honors_current_dev_limit_evidenc
     finally:
         discovery.close()
 
-    @contextmanager
-    def connection_factory():
-        connection = psycopg2.connect(**dev, connect_timeout=10)
-        try:
-            yield connection
-        finally:
-            connection.close()
-
-    source = AdvisoryForwardEvaluationMarketSource(conn_factory=connection_factory)
+    source = AdvisoryForwardEvaluationMarketSource(conn_factory=lambda: _connection_factory(dev))
     if not complete_limit_row_count:
         with pytest.raises(AdvisoryForwardModelEvaluationError) as excinfo:
             source.load(

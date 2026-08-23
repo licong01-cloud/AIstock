@@ -3,6 +3,11 @@ from __future__ import annotations
 from backend.services.trading_core.errors import InvalidStateTransitionError
 
 
+REASON_MODEL_EVALUATION_IDENTITY_CONFLICT = (
+    "ADVISORY_FORWARD_MODEL_EVALUATION_IDENTITY_CONFLICT"
+)
+
+
 class AdvisoryForwardActiveEpisodeStateConflictError(InvalidStateTransitionError):
     error_code = "ADVISORY_FORWARD_ACTIVE_EPISODE_STATE_CONFLICT"
 
