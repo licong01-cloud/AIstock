@@ -1592,7 +1592,6 @@ def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping(
     receipt = subject._c010_expected_opportunity_receipt(
         connection,
         source_spec,
-        security_identity_manifest=_C010SecurityManifest(),
         train_start=date(2022, 1, 1),
         train_end=date(2024, 6, 30),
         authority_identities=[authority],
@@ -1601,6 +1600,9 @@ def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping(
     assert receipt["entries"][0]["opportunity_dates"] == ["2022-01-04"]
     query = " ".join(connection.queries[0].split())
     assert "market.sw_index_classify" not in query
+    assert "market.kline_daily_raw" not in query
+    assert "FROM market.trading_calendar calendar" in query
+    assert "JOIN market.stock_universe_pit_spans spans" in query
     assert "canonical_l1_catalog AS" in query
     assert "JOIN l2_owner owner" in query
     assert "owner.canonical_l1_count=1" in query
@@ -1618,7 +1620,6 @@ def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping(
                 ]
             ),
             source_spec,
-            security_identity_manifest=_C010SecurityManifest(),
             train_start=date(2022, 1, 1),
             train_end=date(2024, 6, 30),
             authority_identities=[authority],

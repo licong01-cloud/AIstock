@@ -623,46 +623,32 @@ def _c010_expected_opportunity_receipt(
     conn: Any,
     source_spec: StockFactSourceSpec,
     *,
-    security_identity_manifest: Any,
     train_start: date,
     train_end: date,
     authority_identities: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    alias_rows = security_identity_manifest.alias_rows("market.kline_daily_raw")
     with conn.cursor() as cursor:
         cursor.execute(
             f"""
-            WITH {MEMBER_CLASSIFICATION_CTES}, price_alias AS (
-              SELECT canonical_ts_code,source_ts_code,effective_start::date,effective_end::date
-              FROM jsonb_to_recordset(%s::jsonb) AS item(
-                canonical_ts_code text,source_ts_code text,effective_start text,effective_end text,
-                security_identity_id text,row_hash text
-              )
-            ), price_resolved AS (
-              SELECT price.trade_date,COALESCE(alias.canonical_ts_code,price.ts_code) canonical_ts_code,
-                     price.ts_code source_ts_code
-              FROM market.kline_daily_raw price
-              LEFT JOIN price_alias alias
-                ON alias.source_ts_code=price.ts_code
-               AND price.trade_date BETWEEN alias.effective_start AND alias.effective_end
-              WHERE price.trade_date BETWEEN %s AND %s
-            ), opportunity_source AS (
-              SELECT price.canonical_ts_code,price.trade_date,price.source_ts_code,
+            WITH {MEMBER_CLASSIFICATION_CTES}, opportunity_source AS (
+              SELECT spans.ts_code canonical_ts_code,calendar.cal_date::date trade_date,
+                     spans.ts_code source_ts_code,
                      member.l1_code source_l1_code,member.l2_code source_l2_code,
                      member.in_date,member.out_date,
                      l1.index_code l1_code,l2.index_code l2_code
-              FROM price_resolved price
-            JOIN market.stock_universe_pit_spans spans
-              ON spans.ts_code=price.canonical_ts_code AND spans.universe_key=%s
-             AND spans.eligible_start<=price.trade_date
-             AND (spans.eligible_end IS NULL OR spans.eligible_end>=price.trade_date)
-            JOIN market.sw_index_member member
-              ON member.ts_code=price.canonical_ts_code AND member.in_date<=price.trade_date
-             AND (member.out_date IS NULL OR member.out_date>=price.trade_date)
+              FROM market.trading_calendar calendar
+              JOIN market.stock_universe_pit_spans spans
+                ON spans.universe_key=%s
+               AND spans.eligible_start<=calendar.cal_date
+               AND (spans.eligible_end IS NULL OR spans.eligible_end>=calendar.cal_date)
+              JOIN market.sw_index_member member
+                ON member.ts_code=spans.ts_code AND member.in_date<=calendar.cal_date
+               AND (member.out_date IS NULL OR member.out_date>=calendar.cal_date)
               JOIN l2_owner owner
                 ON owner.l2_code=member.l2_code AND owner.canonical_l1_count=1
               JOIN canonical_l1_catalog l1 ON l1.index_code=owner.canonical_l1_code
               JOIN l2_catalog l2 ON l2.index_code=member.l2_code
+              WHERE calendar.is_trading=true AND calendar.cal_date BETWEEN %s AND %s
             ), grouped AS (
               SELECT canonical_ts_code,trade_date,
                      jsonb_agg(DISTINCT jsonb_build_object(
@@ -677,10 +663,9 @@ def _c010_expected_opportunity_receipt(
             FROM grouped ORDER BY canonical_ts_code,trade_date
             """,
             (
-                json.dumps(alias_rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                source_spec.universe_key,
                 train_start,
                 train_end,
-                source_spec.universe_key,
             ),
         )
         rows = cursor.fetchall()
@@ -984,7 +969,6 @@ def _load_l1_source_inputs(
             expected_opportunity = _c010_expected_opportunity_receipt(
                 conn,
                 source_spec,
-                security_identity_manifest=security_identity_manifest,
                 train_start=train_start,
                 train_end=train_end,
                 authority_identities=opportunity_authorities,
@@ -1392,7 +1376,6 @@ def prepare_c010_a5_domain_partition_preflight(
         opportunity = _c010_expected_opportunity_receipt(
             conn,
             source_spec,
-            security_identity_manifest=security_identity_manifest,
             train_start=train_start,
             train_end=train_end,
             authority_identities=opportunity_authorities,
