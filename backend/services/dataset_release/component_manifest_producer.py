@@ -59,6 +59,7 @@ _DATASETS = {
         "kline_daily_raw",
         "adj_factor",
         "stk_limit",
+        "stk_limit_rule_coverage",
         "suspend_d",
         "index_daily_merged",
     ),
@@ -68,6 +69,7 @@ _DATASETS = {
         "kline_daily_raw",
         "adj_factor",
         "stk_limit",
+        "stk_limit_rule_coverage",
         "suspend_d",
     ),
     Component.FACTOR_H5_STATIC: (

@@ -87,9 +87,10 @@ class SourcePartitionEvidence:
     max_key: Any
     monthly_content_leaves: tuple[Mapping[str, Any], ...]
     partition_identity: str
+    affected_instruments: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "identity": self.identity,
             "dataset": self.dataset,
             "partition_key": self.partition_key,
@@ -103,6 +104,9 @@ class SourcePartitionEvidence:
             "monthly_content_leaves": [dict(value) for value in self.monthly_content_leaves],
             "partition_identity": self.partition_identity,
         }
+        if self.affected_instruments:
+            value["affected_instruments"] = list(self.affected_instruments)
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -1442,8 +1446,9 @@ def normalize_current_source_partition(
         "min_key",
         "max_key",
         "monthly_content_leaves",
+        "affected_instruments",
     }
-    projected = {key: value.get(key) for key in allowed}
+    projected = {key: value.get(key) for key in allowed if key in value}
     projected["identity"] = value.get("identity", f"{value.get('dataset')}:{value.get('partition_key')}")
     return _normalize_source_partition(projected, require_identity=False)
 
@@ -1623,6 +1628,9 @@ def _normalize_component(
     pit_span_digest_by_code = _digest_map(value["pit_span_digest_by_code"], field="PIT span digest")
     if set(pit_span_digest_by_code) != set(pit_instruments):
         raise ComponentArtifactManifestError("PIT instruments and per-code span digests differ")
+    source_affected = {code for item in source for code in item.affected_instruments}
+    if source_affected.difference(pit_instruments):
+        raise ComponentArtifactManifestError("source affected instruments are outside the frozen PIT universe")
     adj_raw = value["adj_series"]
     adj = (
         None
@@ -1736,7 +1744,8 @@ def _normalize_source_partition(value: Mapping[str, Any], *, require_identity: b
         "max_key",
         "monthly_content_leaves",
     }
-    if set(value).difference(base_fields | {"partition_identity"}) or not base_fields.issubset(value):
+    optional_fields = {"affected_instruments"}
+    if set(value).difference(base_fields | optional_fields | {"partition_identity"}) or not base_fields.issubset(value):
         raise ComponentArtifactManifestError("source partition evidence fields differ")
     dataset = str(value["dataset"]).strip()
     partition_key = str(value["partition_key"]).strip()
@@ -1749,6 +1758,17 @@ def _normalize_source_partition(value: Mapping[str, Any], *, require_identity: b
     table_schema = _optional_digest(value["source_table_schema_digest"], "source_table_schema_digest")
     membership = _optional_digest(value["source_code_membership_digest"], "source_code_membership_digest")
     monthly_leaves = _monthly_content_leaves(value["monthly_content_leaves"])
+    affected: tuple[str, ...] = ()
+    if "affected_instruments" in value:
+        affected_raw = tuple(
+            _stock_instrument(item)
+            for item in _string_sequence(value["affected_instruments"], field="affected_instruments")
+        )
+        affected = tuple(sorted(set(affected_raw)))
+        if affected_raw != affected:
+            raise ComponentArtifactManifestError("affected instruments must be sorted and unique")
+        if dataset != "stk_limit_rule_coverage":
+            raise ComponentArtifactManifestError("affected instruments are only valid for rule-derived limit coverage")
     body = {
         "identity": identity,
         "dataset": dataset,
@@ -1762,6 +1782,8 @@ def _normalize_source_partition(value: Mapping[str, Any], *, require_identity: b
         "max_key": value["max_key"],
         "monthly_content_leaves": [dict(item) for item in monthly_leaves],
     }
+    if affected:
+        body["affected_instruments"] = list(affected)
     identity_digest = digest_named_fields(COMPONENT_SOURCE_PARTITION_SCHEMA, body)
     if require_identity and value.get("partition_identity") != identity_digest:
         raise ComponentArtifactManifestError("source partition derived identity differs")
@@ -1778,6 +1800,7 @@ def _normalize_source_partition(value: Mapping[str, Any], *, require_identity: b
         max_key=body["max_key"],
         monthly_content_leaves=monthly_leaves,
         partition_identity=identity_digest,
+        affected_instruments=affected,
     )
 
 

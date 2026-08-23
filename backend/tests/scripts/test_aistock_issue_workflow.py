@@ -1746,6 +1746,27 @@ def test_bug_1093_offline_hmm_jump_runtime_contract_is_none_and_exact() -> None:
     assert nearby_unregistered["target_ids"] == ["backend-main"]
 
 
+def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> None:
+    changed_files = [
+        "backend/services/dataset_release/a_share_limit_rule.py",
+        "backend/services/dataset_release/artifact_ready_build_source.py",
+        "backend/services/dataset_release/artifact_ready_source.py",
+        "backend/services/dataset_release/component_artifact_manifest.py",
+        "backend/services/dataset_release/component_manifest_producer.py",
+        "backend/services/dataset_release/mixed_planner.py",
+        "backend/services/dataset_release/stk_limit_overlay.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+
+    assert inference == {
+        "runtime_impact": "worker_scheduler",
+        "observed_impacts": ["worker_scheduler"],
+        "runtime_files": changed_files,
+        "target_ids": ["worker-scheduler"],
+    }
+
+
 def test_bug_1107_offline_hmm_ridge_runtime_contract_is_none_and_exact() -> None:
     changed_files = [
         "backend/services/hmm_risk/market_relative_ridge_candidate.py",

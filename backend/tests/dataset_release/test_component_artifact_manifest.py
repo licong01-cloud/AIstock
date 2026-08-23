@@ -577,6 +577,88 @@ def test_mixed_planner_same_cutoff_reuses_every_complete_component(tmp_path) -> 
     assert all(item.frozen_reuse is not None for item in actions.values())
 
 
+def test_mixed_planner_first_rule_limit_coverage_is_exact_code_selective(tmp_path) -> None:
+    store = ControlStore.initialize(tmp_path / "control")
+    payload = _two_code_payload()
+    for component in (Component.DAILY_BIN, Component.MINUTE_BIN):
+        payload["components"][component.value]["append_rules"][0]["datasets"].append("stk_limit")
+    baseline, current, old_context = _planner_fixture(CASStore(store.root), payload)
+    coverage = {
+        "identity": "stk_limit_rule_coverage:2024-07-01_2024-07-31",
+        "dataset": "stk_limit_rule_coverage",
+        "partition_key": "2024-07-01_2024-07-31",
+        "row_count": 1,
+        "content_digest": _digest("limit-coverage"),
+        "schema_digest": _digest("limit-coverage-schema"),
+        "source_table_schema_digest": _digest("stk-limit-table-schema"),
+        "source_code_membership_digest": _digest("stk-limit-membership"),
+        "min_key": ["000001.SZ", "2024-07-22"],
+        "max_key": ["000001.SZ", "2024-07-22"],
+        "monthly_content_leaves": [_month("2024-07", "limit-coverage")],
+        "affected_instruments": ["000001.SZ"],
+    }
+    for component in (Component.DAILY_BIN, Component.MINUTE_BIN):
+        authority = current[component]
+        current[component] = CurrentComponentAuthority(
+            partitions=(*authority.partitions, coverage),
+            adj_series=authority.adj_series,
+        )
+    context = MixedPlannerContext(
+        source_release_id=old_context.source_release_id,
+        source_release_digest=old_context.source_release_digest,
+        source_attestation_key=old_context.source_attestation_key,
+        dataset_start=old_context.dataset_start,
+        cutoff=old_context.cutoff,
+        current_pit_snapshot_digest=baseline.pit_snapshot_digest,
+        current_pit_instruments=("000001.SZ", "000002.SZ"),
+        current_pit_span_digest_by_code={
+            "000001.SZ": _digest("pit:000001.SZ"),
+            "000002.SZ": _digest("pit:000002.SZ"),
+        },
+    )
+
+    actions = _actions(
+        build_mixed_action_plan(
+            baseline=baseline,
+            current=current,
+            context=context,
+            compatible=True,
+        )
+    )
+
+    for component in (Component.DAILY_BIN, Component.MINUTE_BIN):
+        action = actions[component]
+        assert action.action.value == "SELECTIVE_REBUILD"
+        assert action.frozen_reuse is not None
+        scope = next(
+            item
+            for item in action.frozen_reuse.invalidation_scopes
+            if item.get("source_partition") == coverage["identity"]
+        )
+        assert scope["months"] == ["2024-07"]
+        assert scope["affected_instruments"] == ["000001.SZ"]
+        assert action.estimated_work["source_rows"] == 1
+        override_targets = {
+            path for path in action.frozen_reuse.create_new_targets if path.startswith("csv_overrides/")
+        }
+        assert any(path.endswith("/000001.sz.csv") for path in override_targets)
+        assert not any(path.endswith("/000002.sz.csv") for path in override_targets)
+    assert actions[Component.FACTOR_H5_STATIC].action.value == "REUSE"
+    assert actions[Component.DOMESTIC_INDEX_CONTEXT].action.value == "REUSE"
+
+    coverage["affected_instruments"] = ["000003.SZ"]
+    blocked = _actions(
+        build_mixed_action_plan(
+            baseline=baseline,
+            current=current,
+            context=context,
+            compatible=True,
+        )
+    )
+    assert blocked[Component.DAILY_BIN].action.value == "FULL_REBUILD"
+    assert blocked[Component.MINUTE_BIN].action.value == "FULL_REBUILD"
+
+
 def test_legacy_v1_manifest_drives_all_components_through_planner_reuse(
     tmp_path,
 ) -> None:

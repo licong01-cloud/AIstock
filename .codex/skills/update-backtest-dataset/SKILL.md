@@ -64,6 +64,7 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 - 不自动初始化/迁移真实 control root，不启动、停止、重启或注册 backend、Worker、scheduler、QE、RDAgent、WSL task 或 node1。
 - planner/source acquisition 只读 DB。provider 只进入 candidate-local immutable CAS/overlay，不写 DB；DB repair 是独立动作。
 - 历史 D/P 日线缺口使用 candidate-local Tushare `pro_bar` missing-only overlay；价格转厘、成交量转手、amount 千元转厘，DB/provider 重叠必须完全一致。分钟缺口固定 TDX 优先、Tushare 次级；只补 missing keys。重叠冲突、重复、required NULL/非有限、非 240 根或 Tushare `40203` 都 fail closed。
+- canonical PIT v2 内缺失 `stk_limit` 不填 NaN、不补零、也不直接标记不可交易：使用唯一版本化 A 股规则计算器，按沪深主板/创业板/科创板、交易日和 PIT ST 状态，以 `previous_raw_close × adj_prev / adj_current` 计算 raw 前收，再按 0.01 元和 `ROUND_HALF_UP` 生成 missing-only candidate CAS overlay。真实 DB 行永远优先且不得覆盖；未知板块、无涨跌幅日、参考价/复权缺失、重复或 unresolved 键全部 fail closed。首次历史稀疏 overlay 必须携带精确 affected instruments，只允许对应股票的 `SELECTIVE_REBUILD`，不得扩大为全市场导出。
 - 股票 universe 使用冻结 PIT spans；candidate 保存 canonical snapshot/hash。不得用当前 ST 列表、实验黑名单或 max-date/count 代替。
 - v2 PIT 仅接受 `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`：252 个交易所交易日 IPO 暖机、历史退市股生命周期、公告 as-of 终止风险与 ST snapshot gap 闭环必须同时满足；rolling 与 frozen snapshot 必须同 rule/digest。
 - DB 外 moneyflow 固定 `tushare_moneyflow_shares_yuan_v1`：量=股、额=元；`mf_total_net_*` 来自 canonical `net_mf_*`。
@@ -86,6 +87,7 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 - Worker、lease、hard caps、pressure ladder、WAITING/orphan recovery：读 [resource-and-worker.md](references/resource-and-worker.md)。
 - terminal outcome、receipt、attestation、signoff 和 production gates：读 [release-receipt.md](references/release-receipt.md)。
 - 12 指数、单位、provider parity 与 HMM consumer 边界：读 [index-hmm-contract.md](references/index-hmm-contract.md)。
+- `stk_limit` 规则派生、missing-only 身份和选择性失效：读 [fingerprint-and-reuse.md](references/fingerprint-and-reuse.md) 及 `docs/architecture/qe_stk_limit_rule_derived_overlay_f2_design_20260823.md`。
 
 人类 operator 步骤见 `docs/operations/qe_backtest_dataset_monthly_update_runbook.md`。低层 exporter 与历史 moneyflow/PIT 细节见 `docs/analysis/qlib_backtest_dataset_export_guide_20260712.md`；它不是普通月更入口。
 
