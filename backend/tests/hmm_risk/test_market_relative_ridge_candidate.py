@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import subprocess
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -98,6 +99,93 @@ def _p2_3c_request(commit: str = "a" * 40) -> dict[str, object]:
     }
 
 
+def _rl1_calendar() -> list[date]:
+    return [
+        *_approved_calendar(),
+        *_segment(date(2025, 4, 1), date(2025, 9, 30), 126),
+        *_segment(date(2025, 10, 1), date(2026, 3, 31), 116),
+    ]
+
+
+def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> dict[str, object]:
+    calendar = _rl1_calendar()
+    root = (artifact_root or Path("F:/AIstock_artifacts/c012_rl1_unit")).resolve()
+    candidate = root / "candidate.json"
+    first = root / "children" / "rotation_l1_candidate.fresh_process_1.json"
+    second = root / "children" / "rotation_l1_candidate.fresh_process_2.json"
+    fold_rows: list[dict[str, object]] = []
+    for name, train_start, train_end, validation_start, validation_end in subject.RL1_FOLD_BOUNDARIES:
+        train = [day for day in calendar if train_start <= day <= train_end]
+        validation = [day for day in calendar if validation_start <= day <= validation_end]
+        fold_rows.append(
+            {
+                "fold": name,
+                "train_start": train_start.isoformat(),
+                "train_end": train_end.isoformat(),
+                "validation_start": validation_start.isoformat(),
+                "validation_end": validation_end.isoformat(),
+                "train_trading_day_count": len(train),
+                "train_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in train]),
+                "validation_trading_day_count": len(validation),
+                "validation_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in validation]),
+            }
+        )
+    body: dict[str, object] = {
+        "schema_version": subject.RL1_REQUEST_SCHEMA_VERSION,
+        "contract_version": subject.RL1_CONTRACT_VERSION,
+        "expected_producer_commit": commit,
+        "fixed_market_parameters": {
+            "n_states": 2,
+            "jump_penalty": 4.0,
+            "seed": 42,
+            "arrival_cost_policy": "zero_at_each_segment_start_no_train_carry",
+        },
+        "fixed_ridge_parameters": {
+            "alpha": 100.0,
+            "fit_intercept": True,
+            "solver": "svd",
+            "positive": False,
+            "copy_X": True,
+            "tol": 1e-4,
+            "max_iter": None,
+            "random_state": None,
+        },
+        "feature_names": list(subject.P2_3C_FEATURES),
+        "target_contract": {
+            "horizon": 10,
+            "formula": "daily_l1_cross_section_centered_future_relative_excess_return",
+            "score_direction": "higher_is_future_relative_strength",
+        },
+        "development_calendar": {
+            "start": subject.RL1_DEVELOPMENT_START.isoformat(),
+            "end": subject.RL1_DEVELOPMENT_END.isoformat(),
+            "trading_day_count": len(calendar),
+            "date_set_sha256": subject.canonical_sha256([day.isoformat() for day in calendar]),
+        },
+        "folds": fold_rows,
+        "new_holdout": {
+            "state_start": subject.RL1_HOLDOUT_START.isoformat(),
+            "state_end": subject.RL1_HOLDOUT_END.isoformat(),
+            "outcome_tail_trading_days": 10,
+            "access_authorized": False,
+        },
+        "source": {
+            "source_start": "2020-07-30",
+            "source_end": subject.RL1_DEVELOPMENT_END.isoformat(),
+            "source_revision": "unit-c012-rl1-development-v1",
+        },
+        "artifact_outputs": {
+            "candidate_output": str(candidate),
+            "candidate_failure_output": str(candidate.with_name("candidate.failure.json")),
+            "child_1_output": str(first),
+            "child_1_failure_output": str(first.with_name("rotation_l1_candidate.fresh_process_1.failure.json")),
+            "child_2_output": str(second),
+            "child_2_failure_output": str(second.with_name("rotation_l1_candidate.fresh_process_2.failure.json")),
+        },
+    }
+    return {**body, "request_sha256": subject.canonical_sha256(body)}
+
+
 def _top_level_inputs() -> dict[str, object]:
     calendar = _approved_calendar()
     return {
@@ -115,6 +203,55 @@ def _stage_receipt(component: str, *, selected_alpha: float | None = None) -> di
     if selected_alpha is not None:
         body["selected_alpha"] = selected_alpha
     return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+
+def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, object]:
+    request_identity = subject._c012_rl1_request_identity(request, producer)
+    folds = [_stage_receipt(f"fold-{index}") for index in range(1, 6)]
+    attempts = [{"fit": index} for index in range(12)]
+    acceptance_body = {"component": "development", "accepted": True}
+    return {
+        "contract_version": subject.RL1_CONTRACT_VERSION,
+        "algorithm_version": subject.RL1_ALGORITHM_VERSION,
+        "model_origin": subject.RL1_MODEL_ORIGIN,
+        "producer_commit": producer,
+        "runtime_versions": {"unit": True},
+        "request_identity": request_identity,
+        "request_identity_sha256": subject.canonical_sha256(request_identity),
+        "dataset_manifest_sha256": "b" * 64,
+        "mapping_manifest_sha256": "c" * 64,
+        "c010_formal_evidence": {"receipt_sha256": "d" * 64},
+        "database_identity": {"dbname": "dev"},
+        "development_start": subject.RL1_DEVELOPMENT_START.isoformat(),
+        "development_end": subject.RL1_DEVELOPMENT_END.isoformat(),
+        "development_trading_day_count": len(_rl1_calendar()),
+        "folds": folds,
+        "fold_receipt_sha256s": [item["receipt_sha256"] for item in folds],
+        "development_acceptance": {
+            **acceptance_body,
+            "receipt_sha256": subject.canonical_sha256(acceptance_body),
+        },
+        "market": _stage_receipt("market"),
+        "rotation_L1": _stage_receipt("rotation_L1", selected_alpha=100.0),
+        "capabilities": {
+            "rotation_L1": "CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT",
+            "rotation_L2": "NOT_AVAILABLE",
+            "risk_L1": "NOT_AVAILABLE",
+            "risk_L2": "NOT_AVAILABLE",
+        },
+        "process_fit_count": 12,
+        "fit_attempts": attempts,
+        "fit_attempts_sha256": subject.canonical_sha256(attempts),
+        "selection_performed": False,
+        "parameter_search_performed": False,
+        "holdout_accessed": False,
+        "product_acceptance_performed": False,
+        "model_write": False,
+        "bundle_write": False,
+        "ready_write": False,
+        "database_write": False,
+        "runtime_action": False,
+    }
 
 
 def _prepared_relative_component(values: np.ndarray) -> jump_subject.PreparedComponent:
@@ -1068,6 +1205,380 @@ def test_cli_has_no_defaults_and_writes_typed_failure_sibling(tmp_path: Path) ->
     assert failure["model_write"] is False
     assert failure["database_write"] is False
     assert failure["runtime_action"] is False
+
+
+def test_c012_rl1_request_freezes_exact_parameters_folds_and_new_holdout() -> None:
+    request = _rl1_request()
+    identity = subject.validate_c012_rl1_static_request(request)
+
+    assert identity["contract_version"] == "C-012-RL1-D1-D6"
+    assert identity["fixed_ridge_parameters"]["alpha"] == 100.0
+    assert len(identity["folds"]) == 5
+    assert identity["new_holdout"] == {
+        "state_start": "2026-04-01",
+        "state_end": "2026-09-30",
+        "outcome_tail_trading_days": 10,
+        "access_authorized": False,
+    }
+
+    drift = dict(request)
+    drift["fixed_ridge_parameters"] = {**request["fixed_ridge_parameters"], "alpha": 10.0}
+    drift["request_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in drift.items() if key != "request_sha256"}
+    )
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject.validate_c012_rl1_static_request(drift)
+    assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+
+def _rl1_metric_fold(index: int, *, rank_ic: float = 0.03, spread: float = 0.004) -> dict[str, object]:
+    start = date(2023, 1, 2) + timedelta(days=index * 40)
+    ic_rows = [[(start + timedelta(days=offset)).isoformat(), rank_ic + 0.0001 * offset] for offset in range(20)]
+    spread_rows = [[(start + timedelta(days=offset)).isoformat(), spread + 0.00001 * offset] for offset in range(20)]
+    metrics = {
+        "metric_valid": True,
+        "mean_rank_ic": math.fsum(float(row[1]) for row in ic_rows) / len(ic_rows),
+        "mean_spread": math.fsum(float(row[1]) for row in spread_rows) / len(spread_rows),
+        "daily_rank_ic": ic_rows,
+        "daily_spread": spread_rows,
+    }
+    return {"fold": f"fold-{index + 1}", "metric_valid": True, "metrics": metrics}
+
+
+def test_c012_rl1_development_acceptance_requires_four_same_positive_folds_and_nw_boundaries() -> None:
+    folds = [_rl1_metric_fold(index) for index in range(5)]
+    accepted = subject._c012_rl1_development_acceptance(folds)
+    assert accepted["accepted"] is True
+    assert accepted["positive_fold_count"] == 5
+    assert accepted["oof_rank_ic_newey_west"]["t_stat"] >= 1.645
+    assert accepted["oof_spread_newey_west"]["t_stat"] >= 1.645
+
+    two_negative = [
+        _rl1_metric_fold(index, rank_ic=-0.01, spread=-0.001) if index < 2 else _rl1_metric_fold(index)
+        for index in range(5)
+    ]
+    rejected = subject._c012_rl1_development_acceptance(two_negative)
+    assert rejected["accepted"] is False
+    assert rejected["positive_fold_count"] == 3
+    assert rejected["reason_code"] == subject.REASON_RL1_DEVELOPMENT
+
+
+def test_c012_rl1_fold_metrics_rejects_daily_denominator_below_28() -> None:
+    day = date(2025, 1, 2)
+    scores = {(f"L1-{index:02d}", day): float(index) for index in range(27)}
+    targets = subject.TargetRows(
+        level="L1",
+        start=day,
+        end=day,
+        eligible_dates=(day,),
+        values={(code, score_day): score * 0.001 for (code, score_day), score in scores.items()},
+        receipt={},
+    )
+    states = {
+        (code, score_day): "trending" if index >= 22 else "fading" if index < 5 else "neutral"
+        for index, ((code, score_day), _score) in enumerate(scores.items())
+    }
+
+    metrics = subject._c012_rl1_fold_metrics(scores, targets, states)
+    assert metrics["metric_valid"] is False
+    assert metrics["insufficient_denominator_dates"] == [day.isoformat()]
+
+
+def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _rl1_request()
+    calendar = _rl1_calendar()
+
+    def receipt(name: str) -> dict[str, object]:
+        body = {"name": name}
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    inputs = {
+        "trading_dates": tuple(calendar),
+        "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
+        "mapping_manifest": {"rows": []},
+        "database": {"host": "redacted", "dbname": "dev"},
+        "provider_absence_manifest": {"manifest": "v1"},
+        "security_identity_manifest": {"manifest": "v1"},
+        "c010_diagnostic": {
+            "eligibility": receipt("eligibility"),
+            "aggregate_evidence": receipt("aggregate"),
+            "l1_cross_section_evidence": receipt("l1-cross"),
+            "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
+        },
+    }
+    attempts_by_market: list[dict[str, object]] = []
+
+    def fake_market(*args: object, **kwargs: object) -> subject.MarketConditioningFold:
+        attempts = kwargs["attempt_log"]
+        attempts.append({"component": "market", "status": "fit_completed"})
+        index = len(attempts_by_market)
+        attempts_by_market.append({"index": index})
+        day = date(2024, 1, 2) + timedelta(days=index)
+        receipt = _stage_receipt(f"market-{index}")
+        return subject.MarketConditioningFold(
+            fold=f"fold-{index + 1}",
+            train_states={day: "risk_on"},
+            validation_states={day: "risk_on"},
+            receipt=receipt,
+        )
+
+    feature_count = len(subject.P2_3C_FEATURES)
+    conditioned_component = subject.ConditionedFeatureComponent(
+        component="L1_market_conditioned",
+        level="L1",
+        feature_names=subject.P2_3C_FEATURES,
+        canonical_codes=("L1",),
+        sequences=(),
+        unavailable_items=(),
+        valid_row_count=1,
+        valid_identity_sha256="d" * 64,
+    )
+    conditioned = subject.ConditionedComponent(conditioned_component, _stage_receipt("interaction"))
+    dummy_target = subject.TargetRows("L1", date(2024, 1, 2), date(2024, 1, 2), (), {}, {})
+    dummy_component = _prepared_relative_component(np.ones((2, len(subject.RELATIVE_FEATURES))))
+    monkeypatch.setattr(subject, "_component_panel", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(
+        subject,
+        "_prepare_fold",
+        lambda *args, **kwargs: (dummy_component, dummy_target, dummy_component, dummy_target),
+    )
+    monkeypatch.setattr(subject, "_condition_component", lambda *args, **kwargs: conditioned)
+
+    def fake_fit(*args: object, **kwargs: object) -> subject.RidgeFit:
+        kwargs["attempt_log"].append({"component": "L1", "status": "fit_completed"})
+        return subject.RidgeFit(100.0, np.ones(feature_count), 0.0, 100, feature_count, "e" * 64)
+
+    monkeypatch.setattr(subject, "_fit_ridge", fake_fit)
+    score_calls: list[int] = []
+
+    def fake_scores(*args: object, **kwargs: object) -> tuple[dict[tuple[str, date], float], dict[str, object]]:
+        index = len(score_calls)
+        score_calls.append(index)
+        return {}, _stage_receipt(f"scores-{index}")
+
+    monkeypatch.setattr(subject, "predict_scores", fake_scores)
+    monkeypatch.setattr(subject, "project_daily_states", lambda *args, **kwargs: ({}, _stage_receipt("states")))
+    metric_index = iter(range(5))
+    monkeypatch.setattr(
+        subject,
+        "_c012_rl1_fold_metrics",
+        lambda *args, **kwargs: _rl1_metric_fold(next(metric_index))["metrics"] | {"metric_valid": True},
+    )
+
+    def fake_market_final(*args: object, **kwargs: object) -> tuple[dict[date, str], dict[str, object]]:
+        kwargs["attempt_log"].append({"component": "market-final", "status": "fit_completed"})
+        return {}, _stage_receipt("market-final")
+
+    def fake_level_final(*args: object, **kwargs: object) -> dict[str, object]:
+        kwargs["attempt_log"].append({"component": "L1-final", "status": "fit_completed"})
+        return _stage_receipt("rotation-L1-final")
+
+    monkeypatch.setattr(subject, "_market_fold_conditioning", fake_market)
+    monkeypatch.setattr(subject, "_c012_rl1_market_final", fake_market_final)
+    monkeypatch.setattr(subject, "_c012_rl1_level_final", fake_level_final)
+    monkeypatch.setattr(subject, "_runtime_versions", lambda: {"test": True})
+
+    child = subject.run_c012_rl1_candidate_process(
+        inputs,
+        request,
+        producer_commit="a" * 40,
+        process_index=1,
+    )
+
+    payload = child["reproducibility_payload"]
+    assert payload["process_fit_count"] == 12
+    assert payload["selection_performed"] is False
+    assert payload["parameter_search_performed"] is False
+    assert payload["holdout_accessed"] is False
+    assert score_calls == [0, 1, 2, 3, 4]
+    assert [item["fold"] for item in payload["folds"]][-2:] == ["fold-4", "fold-5"]
+    assert len({item["scores"]["receipt_sha256"] for item in payload["folds"]}) == 5
+    assert payload["capabilities"] == {
+        "rotation_L1": "CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT",
+        "rotation_L2": "NOT_AVAILABLE",
+        "risk_L1": "NOT_AVAILABLE",
+        "risk_L2": "NOT_AVAILABLE",
+    }
+
+    second_body = {key: value for key, value in child.items() if key != "report_sha256"}
+    second_body["process_index"] = 2
+    second = {**second_body, "report_sha256": subject.canonical_sha256(second_body)}
+    report = subject.close_c012_rl1_candidate_children(
+        child,
+        second,
+        request=request,
+        producer_commit="a" * 40,
+    )
+    assert report["planned_fit_count"] == 24
+    assert report["completed_fit_count"] == 24
+    assert report["status"] == "ROTATION_L1_CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT"
+    assert report["model_write"] is False
+    assert report["bundle_write"] is False
+    assert report["ready_write"] is False
+
+
+def test_c012_rl1_cli_parent_closes_two_durable_children_without_database_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request_value = _rl1_request(artifact_root=tmp_path)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request_value), encoding="utf-8")
+    output = tmp_path / "candidate.json"
+    child_dir = tmp_path / "children"
+    producer = "a" * 40
+    payload = _rl1_child_payload(request_value, producer)
+    monkeypatch.setattr(cli, "_producer_commit", lambda: producer)
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        index = int(command[command.index("--child-index") + 1])
+        body = {
+            "schema_version": subject.RL1_REPORT_SCHEMA_VERSION,
+            "record_type": "fresh_process_child",
+            "status": "child_complete",
+            "process_index": index,
+            "producer_commit": producer,
+            "reproducibility_payload": payload,
+            "reproducibility_payload_sha256": subject.canonical_sha256(payload),
+        }
+        report = {**body, "report_sha256": subject.canonical_sha256(body)}
+        subject.write_report(
+            cli._child_path(child_dir, index),
+            report,
+            repository_root=Path(__file__).resolve().parents[3],
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    result = cli.main(
+        [
+            "--candidate-mode",
+            "c012-rl1",
+            "--request",
+            str(request_path),
+            "--output",
+            str(output),
+            "--child-dir",
+            str(child_dir),
+            "--db-env-prefix",
+            "UNIT",
+        ]
+    )
+    assert result == 0
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["completed_fit_count"] == 24
+    assert report["candidate_receipt_write"] is True
+    assert report["holdout_accessed"] is False
+
+
+def test_c012_rl1_closure_rejects_self_hashed_extra_child_or_payload_authority() -> None:
+    request = _rl1_request()
+    producer = "a" * 40
+    payload = _rl1_child_payload(request, producer)
+
+    def child(index: int, value: dict[str, object]) -> dict[str, object]:
+        body = {
+            "schema_version": subject.RL1_REPORT_SCHEMA_VERSION,
+            "record_type": "fresh_process_child",
+            "status": "child_complete",
+            "process_index": index,
+            "producer_commit": producer,
+            "reproducibility_payload": value,
+            "reproducibility_payload_sha256": subject.canonical_sha256(value),
+        }
+        return {**body, "report_sha256": subject.canonical_sha256(body)}
+
+    first = child(1, payload)
+    second = child(2, payload)
+    extra_child = dict(first)
+    extra_child["untrusted"] = True
+    extra_child["report_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in extra_child.items() if key != "report_sha256"}
+    )
+    with pytest.raises(subject.RidgeCandidateError) as child_error:
+        subject.close_c012_rl1_candidate_children(extra_child, second, request=request, producer_commit=producer)
+    assert child_error.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
+
+    extra_payload = {**payload, "untrusted": True}
+    with pytest.raises(subject.RidgeCandidateError) as payload_error:
+        subject.close_c012_rl1_candidate_children(
+            child(1, extra_payload), child(2, extra_payload), request=request, producer_commit=producer
+        )
+    assert payload_error.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
+
+
+def test_c012_rl1_request_loader_rejects_non_finite_json(tmp_path: Path) -> None:
+    path = tmp_path / "request.json"
+    path.write_text('{"value": NaN}', encoding="utf-8")
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        cli._load_request(path)
+    assert captured.value.reason_code == subject.REASON_INPUT_IDENTITY
+
+
+def test_c012_rl1_child_failure_authority_rejects_holdout_claim(tmp_path: Path) -> None:
+    request = _rl1_request()
+    producer = "a" * 40
+    report = subject.report_for_write(
+        subject.failure_report(
+            request,
+            producer_commit=producer,
+            error=subject.RidgeCandidateError(
+                subject.REASON_RL1_DEVELOPMENT,
+                "development unavailable",
+                stage="development_acceptance",
+            ),
+            candidate_mode="c012-rl1",
+            process_index=1,
+        ),
+        failure=True,
+    )
+    report["holdout_accessed"] = True
+    report["report_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in report.items() if key != "report_sha256"}
+    )
+    path = tmp_path / "child.failure.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        cli._load_c012_child_failure(path, producer_commit=producer, request=request, process_index=1)
+    assert captured.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
+
+
+def test_c012_rl1_cli_output_drift_writes_only_request_authorized_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authorized = tmp_path / "authorized"
+    request = _rl1_request(artifact_root=authorized)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    monkeypatch.setattr(cli, "_producer_commit", lambda: pytest.fail("producer lookup must follow output closure"))
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: pytest.fail("database loader must follow output closure"),
+    )
+    unauthorized_output = tmp_path / "other" / "candidate.json"
+
+    result = cli.main(
+        [
+            "--candidate-mode",
+            "c012-rl1",
+            "--request",
+            str(request_path),
+            "--output",
+            str(unauthorized_output),
+            "--child-dir",
+            str(tmp_path / "other" / "children"),
+            "--db-env-prefix",
+            "UNUSED",
+        ]
+    )
+
+    assert result == 1
+    assert not unauthorized_output.exists()
+    assert not unauthorized_output.with_name("candidate.failure.json").exists()
+    failure_path = Path(str(request["artifact_outputs"]["candidate_failure_output"]))
+    failure = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert failure["failure_reason_code"] == subject.REASON_RL1_INPUT
 
 
 def test_cli_rejects_holdout_source_before_database_loader(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import json
+import math
+import subprocess
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -430,6 +432,186 @@ def _evaluation_fixture() -> tuple[dict[str, object], subject.FrozenCandidate, d
         "artifact_outputs": _artifact_outputs(Path("F:/AIstock_artifacts/p2_4_evaluation_test")),
     }
     request = {**request_body, "request_sha256": subject.canonical_sha256(request_body)}
+    return inputs, candidate, request
+
+
+def _rotation_outputs(root: Path) -> dict[str, str]:
+    return {
+        "acceptance_output": str((root / "acceptance.json").resolve()),
+        "acceptance_failure_output": str((root / "acceptance.failure.json").resolve()),
+        "component_output": str((root / "component.json").resolve()),
+        "bundle_output": str((root / "bundle.json").resolve()),
+        "child_1_output": str((root / "child-1.json").resolve()),
+        "child_1_failure_output": str((root / "child-1.failure.json").resolve()),
+        "child_2_output": str((root / "child-2.json").resolve()),
+        "child_2_failure_output": str((root / "child-2.failure.json").resolve()),
+    }
+
+
+def _rotation_fixture(tmp_path: Path) -> tuple[dict[str, object], subject.RotationL1Candidate, dict[str, object]]:
+    state = _segment(subject.RL1_HOLDOUT_START, subject.RL1_HOLDOUT_END, 126)
+    tail = tuple(
+        subject.RL1_HOLDOUT_END + timedelta(days=index)
+        for index in range(1, 30)
+        if (subject.RL1_HOLDOUT_END + timedelta(days=index)).weekday() < 5
+    )[: subject.RL1_OUTCOME_TAIL_TRADING_DAYS]
+    calendar = (*state, *tail)
+    l1_codes = [f"L1-{index:03d}" for index in range(31)]
+    l2_codes = [f"L2-{index:03d}" for index in range(131)]
+
+    def receipt(name: str) -> dict[str, object]:
+        body = {"name": name}
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    inputs: dict[str, object] = {
+        "trading_dates": calendar,
+        "panel": _holdout_panel(l1_codes, calendar),
+        "l2_panel": _holdout_panel(l2_codes, calendar),
+        "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
+        "mapping_manifest": {"mapping": "rotation-v1"},
+        "feature_definition": {"formula": "rotation-l1-v1", "level": "L1"},
+        "security_identity_manifest": {"security": "v1"},
+        "provider_absence_manifest": {"absence": "v1"},
+        "c010_diagnostic": {
+            "eligibility": receipt("eligibility"),
+            "aggregate_evidence": receipt("aggregate"),
+            "l1_cross_section_evidence": receipt("l1-cross"),
+            "l1_feature_definition": {"features": list(RELATIVE_FEATURES)},
+        },
+    }
+    c010 = subject._rotation_l1_c010_identity(inputs)
+    market_preprocess = _preprocessor(tuple(MARKET_FEATURES))
+    market_body: dict[str, object] = {
+        "schema_version": subject.RL1_MARKET_COMPONENT_SCHEMA_VERSION,
+        "fixed_jump_penalty": 4.0,
+        "fixed_seed": 42,
+        "preprocess": market_preprocess.payload(),
+        "preprocess_sha256": subject.canonical_sha256(market_preprocess.payload()),
+        "centers": [[-1.0] * len(MARKET_FEATURES), [1.0] * len(MARKET_FEATURES)],
+        "semantic_mapping": {"0": "risk_off", "1": "risk_on"},
+    }
+    market_body["centers_sha256"] = subject.sha256_bytes(
+        subject.np.asarray(market_body["centers"], dtype="<f8").tobytes()
+    )
+    market_body["semantic_mapping_sha256"] = subject.canonical_sha256(market_body["semantic_mapping"])
+    market = {**market_body, "receipt_sha256": subject.canonical_sha256(market_body)}
+    level_preprocess = _preprocessor(tuple(RELATIVE_FEATURES))
+    coefficient = subject.np.asarray([1.0, 0.0, 0.0, 0.0, 0.0] + [0.0] * 5, dtype="<f8")
+    fit_body = {
+        "alpha": 100.0,
+        "coefficient": coefficient.tolist(),
+        "coefficient_sha256": subject.sha256_bytes(coefficient.tobytes()),
+        "intercept": 0.0,
+        "row_count": 1000,
+        "feature_count": 10,
+        "training_identity_sha256": "b" * 64,
+    }
+    rotation_body: dict[str, object] = {
+        "schema_version": subject.RL1_COMPONENT_SCHEMA_VERSION,
+        "component": "rotation_L1",
+        "level": "L1",
+        "selected_alpha": 100.0,
+        "canonical_sector_count": 31,
+        "canonical_sector_sha256": subject.canonical_sha256(l1_codes),
+        "preprocess": level_preprocess.payload(),
+        "preprocess_sha256": subject.canonical_sha256(level_preprocess.payload()),
+        "fit": _receipt(fit_body),
+    }
+    rotation = {**rotation_body, "receipt_sha256": subject.canonical_sha256(rotation_body)}
+    development_source = {
+        "source_start": "2020-07-30",
+        "source_end": subject.RL1_DEVELOPMENT_END.isoformat(),
+        "source_revision": "rotation-development-v1",
+    }
+    request_identity = {
+        "source": development_source,
+        "source_sha256": subject.canonical_sha256(development_source),
+        "request_sha256": "e" * 64,
+    }
+    folds = [_receipt({"fold": f"fold-{index}"}) for index in range(1, 6)]
+    attempts = [{"fit": index} for index in range(12)]
+    payload = {
+        "contract_version": subject.RL1_CONTRACT_VERSION,
+        "algorithm_version": subject.RL1_ALGORITHM_VERSION,
+        "model_origin": "rotation_l1_market_conditioned_ridge_v1",
+        "producer_commit": "a" * 40,
+        "runtime_versions": {"unit": True},
+        "request_identity": request_identity,
+        "request_identity_sha256": subject.canonical_sha256(request_identity),
+        "dataset_manifest_sha256": "6" * 64,
+        "mapping_manifest_sha256": "7" * 64,
+        "database_identity": _database_identity(),
+        "c010_formal_evidence": c010,
+        "development_start": "2022-01-04",
+        "development_end": subject.RL1_DEVELOPMENT_END.isoformat(),
+        "development_trading_day_count": 1000,
+        "folds": folds,
+        "fold_receipt_sha256s": [item["receipt_sha256"] for item in folds],
+        "development_acceptance": _receipt({"accepted": True}),
+        "market": market,
+        "rotation_L1": rotation,
+        "process_fit_count": 12,
+        "fit_attempts": attempts,
+        "fit_attempts_sha256": subject.canonical_sha256(attempts),
+        "selection_performed": False,
+        "parameter_search_performed": False,
+        "holdout_accessed": False,
+        "product_acceptance_performed": False,
+        "model_write": False,
+        "bundle_write": False,
+        "ready_write": False,
+        "database_write": False,
+        "runtime_action": False,
+        "capabilities": {
+            "rotation_L1": "CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT",
+            "rotation_L2": "NOT_AVAILABLE",
+            "risk_L1": "NOT_AVAILABLE",
+            "risk_L2": "NOT_AVAILABLE",
+        },
+    }
+    report_body: dict[str, object] = {
+        "schema_version": subject.RL1_REPORT_SCHEMA_VERSION,
+        "contract_version": subject.RL1_CONTRACT_VERSION,
+        "algorithm_version": subject.RL1_ALGORITHM_VERSION,
+        "model_origin": "rotation_l1_market_conditioned_ridge_v1",
+        "record_type": "candidate",
+        "status": "ROTATION_L1_CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT",
+        "producer_commit": "a" * 40,
+        "request_sha256": request_identity["request_sha256"],
+        "planned_fit_count": 24,
+        "completed_fit_count": 24,
+        "selection_performed": False,
+        "parameter_search_performed": False,
+        "holdout_accessed": False,
+        "product_acceptance_performed": False,
+        "candidate_receipt_write": True,
+        "failure_receipt_write": False,
+        "model_write": False,
+        "bundle_write": False,
+        "ready_write": False,
+        "database_write": False,
+        "runtime_action": False,
+        "child_report_sha256s": ["1" * 64, "2" * 64],
+        "reproducibility_payload": payload,
+        "reproducibility_payload_sha256": subject.canonical_sha256(payload),
+    }
+    report = {**report_body, "report_sha256": subject.canonical_sha256(report_body)}
+    candidate = subject.RotationL1Candidate(report=report, payload=payload, market=market, rotation_l1=rotation)
+    source = {
+        "source_start": "2020-07-30",
+        "source_end": tail[-1].isoformat(),
+        "source_revision": "rotation-holdout-v1",
+        "development_end": subject.RL1_DEVELOPMENT_END.isoformat(),
+        "state_start": subject.RL1_HOLDOUT_START.isoformat(),
+        "state_end": subject.RL1_HOLDOUT_END.isoformat(),
+        "development_source_sha256": subject.canonical_sha256(development_source),
+    }
+    request = subject.build_rotation_l1_holdout_request(
+        inputs,
+        candidate,
+        source=source,
+        artifact_outputs=_rotation_outputs(tmp_path),
+    )
     return inputs, candidate, request
 
 
@@ -1941,3 +2123,498 @@ def test_child_source_preflight_failure_does_not_claim_holdout_access(
     assert failure["failure_stage"] == "source_preflight"
     assert failure["holdout_accessed"] is False
     assert failure["product_acceptance_performed"] is False
+
+
+def test_rotation_l1_candidate_and_request_close_new_source_without_reusing_old_holdout(tmp_path: Path) -> None:
+    inputs, candidate, request = _rotation_fixture(tmp_path)
+    candidate_path = tmp_path / "candidate.json"
+    _write_json(candidate_path, candidate.report)
+
+    loaded = subject.load_rotation_l1_candidate(candidate_path, expected_sha256=str(candidate.report["report_sha256"]))
+    receipt = subject.validate_rotation_l1_holdout_request(request, loaded)
+    state_dates, tail_dates, c010 = subject.validate_rotation_l1_loaded_source(inputs, request, loaded)
+
+    assert receipt["holdout_evaluation_id"] == request["holdout_evaluation_id"]
+    assert state_dates[0] == subject.RL1_HOLDOUT_START
+    assert state_dates[-1] == subject.RL1_HOLDOUT_END
+    assert len(tail_dates) == 10
+    assert c010 == candidate.payload["c010_formal_evidence"]
+    assert request["holdout_source"]["source"]["source_revision"] == "rotation-holdout-v1"
+    assert (
+        request["holdout_source"]["source"]["development_source_sha256"]
+        == candidate.payload["request_identity"]["source_sha256"]
+    )
+
+    forged = copy.deepcopy(candidate.report)
+    forged_payload = {**forged["reproducibility_payload"], "untrusted": True}
+    forged["reproducibility_payload"] = forged_payload
+    forged["reproducibility_payload_sha256"] = subject.canonical_sha256(forged_payload)
+    forged["report_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in forged.items() if key != "report_sha256"}
+    )
+    forged_path = tmp_path / "forged-candidate.json"
+    _write_json(forged_path, forged)
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.load_rotation_l1_candidate(forged_path, expected_sha256=str(forged["report_sha256"]))
+    assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+
+def test_rotation_l1_new_holdout_requires_distinct_source_revision(tmp_path: Path) -> None:
+    inputs, candidate, request = _rotation_fixture(tmp_path)
+    source = dict(request["holdout_source"]["source"])
+    source["source_revision"] = candidate.payload["request_identity"]["source"]["source_revision"]
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.build_rotation_l1_holdout_request(
+            inputs,
+            candidate,
+            source=source,
+            artifact_outputs=request["artifact_outputs"],
+        )
+    assert captured.value.reason_code == subject.REASON_RL1_HOLDOUT_NOT_READY
+
+
+def test_rotation_l1_c010_period_receipts_may_change_but_stable_policy_must_match(tmp_path: Path) -> None:
+    inputs, candidate, original = _rotation_fixture(tmp_path)
+    inputs["c010_diagnostic"] = {
+        **inputs["c010_diagnostic"],
+        "eligibility": _receipt({"name": "holdout-eligibility"}),
+        "aggregate_evidence": _receipt({"name": "holdout-aggregate"}),
+        "l1_cross_section_evidence": _receipt({"name": "holdout-l1-cross"}),
+    }
+    request = subject.build_rotation_l1_holdout_request(
+        inputs,
+        candidate,
+        source=original["holdout_source"]["source"],
+        artifact_outputs=original["artifact_outputs"],
+    )
+    _state, _tail, current = subject.validate_rotation_l1_loaded_source(inputs, request, candidate)
+    assert (
+        current["eligibility_receipt_sha256"] != candidate.payload["c010_formal_evidence"]["eligibility_receipt_sha256"]
+    )
+
+    drifted_inputs = copy.deepcopy(inputs)
+    drifted_inputs["provider_absence_manifest"] = {"absence": "changed-policy"}
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.build_rotation_l1_holdout_request(
+            drifted_inputs,
+            candidate,
+            source=original["holdout_source"]["source"],
+            artifact_outputs=original["artifact_outputs"],
+        )
+    assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+
+def _rotation_metric_inputs(
+    state_dates: tuple[date, ...],
+) -> tuple[dict[tuple[str, date], float], dict[tuple[str, date], str], dict[tuple[str, date], float]]:
+    codes = [f"L1-{index:03d}" for index in range(31)]
+    scores: dict[tuple[str, date], float] = {}
+    states: dict[tuple[str, date], str] = {}
+    outcomes: dict[tuple[str, date], float] = {}
+    for day_index, day in enumerate(state_dates):
+        swap_count = day_index % 5
+        rank_values = list(range(31))
+        for offset in range(swap_count):
+            left = 10 + offset * 2
+            rank_values[left], rank_values[left + 1] = rank_values[left + 1], rank_values[left]
+        for code_index, code in enumerate(codes):
+            score = float(code_index)
+            scores[(code, day)] = score
+            states[(code, day)] = "fading" if code_index < 6 else "trending" if code_index >= 25 else "neutral"
+            outcomes[(code, day)] = 0.001 * rank_values[code_index] + 0.00001 * (day_index % 7)
+    return scores, states, outcomes
+
+
+def test_rotation_l1_product_metrics_use_score_rank_spread_nw_and_both_quarters() -> None:
+    state_dates = _segment(subject.RL1_HOLDOUT_START, subject.RL1_HOLDOUT_END, 126)
+    scores, states, outcomes = _rotation_metric_inputs(state_dates)
+
+    metrics = subject.rotation_l1_product_metrics(scores, states, outcomes, state_dates)
+
+    assert metrics["product_metrics_passed"] is True
+    assert metrics["mean_rank_ic"] >= 0.02
+    assert metrics["mean_spread"] >= 0.003
+    assert metrics["rank_ic_newey_west"]["t_stat"] >= 1.645
+    assert metrics["spread_newey_west"]["t_stat"] >= 1.645
+    assert [row["quarter"] for row in metrics["quarter_metrics"]] == ["2026-Q2", "2026-Q3"]
+    assert all(row["coverage_passed"] for row in metrics["quarter_metrics"])
+    assert all(row["mean_rank_ic"] > 0.0 and row["mean_spread"] > 0.0 for row in metrics["quarter_metrics"])
+
+    outcomes.pop(("L1-000", state_dates[0]))
+    failed = subject.rotation_l1_product_metrics(scores, states, outcomes, state_dates)
+    assert failed["eligible_date_count"] == len(state_dates)
+    assert failed["required_date_count"] == math.ceil(0.80 * len(state_dates))
+    assert failed["unavailable"][0]["reason_code"] == subject.REASON_RL1_METRIC
+
+
+def test_rotation_l1_coverage_uses_31_denominator_and_never_claims_full_ready() -> None:
+    state_dates = _segment(subject.RL1_HOLDOUT_START, subject.RL1_HOLDOUT_END, 20)
+    codes = [f"L1-{index:03d}" for index in range(31)]
+    c010 = _receipt({"name": "c010"})
+    full = {(code, day) for code in codes for day in state_dates}
+
+    full_receipt = subject.rotation_l1_coverage(
+        state_dates=state_dates,
+        canonical_codes=codes,
+        prediction_available=full,
+        outcome_available=full,
+        product_metrics_passed=True,
+        c010_identity=c010,
+    )
+    assert full_receipt["coverage_status"] == "FULL_COVERAGE"
+    assert full_receipt["bundle_status"] == "CAPABILITY_AVAILABLE"
+    assert full_receipt["prediction_only_count"] == 0
+    assert full_receipt["outcome_only_count"] == 0
+    assert full_receipt["both_unavailable_count"] == 0
+    assert full_receipt["abstention_count"] == 0
+
+    partial = set(full)
+    for day in state_dates[:2]:
+        partial.remove(("L1-030", day))
+    coverage_receipt = subject.rotation_l1_coverage(
+        state_dates=state_dates,
+        canonical_codes=codes,
+        prediction_available=partial,
+        outcome_available=full,
+        product_metrics_passed=True,
+        c010_identity=c010,
+    )
+    assert coverage_receipt["coverage_status"] == "COVERAGE_AVAILABLE"
+    assert coverage_receipt["bundle_status"] == "CAPABILITY_AVAILABLE"
+    assert coverage_receipt["outcome_only_count"] == 2
+    assert coverage_receipt["prediction_only_count"] == 0
+    assert coverage_receipt["both_unavailable_count"] == 0
+    assert coverage_receipt["abstention_count"] == 2
+
+    insufficient = {(code, day) for code in codes[:27] for day in state_dates}
+    failed = subject.rotation_l1_coverage(
+        state_dates=state_dates,
+        canonical_codes=codes,
+        prediction_available=insufficient,
+        outcome_available=full,
+        product_metrics_passed=True,
+        c010_identity=c010,
+    )
+    assert failed["coverage_status"] == "INSUFFICIENT_COVERAGE"
+    assert failed["bundle_status"] == "NOT_AVAILABLE"
+
+
+def test_rotation_l1_child_closure_writes_component_and_bundle_but_never_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, candidate, request = _rotation_fixture(tmp_path)
+    state_dates = tuple(
+        day for day in inputs["trading_dates"] if subject.RL1_HOLDOUT_START <= day <= subject.RL1_HOLDOUT_END
+    )
+    scores, states, outcomes = _rotation_metric_inputs(state_dates)
+    monkeypatch.setattr(
+        subject,
+        "_rotation_l1_market_states",
+        lambda *args, **kwargs: ({day: "risk_on" for day in state_dates}, _receipt({"name": "market"})),
+    )
+    monkeypatch.setattr(
+        subject, "_rotation_l1_level_states", lambda *args, **kwargs: (scores, states, _receipt({"name": "state"}))
+    )
+    monkeypatch.setattr(subject, "_rotation_l1_outcomes", lambda *args, **kwargs: outcomes)
+    monkeypatch.setattr(subject, "runtime_versions", lambda: {"test": True})
+
+    first = subject.evaluate_rotation_l1_child(
+        inputs,
+        request,
+        candidate,
+        process_index=1,
+        producer_commit="d" * 40,
+    )
+    second_body = {key: value for key, value in first.items() if key != "report_sha256"}
+    second_body["process_index"] = 2
+    second = {**second_body, "report_sha256": subject.canonical_sha256(second_body)}
+    draft = subject.close_rotation_l1_children(first, second, request=request, producer_commit="d" * 40)
+    component = subject.rotation_l1_component_artifact(draft, candidate)
+    bundle = subject.rotation_l1_capability_bundle(draft, component)
+    acceptance = subject.finalize_rotation_l1_acceptance(
+        draft,
+        component_sha256=str(component["component_sha256"]),
+        bundle_sha256=str(bundle["bundle_sha256"]),
+    )
+    readback = subject.validate_rotation_l1_artifact_bundle(
+        acceptance,
+        component=component,
+        bundle=bundle,
+    )
+
+    assert draft["status"] == "CAPABILITY_AVAILABLE"
+    assert draft["capabilities"] == {
+        "rotation_L1": "AVAILABLE",
+        "rotation_L2": "NOT_AVAILABLE",
+        "risk_L1": "NOT_AVAILABLE",
+        "risk_L2": "NOT_AVAILABLE",
+    }
+    assert component["ready"] is False
+    assert bundle["ready"] is False
+    assert acceptance["ready_write"] is False
+    assert acceptance["ready_sha256"] is None
+    assert readback["bundle_valid"] is True
+
+    forged_bundle = {**bundle, "status": "FULL_READY"}
+    forged_bundle["bundle_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in forged_bundle.items() if key != "bundle_sha256"}
+    )
+    forged_acceptance = {**acceptance, "bundle_sha256": forged_bundle["bundle_sha256"]}
+    forged_acceptance["report_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in forged_acceptance.items() if key != "report_sha256"}
+    )
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.validate_rotation_l1_artifact_bundle(
+            forged_acceptance,
+            component=component,
+            bundle=forged_bundle,
+        )
+    assert captured.value.reason_code == subject.REASON_RL1_READBACK
+
+
+def test_rotation_l1_not_available_writes_no_component_or_bundle(tmp_path: Path) -> None:
+    _inputs, candidate, request = _rotation_fixture(tmp_path)
+    payload = {
+        "candidate_report_sha256": candidate.report["report_sha256"],
+        "holdout_evaluation_id": request["holdout_evaluation_id"],
+        "holdout_source_sha256": subject.canonical_sha256(request["holdout_source"]),
+        "state_date_set_sha256": request["holdout_source"]["state_date_set_sha256"],
+        "outcome_tail_date_set_sha256": request["holdout_source"]["outcome_tail_date_set_sha256"],
+        "market_receipt": _receipt({"status": "complete"}),
+        "rotation_l1_state": _receipt({"status": "complete"}),
+        "rotation_l1_metrics": _receipt({"product_metrics_passed": False}),
+        "coverage": _receipt(
+            {
+                "coverage_status": "FULL_COVERAGE",
+                "bundle_status": "NOT_AVAILABLE",
+                "product_metrics_passed": False,
+            }
+        ),
+        "runtime_versions": {"unit": True},
+        "fit_count": 0,
+        "selection_performed": False,
+        "parameter_search_performed": False,
+        "database_write": False,
+        "runtime_action": False,
+    }
+
+    def child(index: int) -> dict[str, object]:
+        body = {
+            "schema_version": subject.RL1_HOLDOUT_CHILD_SCHEMA_VERSION,
+            "contract_version": subject.RL1_CONTRACT_VERSION,
+            "algorithm_version": subject.RL1_ALGORITHM_VERSION,
+            "status": "child_complete",
+            "process_index": index,
+            "producer_commit": "d" * 40,
+            "holdout_accessed": True,
+            "product_acceptance_performed": True,
+            "reproducibility_payload": payload,
+            "reproducibility_payload_sha256": subject.canonical_sha256(payload),
+            "model_write": False,
+            "bundle_write": False,
+            "ready_write": False,
+        }
+        return {**body, "report_sha256": subject.canonical_sha256(body)}
+
+    draft = subject.close_rotation_l1_children(child(1), child(2), request=request, producer_commit="d" * 40)
+    acceptance = subject.finalize_rotation_l1_acceptance(draft, component_sha256=None, bundle_sha256=None)
+    subject.validate_rotation_l1_artifact_bundle(acceptance, component=None, bundle=None)
+    assert acceptance["status"] == "NOT_AVAILABLE"
+    assert acceptance["component_write"] is False
+    assert acceptance["bundle_write"] is False
+    assert acceptance["ready_write"] is False
+    with pytest.raises(subject.HoldoutAcceptanceError):
+        subject.rotation_l1_component_artifact(draft, candidate)
+
+    untrusted = {**payload, "untrusted": True}
+
+    def tampered_child(index: int) -> dict[str, object]:
+        base = child(index)
+        body = {key: value for key, value in base.items() if key != "report_sha256"}
+        body["reproducibility_payload"] = untrusted
+        body["reproducibility_payload_sha256"] = subject.canonical_sha256(untrusted)
+        return {**body, "report_sha256": subject.canonical_sha256(body)}
+
+    with pytest.raises(subject.HoldoutAcceptanceError) as captured:
+        subject.close_rotation_l1_children(
+            tampered_child(1),
+            tampered_child(2),
+            request=request,
+            producer_commit="d" * 40,
+        )
+    assert captured.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
+
+
+def test_rotation_l1_cli_parent_writes_component_bundle_and_no_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, candidate, _request = _rotation_fixture(tmp_path / "fixture")
+    candidate_path = tmp_path / "candidate.json"
+    _write_json(candidate_path, candidate.report)
+    output = tmp_path / "acceptance.json"
+    component_output = tmp_path / "component.json"
+    bundle_output = tmp_path / "bundle.json"
+    child_dir = tmp_path / "children"
+    args = type(
+        "Args",
+        (),
+        {
+            "output": output,
+            "model_output": component_output,
+            "bundle_output": bundle_output,
+            "child_dir": child_dir,
+        },
+    )()
+    outputs = cli._rotation_artifact_outputs(args)
+    source = {
+        "source_start": "2020-07-30",
+        "source_end": max(inputs["trading_dates"]).isoformat(),
+        "source_revision": "rotation-holdout-v1",
+        "development_end": subject.RL1_DEVELOPMENT_END.isoformat(),
+        "state_start": subject.RL1_HOLDOUT_START.isoformat(),
+        "state_end": subject.RL1_HOLDOUT_END.isoformat(),
+        "development_source_sha256": candidate.payload["request_identity"]["source_sha256"],
+    }
+    request = subject.build_rotation_l1_holdout_request(
+        inputs,
+        candidate,
+        source=source,
+        artifact_outputs=outputs,
+    )
+    request_path = tmp_path / "request.json"
+    _write_json(request_path, request)
+    producer = "d" * 40
+    state_dates = tuple(
+        day for day in inputs["trading_dates"] if subject.RL1_HOLDOUT_START <= day <= subject.RL1_HOLDOUT_END
+    )
+    scores, states, outcomes = _rotation_metric_inputs(state_dates)
+    metrics = subject.rotation_l1_product_metrics(scores, states, outcomes, state_dates)
+    coverage = subject.rotation_l1_coverage(
+        state_dates=state_dates,
+        canonical_codes=[f"L1-{index:03d}" for index in range(31)],
+        prediction_available=set(states),
+        outcome_available=set(outcomes),
+        product_metrics_passed=True,
+        c010_identity=candidate.payload["c010_formal_evidence"],
+    )
+    payload = {
+        "candidate_report_sha256": candidate.report["report_sha256"],
+        "holdout_evaluation_id": request["holdout_evaluation_id"],
+        "holdout_source_sha256": subject.canonical_sha256(request["holdout_source"]),
+        "state_date_set_sha256": request["holdout_source"]["state_date_set_sha256"],
+        "outcome_tail_date_set_sha256": request["holdout_source"]["outcome_tail_date_set_sha256"],
+        "market_receipt": _receipt({"status": "complete"}),
+        "rotation_l1_state": _receipt({"status": "complete"}),
+        "rotation_l1_metrics": metrics,
+        "coverage": coverage,
+        "runtime_versions": {"unit": True},
+        "fit_count": 0,
+        "selection_performed": False,
+        "parameter_search_performed": False,
+        "database_write": False,
+        "runtime_action": False,
+    }
+    monkeypatch.setattr(cli, "_producer_commit", lambda: producer)
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        index = int(command[command.index("--child-index") + 1])
+        body = {
+            "schema_version": subject.RL1_HOLDOUT_CHILD_SCHEMA_VERSION,
+            "contract_version": subject.RL1_CONTRACT_VERSION,
+            "algorithm_version": subject.RL1_ALGORITHM_VERSION,
+            "status": "child_complete",
+            "process_index": index,
+            "producer_commit": producer,
+            "holdout_accessed": True,
+            "product_acceptance_performed": True,
+            "reproducibility_payload": payload,
+            "reproducibility_payload_sha256": subject.canonical_sha256(payload),
+            "model_write": False,
+            "bundle_write": False,
+            "ready_write": False,
+        }
+        child = {**body, "report_sha256": subject.canonical_sha256(body)}
+        subject.write_once(
+            cli._rotation_child_path(child_dir, index), child, repository_root=Path(__file__).resolve().parents[3]
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    result = cli.main(
+        [
+            "--holdout-mode",
+            "c012-rl1",
+            "--request",
+            str(request_path),
+            "--candidate",
+            str(candidate_path),
+            "--candidate-sha256",
+            str(candidate.report["report_sha256"]),
+            "--output",
+            str(output),
+            "--model-output",
+            str(component_output),
+            "--bundle-output",
+            str(bundle_output),
+            "--child-dir",
+            str(child_dir),
+            "--db-env-prefix",
+            "UNIT",
+        ]
+    )
+    assert result == 0
+    acceptance = json.loads(output.read_text(encoding="utf-8"))
+    bundle = json.loads(bundle_output.read_text(encoding="utf-8"))
+    assert acceptance["status"] == "CAPABILITY_AVAILABLE"
+    assert acceptance["ready_write"] is False
+    assert bundle["ready"] is False
+    assert not (tmp_path / "ready.json").exists()
+
+
+def test_rotation_l1_child_output_drift_writes_only_request_authorized_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _inputs, candidate, request = _rotation_fixture(tmp_path / "authorized")
+    candidate_path = tmp_path / "candidate.json"
+    request_path = tmp_path / "request.json"
+    _write_json(candidate_path, candidate.report)
+    _write_json(request_path, request)
+    monkeypatch.setattr(cli, "_producer_commit", lambda: pytest.fail("producer lookup must follow output closure"))
+    monkeypatch.setattr(
+        cli,
+        "_load_rotation_inputs",
+        lambda *args, **kwargs: pytest.fail("database loader must follow output closure"),
+    )
+    other = tmp_path / "other"
+
+    result = cli.main(
+        [
+            "--holdout-mode",
+            "c012-rl1",
+            "--request",
+            str(request_path),
+            "--candidate",
+            str(candidate_path),
+            "--candidate-sha256",
+            str(candidate.report["report_sha256"]),
+            "--output",
+            str(other / "acceptance.json"),
+            "--model-output",
+            str(other / "component.json"),
+            "--bundle-output",
+            str(other / "bundle.json"),
+            "--child-dir",
+            str(other / "children"),
+            "--db-env-prefix",
+            "UNUSED",
+            "--child-index",
+            "1",
+        ]
+    )
+
+    assert result == 1
+    assert not (other / "children" / "rotation_l1_holdout_child_1.failure.json").exists()
+    failure_path = Path(str(request["artifact_outputs"]["child_1_failure_output"]))
+    failure = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert failure["failure_reason_code"] == subject.REASON_RL1_INPUT
+    assert failure["holdout_accessed"] is False
