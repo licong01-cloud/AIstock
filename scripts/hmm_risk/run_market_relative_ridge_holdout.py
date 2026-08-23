@@ -23,21 +23,38 @@ from backend.services.hmm_risk.market_relative_ridge_holdout import (  # noqa: E
     HoldoutAcceptanceError,
     HOLDOUT_END,
     OUTCOME_TAIL_TRADING_DAYS,
+    REASON_RL1_HOLDOUT_NOT_READY,
+    REASON_RL1_REPRODUCIBILITY,
+    RL1_ALGORITHM_VERSION,
+    RL1_CONTRACT_VERSION,
+    RL1_HOLDOUT_ACCEPTANCE_SCHEMA_VERSION,
+    RL1_HOLDOUT_END,
+    RL1_OUTCOME_TAIL_TRADING_DAYS,
     REASON_REPRODUCIBILITY,
     REASON_SOURCE,
     build_holdout_request,
+    build_rotation_l1_holdout_request,
     close_children,
+    close_rotation_l1_children,
     evaluate_child,
+    evaluate_rotation_l1_child,
     expected_holdout_source,
     failure_receipt,
+    finalize_rotation_l1_acceptance,
     finalize_acceptance,
     load_frozen_candidate,
+    load_rotation_l1_candidate,
     load_request,
     load_written_artifact,
     model_artifact,
     preflight_output,
     ready_artifact,
+    rotation_l1_capability_bundle,
+    rotation_l1_component_artifact,
+    rotation_l1_failure_receipt,
     validate_artifact_bundle,
+    validate_rotation_l1_artifact_bundle,
+    validate_rotation_l1_holdout_request,
     validate_output_identity,
     validate_static_request,
     write_once,
@@ -85,6 +102,10 @@ def _child_path(directory: Path, index: int) -> Path:
     return directory.resolve() / f"p2_4_holdout_child_{index}.json"
 
 
+def _rotation_child_path(directory: Path, index: int) -> Path:
+    return directory.resolve() / f"rotation_l1_holdout_child_{index}.json"
+
+
 def _loader_request(request: dict[str, Any]) -> dict[str, Any]:
     source = request["holdout_source"]["source"]
     family = {"train_start": "2022-01-04", "train_end": "2025-03-31"}
@@ -99,6 +120,21 @@ def _artifact_outputs(args: argparse.Namespace) -> dict[str, str]:
         "acceptance_failure_output": str(_failure_path(args.output.resolve())),
         "model_output": str(args.model_output.resolve()),
         "ready_output": str(args.ready_output.resolve()),
+        "child_1_output": str(child_1),
+        "child_1_failure_output": str(_failure_path(child_1)),
+        "child_2_output": str(child_2),
+        "child_2_failure_output": str(_failure_path(child_2)),
+    }
+
+
+def _rotation_artifact_outputs(args: argparse.Namespace) -> dict[str, str]:
+    child_1 = _rotation_child_path(args.child_dir, 1)
+    child_2 = _rotation_child_path(args.child_dir, 2)
+    return {
+        "acceptance_output": str(args.output.resolve()),
+        "acceptance_failure_output": str(_failure_path(args.output.resolve())),
+        "component_output": str(args.model_output.resolve()),
+        "bundle_output": str(args.bundle_output.resolve()),
         "child_1_output": str(child_1),
         "child_1_failure_output": str(_failure_path(child_1)),
         "child_2_output": str(child_2),
@@ -565,13 +601,411 @@ def _parent(args: argparse.Namespace) -> int:
         return 1
 
 
+def _rotation_candidate_database_identity(candidate: Any) -> dict[str, Any]:
+    value = candidate.payload.get("database_identity")
+    if not isinstance(value, Mapping):
+        raise HoldoutAcceptanceError(
+            "hmm_risk_rotation_l1_input_identity_mismatch",
+            "rotation L1 candidate database identity is missing",
+            stage="source_preflight",
+        )
+    return dict(value)
+
+
+def _resolve_rotation_tail_end(db_prefix: str, *, expected_database_identity: Mapping[str, Any]) -> date:
+    try:
+        conn, actual_database_identity = _connect_readonly(db_prefix)
+        try:
+            _require_database_identity_match(actual_database_identity, expected_database_identity)
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT cal_date::date
+                    FROM market.trading_calendar
+                    WHERE is_trading=true AND cal_date > %s
+                    ORDER BY cal_date
+                    LIMIT %s
+                    """,
+                    (RL1_HOLDOUT_END, RL1_OUTCOME_TAIL_TRADING_DAYS),
+                )
+                rows = cursor.fetchall()
+        finally:
+            try:
+                conn.rollback()
+            finally:
+                conn.close()
+    except HoldoutAcceptanceError:
+        raise
+    except (PsycopgError, StateModelSetError) as exc:
+        raise HoldoutAcceptanceError(
+            REASON_RL1_HOLDOUT_NOT_READY,
+            str(exc),
+            stage="source_preflight",
+            evidence={"exception_type": type(exc).__name__, "error_message": str(exc)},
+        ) from exc
+    values = tuple(row[0] for row in rows)
+    if (
+        len(values) != RL1_OUTCOME_TAIL_TRADING_DAYS
+        or any(type(value) is not date for value in values)
+        or values != tuple(sorted(set(values)))
+        or values[0] <= RL1_HOLDOUT_END
+    ):
+        raise HoldoutAcceptanceError(
+            REASON_RL1_HOLDOUT_NOT_READY,
+            "canonical calendar cannot resolve the rotation L1 outcome tail",
+            stage="source_preflight",
+        )
+    return values[-1]
+
+
+def _rotation_loader_request(request: Mapping[str, Any]) -> dict[str, Any]:
+    source = request["holdout_source"]["source"]
+    family = {"train_start": "2022-01-04", "train_end": RL1_HOLDOUT_END.isoformat()}
+    return {"source": source, "families": [dict(family), dict(family)]}
+
+
+def _load_rotation_inputs(
+    request: Mapping[str, Any],
+    *,
+    db_prefix: str,
+    expected_database_identity: Mapping[str, Any],
+    source_preflight_complete: Callable[[], None],
+) -> Any:
+    try:
+        return _load_l1_source_inputs(
+            _rotation_loader_request(request),
+            db_prefix=db_prefix,
+            c010_formal=True,
+            expected_database_identity=expected_database_identity,
+            source_preflight_complete=source_preflight_complete,
+        )
+    except HoldoutAcceptanceError:
+        raise
+    except (PsycopgError, StateModelSetError) as exc:
+        raise HoldoutAcceptanceError(
+            "hmm_risk_rotation_l1_input_identity_mismatch",
+            str(exc),
+            stage="source_preflight",
+            evidence={"exception_type": type(exc).__name__, "error_message": str(exc)},
+        ) from exc
+
+
+def _prepare_rotation_request(args: argparse.Namespace) -> int:
+    request: dict[str, Any] = {}
+    producer = "unknown"
+    holdout_accessed = False
+    try:
+        candidate = load_rotation_l1_candidate(args.candidate.resolve(), expected_sha256=str(args.candidate_sha256))
+        expected_database_identity = _rotation_candidate_database_identity(candidate)
+        producer = _producer_commit()
+        outputs = _rotation_artifact_outputs(args)
+        for path in (args.request.resolve(), *(Path(value) for value in outputs.values())):
+            preflight_output(path, repository_root=ROOT)
+        source = load_request(args.holdout_source.resolve())
+        outcome_tail_end = _resolve_rotation_tail_end(
+            str(args.db_env_prefix), expected_database_identity=expected_database_identity
+        )
+        if source.get("source_end") != outcome_tail_end.isoformat():
+            raise HoldoutAcceptanceError(
+                REASON_RL1_HOLDOUT_NOT_READY,
+                "holdout source end differs from canonical outcome tail",
+                stage="source_preflight",
+            )
+
+        def mark_holdout_accessed() -> None:
+            nonlocal holdout_accessed
+            holdout_accessed = True
+
+        inputs = _load_rotation_inputs(
+            {"holdout_source": {"source": source}},
+            db_prefix=str(args.db_env_prefix),
+            expected_database_identity=expected_database_identity,
+            source_preflight_complete=mark_holdout_accessed,
+        )
+        request = build_rotation_l1_holdout_request(
+            inputs,
+            candidate,
+            source=source,
+            artifact_outputs=outputs,
+        )
+        write_once(args.request.resolve(), request, repository_root=ROOT)
+        sys.stdout.buffer.write(
+            canonical_json_bytes(
+                {
+                    "status": "request_prepared",
+                    "output": str(args.request.resolve()),
+                    "request_sha256": request["request_sha256"],
+                }
+            )
+            + b"\n"
+        )
+        return 0
+    except Exception as exc:
+        failure = rotation_l1_failure_receipt(
+            request=request,
+            producer_commit=producer,
+            error=exc,
+            holdout_accessed=holdout_accessed,
+            product_acceptance_performed=False,
+        )
+        try:
+            write_once(_failure_path(args.output.resolve()), failure, repository_root=ROOT)
+        except Exception as write_exc:
+            sys.stderr.write(
+                "rotation L1 request preparation failed and failure receipt could not be written: "
+                f"{type(write_exc).__name__}: {write_exc}\n"
+            )
+            return 2
+        sys.stderr.write(f"rotation L1 request preparation failed: {failure['failure_reason_code']}\n")
+        return 1
+
+
+def _rotation_child(args: argparse.Namespace) -> int:
+    request: dict[str, Any] = {}
+    producer = "unknown"
+    holdout_accessed = False
+    product_acceptance_performed = False
+    output = _rotation_child_path(args.child_dir, int(args.child_index))
+    failure_output = _failure_path(output)
+    try:
+        request = load_request(args.request.resolve())
+        candidate = load_rotation_l1_candidate(args.candidate.resolve(), expected_sha256=str(args.candidate_sha256))
+        validate_rotation_l1_holdout_request(request, candidate)
+        failure_output = Path(str(request["artifact_outputs"][f"child_{int(args.child_index)}_failure_output"]))
+        if request.get("artifact_outputs") != _rotation_artifact_outputs(args):
+            raise HoldoutAcceptanceError(
+                "hmm_risk_rotation_l1_input_identity_mismatch",
+                "rotation L1 child outputs differ from request",
+                stage="preflight",
+            )
+        producer = _producer_commit()
+        expected_database_identity = _rotation_candidate_database_identity(candidate)
+
+        def mark_holdout_accessed() -> None:
+            nonlocal holdout_accessed
+            holdout_accessed = True
+
+        inputs = _load_rotation_inputs(
+            request,
+            db_prefix=str(args.db_env_prefix),
+            expected_database_identity=expected_database_identity,
+            source_preflight_complete=mark_holdout_accessed,
+        )
+        child = evaluate_rotation_l1_child(
+            inputs,
+            request,
+            candidate,
+            process_index=int(args.child_index),
+            producer_commit=producer,
+        )
+        product_acceptance_performed = True
+        write_once(output, child, repository_root=ROOT)
+        sys.stdout.buffer.write(canonical_json_bytes({"status": child["status"], "output": str(output)}) + b"\n")
+        return 0
+    except Exception as exc:
+        failure = rotation_l1_failure_receipt(
+            request=request,
+            producer_commit=producer,
+            error=exc,
+            holdout_accessed=holdout_accessed,
+            product_acceptance_performed=product_acceptance_performed,
+            process_index=int(args.child_index),
+        )
+        try:
+            write_once(failure_output, failure, repository_root=ROOT)
+        except Exception as write_exc:
+            sys.stderr.write(
+                f"rotation L1 child failed and failure receipt could not be written: {type(write_exc).__name__}: {write_exc}\n"
+            )
+            return 2
+        sys.stderr.write(f"rotation L1 child failed: {failure['failure_reason_code']}\n")
+        return 1
+
+
+def _rotation_parent(args: argparse.Namespace) -> int:
+    request: dict[str, Any] = {}
+    producer = "unknown"
+    holdout_accessed = False
+    product_acceptance_performed = False
+    component_sha256: str | None = None
+    bundle_sha256: str | None = None
+    failure_output = _failure_path(args.output.resolve())
+    try:
+        request = load_request(args.request.resolve())
+        candidate = load_rotation_l1_candidate(args.candidate.resolve(), expected_sha256=str(args.candidate_sha256))
+        validate_rotation_l1_holdout_request(request, candidate)
+        failure_output = Path(str(request["artifact_outputs"]["acceptance_failure_output"]))
+        producer = _producer_commit()
+        outputs = _rotation_artifact_outputs(args)
+        if request.get("artifact_outputs") != outputs:
+            raise HoldoutAcceptanceError(
+                "hmm_risk_rotation_l1_input_identity_mismatch",
+                "rotation L1 CLI outputs differ from request",
+                stage="preflight",
+            )
+        for path in (Path(value) for value in outputs.values()):
+            preflight_output(path, repository_root=ROOT)
+        environment = os.environ.copy()
+        for key in (
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+        ):
+            environment[key] = "1"
+        base = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--holdout-mode",
+            "c012-rl1",
+            "--request",
+            str(args.request.resolve()),
+            "--candidate",
+            str(args.candidate.resolve()),
+            "--candidate-sha256",
+            str(args.candidate_sha256),
+            "--output",
+            str(args.output.resolve()),
+            "--model-output",
+            str(args.model_output.resolve()),
+            "--bundle-output",
+            str(args.bundle_output.resolve()),
+            "--child-dir",
+            str(args.child_dir.resolve()),
+            "--db-env-prefix",
+            str(args.db_env_prefix),
+        ]
+        for index in (1, 2):
+            completed = subprocess.run(
+                [*base, "--child-index", str(index)],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode != 0:
+                failure_path = _failure_path(_rotation_child_path(args.child_dir, index))
+                child_failure = (
+                    load_written_artifact(failure_path, label="rotation L1 child failure")
+                    if failure_path.exists()
+                    else {}
+                )
+                child_hash = str(child_failure.get("report_sha256") or "")
+                child_evidence = child_failure.get("failure_evidence")
+                child_reason = child_failure.get("failure_reason_code")
+                child_stage = child_failure.get("failure_stage")
+                if (
+                    len(child_hash) != 64
+                    or canonical_sha256({key: value for key, value in child_failure.items() if key != "report_sha256"})
+                    != child_hash
+                    or child_failure.get("schema_version") != RL1_HOLDOUT_ACCEPTANCE_SCHEMA_VERSION
+                    or child_failure.get("contract_version") != RL1_CONTRACT_VERSION
+                    or child_failure.get("algorithm_version") != RL1_ALGORITHM_VERSION
+                    or child_failure.get("status") != "NOT_AVAILABLE"
+                    or child_failure.get("producer_commit") != producer
+                    or child_failure.get("holdout_evaluation_id") != request.get("holdout_evaluation_id")
+                    or child_failure.get("process_index") != index
+                    or child_failure.get("fit_count") != 0
+                    or child_failure.get("selection_performed") is not False
+                    or child_failure.get("parameter_search_performed") is not False
+                    or not isinstance(child_failure.get("holdout_accessed"), bool)
+                    or not isinstance(child_failure.get("product_acceptance_performed"), bool)
+                    or (
+                        child_failure.get("product_acceptance_performed") is True
+                        and child_failure.get("holdout_accessed") is not True
+                    )
+                    or child_failure.get("component_write") is not False
+                    or child_failure.get("bundle_write") is not False
+                    or child_failure.get("ready_write") is not False
+                    or child_failure.get("database_write") is not False
+                    or child_failure.get("runtime_action") is not False
+                    or not isinstance(child_reason, str)
+                    or not child_reason.startswith("hmm_risk_rotation_l1_")
+                    or not isinstance(child_stage, str)
+                    or not child_stage
+                    or not isinstance(child_evidence, Mapping)
+                ):
+                    raise HoldoutAcceptanceError(
+                        REASON_RL1_REPRODUCIBILITY,
+                        "rotation L1 child failure receipt authority is invalid",
+                        stage="fresh_process",
+                    )
+                raise HoldoutAcceptanceError(
+                    str(child_reason),
+                    "rotation L1 child process failed",
+                    stage=child_stage,
+                    evidence={
+                        "process_index": index,
+                        "returncode": completed.returncode,
+                        "failure_receipt": str(failure_path),
+                        "child_failure_report_sha256": child_hash,
+                        "child_failure_evidence": dict(child_evidence),
+                    },
+                )
+        holdout_accessed = True
+        product_acceptance_performed = True
+        first = load_written_artifact(_rotation_child_path(args.child_dir, 1), label="rotation L1 child 1")
+        second = load_written_artifact(_rotation_child_path(args.child_dir, 2), label="rotation L1 child 2")
+        draft = close_rotation_l1_children(first, second, request=request, producer_commit=producer)
+        component: dict[str, Any] | None = None
+        bundle: dict[str, Any] | None = None
+        if draft["status"] == "CAPABILITY_AVAILABLE":
+            component = rotation_l1_component_artifact(draft, candidate)
+            write_once(args.model_output.resolve(), component, repository_root=ROOT)
+            component_sha256 = str(component["component_sha256"])
+            bundle = rotation_l1_capability_bundle(draft, component)
+            write_once(args.bundle_output.resolve(), bundle, repository_root=ROOT)
+            bundle_sha256 = str(bundle["bundle_sha256"])
+        acceptance = finalize_rotation_l1_acceptance(
+            draft, component_sha256=component_sha256, bundle_sha256=bundle_sha256
+        )
+        write_once(args.output.resolve(), acceptance, repository_root=ROOT)
+        acceptance_readback = load_written_artifact(args.output.resolve(), label="rotation L1 acceptance")
+        component_readback = (
+            load_written_artifact(args.model_output.resolve(), label="rotation L1 component") if component else None
+        )
+        bundle_readback = (
+            load_written_artifact(args.bundle_output.resolve(), label="rotation L1 bundle") if bundle else None
+        )
+        validate_rotation_l1_artifact_bundle(acceptance_readback, component=component_readback, bundle=bundle_readback)
+        sys.stdout.buffer.write(
+            canonical_json_bytes({"status": acceptance["status"], "output": str(args.output.resolve())}) + b"\n"
+        )
+        return 0
+    except Exception as exc:
+        failure = rotation_l1_failure_receipt(
+            request=request,
+            producer_commit=producer,
+            error=exc,
+            holdout_accessed=holdout_accessed,
+            product_acceptance_performed=product_acceptance_performed,
+            component_sha256=component_sha256,
+            bundle_sha256=bundle_sha256,
+        )
+        try:
+            write_once(failure_output, failure, repository_root=ROOT)
+        except Exception as write_exc:
+            sys.stderr.write(
+                f"rotation L1 parent failed and failure receipt could not be written: {type(write_exc).__name__}: {write_exc}\n"
+            )
+            return 2
+        sys.stderr.write(f"rotation L1 parent failed: {failure['failure_reason_code']}\n")
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--holdout-mode", choices=("p2-4", "c012-rl1"), default="p2-4")
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--candidate-sha256")
+    parser.add_argument("--holdout-source", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-output", type=Path, required=True)
-    parser.add_argument("--ready-output", type=Path, required=True)
+    parser.add_argument("--ready-output", type=Path)
+    parser.add_argument("--bundle-output", type=Path)
     parser.add_argument("--child-dir", type=Path, required=True)
     parser.add_argument("--db-env-prefix", required=True)
     parser.add_argument("--prepare-request", action="store_true")
@@ -579,6 +1013,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.prepare_request and args.child_index is not None:
         parser.error("--prepare-request and --child-index are mutually exclusive")
+    if args.holdout_mode == "c012-rl1":
+        if not args.candidate_sha256 or args.bundle_output is None:
+            parser.error("--candidate-sha256 and --bundle-output are required for c012-rl1")
+        if args.prepare_request and args.holdout_source is None:
+            parser.error("--holdout-source is required to prepare a c012-rl1 request")
+        if not args.prepare_request and args.holdout_source is not None:
+            parser.error("--holdout-source is only valid with --prepare-request")
+        if args.prepare_request:
+            return _prepare_rotation_request(args)
+        return _rotation_child(args) if args.child_index is not None else _rotation_parent(args)
+    if args.ready_output is None:
+        parser.error("--ready-output is required for p2-4")
+    if args.candidate_sha256 is not None or args.bundle_output is not None or args.holdout_source is not None:
+        parser.error("rotation L1 arguments are not valid for p2-4")
     if args.prepare_request:
         return _prepare_request(args)
     return _child(args) if args.child_index is not None else _parent(args)
