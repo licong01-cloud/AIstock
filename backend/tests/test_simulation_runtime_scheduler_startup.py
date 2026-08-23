@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 
 import backend.main as backend_main
+import backend.services.paper_trading_v2.scheduler as paper_scheduler_module
 import backend.services.simulation_runtime as simulation_runtime_module
 from backend.services.quantevolver.qe_log_store import QELiveLogConfigurationError
 
@@ -27,6 +28,7 @@ def _run_lifespan(
     monkeypatch,
     *,
     enable_sim_runtime: bool,
+    enable_legacy_paper_scheduler: bool = False,
     qe_store_error: Exception | None = None,
 ) -> list[tuple[str, tuple, dict]]:
     calls: list[tuple[str, tuple, dict]] = []
@@ -40,7 +42,10 @@ def _run_lifespan(
     monkeypatch.setenv("DISABLE_HMM_SCHEDULER", "1")
     monkeypatch.setenv("DISABLE_EVOLUTION_SCANNER", "1")
     monkeypatch.setenv("DISABLE_QE_EXPERIMENT_SCANNER", "1")
-    monkeypatch.delenv("ENABLE_PAPER_TRADING_V2_SCHEDULER", raising=False)
+    monkeypatch.setenv(
+        "ENABLE_PAPER_TRADING_V2_SCHEDULER",
+        "1" if enable_legacy_paper_scheduler else "0",
+    )
     monkeypatch.setenv("ENABLE_SIMULATION_RUNTIME_SCHEDULER", "1" if enable_sim_runtime else "0")
 
     monkeypatch.setattr(backend_main, "init_db_pool", lambda *args, **kwargs: calls.append(("init_db_pool", args, kwargs)))
@@ -58,6 +63,17 @@ def _run_lifespan(
 
     monkeypatch.setattr(scheduler, "start", lambda *args, **kwargs: calls.append(("simulation_scheduler_start", args, kwargs)) or {"running": True})
     monkeypatch.setattr(scheduler, "shutdown", lambda *args, **kwargs: calls.append(("simulation_scheduler_shutdown", args, kwargs)) or {"running": False})
+    monkeypatch.setattr(
+        paper_scheduler_module.paper_trading_v2_scheduler,
+        "start",
+        lambda *args, **kwargs: calls.append(("legacy_paper_scheduler_start", args, kwargs)) or {"running": True},
+    )
+    monkeypatch.setattr(
+        paper_scheduler_module.paper_trading_v2_scheduler,
+        "shutdown",
+        lambda *args, **kwargs: calls.append(("legacy_paper_scheduler_shutdown", args, kwargs))
+        or {"running": False},
+    )
 
     app = FastAPI()
     async def _run() -> None:
@@ -83,6 +99,18 @@ def test_main_lifespan_opt_in_starts_and_stops_simulation_scheduler(monkeypatch)
     calls = _run_lifespan(monkeypatch, enable_sim_runtime=True)
     assert ("simulation_scheduler_start", tuple(), {}) in calls
     assert ("simulation_scheduler_shutdown", tuple(), {"wait": False}) in calls
+
+
+def test_main_lifespan_ignores_legacy_paper_scheduler_env(monkeypatch) -> None:
+    calls = _run_lifespan(
+        monkeypatch,
+        enable_sim_runtime=True,
+        enable_legacy_paper_scheduler=True,
+    )
+
+    assert ("legacy_paper_scheduler_start", tuple(), {}) not in calls
+    assert ("legacy_paper_scheduler_shutdown", tuple(), {"wait": False}) in calls
+    assert ("simulation_scheduler_start", tuple(), {}) in calls
 
 
 def test_main_lifespan_fails_closed_before_db_for_invalid_qe_live_log_root(monkeypatch) -> None:
