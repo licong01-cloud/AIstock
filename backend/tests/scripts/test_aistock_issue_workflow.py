@@ -10278,6 +10278,84 @@ def test_close_sync_batch_updates_multiple_bug_jsons(
         "python -m nox -s l0 -> passed",
     ]
     assert set(payload["github_issue_sync"]) == {"BUG-199", "BUG-200"}
+    assert payload["compatibility"]["workflow_gate"] == "compatible"
+    assert payload["compatibility"]["compatibility_key"].startswith("close-sync:")
+    assert {
+        item["compatibility_key"] for item in payload["per_issue"]
+    } == {payload["compatibility"]["compatibility_key"]}
+
+
+@pytest.mark.parametrize(
+    ("overrides_a", "overrides_b", "message"),
+    [
+        ({"module": "validation"}, {"module": "other"}, "share one module"),
+        ({"severity": "P1"}, {"severity": "P2"}, "share one risk tier"),
+        ({"required_verification": ["l0"]}, {"required_verification": ["guardrail_changed_files"]}, "same required_verification"),
+        ({"production_ddl_gate": "noop"}, {"production_ddl_gate": "pending_authorized_apply"}, "same production gate state"),
+    ],
+)
+def test_close_sync_batch_rejects_incompatible_records(
+    isolated_workflow_root: Path,
+    overrides_a: dict[str, Any],
+    overrides_b: dict[str, Any],
+    message: str,
+) -> None:
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(**overrides_a),
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
+        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200", **overrides_b),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match=message):
+        workflow.build_close_sync_batch_plan(
+            bug_ids=["BUG-199", "BUG-200"],
+            pr_url="https://github.example/pull/299",
+            apply=False,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+        )
+
+
+def test_close_sync_batch_allows_compatible_non_restart_client_records(
+    isolated_workflow_root: Path,
+) -> None:
+    client_contract = {
+        "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+        "runtime_impact": "client",
+        "persistence_basis": "not_required",
+    }
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(
+            allowed_write_scope=[".codex/skills/fix-aistock-issue/SKILL.md"],
+            runtime_contract=client_contract,
+        ),
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
+        _bug(
+            bug_id="BUG-200",
+            github_issue_number=200,
+            github_issue_url="https://github.example/issues/200",
+            allowed_write_scope=[".codex/skills/fix-aistock-issue/SKILL.md"],
+            runtime_contract=client_contract,
+        ),
+    )
+
+    payload = workflow.build_close_sync_batch_plan(
+        bug_ids=["BUG-199", "BUG-200"],
+        pr_url="https://github.example/pull/299",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+
+    assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["compatibility"]["runtime_impact"] == "client"
+    assert payload["compatibility"]["backend_restart_required"] == []
 
 
 def test_close_sync_batch_rejects_runtime_bugs_without_per_issue_receipts(
