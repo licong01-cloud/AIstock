@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -51,6 +52,10 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (  # noqa:
     validate_c012_rl1_static_request,
     validate_p2_3c_static_request,
     write_report,
+)
+from backend.services.canonical_equity_pit import (  # noqa: E402
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_UNIVERSE_KEY,
 )
 from backend.services.hmm_risk.state_model_set import StateModelSetError  # noqa: E402
 from scripts.hmm_risk.prepare_state_model_set import _load_l1_source_inputs  # noqa: E402
@@ -181,6 +186,56 @@ def _c012_artifact_outputs(args: argparse.Namespace) -> dict[str, str]:
 
 def _source_authority(path: Path) -> dict[str, Any]:
     value = _load_request(path)
+    if value.get("schema_version") == "pit_v2_source_freeze_receipt_v2":
+        profiles = value.get("profiles")
+        profile = profiles.get("canonical_v2") if isinstance(profiles, Mapping) else None
+        if not isinstance(profile, Mapping):
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                "canonical PIT v2 source profile is missing",
+                stage="request_preparation",
+            )
+        config_path = str(profile.get("path") or "")
+        if config_path != "configs/datasets/qe_backtest_monthly_v2.yaml":
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                "canonical PIT v2 source profile path drifted",
+                stage="request_preparation",
+            )
+        config = (ROOT / config_path).resolve()
+        try:
+            config.relative_to(ROOT)
+        except ValueError as exc:
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                "canonical PIT v2 source profile escapes the repository",
+                stage="request_preparation",
+            ) from exc
+        if (
+            not config.is_file()
+            or hashlib.sha256(config.read_bytes()).hexdigest() != profile.get("file_sha256")
+            or profile.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY
+            or profile.get("rule_version") != CANONICAL_PIT_RULE_VERSION
+            or profile.get("declared_target_authority_status") != "ACTIVE_CANONICAL"
+        ):
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                "canonical PIT v2 source profile identity is invalid",
+                stage="request_preparation",
+            )
+        security_path = "backend/services/hmm_risk/manifests/security_source_identity_v1.json"
+        absence_path = "backend/services/hmm_risk/manifests/provider_absence_v1.json"
+        return {
+            "source_start": "2020-07-30",
+            "circ_mv_history_start": "2020-07-30",
+            "source_end": RL1_DEVELOPMENT_END.isoformat(),
+            "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+            "universe_rule_version": CANONICAL_PIT_RULE_VERSION,
+            "security_identity_manifest_path": security_path,
+            "security_identity_manifest_sha256": canonical_sha256(_load_request(ROOT / security_path)),
+            "provider_absence_manifest_path": absence_path,
+            "provider_absence_manifest_sha256": canonical_sha256(_load_request(ROOT / absence_path)),
+        }
     source = value.get("source") if "source" in value else value
     if not isinstance(source, dict):
         raise RidgeCandidateError(REASON_RL1_INPUT, "source authority is missing", stage="request_preparation")
@@ -266,7 +321,7 @@ def _prepare_c012_rl1_request(args: argparse.Namespace) -> int:
                 REASON_RL1_INPUT,
                 str(exc),
                 stage="source_preflight",
-                evidence={"exception_type": type(exc).__name__},
+                evidence={"exception_type": type(exc).__name__, "error_message": str(exc)},
             ) from exc
         request = build_c012_rl1_replay_request(
             inputs,
