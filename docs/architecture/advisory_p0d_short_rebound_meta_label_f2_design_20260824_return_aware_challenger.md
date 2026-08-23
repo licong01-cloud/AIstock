@@ -167,9 +167,9 @@ F:/Dev/AIstock_model_artifacts/advisory_p0e_return_aware_replay_20260824
 
 | item | result |
 |---|---|
-| repository commit | `3fedd1ac8da723cd62c125e684219cd4f5ffbb1b` |
-| request | `advmetareq_49042f2c766a6d32bb801439` / `49042f2c766a6d32bb801439713d5a6f14669cbbc862b9f5e62c68dc7d332b97` |
-| bundle | `a222a1a4999e465b13d48000e024f885b6276801ac92d34ca34d497841daa34e` |
+| repository commit | `7e767a139bb5d34ac514dc8b93a31ec5813dc363` |
+| request | `advmetareq_4d2393bcb776cf7d6a3aace2` / `4d2393bcb776cf7d6a3aace297328485167c5dbe0e7acf0f48e3dec13a854733` |
+| bundle | `cb9e61e9c54d89263f76f2f2bcefb515070c96908aa2bca790c064fd339fb270` |
 | trial matrix | 2 families × 3 seeds × 28 paths = 168 rows；6 trials × 8 blocks |
 | winner | `FAMILY_CORE_HMM / 20260817`；4 boost rounds |
 | candidate metric | mean daily net excess `18.9626236037 bps`；Selection lift `+3.1825697785 bps`；Selection path win rate `57.14%` |
@@ -177,14 +177,14 @@ F:/Dev/AIstock_model_artifacts/advisory_p0e_return_aware_replay_20260824
 | candidate diagnostics | ROC-AUC `0.5159415721`；Brier `0.2523798050` |
 | PBO | `0.8142857143`，比 P0-D 的 `0.40` 明显恶化 |
 | outcome weighting | full refit scale `335.7896 bps`；train mean weight `1.0`；weight range `0.42999..2.14820` |
-| resource | `363.412s`；peak RSS `2,835,582,976 bytes`，低于8GB |
-| exact retry | `4.7s`；返回同一 bundle；`EXISTING_BUNDLE/activated=false` |
+| resource | `346.325s`；peak RSS `2,736,852,992 bytes`，低于8GB |
+| exact retry | `3.3s`；返回同一 bundle；`EXISTING_BUNDLE/activated=false` |
 
 冻结 CPCV 结论为负面：幅度权重仍优于 Selection，但没有超过当前 P0-D，且稳定性/PBO恶化。按预注册规则不追加 family、cap、阈值或 blend，不激活该 bundle。
 
 ### 8.2 HISTORICAL_REPLAY Result / 已消费窗口诊断
 
-隔离 descriptor `debed6e7e...` 对同一24个决策日+20日tail完成100% resolved回放，artifact 为 `c7f6ec1388adf8e8b7b13aa20aff35047919558b4d833091f1bf1311c9067934`，exact retry 返回同hash。证据分类为 `HISTORICAL_REPLAY`，不参与选模。
+最终源码 re-attestation 在 rebase 后重新冻结 request；新旧 bundle 的模型、168行 CPCV、PBO、reference comparison、winner 与 HMM receipt 功能 hash 全部一致，变化仅来自 request/source identity。隔离 descriptor `a485adefb9...` 对同一24个决策日+20日tail完成100% resolved回放，artifact 为 `6bba37f8804af38f4357c3939a380cca3be2bc915a62149108518b6d4948dba4`，exact retry 返回同hash。证据分类为 `HISTORICAL_REPLAY`，不参与选模。
 
 | metric | P0-E weighted | Selection Top5 | 原P0-D | P0-E vs Selection |
 |---|---:|---:|---:|---:|
@@ -308,12 +308,12 @@ episode归因显示 P0-E 平均盈利 `675.41 bps`、平均亏损 `-573.01 bps`�
 | F-701 | 本设计 §1；artifact `fbf072...` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0d_historical_forward_replay_20260823/p0d-historical-forward/fbf072f0d8c4a637a48aa8c2ed63c3b61c245abd08ac4e1417b2a0fcc8eb59a9.json` | pass | none |
 | F-702 | `meta_label_contracts.py` | `backend/tests/advisory_model_first/test_meta_label_contracts.py` | pass | none |
 | F-703 | `meta_label_training.py` | `backend/tests/advisory_model_first/test_meta_label_training.py` | pass | none |
-| F-704 | request/pipeline | `backend/tests/advisory_model_first/test_meta_label_pipeline.py`; artifact: `a222a1a4.../cpcv_trial_metrics.parquet` | pass | none |
+| F-704 | request/pipeline | `backend/tests/advisory_model_first/test_meta_label_pipeline.py`; artifact: `cb9e61e9.../cpcv_trial_metrics.parquet` | pass | none |
 | F-705 | existing scorer/evaluator | `backend/tests/advisory_model_first/test_meta_label_bundle.py`; `backend/tests/advisory_model_first/test_meta_label_portfolio.py` | pass | none |
-| F-706 | `meta_label_pipeline.py` | `backend/tests/advisory_model_first/test_meta_label_pipeline.py`; artifact: `a222a1a4.../reference_challenger_comparison.json` | pass | none |
+| F-706 | `meta_label_pipeline.py` | `backend/tests/advisory_model_first/test_meta_label_pipeline.py`; artifact: `cb9e61e9.../reference_challenger_comparison.json` | pass | none |
 | F-707 | `meta_label_bundle.py` | `backend/tests/advisory_model_first/test_meta_label_bundle.py` | pass | none |
-| F-708 | WSL CLI and bundle | artifact: `a222a1a4.../resource_report.json`; exact retry `EXISTING_BUNDLE` | pass | none |
-| F-709 | historical replay CLI | artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0e_return_aware_replay_20260824/p0d-historical-forward/c7f6ec1388adf8e8b7b13aa20aff35047919558b4d833091f1bf1311c9067934.json` | pass | none |
+| F-708 | WSL CLI and bundle | artifact: `cb9e61e9.../resource_report.json`; exact retry `EXISTING_BUNDLE` | pass | none |
+| F-709 | historical replay CLI | artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0e_return_aware_replay_20260824/p0d-historical-forward/6bba37f8804af38f4357c3939a380cca3be2bc915a62149108518b6d4948dba4.json` | pass | none |
 | F-710 | import/scope/diff review | `tests/aistock_validation/catalog/file_ownership.yaml`; validation-receipt: `nox -s l0` pass，0 HIGH finding | pass | none |
 | F-711 | complete diff | `backend/tests/advisory_model_first/`; validation-receipt: F2 validator and three review rounds | pending | final gate |
 
@@ -328,7 +328,7 @@ episode归因显示 P0-E 平均盈利 `675.41 bps`、平均亏损 `-573.01 bps`�
 
 - Round 1（设计/泄漏）：基于真实 episode 归因否决开放式双头与调参搜索，冻结为单一 train-only magnitude weighting；实际旧 v2 request `0451bd...` 以原 hash 成功解析。
 - Round 2（代码/身份）：314个 `advisory_model_first` 直接测试通过；正式 reference 168行 readback、WSL 168 trial-path、bundle exact retry和隔离 replay exact retry通过。发现测试 helper 传 dict 时产生 Pydantic serializer warning，已在 builder 入口正规化 nested contracts并针对性复测。
-- Round 3（结果/生产隔离）：模块 L2 `364 passed, 8 skipped`，L0 pass；生产 descriptor仍为 `f98f2ded... -> e555903e...`，实验 descriptor为独立root `debed6e7... -> a222a1a4...`。负面CPCV与正向已消费回放并列披露，不用后者覆盖前者。
+- Round 3（结果/生产隔离）：模块 L2 `364 passed, 8 skipped`，L0 pass；最终源码重新训练与首轮产物的模型/CPCV/PBO/reference功能hash完全一致。生产 descriptor仍为 `f98f2ded... -> e555903e...`，实验 descriptor为独立root `a485adef... -> cb9e61e9...`。负面CPCV与正向已消费回放并列披露，不用后者覆盖前者。
 
 ## 18. Completion definition / 完成定义
 
