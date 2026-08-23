@@ -5705,3 +5705,20 @@ HR1 首次正式 request preflight 在 0 fits 处正确停止，但暴露两个�
 5. **审核结论**：`PASS_BUG_1167_MEMBER_CLASSIFICATION_AUTHORITY_FAIL_CLOSED_SOURCE_VALIDATED`。DEV只读核验得到218条 distinct member catalog rows、
    31个canonical L1、131个canonical L2、190个canonical/alias lookup entries，并成功读取首条2022-01-04 PIT mapping。该结论只说明源码合同正确，不能推导
    replay、模型或产品能力成功。
+
+### 23.33 BUG-1169：canonical PIT v2 provider-absence 权威闭合
+
+HR1 在生产只读历史源与 `aistock_equity_pit_canonical_v2` 上执行 request preflight 时，于 0 fits 处对
+`002366.SZ/2021-09-23` 正确返回 `hmm_risk_stock_fact_provider_absence_unverified`。根因不是本地价格、PIT 身份或
+moneyflow 写入缺失，而是 active `hmm_risk_provider_absence_manifest_v1` 仍冻结在旧的 502 个 exact key，未覆盖
+canonical PIT v2 当前完整候选集。
+
+1. **精确权威闭合**：生产只读候选集为 563 个 exact key；旧权威 502 个，新增 61 个，分布于 40 个交易日。新增 key
+   已逐日按 Tushare `moneyflow` full-market authority 核验为 61/61 provider absent、0 present；manifest v2 保存旧 receipt
+   hash、supplement key hash、计数与 `db_writes=false`，每行继续绑定同一新 receipt hash 和 row hash。
+2. **fail-closed 语义不变**：只有 manifest 中 `(canonical_ts_code, source_dataset, source_ts_code, trade_date)` 完全匹配的
+   key 才可形成 provider-absence NA evidence；未知 key、identity 漂移、receipt/hash/count/order 漂移仍失败。不得填 0、前值、
+   neutral、行业代理或 synthetic row。
+3. **业务与实验合同不变**：本修复只更新 active 输入权威，不修改 HR1 estimator、特征、fold、阈值、seed、24-fit、selection、
+   capability 或 READY 语义；不执行 DDL/DML、依赖安装、runtime activation 或服务启停。
+4. **完成边界**：manifest/parser/定向测试通过只证明 source preflight 可继续；不推导 24-fit replay、模型验收或板块轮动产品能力成功。

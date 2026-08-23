@@ -775,12 +775,13 @@ def test_reader_marks_missing_provider_moneyflow_as_na_with_identity_evidence() 
     assert row["moneyflow_fact_status"] == "provider_absence"
     assert row["net_mf_amount_cny"] is None
     assert row["moneyflow_source_identity"]["source_ts_code"] == "603595.SH"
-    assert row["moneyflow_provider_absence"]["provider_audit_receipt_sha256"] == (
-        "a96c19313e110e7ea3ce67f33d0027eaef3ef494898f5d8db7362c9e88670fec"
+    expected_evidence = _provider_absence_manifest().resolve(
+        canonical_ts_code="603595.SH",
+        source_dataset="market.moneyflow_ts",
+        source_ts_code="603595.SH",
+        trade_date=date(2024, 1, 8),
     )
-    assert row["moneyflow_provider_absence"]["row_hash"] == (
-        "7f7eb116ab9b800995eeea98c7c1d050bea6674702d7b6994906a2bcaee147b6"
-    )
+    assert row["moneyflow_provider_absence"] == expected_evidence.evidence()
 
     connection.stock_rows[0] = (date(2024, 1, 9), *connection.stock_rows[0][1:])
     with pytest.raises(StateModelSetError, match="provider_absence_unverified"):

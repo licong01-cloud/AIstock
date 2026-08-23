@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/hmm_risk/manifests/provider_absence_v1.json",
     "backend/tests/hmm_risk/test_provider_absence.py",
+    "backend/tests/hmm_risk/test_stock_fact_repository.py",
     "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
     "tests/aistock_validation/bugs/20260823_BUG-1169-hmm-provider-absence-authority-omits-canonical-pit-v2-moneyflow-gaps.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -19,6 +20,12 @@
   "description": "61 provider-absent exact keys are missing from the active manifest, so HR1 request preparation fails at 0 fits on 002366.SZ/2021-09-23.",
   "events": [
     {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added the direct stock-fact consumer contract test after targeted validation proved that it pinned the superseded provider-audit receipt hash.",
+      "timestamp": "2026-08-23T20:35:00Z"
+    },
+    {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260823-d9d60e1f8f09",
@@ -32,12 +39,14 @@
     "changed_files": [
       "backend/services/hmm_risk/manifests/provider_absence_v1.json",
       "backend/tests/hmm_risk/test_provider_absence.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
       "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/manifests/provider_absence_v1.json",
         "backend/tests/hmm_risk/test_provider_absence.py",
+        "backend/tests/hmm_risk/test_stock_fact_repository.py",
         "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
       ],
       "impacted_modules": [
@@ -61,6 +70,13 @@
           "rule_id": "hmm_risk_services"
         },
         {
+          "file": "backend/tests/hmm_risk/test_stock_fact_repository.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
           "file": "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
           "impact_modules": [
             "validation.module_quality"
@@ -77,6 +93,7 @@
       "suggested_scope": [
         "backend/services/hmm_risk/manifests/provider_absence_v1.json",
         "backend/tests/hmm_risk/test_provider_absence.py",
+        "backend/tests/hmm_risk/test_stock_fact_repository.py",
         "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
       ],
       "unmatched_files": []
@@ -85,6 +102,7 @@
     "scope_files": [
       "backend/services/hmm_risk/manifests/provider_absence_v1.json",
       "backend/tests/hmm_risk/test_provider_absence.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
       "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
     ]
   },
@@ -105,7 +123,8 @@
   "reproduce_command": "run C-012-RL1-HR1 request preparation against TDX_DB_ with canonical PIT v2 source authority",
   "required_verification": [
     "l0",
-    "hmm_risk_backend"
+    "hmm_risk_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
