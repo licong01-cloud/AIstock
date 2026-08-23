@@ -1,6 +1,7 @@
 {
   "actual": "76 historical rows remain FAILED_RETRYABLE; the existing BUG-1099 package cleanup intentionally cannot select them, and no governed retained-package terminalization tool exists.",
   "allowed_write_scope": [
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "scripts/stale_simulation_run_terminalization_core.py",
     "scripts/terminalize_stale_simulation_runs.py",
@@ -30,6 +31,12 @@
       "actor": "codex",
       "note": "The delivered source is an operator-invoked maintenance CLI that is not imported by backend-main; merge requires no restart and this PR does not execute production DML.",
       "timestamp": "2026-08-23T18:30:00Z"
+    },
+    {
+      "action": "validation_scope_expanded",
+      "actor": "codex",
+      "note": "Workflow review required both maintenance scripts to be registered in the authoritative non-runtime source catalog, matching the existing simulation-history cleanup tools.",
+      "timestamp": "2026-08-23T18:43:42Z"
     }
   ],
   "evidence_uris": [
@@ -43,10 +50,12 @@
       "backend/tests/simulation_runtime/test_stale_run_terminalization.py"
     ],
     "changed_files": [
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "ownership": {
       "changed_files": [
+        "docs/standards/aistock_runtime_targets_v1.yaml",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "scripts/stale_simulation_run_terminalization_core.py",
         "scripts/terminalize_stale_simulation_runs.py",
@@ -62,6 +71,16 @@
         "miniqmt_execution_runtime"
       ],
       "matched_rules": [
+        {
+          "file": "docs/standards/aistock_runtime_targets_v1.yaml",
+          "impact_modules": [
+            "validation.module_quality",
+            "validation.runner"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "runtime_target_catalog"
+        },
         {
           "file": "tests/aistock_validation/catalog/file_ownership.yaml",
           "impact_modules": [
@@ -103,6 +122,7 @@
         "critical"
       ],
       "suggested_scope": [
+        "docs/standards/aistock_runtime_targets_v1.yaml",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "scripts/stale_simulation_run_terminalization_core.py",
         "scripts/terminalize_stale_simulation_runs.py",
@@ -112,6 +132,7 @@
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "tests/aistock_validation/catalog/file_ownership.yaml",
       "scripts/stale_simulation_run_terminalization_core.py",
       "scripts/terminalize_stale_simulation_runs.py",
