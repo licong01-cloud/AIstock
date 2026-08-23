@@ -83,12 +83,14 @@
     "fresh_process_evidence": [
       "Fresh pytest process loaded commit 4b12af53907b756641e681face9dbee83f2813d1 code content and passed the direct MiniQMT product-evidence plus frozen T+1 matrix: 71 passed; no broker, scheduler, backend, or database side effects.",
       "Fresh nox process loaded commit 4b12af53907b756641e681face9dbee83f2813d1 code content and passed miniqmt_execution_runtime_l2: 1513 passed, 82 skipped; no production process control.",
-      "Fresh nox process loaded commit 4b12af53907b756641e681face9dbee83f2813d1 code content and passed platform_api_backend: 13 passed; no production process control."
+      "Fresh nox process loaded commit 4b12af53907b756641e681face9dbee83f2813d1 code content and passed platform_api_backend: 13 passed; no production process control.",
+      "Fresh nox MiniQMT L2 process loaded tracked BUG-1158 source and passed 1513 tests with 82 explicit skips; no production process control."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
