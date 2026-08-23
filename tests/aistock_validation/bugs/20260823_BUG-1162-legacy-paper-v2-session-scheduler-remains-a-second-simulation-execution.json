@@ -181,12 +181,14 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh pytest process loaded the tracked BUG-1162 backend lifespan and router sources and passed 10 startup/retired-route tests; no production process, database, broker, session, or thread mutation.",
-      "Fresh nox process loaded the tracked BUG-1162 Paper v2 sources and passed paper_v2_backend: 1129 passed, 3 skipped, 2 expected xfails; no production process control."
+      "Fresh nox process loaded the tracked BUG-1162 Paper v2 sources and passed paper_v2_backend: 1129 passed, 3 skipped, 2 expected xfails; no production process control.",
+      "Fresh nox Paper v2 process loaded tracked BUG-1162 sources and passed 1129 tests with 3 skips and 2 expected xfails; no production process control."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
