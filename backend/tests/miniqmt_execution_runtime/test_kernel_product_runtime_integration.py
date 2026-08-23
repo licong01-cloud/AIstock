@@ -41,7 +41,7 @@ from backend.services.miniqmt_execution_runtime.kernel_product_evidence import (
     ProductEvidenceBuildResultV3,
     VirtualAccountProjectionError,
     _CursorLedgerReadRepository,
-    _CursorTradingCalendar,
+    _FrozenSessionTPlusOneCalendar,
     bind_product_transition_bundle_v3,
     virtual_account_projection_v1,
 )
@@ -439,6 +439,13 @@ def _prepare_evidence_provider(monkeypatch, *, preflight) -> KernelProductEviden
     )
     monkeypatch.setattr(provider, "_exact_virtual_account", lambda *_args, **_kwargs: _evidence_account())
     monkeypatch.setattr(
+        provider,
+        "_locked_session_calendar",
+        lambda _cur, *, event, trade_date: _FrozenSessionTPlusOneCalendar(
+            _runtime_session_authority(event.runtime_id, trade_date)
+        ),
+    )
+    monkeypatch.setattr(
         kernel_product_evidence.QmtManagedOrderService,
         "preview_order",
         lambda _self, _request: preflight,
@@ -478,6 +485,41 @@ def test_product_evidence_builds_exact_same_cursor_submit_projection(monkeypatch
         "RISK_DECISION",
         "ROUTE_COMPATIBILITY",
     }
+
+
+def test_product_evidence_reads_frozen_calendar_once_for_multiple_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event, delivery, algo, state = _worker_facts()
+    provider = _prepare_evidence_provider(
+        monkeypatch,
+        preflight=SimpleNamespace(errors=(), freeze_amount=Decimal("1025")),
+    )
+    calendar_reads: list[tuple[str, date]] = []
+
+    def locked_calendar(_cur, *, event, trade_date):
+        calendar_reads.append((event.runtime_id, trade_date))
+        return _FrozenSessionTPlusOneCalendar(_runtime_session_authority(event.runtime_id, trade_date))
+
+    monkeypatch.setattr(provider, "_locked_session_calendar", locked_calendar)
+    cursor = _EvidenceCursor()
+    base = provider.build_base_services_with_cursor_v1(cur=cursor, event=event, delivery=delivery, algo=algo)
+
+    result = provider.build_with_cursor_v1(
+        cur=cursor,
+        event=event,
+        delivery=delivery,
+        algo=algo,
+        transition=_transition_with_commands(
+            state,
+            (_submit_command(event, algo, ordinal=0), _submit_command(event, algo, ordinal=1)),
+        ),
+        base_services=base,
+        route_receipt=_route_receipt_for(algo),
+    )
+
+    assert len(result.ordered_evidence) == 2
+    assert calendar_reads == [(event.runtime_id, date(2026, 7, 26))]
 
 
 def test_product_evidence_preserves_dependent_buy_rejection_and_sell_owner(
@@ -734,26 +776,74 @@ def test_same_cursor_plan_and_market_authorities_close_exactly() -> None:
 
 
 class _CalendarCursor:
-    def __init__(self, rows) -> None:
-        self.rows = list(rows)
+    def __init__(self, row) -> None:
+        self.row = row
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
 
-    def execute(self, _sql, _params=()):
-        return None
+    def execute(self, sql, params=()):
+        self.executed.append((" ".join(str(sql).split()), tuple(params)))
 
     def fetchone(self):
-        return self.rows.pop(0) if self.rows else None
+        return self.row
 
 
-def test_cursor_calendar_authority_is_strict_and_fail_loud() -> None:
-    calendar = _CursorTradingCalendar(_CalendarCursor(({"is_trading": True}, {"next_day": date(2026, 7, 27)})))
-    assert calendar.is_trading_day(date(2026, 7, 26)) is True
-    assert calendar.next_trading_day_after(date(2026, 7, 26)) == date(2026, 7, 27)
+def test_frozen_session_calendar_exposes_exact_tplus1_without_historical_query() -> None:
+    trade_date = date(2026, 7, 27)
+    calendar = _FrozenSessionTPlusOneCalendar(_runtime_session_authority("runtime_calendar", trade_date))
+
+    assert calendar.is_trading_day(trade_date) is True
+    assert calendar.is_trading_day(date(2026, 7, 26)) is False
+    assert calendar.tplus1_unlocked(date(2026, 7, 24), trade_date) is True
+    assert calendar.tplus1_unlocked(trade_date, trade_date) is False
+    with pytest.raises(KernelProductEvidenceError, match="differs from frozen"):
+        calendar.tplus1_unlocked(date(2026, 7, 24), date(2026, 7, 28))
+    with pytest.raises(KernelProductEvidenceError, match="not a historical calendar query"):
+        calendar.next_trading_day_after(date(2026, 7, 24))
+
+
+def test_product_calendar_reads_one_frozen_authority_and_never_market_calendar() -> None:
+    trade_date = date(2026, 7, 27)
+    authority = _runtime_session_authority("runtime_calendar", trade_date)
+    cursor = _CalendarCursor({"authority_json": authority.model_dump(mode="python")})
+    event = _worker_facts()[0].model_copy(update={"runtime_id": "runtime_calendar"})
+
+    calendar = KernelProductEvidenceProviderV3._locked_session_calendar(
+        cursor,
+        event=event,
+        trade_date=trade_date,
+    )
+
+    assert calendar.tplus1_unlocked(date(2026, 7, 24), trade_date) is True
+    assert len(cursor.executed) == 1
+    sql, params = cursor.executed[0]
+    assert "qmt_strategy.execution_exchange_session_authority" in sql
+    assert "FOR SHARE" in sql
+    assert "market.trading_calendar" not in sql
+    assert params == ("runtime_calendar", trade_date)
+
+
+def test_product_calendar_authority_is_strict_and_fail_loud() -> None:
+    trade_date = date(2026, 7, 27)
+    event = _worker_facts()[0].model_copy(update={"runtime_id": "runtime_calendar"})
     with pytest.raises(KernelProductEvidenceError, match="authority is missing"):
-        _CursorTradingCalendar(_CalendarCursor(())).is_trading_day(date(2026, 7, 26))
-    with pytest.raises(KernelProductEvidenceError, match="not a strict boolean"):
-        _CursorTradingCalendar(_CalendarCursor(({"is_trading": 1},))).is_trading_day(date(2026, 7, 26))
-    with pytest.raises(KernelProductEvidenceError, match="next trading day"):
-        _CursorTradingCalendar(_CalendarCursor((None,))).next_trading_day_after(date(2026, 7, 26))
+        KernelProductEvidenceProviderV3._locked_session_calendar(
+            _CalendarCursor(None),
+            event=event,
+            trade_date=trade_date,
+        )
+    with pytest.raises(KernelProductEvidenceError, match="authority is invalid"):
+        KernelProductEvidenceProviderV3._locked_session_calendar(
+            _CalendarCursor({"authority_json": {"schema_version": "wrong"}}),
+            event=event,
+            trade_date=trade_date,
+        )
+    conflicting = _runtime_session_authority("other_runtime", trade_date)
+    with pytest.raises(KernelProductEvidenceError, match="conflicts with product owner"):
+        KernelProductEvidenceProviderV3._locked_session_calendar(
+            _CalendarCursor({"authority_json": conflicting.model_dump(mode="python")}),
+            event=event,
+            trade_date=trade_date,
+        )
 
 
 class _EmptyLedgerCursor:

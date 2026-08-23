@@ -2,7 +2,11 @@
   "actual": "生产代码 backend/services/miniqmt_execution_runtime/kernel_product_evidence.py 在每个产生 SUBMIT_LIMIT 卖单命令的同事务 product evidence preflight 中构造 _CursorTradingCalendar；QmtManagedOrderService.preview_order 计算 T+1 可卖 lot 时按 child command 查询 market.trading_calendar。当前 runtime 已拥有并持久化 CalendarSnapshotSet，但订单 preflight 未复用，违反全局 Trading Calendar Service 与 hot-data zero-DB 边界，可能造成盘中高频数据库访问。修复必须复用已冻结且 hash-closed 的日历 authority，保持 T+1/lot/account/order/OMS 语义，禁止缓存猜测或 fail-open，并增加 action/no-action 查询预算与严格 authority 测试。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260823_BUG-1158-miniqmt-kernel-v2-preflight.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+    "backend/services/qmt_strategy_ledger/lot_availability.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+    "backend/tests/qmt_strategy_ledger/test_lot_availability.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1158",
@@ -25,8 +29,15 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
+    "added_files": [
+      "backend/tests/qmt_strategy_ledger/test_lot_availability.py"
+    ],
+    "changed_files": [
+      "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+      "backend/services/qmt_strategy_ledger/lot_availability.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+      "backend/tests/qmt_strategy_ledger/test_lot_availability.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +47,12 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+      "backend/services/qmt_strategy_ledger/lot_availability.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+      "backend/tests/qmt_strategy_ledger/test_lot_availability.py"
+    ]
   },
   "first_seen_at": "2026-08-23T14:49:15.392353Z",
   "fix_branch": null,
@@ -60,13 +76,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
