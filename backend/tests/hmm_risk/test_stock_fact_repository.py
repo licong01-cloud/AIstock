@@ -51,10 +51,8 @@ class _Cursor:
     def fetchall(self):
         if "information_schema.columns" in self.sql:
             return [("daily_basic", "trade_date", "date")]
-        if "FROM market.sw_index_classify" in self.sql:
-            rows = [("L1", f"L1-{index:02d}", f"I1-{index:02d}", f"L1 Sector {index}") for index in range(31)]
-            rows.extend(("L2", f"L2-{index:03d}", f"I2-{index:03d}", f"L2 Sector {index}") for index in range(131))
-            return rows
+        if "SELECT DISTINCT l1_code,l1_name,l2_code,l2_name FROM market.sw_index_member" in self.sql:
+            return self.connection.classification_member_rows
         if "duplicates WHERE conflict_groups>0" in self.sql:
             return self.connection.duplicates
         if "SELECT cal_date::date FROM market.trading_calendar" in self.sql:
@@ -134,12 +132,27 @@ class _Connection:
     def __init__(self) -> None:
         self.executed = []
         self.duplicates = []
+        self.classification_member_rows = _complete_member_classification_rows()
         self.mapping_rows = []
         self.missing_rows = []
         self.stock_rows = []
 
     def cursor(self, name=None):
         return _Cursor(self, name=name)
+
+
+def _complete_member_classification_rows() -> list[tuple[str, str, str, str]]:
+    rows: list[tuple[str, str, str, str]] = []
+    for l2_index in range(131):
+        l1_index = l2_index % 31
+        canonical_l1 = f"801{l1_index:03d}.SI"
+        l1_name = f"L1 Sector {l1_index}"
+        l2_code = f"L2-{l2_index:03d}"
+        l2_name = f"L2 Sector {l2_index}"
+        rows.append((canonical_l1, l1_name, l2_code, l2_name))
+        if l1_index < 28:
+            rows.append((f"{110000 + l1_index * 10000:06d}", "", l2_code, l2_name))
+    return rows
 
 
 def _spec(*, circ_mv_history_start: date | None = None) -> subject.StockFactSourceSpec:
@@ -193,10 +206,37 @@ def test_reader_allows_identical_duplicates_but_rejects_conflicting_duplicate_ke
     reader.validate_fact_uniqueness()
 
     assert state["universe_key"] == "immutable_v1"
-    assert lookup[("L1", "I1-00")]["index_code"] == "L1-00"
+    assert lookup[("L1", "110000")]["index_code"] == "801000.SI"
+    assert not any("market.sw_index_classify" in sql for _, sql, _ in connection.executed)
     connection.duplicates = [("moneyflow_ts", 2)]
     with pytest.raises(StateModelSetError, match="conflicting duplicate keys"):
         reader.validate_fact_uniqueness()
+
+
+def test_member_classification_authority_rejects_ambiguous_l1_alias() -> None:
+    connection = _Connection()
+    first_l2 = connection.classification_member_rows[0][2]
+    connection.classification_member_rows.append(("120000", "L1 Sector 1", first_l2, "L2 Sector 0"))
+
+    with pytest.raises(StateModelSetError, match="L1 alias maps to multiple canonical identities"):
+        _reader(connection).load_classification_lookup()
+
+
+def test_member_classification_authority_rejects_incomplete_l2_catalog() -> None:
+    connection = _Connection()
+    connection.classification_member_rows = [row for row in connection.classification_member_rows if row[2] != "L2-130"]
+
+    with pytest.raises(StateModelSetError, match="canonical L1=31/L2=131; actual=31/130"):
+        _reader(connection).load_classification_lookup()
+
+
+def test_member_classification_authority_rejects_unknown_l1_code_representation() -> None:
+    connection = _Connection()
+    first_l2 = connection.classification_member_rows[0][2]
+    connection.classification_member_rows.append(("LEGACY-L1", "", first_l2, "L2 Sector 0"))
+
+    with pytest.raises(StateModelSetError, match="L1 code representation is invalid"):
+        _reader(connection).load_classification_lookup()
 
 
 def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
@@ -205,13 +245,13 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
         (
             date(2024, 1, 2),
             "000001.SZ",
-            "I1-00",
-            "I2-000",
+            "110000",
+            "L2-000",
             date(2020, 1, 1),
             None,
             date(2020, 1, 1),
             None,
-            "L1-00",
+            "801000.SI",
             "L1 Sector 0",
             "L2-000",
             "L2 Sector 0",
@@ -261,8 +301,8 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     l2_stock = next(reader.iter_stock_fact_rows(sector_level="L2"))
     assert list(reader.iter_missing_price_rows()) == []
 
-    assert mapping["source_l1_code"] == "I1-00"
-    assert mapping["l1_code"] == "L1-00"
+    assert mapping["source_l1_code"] == "110000"
+    assert mapping["l1_code"] == "801000.SI"
     assert stock["close_yuan"] == 10.5
     assert stock["volume_shares"] == 10_000.0
     assert stock["amount_cny"] == 1_000.0
@@ -284,6 +324,12 @@ def test_reader_streams_normalized_mapping_and_scaled_stock_facts() -> None:
     missing_queries = [sql for name, sql, _ in connection.executed if name and "missing_price_base" in name]
     assert missing_queries and all("missing_keys AS MATERIALIZED" in sql for sql in missing_queries)
     assert all("DISTINCT ON" not in sql.upper() for _, sql, _ in connection.executed)
+    assert all("market.sw_index_classify" not in sql for _, sql, _ in connection.executed)
+    assert all(
+        "JOIN l2_owner owner" in sql
+        for name, sql, _ in connection.executed
+        if name and ("mapping_source" in name or "stock_fact" in name)
+    )
     assert all(params is None or sql.count("%s") == len(params) for _, sql, params in connection.executed)
 
 
