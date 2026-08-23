@@ -1,5 +1,5 @@
 {
-  "actual": "LocalSIM unattended daily roll-forward creates a new runtime release by copying the source release runtime profile, daily strategy profile, execution policy, tail policy, validation state, and release policy JSON. A historical source can therefore carry retired V25 execution/model/tail authority into a new trade date, while the LocalSIM planner later forces TWAP-only. The persisted release and the executed policy become two authorities, and execution-algorithm retirement is not enforced at the roll-forward boundary. Fix only the LocalSIM roll-forward path so the new immutable release contains the canonical TWAP-only execution authority and no retired V25 execution/model/tail authority. Preserve MiniQMT roll-forward, package/manifest identity, strategy selection, capital, account, position, and order semantics. Fail closed when canonical authority cannot be formed; do not add a fallback or process control. Add direct LocalSIM/MiniQMT separation, retired-source, idempotency, and no-dual-authority tests.",
+  "actual": "LocalSIM unattended daily roll-forward copies the source release execution policy, including a retired V25 algorithm, into the new trade-date release. The LocalSIM context provider and plan compiler then independently replace that persisted policy with TWAP-only, so the release and execution plan expose different authorities. Daily strategy profile and tail policy are separate approved selection and unfilled-order semantics and must remain unchanged. Fix only the LocalSIM roll-forward execution authority: persist the canonical TWAP-only policy in the new immutable release, preserve daily/tail/runtime profiles and all package, manifest, capital, account, position, selection, and order semantics, and keep MiniQMT roll-forward unchanged. Fail closed without fallback or process control; cover retired-source migration, LocalSIM/MiniQMT separation, release-plan identity closure, and idempotency.",
   "allowed_write_scope": [
     "backend/services/simulation_runtime/scheduler.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
@@ -15,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-23T16:39:06.973113Z",
-  "description": "LocalSIM unattended daily roll-forward creates a new runtime release by copying the source release runtime profile, daily strategy profile, execution policy, tail policy, validation state, and release policy JSON. A historical source can therefore carry retired V25 execution/model/tail authority into a new trade date, while the LocalSIM planner later forces TWAP-only. The persisted release and the executed policy become two authorities, and execution-algorithm retirement is not enforced at the roll-forward boundary. Fix only the LocalSIM roll-forward path so the new immutable release contains the canonical TWAP-only execution authority and no retired V25 execution/model/tail authority. Preserve MiniQMT roll-forward, package/manifest identity, strategy selection, capital, account, position, and order semantics. Fail closed when canonical authority cannot be formed; do not add a fallback or process control. Add direct LocalSIM/MiniQMT separation, retired-source, idempotency, and no-dual-authority tests.",
+  "description": "LocalSIM unattended daily roll-forward copies the source release execution policy, including a retired V25 algorithm, into the new trade-date release. The LocalSIM context provider and plan compiler then independently replace that persisted policy with TWAP-only, so the release and execution plan expose different authorities. Daily strategy profile and tail policy are separate approved selection and unfilled-order semantics and must remain unchanged. Fix only the LocalSIM roll-forward execution authority: persist the canonical TWAP-only policy in the new immutable release, preserve daily/tail/runtime profiles and all package, manifest, capital, account, position, selection, and order semantics, and keep MiniQMT roll-forward unchanged. Fail closed without fallback or process control; cover retired-source migration, LocalSIM/MiniQMT separation, release-plan identity closure, and idempotency.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -25,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Every new LocalSIM unattended roll-forward release persists the canonical TWAP-only execution policy used by its plan; no retired V25 execution identity remains in the new release. Independent daily strategy and tail authorities remain unchanged, and MiniQMT continues to preserve its source execution policy.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -95,13 +95,18 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0",
+    "validation_module_registry_l0",
     "simulation_core_l2"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
