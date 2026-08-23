@@ -576,6 +576,16 @@ rules:
     layer: script
     risk_level: critical
     ownership_reason: Governed simulation-history cleanup mutates the Paper v2, unified simulation, StrategyPackage runtime-release, and MiniQMT K2 persistence graphs.
+  - rule_id: simulation_stale_run_terminalization_cli
+    priority: 97
+    include:
+      - scripts/stale_simulation_run_terminalization_core.py
+      - scripts/terminalize_stale_simulation_runs.py
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2, miniqmt_execution_runtime]
+    layer: script
+    risk_level: critical
+    ownership_reason: Governed retained-package terminalization changes historical unified simulation run status while preserving broker and economic evidence.
   - rule_id: miniqmt_execution_runtime_services
     priority: 95
     include:
