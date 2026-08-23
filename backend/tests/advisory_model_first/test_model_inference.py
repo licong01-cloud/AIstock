@@ -444,6 +444,8 @@ def test_model_shadow_scores_complete_persisted_candidate_group() -> None:
     assert [item["symbol"] for item in result["candidates"]] == ["000002.SZ", "000001.SZ"]
     assert [item["advisory_model_rank"] for item in result["candidates"]] == [1, 2]
     assert all(item["is_top5"] for item in result["candidates"])
+    assert "evaluation_contract_version" not in result
+    assert "cost_policy" not in result
     assert feature_source.calls == 1
 
 

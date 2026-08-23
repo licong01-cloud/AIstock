@@ -29,6 +29,9 @@ class _Repository:
     def pending_settlements(self, *, on_or_before: date):
         return []
 
+    def pending_mature_model_observations(self, **_kwargs):
+        return []
+
     def list_runs(self, **_kwargs):
         return []
 

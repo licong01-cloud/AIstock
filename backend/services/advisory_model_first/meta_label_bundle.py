@@ -15,7 +15,10 @@ import pandas as pd
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.meta_label_contracts import FrozenAdvisoryMetaLabelTrainingRequestV1
-from backend.services.advisory_model_first.policy_contracts import transition_policy_from_payload
+from backend.services.advisory_model_first.policy_contracts import (
+    AdvisoryPolicyCostV1,
+    transition_policy_from_payload,
+)
 from backend.services.advisory_model_first.policy_dataset_bundle import _json_ready
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 
@@ -277,6 +280,41 @@ def load_exact_meta_label_runtime_bundle(
             "meta-label runtime policy is invalid",
             reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
         ) from exc
+    policy_dataset_manifest = _read_runtime_json(
+        bundle_path / "policy_dataset_manifest.json",
+        expected_type=dict,
+    )
+    if (
+        policy_dataset_manifest.get("policy_dataset_bundle_id") != policy_dataset_bundle_id
+        or policy_dataset_manifest.get("shadow_policy_sha256")
+        != loaded["manifest"].get("shadow_policy_sha256")
+    ):
+        raise AdvisoryModelFirstError(
+            "meta-label runtime policy dataset manifest differs from the frozen bundle identity",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        )
+    cost_policy_path = (root / "policy_datasets" / policy_dataset_bundle_id / "cost_policy.json").resolve()
+    try:
+        cost_policy_path.relative_to(root)
+    except ValueError as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime cost policy escapes its configured root",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        ) from exc
+    cost_policy_payload = _read_runtime_json(cost_policy_path, expected_type=dict)
+    try:
+        cost_policy = AdvisoryPolicyCostV1.model_validate(cost_policy_payload)
+    except ValueError as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime cost policy is invalid",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        ) from exc
+    expected_cost_policy_sha256 = str(policy_dataset_manifest.get("cost_policy_sha256") or "")
+    if cost_policy.policy_sha256 != expected_cost_policy_sha256:
+        raise AdvisoryModelFirstError(
+            "meta-label runtime cost policy differs from the frozen policy dataset",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+        )
     feature_schema = _read_runtime_json(bundle_path / "feature_schema.json", expected_type=dict)
     hmm_models = _read_runtime_json(bundle_path / "fresh_hmm_models.json", expected_type=dict)
     hmm_unavailable = _read_runtime_json(
@@ -316,6 +354,8 @@ def load_exact_meta_label_runtime_bundle(
             "hmm_unavailable": tuple(hmm_unavailable),
             "baselines": baselines,
             "shadow_policy": shadow_policy,
+            "cost_policy": cost_policy.model_dump(mode="json"),
+            "cost_policy_sha256": cost_policy.policy_sha256,
             "shadow_policy_maturity_horizon_days": transition_policy.time_stop_days,
             "continuation_cutoff": continuation_cutoff,
             "manifest_file_sha256": bundle_manifest_sha256,

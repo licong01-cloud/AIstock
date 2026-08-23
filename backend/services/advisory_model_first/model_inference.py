@@ -439,6 +439,16 @@ class AdvisoryModelShadowService:
             "model_descriptor_sha256": resolution.descriptor_sha256,
             "model_role": resolution.model_role,
             "shadow_policy_sha256": resolution.shadow_policy_sha256,
+            **(
+                {
+                    "shadow_policy": bundle["shadow_policy"],
+                    "cost_policy": bundle["cost_policy"],
+                    "cost_policy_sha256": bundle["cost_policy_sha256"],
+                    "evaluation_contract_version": "advisory_forward_model_evaluation_v1",
+                }
+                if is_meta_label
+                else {}
+            ),
             "shadow_policy_maturity_horizon_days": (
                 bundle["shadow_policy_maturity_horizon_days"] if is_meta_label else None
             ),

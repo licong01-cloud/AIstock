@@ -13,6 +13,7 @@ from backend.services.advisory_model_first.model_binding_resolution import (
 )
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
 from backend.services.selection_center.models import SelectionRunStatus
+from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 from backend.tests.advisory_model_first.test_model_inference import (
     BINDING_VERSION_ID,
     FUND_LEG_ID,
@@ -26,6 +27,32 @@ from backend.tests.advisory_model_first.test_model_inference import (
     _ReviewSource,
     _candidate,
 )
+
+
+SHADOW_POLICY = {
+    "target_count": 5,
+    "rank_enter_threshold": 5,
+    "rank_exit_threshold": 40,
+    "rank_exit_confirm_days": 2,
+    "daily_replacement_budget": 5,
+    "stop_loss_bps": 800,
+    "take_profit_bps": 1800,
+    "trailing_stop_bps": 700,
+    "time_stop_days": 20,
+    "take_profit_mode": "trailing",
+    "entry_price_basis": "next_open_executable",
+    "exit_price_basis": "next_open_executable",
+}
+COST_POLICY = {
+    "schema_version": "advisory_policy_cost_v1",
+    "buy_cost_bps": 3.0,
+    "sell_cost_bps": 13.0,
+    "minimum_commission_bps": 0,
+    "cash_return_bps_per_day": 0,
+    "benchmark_instrument": "000300.SH",
+}
+SHADOW_POLICY_SHA256 = canonical_json_sha256(SHADOW_POLICY)
+COST_POLICY_SHA256 = canonical_json_sha256(COST_POLICY)
 
 
 class _MetaBindingResolver:
@@ -48,7 +75,7 @@ class _MetaBindingResolver:
             component_roles={"lstm": LSTM_LEG_ID, "fund": FUND_LEG_ID},
             descriptor_sha256="d" * 64,
             model_role=META_LABEL_MODEL_ROLE,
-            shadow_policy_sha256="1" * 64,
+            shadow_policy_sha256=SHADOW_POLICY_SHA256,
             terminal_weights={LSTM_LEG_ID: 0.6966591521, FUND_LEG_ID: 0.3033408479},
         )
 
@@ -102,7 +129,7 @@ def _meta_bundle() -> dict[str, object]:
             "manifest_sha256": MANIFEST_SHA256,
             "style_profile_id": STYLE_PROFILE_ID,
             "style_profile_hash": "8e8226885af25dbf1830403ea2ba768ec4a135a35680f827ad30994c0369904b",
-            "shadow_policy_sha256": "1" * 64,
+            "shadow_policy_sha256": SHADOW_POLICY_SHA256,
             "feature_schema_version": "advisory_feature_schema_v1",
             "feature_schema_hash": "e56adb47d444df26e35eb327d3aacacd273477edf67c4c1db201ea5b4c3bd49c",
             "bundle_id": "e" * 64,
@@ -115,6 +142,9 @@ def _meta_bundle() -> dict[str, object]:
             "categorical_vocabulary": {"l2_code_id": [1, 2]},
         },
         "manifest_file_sha256": "f" * 64,
+        "shadow_policy": SHADOW_POLICY,
+        "cost_policy": COST_POLICY,
+        "cost_policy_sha256": COST_POLICY_SHA256,
         "shadow_policy_maturity_horizon_days": 20,
         "continuation_cutoff": "2026-02-02",
         "hmm_models": {"schema_version": "fresh_sector_hmm_bundle_v1", "models": {"1": {}}},
@@ -182,7 +212,9 @@ def test_meta_label_runtime_reorders_top20_entry_only_without_legacy_fallback(mo
 
     assert result["status"] == "EXPERIMENTAL_SHADOW"
     assert result["model_role"] == META_LABEL_MODEL_ROLE
-    assert result["shadow_policy_sha256"] == "1" * 64
+    assert result["shadow_policy_sha256"] == SHADOW_POLICY_SHA256
+    assert result["cost_policy_sha256"] == COST_POLICY_SHA256
+    assert result["evaluation_contract_version"] == "advisory_forward_model_evaluation_v1"
     assert result["shadow_policy_maturity_horizon_days"] == 20
     assert result["candidate_count"] == 20
     assert result["shortlist_count"] == 5

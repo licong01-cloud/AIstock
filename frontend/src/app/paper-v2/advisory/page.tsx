@@ -8,6 +8,7 @@ import {
   type AdvisoryEpisode,
   type AdvisoryForwardRun,
   type AdvisoryForwardRunDetail,
+  type AdvisoryForwardModelMetrics,
   type AdvisoryListVersionDetail,
   type AdvisoryLeaderboardRow,
   type AdvisoryModelShadowResponse,
@@ -683,6 +684,8 @@ function AdvisoryPageContent() {
   const [modelShadowError, setModelShadowError] = useState<string | null>(null);
   const [forwardRuns, setForwardRuns] = useState<AdvisoryForwardRun[]>([]);
   const [latestForwardDetail, setLatestForwardDetail] = useState<AdvisoryForwardRunDetail | null>(null);
+  const [forwardModelMetrics, setForwardModelMetrics] = useState<AdvisoryForwardModelMetrics | null>(null);
+  const [forwardModelMetricsLoading, setForwardModelMetricsLoading] = useState(false);
   const [forwardError, setForwardError] = useState<string | null>(null);
   const [outcomeHorizonDays, setOutcomeHorizonDays] = useState<OutcomeHorizon>(5);
   const [selectedListVersionId, setSelectedListVersionId] = useState("");
@@ -826,6 +829,11 @@ function AdvisoryPageContent() {
     setModelShadow(null);
     setModelShadowError(null);
     setModelShadowLoading(false);
+    setForwardRuns([]);
+    setLatestForwardDetail(null);
+    setForwardModelMetrics(null);
+    setForwardModelMetricsLoading(true);
+    setForwardError(null);
     const [poolRows, reviewPageData, bindingRows, versionRows] = await Promise.all([
       advisoryApi.activePool(programId),
       advisoryApi.reviews(programId, pageSize, offset),
@@ -838,9 +846,6 @@ function AdvisoryPageContent() {
     setReviewTotalCount(reviewPageData.total_count);
     setBindings(bindingRows);
     setListVersions(versionRows);
-    setForwardRuns([]);
-    setLatestForwardDetail(null);
-    setForwardError(null);
     void advisoryApi.forwardRuns(programId, 20)
       .then((forwardRows) => {
         if (!stillCurrent()) return;
@@ -853,6 +858,17 @@ function AdvisoryPageContent() {
       })
       .catch((exc) => {
         if (stillCurrent()) setForwardError(exc instanceof Error ? exc.message : String(exc));
+      });
+    void advisoryApi.forwardModelMetrics(programId)
+      .then((metrics) => {
+        if (!stillCurrent()) return;
+        setForwardModelMetrics(metrics);
+        setForwardModelMetricsLoading(false);
+      })
+      .catch((exc) => {
+        if (!stillCurrent()) return;
+        setForwardModelMetricsLoading(false);
+        setForwardError(exc instanceof Error ? exc.message : String(exc));
       });
     setLoadedDetailsProgramId(programId);
     if (versionRows[0]) {
@@ -1866,6 +1882,39 @@ function AdvisoryPageContent() {
                   {latestForwardDetail.model_observation.reason_code ? `；${latestForwardDetail.model_observation.reason_code}` : ""}
                 </div>
               ) : null}
+              <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid="advisory-forward-model-metrics">
+                <div className="pv2-row-actions">
+                  <strong>模型前向效果</strong>
+                  <span className={`pv2-badge ${forwardModelMetrics?.status === "READY" ? "pv2-badge-success" : forwardModelMetrics?.status === "FAILED" ? "pv2-badge-danger" : "pv2-badge-neutral"}`}>
+                    {forwardModelMetricsLoading ? "LOADING" : forwardModelMetrics?.status || "UNAVAILABLE"}
+                  </span>
+                </div>
+                {forwardModelMetricsLoading ? (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>正在加载模型前向证据…</div>
+                ) : forwardModelMetrics?.evaluation ? (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>
+                    成熟 observation {forwardModelMetrics.evaluation.matured_outcome_count}/{forwardModelMetrics.evaluation.due_observation_count}；
+                    已退出 episode {forwardModelMetrics.evaluation.metrics_json.exited_episode_count ?? 0}；
+                    胜率 {fmtPct(forwardModelMetrics.evaluation.metrics_json.completed_episode_hit_rate)}；
+                    日均净收益 {fmtBps(forwardModelMetrics.evaluation.metrics_json.mean_daily_net_return_bps)}；
+                    日均超额 {fmtBps(forwardModelMetrics.evaluation.metrics_json.mean_daily_net_excess_return_bps)}；
+                    最大回撤 {fmtPct(forwardModelMetrics.evaluation.metrics_json.maximum_drawdown)}；
+                    平均换手 {fmtPct(forwardModelMetrics.evaluation.metrics_json.mean_turnover_fraction)}；
+                    覆盖率 {fmtPct(forwardModelMetrics.evaluation.metrics_json.coverage)}
+                  </div>
+                ) : forwardModelMetrics ? (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>
+                    已记录 {forwardModelMetrics?.observation_count ?? 0} 条 P0-D observation，
+                    当前到期 {forwardModelMetrics?.due_observation_count ?? 0} 条；
+                    {forwardModelMetrics?.next_maturity_trade_date
+                      ? `下一成熟日 ${forwardModelMetrics.next_maturity_trade_date}`
+                      : "尚无可结算样本"}
+                    {forwardModelMetrics?.reason_code ? `；${forwardModelMetrics.reason_code}` : ""}
+                  </div>
+                ) : (
+                  <div className="pv2-muted" style={{ marginTop: 6 }}>模型前向指标不可用，请查看上方错误。</div>
+                )}
+              </div>
               {latestForwardPrediction ? (
                 <>
                 <div className="pv2-muted" style={{ marginTop: 6 }} data-testid="advisory-forward-child-status">

@@ -88,6 +88,9 @@ class _RecoveryRepository:
     def pending_settlements(self, **_kwargs):
         return []
 
+    def pending_mature_model_observations(self, **_kwargs):
+        return []
+
     def retryable_model_observations(self, *, limit: int):
         assert limit == 1
         return self.retryable_observations[:limit]
