@@ -2,7 +2,26 @@
   "actual": "qe_hmm_full_v2 固定五股 sample 在任何导出前被 BLOCKED_SOURCE_AUDIT_INCOMPLETE 阻断。只读诊断确认：BUG-1150 seeder 未按 pit_stock_codes 过滤物理计数，非 PIT ETF/BJ 空字段会毒化 stk_limit 整日；PIT 内另有 92 行 pre_close NULL，PR #3698 missing-only overlay 只处理整行不存在；index_daily 的 166 个 required-index 键本可由已登记 Tushare provider 补齐却在 provider 前阻断；bak_basic 18 个合法历史空日仍按 dense 阻断；4 只退市股最后交易日后的 829 个长期停牌尾段被 daily provider coverage 误判为缺失。要求贯通 source-audit、artifact-ready 和 fail-closed candidate repair；不得写生产数据库、不得覆盖现有 2026-07-31 数据集、不得放宽未知或内部缺口。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260823_BUG-1157-pit-v2-source-audit-candidate-repair.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/seed_dataset_refresh_audit.py",
+    "backend/services/dataset_release/source_authority.py",
+    "backend/services/dataset_release/artifact_ready_source.py",
+    "backend/services/dataset_release/stk_limit_overlay.py",
+    "backend/services/dataset_release/artifact_ready_build_source.py",
+    "backend/services/dataset_release/index_sources.py",
+    "backend/services/dataset_release/minute_overlay.py",
+    "backend/tests/test_dataset_refresh_audit.py",
+    "backend/tests/dataset_release/test_source_authority.py",
+    "backend/tests/dataset_release/test_artifact_ready_source.py",
+    "backend/tests/dataset_release/test_stk_limit_overlay.py",
+    "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+    "backend/tests/dataset_release/test_index_sources.py",
+    "backend/tests/dataset_release/test_minute_overlay.py",
+    "docs/architecture/qe_stk_limit_rule_derived_overlay_f2_design_20260823.md",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    ".codex/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/references/monthly-workflow.md",
+    ".codex/skills/update-backtest-dataset/references/fingerprint-and-reuse.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1157",
@@ -23,7 +42,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "PIT v2 source audit only evaluates canonical PIT stock-days; legal sparse empties and exact candidate-local repairs continue automatically; provider transport/rate limits are retryable; authority conflicts, internal gaps and missing deterministic inputs remain hard blockers without modifying existing datasets or production data.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -54,8 +73,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0",
-    "data_sync_autonomy_backend"
+    "validation_module_registry_l0",
+    "qlib_data_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -63,10 +82,13 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
-    "target_ids": []
+    "target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
