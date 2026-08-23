@@ -71,6 +71,7 @@ def test_missing_only_overlay_derives_from_previous_close_and_adjustment_ratio()
     assert result.expected_pit_keys == 3
     assert result.database_rows == 2
     assert result.rule_derived_rows == 1
+    assert result.database_completion_rows == 0
     assert result.database_override_rows == 0
     assert result.unresolved_keys == 0
     assert result.overlay_rows == (
@@ -122,6 +123,58 @@ def test_complete_database_partition_creates_no_overlay() -> None:
     )
     assert result.overlay_rows == ()
     assert result.rule_derived_rows == 0
+    assert result.database_completion_rows == 0
+
+
+def test_incomplete_database_row_is_completed_when_non_null_values_match() -> None:
+    partial = {
+        "ts_code": CODE,
+        "trade_date": DAY2,
+        "pre_close": None,
+        "up_limit": "11.00",
+        "down_limit": "9.00",
+    }
+    result = build_stk_limit_rule_overlay(
+        pit_snapshot=_pit(),
+        trading_dates=(DAY1, DAY2, DAY3),
+        partition_start=DAY1,
+        partition_end=DAY3,
+        database_limit_rows=[_limit(DAY1), partial, _limit(DAY3)],
+        daily_rows=[_daily(DAY1, 10_000), _daily(DAY2, 10_100), _daily(DAY3, 10_200)],
+        adj_factor_rows=[_adj(DAY1, "1"), _adj(DAY2, "1"), _adj(DAY3, "1")],
+    )
+
+    assert result.database_rows == 3
+    assert result.database_completion_rows == 1
+    assert result.overlay_rows == (
+        {
+            "ts_code": CODE,
+            "trade_date": DAY2.isoformat(),
+            "pre_close": "10.00",
+            "up_limit": "11.00",
+            "down_limit": "9.00",
+        },
+    )
+
+
+def test_incomplete_database_non_null_conflict_fails_closed() -> None:
+    partial = {
+        "ts_code": CODE,
+        "trade_date": DAY2,
+        "pre_close": None,
+        "up_limit": "10.99",
+        "down_limit": "9.00",
+    }
+    with pytest.raises(StkLimitRuleOverlayError, match="conflicts with rule derivation"):
+        build_stk_limit_rule_overlay(
+            pit_snapshot=_pit(),
+            trading_dates=(DAY1, DAY2, DAY3),
+            partition_start=DAY1,
+            partition_end=DAY3,
+            database_limit_rows=[_limit(DAY1), partial, _limit(DAY3)],
+            daily_rows=[_daily(DAY1, 10_000), _daily(DAY2, 10_100), _daily(DAY3, 10_200)],
+            adj_factor_rows=[_adj(DAY1, "1"), _adj(DAY2, "1"), _adj(DAY3, "1")],
+        )
 
 
 def test_limit_daily_and_adj_streams_merge_one_code_at_a_time() -> None:
