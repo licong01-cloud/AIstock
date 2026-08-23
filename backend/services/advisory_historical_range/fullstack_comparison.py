@@ -24,6 +24,7 @@ from backend.services.advisory_list_transition import (
 
 from backend.services.advisory_historical_range.canonical import canonical_json_text
 from backend.services.advisory_historical_range.model_challenger import (
+    HistoricalMetaLabelChallengerArtifactV1,
     HistoricalModelChallengerArtifactV1,
 )
 from backend.services.advisory_historical_range.models import (
@@ -62,17 +63,45 @@ class HistoricalComparisonArtifactStore:
         self,
         artifact: HistoricalModelChallengerArtifactV1,
     ) -> HistoricalComparisonArtifactRefV1:
+        return self._publish_model_artifact(
+            artifact=artifact,
+            artifact_kind="MODEL_CHALLENGER",
+            directory="model-challenger",
+        )
+
+    def publish_meta_label_challenger(
+        self,
+        artifact: HistoricalMetaLabelChallengerArtifactV1,
+    ) -> HistoricalComparisonArtifactRefV1:
+        return self._publish_model_artifact(
+            artifact=artifact,
+            artifact_kind="META_LABEL_CHALLENGER",
+            directory="meta-label-challenger",
+        )
+
+    def _publish_model_artifact(
+        self,
+        *,
+        artifact: (
+            HistoricalModelChallengerArtifactV1
+            | HistoricalMetaLabelChallengerArtifactV1
+        ),
+        artifact_kind: str,
+        directory: str,
+    ) -> HistoricalComparisonArtifactRefV1:
         identity = str(artifact.artifact_hash)
-        relative = Path("model-challenger") / f"{identity}.json"
+        relative = Path(directory) / f"{identity}.json"
         destination = (self._root / relative).resolve()
         try:
             destination.relative_to(self._root)
         except ValueError as exc:
-            raise ValueError("comparison artifact path escapes configured root") from exc
+            raise ValueError(
+                "comparison artifact path escapes configured root"
+            ) from exc
         destination.parent.mkdir(parents=True, exist_ok=True)
-        content = (
-            canonical_json_text(artifact.model_dump(mode="json")) + "\n"
-        ).encode("utf-8")
+        content = (canonical_json_text(artifact.model_dump(mode="json")) + "\n").encode(
+            "utf-8"
+        )
         if destination.exists():
             persisted = destination.read_bytes()
             if persisted != content:
@@ -97,7 +126,7 @@ class HistoricalComparisonArtifactStore:
             finally:
                 temporary.unlink(missing_ok=True)
         return HistoricalComparisonArtifactRefV1(
-            artifact_kind="MODEL_CHALLENGER",
+            artifact_kind=artifact_kind,
             artifact_hash=identity,
             relative_path=relative.as_posix(),
             file_sha256=_sha256_bytes(content),
@@ -114,12 +143,36 @@ class HistoricalComparisonArtifactStore:
         try:
             path.relative_to(self._root)
         except ValueError as exc:
-            raise ValueError("comparison artifact path escapes configured root") from exc
+            raise ValueError(
+                "comparison artifact path escapes configured root"
+            ) from exc
         raw = path.read_bytes()
         if len(raw) != ref.size_bytes or _sha256_bytes(raw) != ref.file_sha256:
             raise RuntimeError("ADVISORY_COMPARISON_ARTIFACT_READBACK_MISMATCH")
         payload = json.loads(raw.decode("utf-8"))
         artifact = HistoricalModelChallengerArtifactV1.model_validate(payload)
+        if artifact.artifact_hash != ref.artifact_hash:
+            raise RuntimeError("ADVISORY_COMPARISON_ARTIFACT_READBACK_MISMATCH")
+        return artifact
+
+    def load_meta_label_challenger(
+        self,
+        ref: HistoricalComparisonArtifactRefV1,
+    ) -> HistoricalMetaLabelChallengerArtifactV1:
+        if ref.artifact_kind != "META_LABEL_CHALLENGER":
+            raise ValueError("comparison ref is not a meta-label challenger")
+        path = (self._root / ref.relative_path).resolve()
+        try:
+            path.relative_to(self._root)
+        except ValueError as exc:
+            raise ValueError(
+                "comparison artifact path escapes configured root"
+            ) from exc
+        raw = path.read_bytes()
+        if len(raw) != ref.size_bytes or _sha256_bytes(raw) != ref.file_sha256:
+            raise RuntimeError("ADVISORY_COMPARISON_ARTIFACT_READBACK_MISMATCH")
+        payload = json.loads(raw.decode("utf-8"))
+        artifact = HistoricalMetaLabelChallengerArtifactV1.model_validate(payload)
         if artifact.artifact_hash != ref.artifact_hash:
             raise RuntimeError("ADVISORY_COMPARISON_ARTIFACT_READBACK_MISMATCH")
         return artifact
@@ -149,7 +202,9 @@ def compare_day_ranks(
         raise ValueError("A/B raw candidate evidence differs")
     model = {item.symbol: item for item in challenger.candidates}
     expected_model_symbols = {
-        item.symbol for item in control.candidates if (item.selection_effective_rank or 10**9) <= 20
+        item.symbol
+        for item in control.candidates
+        if (item.selection_effective_rank or 10**9) <= 20
     }
     if set(model) != expected_model_symbols:
         raise ValueError("C parent Top20 differs from A")
@@ -161,14 +216,18 @@ def compare_day_ranks(
     return {
         "decision_trade_date": control.decision_trade_date.isoformat(),
         "raw_candidate_count": len(a),
-        "hmm_rank_changed_count": _changed_count(b.values(), "alpha_raw_rank", "hmm_adjusted_rank"),
+        "hmm_rank_changed_count": _changed_count(
+            b.values(), "alpha_raw_rank", "hmm_adjusted_rank"
+        ),
         "risk_rank_changed_count": _changed_count(
             b.values(), "hmm_adjusted_rank", "risk_policy_adjusted_rank"
         ),
         "selection_rank_changed_count": _changed_count(
             b.values(), "risk_policy_adjusted_rank", "selection_effective_rank"
         ),
-        "excluded_count": sum(item.membership_status == "EXCLUDED" for item in b.values()),
+        "excluded_count": sum(
+            item.membership_status == "EXCLUDED" for item in b.values()
+        ),
         "a20_b20_overlap": len(a20 & b20),
         "a20_b20_changed": 20 - len(a20 & b20),
         "a5_b5_overlap": len(a5 & b5),
@@ -322,7 +381,10 @@ def replay_matched_lifecycle(
                     day.exit_mark_available_by_symbol.get(symbol, False)
                 ),
                 reason_code=REVIEW_REASON_NOT_IN_CURRENT_TOPK,
-                evidence={"group_name": group_name, "active_episode_id": episode.episode_id},
+                evidence={
+                    "group_name": group_name,
+                    "active_episode_id": episode.episode_id,
+                },
             )
         active_review_ranks = {
             symbol: day.review_rank_by_symbol.get(symbol)
@@ -338,7 +400,9 @@ def replay_matched_lifecycle(
         transition = engine.transition(
             policy=policy,
             decision_trade_date=day.decision_trade_date,
-            candidates=tuple(effective_candidates[key] for key in sorted(effective_candidates)),
+            candidates=tuple(
+                effective_candidates[key] for key in sorted(effective_candidates)
+            ),
             active_episodes=active,
             rank_observation=AdvisoryTransitionRankObservationV1(
                 status="COMPLETE",
@@ -365,7 +429,9 @@ def replay_matched_lifecycle(
                     "symbol": decision.symbol,
                     "action": decision.action,
                     "reason_code": decision.reason_code,
-                    "episode_id": decision.episode.episode_id if decision.episode else None,
+                    "episode_id": (
+                        decision.episode.episode_id if decision.episode else None
+                    ),
                 }
             )
             if decision.action == "EXIT" and decision.episode is not None:
@@ -396,7 +462,9 @@ def replay_matched_lifecycle(
             {
                 "decision_trade_date": day.decision_trade_date.isoformat(),
                 "active_symbols": sorted(item.symbol for item in active),
-                "actions": sorted(actions, key=lambda item: (item["symbol"], item["action"])),
+                "actions": sorted(
+                    actions, key=lambda item: (item["symbol"], item["action"])
+                ),
                 "replacement_budget_used": transition.replacement_budget_used,
             }
         )
@@ -437,7 +505,9 @@ def replay_matched_lifecycle(
             else None
         ),
         "mean_episode_return": mean(completed_returns) if completed_returns else None,
-        "median_episode_return": median(completed_returns) if completed_returns else None,
+        "median_episode_return": (
+            median(completed_returns) if completed_returns else None
+        ),
         "max_consecutive_losses": _max_consecutive_losses(completed_returns),
         "mean_holding_trading_days": mean(holding_days) if holding_days else None,
         "mean_max_runup_bps": mean(max_runups) if max_runups else None,

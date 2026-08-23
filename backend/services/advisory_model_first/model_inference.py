@@ -50,8 +50,12 @@ from backend.services.advisory_model_first.realtime_feature_source import (
     PostgresAdvisoryReviewSource,
     PostgresRealtimeFeatureSource,
 )
-from backend.services.advisory_model_first.reranker_training import _coerce_numeric_feature_dtypes
-from backend.services.advisory_model_first.shared_feature_builder import build_advisory_feature_matrix
+from backend.services.advisory_model_first.reranker_training import (
+    _coerce_numeric_feature_dtypes,
+)
+from backend.services.advisory_model_first.shared_feature_builder import (
+    build_advisory_feature_matrix,
+)
 from backend.services.advisory_program import AdvisoryProgramService
 from backend.services.selection_center.canonical_pit_runtime import (
     has_canonical_pit_runtime_profile,
@@ -103,7 +107,9 @@ class AdvisoryModelShadowService:
     def model_root(self) -> str:
         return str(self._model_root_provider() or "").strip()
 
-    def model_shadow(self, *, program_id: str, target_trade_date: date) -> dict[str, Any]:
+    def model_shadow(
+        self, *, program_id: str, target_trade_date: date
+    ) -> dict[str, Any]:
         return self._visible_model_shadow(
             program_id=program_id,
             target_trade_date=target_trade_date,
@@ -212,9 +218,16 @@ class AdvisoryModelShadowService:
         frozen_input_ids: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         program = frozen_program or self._program_service.get_program(program_id)
-        binding = dict(frozen_binding) if frozen_binding is not None else self._program_service.active_binding(program_id)
+        binding = (
+            dict(frozen_binding)
+            if frozen_binding is not None
+            else self._program_service.active_binding(program_id)
+        )
         package_ids = tuple(program.package_ids)
-        if len(package_ids) != 1 or tuple(binding.get("package_ids") or ()) != package_ids:
+        if (
+            len(package_ids) != 1
+            or tuple(binding.get("package_ids") or ()) != package_ids
+        ):
             raise AdvisoryModelFirstError(
                 "no model bundle is bound to this Advisory Program identity",
                 reason_code="ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
@@ -250,7 +263,9 @@ class AdvisoryModelShadowService:
                 "recommendation list does not identify its persisted Advisory review run",
                 reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
             )
-        expected_review_run_id = str((frozen_input_ids or {}).get("review_run_id") or "").strip()
+        expected_review_run_id = str(
+            (frozen_input_ids or {}).get("review_run_id") or ""
+        ).strip()
         if expected_review_run_id and review_run_id != expected_review_run_id:
             raise AdvisoryModelFirstError(
                 "forward recommendation list differs from the frozen review run",
@@ -258,7 +273,9 @@ class AdvisoryModelShadowService:
             )
         review_run = self._review_source.get(review_run_id)
         review_selection_run_ids = tuple(
-            str(value).strip() for value in review_run.selection_run_ids if str(value).strip()
+            str(value).strip()
+            for value in review_run.selection_run_ids
+            if str(value).strip()
         )
         if (
             review_run.program_id != program_id
@@ -270,7 +287,9 @@ class AdvisoryModelShadowService:
                 reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
             )
         selection_run_id = str(review_run.selection_run_id or "").strip()
-        expected_selection_run_id = str((frozen_input_ids or {}).get("selection_run_id") or "").strip()
+        expected_selection_run_id = str(
+            (frozen_input_ids or {}).get("selection_run_id") or ""
+        ).strip()
         if expected_selection_run_id and selection_run_id != expected_selection_run_id:
             raise AdvisoryModelFirstError(
                 "forward review differs from the frozen Selection run",
@@ -314,7 +333,9 @@ class AdvisoryModelShadowService:
                 style_profile_hash=resolution.style_profile_hash,
             )
             _validate_bundle_runtime(bundle, resolution=resolution)
-        decision_date = _resolve_decision_date(list_version=list_version, selection_run=selection_run)
+        decision_date = _resolve_decision_date(
+            list_version=list_version, selection_run=selection_run
+        )
         if decision_date >= target_trade_date:
             raise AdvisoryModelFirstError(
                 "persisted Selection decision clock is invalid",
@@ -359,10 +380,18 @@ class AdvisoryModelShadowService:
             decision_as_of_trade_date=decision_date,
             target_trade_date=target_trade_date,
             continuation_cutoff=date.fromisoformat(
-                str(bundle["continuation_cutoff"] if is_meta_label else bundle.manifest["continuation_cutoff"])
+                str(
+                    bundle["continuation_cutoff"]
+                    if is_meta_label
+                    else bundle.manifest["continuation_cutoff"]
+                )
             ),
             hmm_models=bundle["hmm_models"] if is_meta_label else bundle.hmm_models,
-            **({"pit_universe_key": pit_universe_key} if pit_universe_key is not None else {}),
+            **(
+                {"pit_universe_key": pit_universe_key}
+                if pit_universe_key is not None
+                else {}
+            ),
         )
         built = build_advisory_feature_matrix(
             candidates=candidates,
@@ -375,7 +404,11 @@ class AdvisoryModelShadowService:
             component_roles=resolution.component_roles,
         )
         if len(built.coverage) != 1 or built.coverage.iloc[0]["status"] != "available":
-            missing = built.coverage.iloc[0].get("required_missing_columns", []) if len(built.coverage) else []
+            missing = (
+                built.coverage.iloc[0].get("required_missing_columns", [])
+                if len(built.coverage)
+                else []
+            )
             raise AdvisoryModelFirstError(
                 "realtime feature matrix has required-value gaps",
                 reason_code="ADVISORY_MODEL_FEATURE_REQUIRED_VALUE_MISSING",
@@ -385,10 +418,13 @@ class AdvisoryModelShadowService:
             raise AdvisoryModelFirstError(
                 "realtime feature matrix does not preserve the candidate group",
                 reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
-                context={"candidate_count": len(candidates), "feature_count": len(built.features)},
+                context={
+                    "candidate_count": len(candidates),
+                    "feature_count": len(built.features),
+                },
             )
         if is_meta_label:
-            scored = _meta_label_candidates(
+            scored = format_meta_label_candidates(
                 self._meta_label_scorer(bundle, built.features),
                 features=built.features,
             )
@@ -521,7 +557,9 @@ class AdvisoryModelShadowService:
                 target_trade_date=target_trade_date,
             )
             candidate_by_symbol = {str(item.get("symbol")): item for item in candidates}
-            if len(candidate_by_symbol) != len(candidates) or set(candidate_by_symbol) != set(expected_symbols):
+            if len(candidate_by_symbol) != len(candidates) or set(
+                candidate_by_symbol
+            ) != set(expected_symbols):
                 raise AdvisoryModelFirstError(
                     "price-range inference does not preserve the M2 candidate group",
                     reason_code="ADVISORY_PRICE_RANGE_INFERENCE_FAILED",
@@ -622,7 +660,9 @@ class AdvisoryModelShadowService:
                 exc.context,
                 round((time.monotonic() - started) * 1000),
             )
-            return unavailable_outcome_envelope(reason_code=exc.reason_code, message=str(exc))
+            return unavailable_outcome_envelope(
+                reason_code=exc.reason_code, message=str(exc)
+            )
         except Exception as exc:
             LOGGER.exception(
                 "advisory outcome shadow failed unexpectedly program_id=%s target_trade_date=%s elapsed_ms=%d",
@@ -643,9 +683,15 @@ class AdvisoryModelShadowService:
         )
         return {
             "status": "EXPERIMENTAL_SHADOW",
-            "calibration_state": outcome_bundle.manifest.get("calibration_state", "UNCALIBRATED"),
-            "calibration_policy_version": outcome_bundle.manifest.get("calibration_policy_version"),
-            "parent_outcome_bundle_id": outcome_bundle.manifest.get("parent_outcome_bundle_id"),
+            "calibration_state": outcome_bundle.manifest.get(
+                "calibration_state", "UNCALIBRATED"
+            ),
+            "calibration_policy_version": outcome_bundle.manifest.get(
+                "calibration_policy_version"
+            ),
+            "parent_outcome_bundle_id": outcome_bundle.manifest.get(
+                "parent_outcome_bundle_id"
+            ),
             "binary_calibration_state": outcome_bundle.manifest.get(
                 "binary_calibration_state", "UNCALIBRATED"
             ),
@@ -675,7 +721,9 @@ class AdvisoryModelShadowService:
         list_version_id: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if list_version_id:
-            detail = self._program_service.recommendation_list_version_detail(list_version_id)
+            detail = self._program_service.recommendation_list_version_detail(
+                list_version_id
+            )
             version = dict(detail.get("list_version") or {})
             raw_target = version.get("target_trade_date") or version.get("trade_date")
             if (
@@ -694,11 +742,15 @@ class AdvisoryModelShadowService:
                     reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
                 )
             return version, items
-        versions = self._program_service.recommendation_list_versions(program_id, limit=500, offset=0)
+        versions = self._program_service.recommendation_list_versions(
+            program_id, limit=500, offset=0
+        )
         matching = [
             version
             for version in versions
-            if date.fromisoformat(str(version.get("target_trade_date") or version["trade_date"])[:10])
+            if date.fromisoformat(
+                str(version.get("target_trade_date") or version["trade_date"])[:10]
+            )
             == target_trade_date
         ]
         if not matching:
@@ -706,7 +758,9 @@ class AdvisoryModelShadowService:
                 "target date has no persisted Advisory recommendation list",
                 reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
             )
-        detail = self._program_service.recommendation_list_version_detail(matching[0]["list_version_id"])
+        detail = self._program_service.recommendation_list_version_detail(
+            matching[0]["list_version_id"]
+        )
         items = list(detail.get("items") or [])
         if not items:
             raise AdvisoryModelFirstError(
@@ -724,10 +778,14 @@ def _validate_bundle_runtime(
     manifest = bundle.manifest
     schema_version = manifest.get("schema_version", "advisory_model_bundle_v1")
     expected_calibration = (
-        "UNCALIBRATED" if schema_version == "advisory_model_bundle_v1" else "NOT_APPLICABLE_RANKING_SCORE"
+        "UNCALIBRATED"
+        if schema_version == "advisory_model_bundle_v1"
+        else "NOT_APPLICABLE_RANKING_SCORE"
     )
     terminal_weights = manifest.get("terminal_weights") or {}
-    if schema_version == "advisory_model_bundle_v2" and not _valid_m5_runtime_policy(bundle):
+    if schema_version == "advisory_model_bundle_v2" and not _valid_m5_runtime_policy(
+        bundle
+    ):
         raise AdvisoryModelFirstError(
             "M5A model bundle runtime policy is incompatible with the frozen quality contract",
             reason_code="ADVISORY_M5_RUNTIME_POLICY_MISMATCH",
@@ -740,13 +798,17 @@ def _validate_bundle_runtime(
         or manifest.get("manifest_sha256") != resolution.manifest_sha256
         or manifest.get("style_profile_id") != resolution.style_profile_id
         or manifest.get("style_profile_hash") != resolution.style_profile_hash
-        or manifest.get("selection_runtime_semantics_hash") != resolution.selection_runtime_semantics_hash
+        or manifest.get("selection_runtime_semantics_hash")
+        != resolution.selection_runtime_semantics_hash
         or manifest.get("feature_schema_version") != resolution.feature_schema_version
         or manifest.get("feature_schema_hash") != resolution.feature_schema_hash
         or bundle.bundle_id != resolution.bundle_id
         or bundle.manifest_file_sha256 != resolution.bundle_manifest_sha256
-        or not _matches_terminal_weights(terminal_weights, component_roles=resolution.component_roles)
-        or tuple(bundle.feature_schema.get("trained_feature_names") or ()) != tuple(MODEL_FEATURE_COLUMNS)
+        or not _matches_terminal_weights(
+            terminal_weights, component_roles=resolution.component_roles
+        )
+        or tuple(bundle.feature_schema.get("trained_feature_names") or ())
+        != tuple(MODEL_FEATURE_COLUMNS)
     ):
         raise AdvisoryModelFirstError(
             "model bundle runtime semantics are incompatible with the Advisory shadow path",
@@ -795,11 +857,14 @@ def _validate_meta_label_bundle_runtime(
         or feature_schema.get("feature_schema_hash") != resolution.feature_schema_hash
         or manifest.get("bundle_id") != resolution.bundle_id
         or bundle.get("manifest_file_sha256") != resolution.bundle_manifest_sha256
-        or tuple(feature_schema.get("trained_feature_names") or ()) != tuple(MODEL_FEATURE_COLUMNS)
+        or tuple(feature_schema.get("trained_feature_names") or ())
+        != tuple(MODEL_FEATURE_COLUMNS)
         or set(feature_schema.get("categorical_vocabulary") or {})
         != set(CATEGORICAL_FEATURE_COLUMNS)
         or any(
-            not tuple((feature_schema.get("categorical_vocabulary") or {}).get(column) or ())
+            not tuple(
+                (feature_schema.get("categorical_vocabulary") or {}).get(column) or ()
+            )
             for column in CATEGORICAL_FEATURE_COLUMNS
         )
         or not _matches_terminal_weights(
@@ -813,6 +878,16 @@ def _validate_meta_label_bundle_runtime(
         )
 
 
+def validate_meta_label_bundle_runtime(
+    bundle: Mapping[str, Any],
+    *,
+    resolution: AdvisoryModelBindingResolutionV1,
+) -> None:
+    """Validate the production meta-label contract for explicit historical inference."""
+
+    _validate_meta_label_bundle_runtime(bundle, resolution=resolution)
+
+
 def _valid_m5_runtime_policy(bundle: LoadedAdvisoryModelBundle) -> bool:
     manifest = bundle.manifest
     try:
@@ -822,7 +897,8 @@ def _valid_m5_runtime_policy(bundle: LoadedAdvisoryModelBundle) -> bool:
     return (
         manifest.get("ensemble_score_policy") == ENSEMBLE_SCORE_POLICY
         and manifest.get("selection_prior_policy") == SELECTION_PRIOR_POLICY
-        and manifest.get("explanation_policy") == "MODEL_MEMBER_RAW_CONTRIBUTION_MEAN_V1"
+        and manifest.get("explanation_policy")
+        == "MODEL_MEMBER_RAW_CONTRIBUTION_MEAN_V1"
         and tuple(manifest.get("seeds") or ()) == QUALITY_SEEDS
         and model_weight in {0.25, 0.5, 0.75, 1.0}
         and len(bundle.boosters) == len(QUALITY_SEEDS)
@@ -843,7 +919,11 @@ def _validate_review_policy_identity(
         if symbol not in expected:
             continue
         evidence = item.get("evidence_json")
-        value = evidence.get("review_policy_sha256") if isinstance(evidence, Mapping) else None
+        value = (
+            evidence.get("review_policy_sha256")
+            if isinstance(evidence, Mapping)
+            else None
+        )
         hashes_by_symbol.setdefault(symbol, set()).add(str(value or "").strip())
     if set(hashes_by_symbol) != expected or any(
         values != {review_policy_sha256} for values in hashes_by_symbol.values()
@@ -858,15 +938,17 @@ def _validate_review_policy_identity(
         )
 
 
-def _matches_terminal_weights(value: Any, *, component_roles: Mapping[str, str]) -> bool:
+def _matches_terminal_weights(
+    value: Any, *, component_roles: Mapping[str, str]
+) -> bool:
     component_ids = set(component_roles.values())
     if not isinstance(value, Mapping) or set(value) != component_ids:
         return False
     try:
         weights = [float(value[component_id]) for component_id in component_ids]
-        return all(np.isfinite(weight) and weight > 0 for weight in weights) and np.isclose(
-            sum(weights), 1.0, rtol=0.0, atol=1e-10
-        )
+        return all(
+            np.isfinite(weight) and weight > 0 for weight in weights
+        ) and np.isclose(sum(weights), 1.0, rtol=0.0, atol=1e-10)
     except (TypeError, ValueError):
         return False
 
@@ -911,7 +993,8 @@ def _candidate_frame(
             context={"target_count": target_count},
         )
     selected = sorted(
-        (row for row in rows if int(row.rank) <= target_count), key=lambda row: (int(row.rank), row.symbol)
+        (row for row in rows if int(row.rank) <= target_count),
+        key=lambda row: (int(row.rank), row.symbol),
     )
     expected_ranks = list(range(1, len(selected) + 1))
     actual_ranks = [int(row.rank) for row in selected]
@@ -925,7 +1008,11 @@ def _candidate_frame(
         raise AdvisoryModelFirstError(
             "persisted Selection candidate group is incomplete or non-contiguous",
             reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
-            context={"expected_count": target_count, "actual_count": len(selected), "actual_ranks": actual_ranks},
+            context={
+                "expected_count": target_count,
+                "actual_count": len(selected),
+                "actual_ranks": actual_ranks,
+            },
         )
     terminal_weights = (
         resolution.terminal_weights
@@ -953,7 +1040,12 @@ def _candidate_frame(
                     reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
                     context={"symbol": row.symbol, "leg_id": leg_id},
                 )
-            if not np.isclose(float(leg["weight"]), float(terminal_weights[leg_id]), rtol=0.0, atol=1e-10):
+            if not np.isclose(
+                float(leg["weight"]),
+                float(terminal_weights[leg_id]),
+                rtol=0.0,
+                atol=1e-10,
+            ):
                 raise AdvisoryModelFirstError(
                     "persisted Selection Alpha weight differs from the model runtime semantics",
                     reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
@@ -964,7 +1056,9 @@ def _candidate_frame(
             float(legs[leg_id]["normalized_score"]) * float(terminal_weights[leg_id])
             for leg_id in component_ids
         )
-        if not np.isfinite(weighted_score) or not np.isclose(float(row.score), weighted_score, rtol=0.0, atol=1e-8):
+        if not np.isfinite(weighted_score) or not np.isclose(
+            float(row.score), weighted_score, rtol=0.0, atol=1e-8
+        ):
             raise AdvisoryModelFirstError(
                 "persisted Selection score differs from the frozen Alpha-leg combination",
                 reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
@@ -987,7 +1081,9 @@ def _candidate_frame(
                 "combined_score": float(row.score),
                 **{
                     f"{prefix}__{leg_id}": (
-                        float(legs[leg_id][field]) if field != "leg_rank" else int(legs[leg_id][field])
+                        float(legs[leg_id][field])
+                        if field != "leg_rank"
+                        else int(legs[leg_id][field])
                     )
                     for leg_id in component_ids
                     for prefix, field in (
@@ -1053,15 +1149,26 @@ def prepare_frozen_feature_matrix(
     return matrix
 
 
-def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[dict[str, Any]]:
+def _score(
+    bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame
+) -> list[dict[str, Any]]:
     matrix = prepare_frozen_feature_matrix(bundle, features)
     schema_version = bundle.manifest.get("schema_version", "advisory_model_bundle_v1")
-    boosters = (bundle.booster,) if schema_version == "advisory_model_bundle_v1" else bundle.boosters
-    booster_feature_names = [tuple(booster.feature_name()) for booster in boosters] if boosters else []
+    boosters = (
+        (bundle.booster,)
+        if schema_version == "advisory_model_bundle_v1"
+        else bundle.boosters
+    )
+    booster_feature_names = (
+        [tuple(booster.feature_name()) for booster in boosters] if boosters else []
+    )
     try:
-        raw_scores = [np.asarray(booster.predict(matrix), dtype=float) for booster in boosters]
+        raw_scores = [
+            np.asarray(booster.predict(matrix), dtype=float) for booster in boosters
+        ]
         raw_contributions = [
-            np.asarray(booster.predict(matrix, pred_contrib=True), dtype=float) for booster in boosters
+            np.asarray(booster.predict(matrix, pred_contrib=True), dtype=float)
+            for booster in boosters
         ]
     except Exception as exc:
         LOGGER.exception(
@@ -1083,7 +1190,7 @@ def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[di
     )
 
 
-def _meta_label_candidates(
+def format_meta_label_candidates(
     scored: pd.DataFrame,
     *,
     features: pd.DataFrame,
@@ -1144,16 +1251,19 @@ def _meta_label_candidates(
         "parent_combined_score",
     )
     try:
-        numeric = {column: pd.to_numeric(actual[column], errors="raise") for column in numeric_columns}
+        numeric = {
+            column: pd.to_numeric(actual[column], errors="raise")
+            for column in numeric_columns
+        }
     except (TypeError, ValueError) as exc:
         raise AdvisoryModelFirstError(
             "meta-label scorer output contains an invalid numeric value",
             reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
         ) from exc
     try:
-        decision_dates_match = pd.to_datetime(actual["decision_as_of_trade_date"]).equals(
-            pd.to_datetime(actual["decision_as_of_trade_date_expected"])
-        )
+        decision_dates_match = pd.to_datetime(
+            actual["decision_as_of_trade_date"]
+        ).equals(pd.to_datetime(actual["decision_as_of_trade_date_expected"]))
         target_dates_match = pd.to_datetime(actual["target_trade_date"]).equals(
             pd.to_datetime(actual["target_trade_date_expected"])
         )
@@ -1164,12 +1274,16 @@ def _meta_label_candidates(
         ) from exc
     entry_ranks = numeric["entry_priority_rank"].to_numpy(dtype=float)
     selection_ranks = numeric["selection_effective_rank"].to_numpy(dtype=float)
-    expected_selection_ranks = numeric["selection_effective_rank_expected"].to_numpy(dtype=float)
+    expected_selection_ranks = numeric["selection_effective_rank_expected"].to_numpy(
+        dtype=float
+    )
     exit_ranks = numeric["selection_exit_rank"].to_numpy(dtype=float)
     ranks = sorted(entry_ranks.astype(int).tolist())
     if (
         ranks != list(range(1, len(actual) + 1))
-        or not np.isfinite(np.column_stack([numeric[column] for column in numeric_columns])).all()
+        or not np.isfinite(
+            np.column_stack([numeric[column] for column in numeric_columns])
+        ).all()
         or not np.array_equal(entry_ranks, np.rint(entry_ranks))
         or not np.array_equal(selection_ranks, np.rint(selection_ranks))
         or not np.array_equal(exit_ranks, np.rint(exit_ranks))
@@ -1187,7 +1301,9 @@ def _meta_label_candidates(
             rtol=0.0,
             atol=1e-10,
         )
-        or ((numeric["take_probability"] < 0.0) | (numeric["take_probability"] > 1.0)).any()
+        or (
+            (numeric["take_probability"] < 0.0) | (numeric["take_probability"] > 1.0)
+        ).any()
         or not np.array_equal(selection_ranks, expected_selection_ranks)
         or not np.array_equal(exit_ranks, expected_selection_ranks)
         or set(actual["model_status"]) != {"EXPERIMENTAL_MODEL"}
@@ -1216,7 +1332,9 @@ def _meta_label_candidates(
         }
         for row in actual.itertuples(index=False)
     ]
-    return sorted(output, key=lambda item: (item["advisory_model_rank"], item["symbol"]))
+    return sorted(
+        output, key=lambda item: (item["advisory_model_rank"], item["symbol"])
+    )
 
 
 def score_frozen_feature_matrix_from_booster_outputs(
@@ -1230,15 +1348,22 @@ def score_frozen_feature_matrix_from_booster_outputs(
     """Apply the production M5A ensemble/rank semantics to verified booster outputs."""
 
     schema_version = bundle.manifest.get("schema_version", "advisory_model_bundle_v1")
-    expected_member_count = 1 if schema_version == "advisory_model_bundle_v1" else len(bundle.boosters)
+    expected_member_count = (
+        1 if schema_version == "advisory_model_bundle_v1" else len(bundle.boosters)
+    )
     scores_by_member = [np.asarray(score, dtype=float) for score in raw_scores]
-    contributions_by_member = [np.asarray(value, dtype=float) for value in raw_contributions]
+    contributions_by_member = [
+        np.asarray(value, dtype=float) for value in raw_contributions
+    ]
     if (
         expected_member_count < 1
         or len(scores_by_member) != expected_member_count
         or len(contributions_by_member) != expected_member_count
         or len(booster_feature_names) != expected_member_count
-        or any(tuple(names) != tuple(MODEL_FEATURE_COLUMNS) for names in booster_feature_names)
+        or any(
+            tuple(names) != tuple(MODEL_FEATURE_COLUMNS)
+            for names in booster_feature_names
+        )
     ):
         raise AdvisoryModelFirstError(
             "LightGBM feature order differs from the frozen feature schema",
@@ -1268,7 +1393,9 @@ def score_frozen_feature_matrix_from_booster_outputs(
             [_runtime_percentile(raw, features) for raw in scores_by_member]
         )
         ensemble_scores = percentile_scores.mean(axis=1)
-        declared_group_sizes = pd.to_numeric(features["candidate_group_size"], errors="raise").to_numpy(dtype=float)
+        declared_group_sizes = pd.to_numeric(
+            features["candidate_group_size"], errors="raise"
+        ).to_numpy(dtype=float)
         if (
             len(set(declared_group_sizes.tolist())) != 1
             or declared_group_sizes[0] < len(features)
@@ -1278,16 +1405,24 @@ def score_frozen_feature_matrix_from_booster_outputs(
                 "M5A runtime candidate group identity is invalid",
                 reason_code="ADVISORY_M5_RUNTIME_POLICY_MISMATCH",
             )
-        selection_ranks = pd.to_numeric(features["selection_effective_rank"], errors="raise").to_numpy(dtype=float)
-        if (selection_ranks < 1).any() or (selection_ranks > declared_group_sizes).any():
+        selection_ranks = pd.to_numeric(
+            features["selection_effective_rank"], errors="raise"
+        ).to_numpy(dtype=float)
+        if (selection_ranks < 1).any() or (
+            selection_ranks > declared_group_sizes
+        ).any():
             raise AdvisoryModelFirstError(
                 "M5A runtime selection rank is outside the frozen candidate group",
                 reason_code="ADVISORY_M5_RUNTIME_POLICY_MISMATCH",
             )
-        selection_prior = (declared_group_sizes - selection_ranks) / np.maximum(declared_group_sizes - 1.0, 1.0)
+        selection_prior = (declared_group_sizes - selection_ranks) / np.maximum(
+            declared_group_sizes - 1.0, 1.0
+        )
         model_weight = float(bundle.manifest["model_weight"])
         scores = model_weight * ensemble_scores + (1.0 - model_weight) * selection_prior
-        contributions = np.mean(np.stack(contributions_by_member, axis=0), axis=0) * model_weight
+        contributions = (
+            np.mean(np.stack(contributions_by_member, axis=0), axis=0) * model_weight
+        )
         score_components = [
             {
                 "ensemble_score": float(ensemble_scores[index]),
@@ -1296,11 +1431,16 @@ def score_frozen_feature_matrix_from_booster_outputs(
             }
             for index in range(len(features))
         ]
-    order = sorted(range(len(features)), key=lambda index: (-scores[index], str(features.iloc[index]["instrument"])))
+    order = sorted(
+        range(len(features)),
+        key=lambda index: (-scores[index], str(features.iloc[index]["instrument"])),
+    )
     rank_by_index = {index: rank for rank, index in enumerate(order, start=1)}
     output: list[dict[str, Any]] = []
     for index, row in features.reset_index(drop=True).iterrows():
-        top_indices = np.argsort(np.abs(contributions[index, :-1]), kind="stable")[-5:][::-1]
+        top_indices = np.argsort(np.abs(contributions[index, :-1]), kind="stable")[-5:][
+            ::-1
+        ]
         item = {
             "symbol": str(row["instrument"]),
             "selection_effective_rank": int(row["selection_effective_rank"]),
@@ -1320,7 +1460,9 @@ def score_frozen_feature_matrix_from_booster_outputs(
             item["score_components"] = score_components[index]
             item["explanation_policy"] = bundle.manifest["explanation_policy"]
         output.append(item)
-    return sorted(output, key=lambda item: (item["advisory_model_rank"], item["symbol"]))
+    return sorted(
+        output, key=lambda item: (item["advisory_model_rank"], item["symbol"])
+    )
 
 
 def score_frozen_feature_matrix(
