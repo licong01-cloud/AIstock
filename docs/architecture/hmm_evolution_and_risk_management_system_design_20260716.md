@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统总体蓝图（唯一产品目标权威）
 
-> **版本**: v2.30
+> **版本**: v2.31
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-08-23
-> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活。Phase 2 P2-3C frozen candidate 已完成一次正式 P2-4 untouched holdout 验收，最终状态为 `NOT_AVAILABLE`：L1 rotation directional gate 通过但 risk gate 未通过；L2 Rank IC 为正且显著，但 spread、季度 metric coverage 与 risk identity 未共同闭合。正式 acceptance canonical=`16004b245346ae05a770433efdc42a7e7dccc8f93ec91a5edfb369168d787c87`，`fit_count=0`、`selection_performed=false`、`model_write=false`、`ready_write=false`、DB/runtime 均未变化。该 candidate 与 `2025-04-01..2026-03-31` holdout 已终结，不得重选、调阈值或再次宣称 untouched。F-011 仍未完成，F-012设计已批准，F-013尚未交付；严格产品进度仍为 `11/17=64.71%`，canonical product bundle、FULL_READY、CAPABILITY_AVAILABLE和真实预测/API/UI仍为0。下一步只能先闭合 capability-aligned 产品合同，不自动开启模型或产品实施。本次DDL/DML/dependency/runtime均为`noop`（§13）
+> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活。Phase 2 P2-3C frozen candidate 已完成一次正式 P2-4 untouched holdout 验收，最终状态为 `NOT_AVAILABLE`：L1 rotation directional gate 通过但 risk gate 未通过；L2 Rank IC 为正且显著，但 spread、季度 metric coverage 与 risk identity 未共同闭合。正式 acceptance canonical=`16004b245346ae05a770433efdc42a7e7dccc8f93ec91a5edfb369168d787c87`，`fit_count=0`、`selection_performed=false`、`model_write=false`、`ready_write=false`、DB/runtime 均未变化。该 candidate 与 `2025-04-01..2026-03-31` holdout 已终结，不得重选、调阈值或再次宣称 untouched。用户已批准 C-012-RL1 D1～D6 精确合同；源码、24 fits、全新holdout、model/bundle和产品纵切仍未授权。F-011 仍未完成，F-012设计已批准，F-013尚未交付；严格产品进度仍为 `11/17=64.71%`，canonical product bundle、FULL_READY、CAPABILITY_AVAILABLE和真实预测/API/UI仍为0。本次DDL/DML/dependency/runtime均为`noop`（§13）
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -818,7 +818,7 @@ Gate 2 不再按“先建设完整平台、最后才验证产品”的横向基�
 1. **P2-1 当前11个D6失败根因闭合（已完成）**：正式artifact与独立重算证明11项均非程序/数据/NA缺陷，而是selected seed 43在validation窗口的hard-state缺失、极低占用、transition不足或单run过度集中；未复制多GB artifact、未扩大seed、未放宽阈值、未写READY。
 2. **P2-2 既有证据紧凑聚合与范式决策（已完成）**：既有两个TRANSITION-DWELL-B child artifact已完成零refit聚合并把唯一P2-3A候选收敛到market-regime + pooled sector-relative jump；该步骤没有选择K、seed/family或写model/READY。
 3. **P2-3 产品验收精确合同与单一spike（已完成）**：P2-3A/P2-3B均按批准合同正式判定`NOT_AVAILABLE_FOR_PROMOTION`。唯一P2-3C以固定market参数和十维market-sign交互完成`36/36` fits，L1/L2 development Rank IC与spread均严格为正，冻结一个且仅一个完整candidate；没有访问holdout、写model/READY或改变runtime。不得重跑development、重选alpha、组合失败候选或把本结果写成产品验收成功。
-4. **P2-4 canonical产品验收（当前candidate已终结）**：P2-3C已按批准合同完成一次0-fit双fresh-process holdout验收并得到`NOT_AVAILABLE`；不得重跑、调阈值、重选参数或复用已消费holdout。下一模型任务必须先用F2精确合同拆分rotation/risk与L1/L2能力，指定唯一待验证component、development/walk-forward协议和新的untouched验收边界；蓝图不承诺任何指定模型必然FULL_READY。
+4. **P2-4 canonical产品验收与C-012-RL1（精确合同已批准、实现未授权）**：P2-3C已按批准合同完成一次0-fit双fresh-process holdout验收并得到`NOT_AVAILABLE`；不得重跑、调阈值、重选参数或复用已消费holdout。C-012-RL1 D1～D6已固定唯一rotation_L1 component、五fold development、全新untouched holdout、产品/coverage阈值、最小writer和24-fit双fresh-process成本；蓝图不承诺该模型必然CAPABILITY_AVAILABLE或FULL_READY，且批准合同不授权源码、fit或holdout读取。
 5. **P2-5 最小离线预测纵切**：至少一个经批准能力达到`CAPABILITY_AVAILABLE`后，使用同一canonical bundle生成一个完整交易日的market regime、已验收L1/L2相对强弱/状态、transition、severity、availability和可读原因；未验收能力必须显式`NOT_AVAILABLE`，不得补neutral或以rotation成功冒充risk成功。先验证真实预测业务oracle，不先建设通用job平台。
 6. **P2-6 历史分析与产品化纵切**：对每个已验收能力生成横截面指标、状态/预警时序、命中/误报/漏报、弃权率、覆盖率与偏差，并在最小schema/repository/API/UI中展示同一bundle；不得交付backend-only、静态页面、隐藏不可用sector或隐藏未通过能力。
 7. **P2-7 受控日任务与集成验收**：产品纵切验收后才补幂等日任务、revision/late-data和受控runner；不提前建设通用调度器，Phase 3仍独立。
@@ -872,7 +872,7 @@ Gate 2 不再按“先建设完整平台、最后才验证产品”的横向基�
    BUG-788、BUG-798、BUG-800 和 BUG-804 补齐源 loop 股票池 ∩ QE ST-PIT universe、全股票收益证据、
    逐日状态、内容校验重放和 pre-ST-PIT allowlisted compatibility；F-007/F-009 已验证。
 6. **P1-C API/UI（外部验收已完成）**：F-010 API/UI、worker CLI/service 和 BUG-742～BUG-748 审计修复已实现；schema v2 worker、10-case、10/9 候选性能、进程中断 fail-closed 与显式 retry receipt 已完成；2026-07-22 严格冷热缓存分段 timing/RSS benchmark matrix、真实 UI/Playwright 18 场景与 worker bounded soak 全部完成（Phase 1 详细设计 §17.4.6）。
-7. **P2 板块状态预测、分析与风险预警**：P2-3A/P2-3B/P2-3C均已完成各自批准边界；P2-3C正式P2-4结果为`NOT_AVAILABLE`且该candidate/holdout已终结。下一步只允许先闭合capability-aligned F2精确合同，再验证一个直接服务rotation或risk的component；不得把同一estimator同时通过四个能力写成保证结果，也不得自动并行模型、复用已消费holdout、扩展通用evidence/训练/调度平台或用局部指标冒充bundle完成。每个实现与实验授权、PR合入仍须用户逐项确认。
+7. **P2 板块状态预测、分析与风险预警**：P2-3A/P2-3B/P2-3C均已完成各自批准边界；P2-3C正式P2-4结果为`NOT_AVAILABLE`且该candidate/holdout已终结。C-012-RL1 D1～D6精确合同已批准，下一步在独立授权后只验证该rotation_L1 component；不得把同一estimator同时通过四个能力写成保证结果，也不得自动并行模型、复用已消费holdout、扩展通用evidence/训练/调度平台或用局部指标冒充bundle完成。源码、实验与PR合入仍为独立授权。
 8. **P3 研究训练**：F-014 research-only rolling candidate 与 F-015 manual-first/automation boundary 只有跨阶段方向；必须先建立独立实现级 F2 设计、Design Acceptance Index 和验证矩阵。自动调度仍未批准，不得直接进入代码或复用旧 production training tick。
 
 每个实现 PR 只承担一个可验证 slice，并在 PR body 中列设计项、实现引用、验证证据、生产门禁与未批准缺口；
@@ -920,7 +920,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | 父蓝图v2.30；Phase 2详细设计§4.3.4.2～§4.3.4.6；`market_relative_ridge_{candidate,holdout}.py`及直接测试 | P2-4 acceptance `artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_4_20260823_15e041f_postbug1153/p2_4_holdout_acceptance.json` canonical `16004b24…7c87`；0 fit/0 selection；holdout/product acceptance=true；model/READY=false | APPROVED_BY_USER_P2_4_FORMAL_NOT_AVAILABLE_C012_EXACT_F2_PENDING | 当前candidate未形成canonical bundle、FULL_READY或CAPABILITY_AVAILABLE；已消费holdout不可再作untouched验收。下一步先闭合capability-aligned精确F2合同，不自动实施新模型 |
+| F-011 | 父蓝图v2.31；Phase 2详细设计§4.3.4.2～§4.3.4.7；`market_relative_ridge_{candidate,holdout}.py`及直接测试 | P2-4 acceptance `artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_4_20260823_15e041f_postbug1153/p2_4_holdout_acceptance.json` canonical `16004b24…7c87`；C-012-RL1 D1～D6精确合同已批准；无新源码/fit/holdout/model证据 | APPROVED_BY_USER_P2_4_FORMAL_NOT_AVAILABLE_C012_RL1_EXACT_CONTRACT_USER_APPROVED_IMPLEMENTATION_NOT_AUTHORIZED | 当前candidate未形成canonical bundle、FULL_READY或CAPABILITY_AVAILABLE；已消费holdout不可再作untouched验收。下一步须经独立授权实施唯一rotation_L1候选，不自动开启其他能力 |
 | F-012 | Phase 2 F2 详细设计 §14：advisory-only service boundary | `backend/tests/hmm_risk/test_isolation.py`（目标路径，断言 Selection/Paper/QMT 无写入） | DESIGN_READY_USER_APPROVED | 用户明确批准 legacy producer/consumer 冻结与 advisory-only 隔离；源码与结果证据待实现 PR 回填 |
 | F-013 | Phase 2 F2 详细设计 §9～§11：C-003-A report + `/hmm-risk` 默认首页 | `backend/tests/hmm_risk/test_retrospective_report.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts`（目标路径：capability状态、L1/L2/7日heatmap、固定详情、预警、renderer/error、完整分母与abstention） | APPROVED_BY_USER_PENDING_UPSTREAM_CAPABILITY | API/UI方向已批准；真实验收依赖至少一个明确能力达到CAPABILITY_AVAILABLE，未通过能力必须可见，源码未实施 |
 | F-014 | 本文 Phase 3 UI/隔离方向；research-only rolling candidate + `/hmm-research-training` | `backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts`（目标路径，尚未建立） | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 用户批准跨阶段方向；不得从父蓝图直接编码，身份、训练任务、artifact、状态机、API/UI 和验证合同待独立设计 |
@@ -1002,6 +1002,15 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 
 审核结论：`PASS_BLUEPRINT_CAPABILITY_REALIGNED_P2_4_TERMINAL_RESULT_RECORDED_EXACT_F2_CONTRACT_PENDING`。严格产品进度保持`11/17=64.71%`。
 
+### 11.9 2026-08-23 C-012-RL1 精确合同批准状态
+
+- **合同批准：PASS_USER_APPROVED_EXACT_CONTRACT**。用户已批准从属详细设计§4.3.4.7的`C-012-RL1-D1～D6`，包括唯一component、五fold development、全新untouched holdout、产品/coverage阈值、最小writer与24-fit双fresh-process成本。
+- **实现边界：NOT_AUTHORIZED**。本次批准只确立设计权威，不授权源码修改、24 fits、holdout读取、component/bundle、API/UI、DDL/DML、依赖、runtime或进程控制；后续实现必须单独授权并只复用已登记的Ridge/holdout入口。
+- **产品状态：UNCHANGED**。canonical product bundle、FULL_READY与CAPABILITY_AVAILABLE仍为0；F-011仍未完成，严格进度保持`11/17=64.71%`。不得以设计批准、旧L1 directional局部证据或已消费holdout冒充产品成功。
+- **停止与反过度工程：PASS**。只允许一个rotation_L1候选；development或新holdout失败即typed `NOT_AVAILABLE`，不得自动换alpha/lambda/seed、打开第二candidate或转入其他三项能力；不建设registry、通用训练/evidence平台或scheduler。
+
+审核结论：`PASS_C012_ROTATION_L1_EXACT_CONTRACT_USER_APPROVED_IMPLEMENTATION_NOT_AUTHORIZED`。
+
 ### 11.3 2026-08-14 产品验收方向正式审核
 
 本轮执行三轮文档审核。第一轮修复旧交付顺序、F-011矩阵和提案中残留的两family active合取、穷尽证明、子集READY及spike失败自动降级；第二轮确认历史B3与新C-011 authority分离；第三轮通过F2 validator并形成以下结论：
@@ -1070,6 +1079,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v2.31 | 2026-08-23 | 同步用户批准`C-012-RL1-D1～D6`精确合同：固定唯一rotation_L1 component、五anchored folds、2026-Q2/Q3全新untouched holdout、产品与coverage阈值、最小writer及24-fit双fresh-process成本；源码、fit、holdout读取、model/bundle、API/UI、DB/runtime仍未授权，严格进度保持11/17。 |
 | v2.30 | 2026-08-23 | 回填P2-4正式`NOT_AVAILABLE`结果并终结P2-3C/已消费holdout；把canonical authority修订为versioned product bundle，独立验收rotation L1/L2与risk L1/L2，建立FULL_READY/CAPABILITY_AVAILABLE/NOT_AVAILABLE及能力coverage/abstention双轴状态；F-011移除P2-7运行职责，P2-5允许在至少一个已批准能力可用后做最小离线纵切。精确模型、walk-forward/新holdout、阈值、源码、fit、API/UI、DB/runtime仍pending，严格进度保持11/17。 |
 | v2.29 | 2026-08-18 | 回填P2-3C正式成功：producer `8ca1b98d…fbd0`完成36/36 fits，L1/L2均选择alpha100且development Rank IC/spread严格为正，candidate canonical=`792d4f6a…17e3`，holdout/model/READY/DB/runtime均未触碰。新增P2-4最小精确合同：唯一candidate、两个fresh process、一次逻辑untouched holdout、既有D4/D5阈值、互斥三状态和最小writer；用户已批准D1～D6并授权源码实施，正式holdout和PR合入仍独立授权。严格产品进度保持11/17。 |
 | v2.28 | 2026-08-17 | 用户批准P2-3C D1～D6唯一后续实验合同，源码与36-fit执行仍未授权。证据锚点为P2-3B alpha100 fold-2/fold-3系数cosine=0.985456但Rank IC与spread同时反转；唯一假设为market regime条件斜率。候选固定market lambda4/seed42并逐fold train-only重拟合，sector只增加五个market-sign交互，完整最多36 fits；market/L1/L2失败分别在3/18/33停止。实现只用已登记offline的既有Ridge/CLI/test文件，D3/D4产品验收、untouched holdout与三状态边界不变。不得并行模型、复制旧path、修改workflow/catalog、越权实现或用设计提升11/17进度。 |
