@@ -71,6 +71,7 @@ Never replace an undefined dependency edge with a guessed small update. Fail clo
 - Daily/index revisions invalidate exact code/month partitions and defined downstream blocks.
 - Minute stores each stock’s basis window, QFQ denominator and ordered adjustment-factor digest. Denominator changes invalidate that stock’s necessary full history; numerator-only changes invalidate exact dates and dependent windows.
 - `stk_limit`, `suspend_d` and daily close/pre-close reference are minute dependencies.
+- A canonical-v2 `stk_limit` gap uses the versioned A-share rule calculator only when the key is absent from the sealed DB partition. The candidate-local coverage entry binds the raw partition identity, PIT snapshot digest, rule version, monthly leaves and sorted exact affected instruments. Database values are never overridden. First-adoption or changed coverage is a code-bounded historical `SELECTIVE_REBUILD`, not a tail append and not an all-market rebuild. A disappearing overlay or unproven raw historical revision remains fail-closed because the planner may not guess a row-level diff.
 - PIT changes invalidate affected stock/date ranges.
 - Canonical v2 historical D/P daily gaps are sealed as per-partition Tushare `pro_bar` missing-only overlays; provider receipts and effective partition roots participate in artifact-ready identity, and overlap never overrides DB rows.
 - Moneyflow 5/20 and `PriceStrength_10D` propagate by valid observations, not calendar-day guesses.

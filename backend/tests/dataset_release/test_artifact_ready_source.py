@@ -13,7 +13,10 @@ import pytest
 
 from backend.services.dataset_release import artifact_ready_source as artifact_ready_module
 from backend.services.dataset_release.artifact_ready_source import (
+    ARTIFACT_READY_ADJ_COVERAGE_SCHEMA,
     ARTIFACT_READY_CONTRACT_SCHEMA,
+    ARTIFACT_READY_DAILY_COVERAGE_SCHEMA,
+    ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA,
     ARTIFACT_READY_RECHECK_SCHEMA,
     ArtifactReadyCoverageIncomplete,
     ArtifactReadySourceBuilder,
@@ -316,6 +319,7 @@ def _fixture(
         "kline_minute_raw": (f"{DAY.isoformat()}_{DAY.isoformat()}_bucket-{minute_bucket:04d}"),
         "index_daily": f"{DAY.isoformat()}_{DAY.isoformat()}",
         "adj_factor": f"{DAY.isoformat()}_{DAY.isoformat()}",
+        "stk_limit": f"{DAY.isoformat()}_{DAY.isoformat()}",
     }
     values: dict[str, list[Mapping[str, Any]]] = {}
     rows: dict[str, list[Mapping[str, Any]]] = {}
@@ -349,6 +353,16 @@ def _fixture(
                     "ts_code": CODE,
                     "trade_date": DAY.isoformat(),
                     "adj_factor": 1.25,
+                }
+            ]
+        elif dataset == "stk_limit":
+            source_rows = [
+                {
+                    "ts_code": CODE,
+                    "trade_date": DAY.isoformat(),
+                    "pre_close": 10.0,
+                    "up_limit": 11.0,
+                    "down_limit": 9.0,
                 }
             ]
         else:
@@ -451,6 +465,163 @@ def test_canonical_historical_delisted_daily_gap_uses_tushare_candidate_overlay(
     assert receipt["provider_override_rows"] == 0
     assert receipt["overlay_rows"] == [provider_row]
     assert contract["daily_provider_summary"]["unresolved_keys"] == 0
+    missing_policy = dict(contract)
+    missing_policy.pop("stk_limit_rule_overlay_summary")
+    with pytest.raises(ArtifactReadySourceError, match="limit policy is missing"):
+        load_artifact_ready_contract(
+            cas,
+            profile,
+            cas.put_json(missing_policy),
+            expected_source_content_root=snapshot.source_content_root,
+            expected_pit_snapshot_digest=snapshot.pit_snapshot_digest,
+        )
+
+
+def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(dataset_profile, tmp_path) -> None:
+    day1 = date(2024, 7, 22)
+    day2 = date(2024, 7, 23)
+    partition_key = f"{day1.isoformat()}_{day2.isoformat()}"
+    profile = replace(
+        dataset_profile,
+        profile="qe_hmm_full_v2",
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        universe_rule_version=CANONICAL_PIT_RULE_VERSION,
+        pit_authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        pit_authority_status=PitAuthorityStatus.ACTIVE_CANONICAL.value,
+        pit_rule_parameters_digest=canonical_rule_parameters_digest(),
+        pit_ipo_trading_sessions=252,
+        pit_scope="canonical_all_listed",
+    )
+    pit = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": CODE,
+                "eligible_start": day1,
+                "eligible_end": day2,
+                "entry_reason": None,
+                "exit_reason": None,
+            }
+        ],
+        universe_key=profile.universe_key,
+        rule_version=profile.universe_rule_version,
+        scope_start=day1,
+        cutoff=day2,
+        state_identity=_digest("limit-state"),
+        source_fingerprint_sha256=_digest("limit-source"),
+        parameter_hash=profile.pit_rule_parameters_digest,
+    )
+    snapshot = SimpleNamespace(
+        official_cutoff=day2,
+        pit_snapshot=pit,
+        pit_snapshot_digest=pit.spans_sha256,
+    )
+    store = ControlStore.initialize(tmp_path / "limit-control")
+    cas = CASStore(store.root)
+
+    def descriptor(dataset: str) -> dict[str, Any]:
+        return {
+            "dataset": dataset,
+            "partition_key": partition_key,
+            "row_count": 0,
+            "content_digest": _digest(f"{dataset}:content"),
+            "schema_digest": _digest(f"{dataset}:schema"),
+            "source_table_schema_digest": _digest(f"{dataset}:table"),
+            "source_code_membership_digest": _digest("limit-codes"),
+            "monthly_content_leaves": [],
+            "min_key": None,
+            "max_key": None,
+        }
+
+    values = {dataset: [descriptor(dataset)] for dataset in ("stk_limit", "kline_daily_raw", "adj_factor")}
+    rows = {
+        f"stk_limit:{partition_key}": [
+            {
+                "ts_code": CODE,
+                "trade_date": day1.isoformat(),
+                "pre_close": 9.0,
+                "up_limit": 9.9,
+                "down_limit": 8.1,
+            }
+        ],
+        f"kline_daily_raw:{partition_key}": [
+            {"ts_code": CODE, "trade_date": day1.isoformat(), "close_li": 10_000},
+            {"ts_code": CODE, "trade_date": day2.isoformat(), "close_li": 10_100},
+        ],
+        f"adj_factor:{partition_key}": [
+            {"ts_code": CODE, "trade_date": day1.isoformat(), "adj_factor": 1.0},
+            {"ts_code": CODE, "trade_date": day2.isoformat(), "adj_factor": 1.0},
+        ],
+    }
+    view = _View(values=values, rows=rows)
+    daily_ref = cas.put_json(
+        {"schema_version": ARTIFACT_READY_DAILY_COVERAGE_SCHEMA, "overlay_rows": []}
+    )
+    adj_ref = cas.put_json(
+        {"schema_version": ARTIFACT_READY_ADJ_COVERAGE_SCHEMA, "overlay_rows": []}
+    )
+    builder = ArtifactReadySourceBuilder(profile, cas)
+
+    entries, refs, summary = builder._limit_entries(
+        view,
+        snapshot=snapshot,
+        trading_dates=(day1, day2),
+        daily_entries=(
+            {
+                "dataset": "daily_coverage",
+                "partition_key": partition_key,
+                "rows_ref": daily_ref.as_dict(),
+            },
+        ),
+        adj_entries=(
+            {
+                "dataset": "adj_factor_coverage",
+                "partition_key": partition_key,
+                "rows_ref": adj_ref.as_dict(),
+            },
+        ),
+        checkpoint=lambda: None,
+    )
+
+    assert len(entries) == len(refs) == 1
+    assert entries[0]["dataset"] == "stk_limit_rule_coverage"
+    assert entries[0]["affected_instruments"] == ["000001.SZ"]
+    receipt = cas.get_json(refs[0])
+    assert receipt["schema_version"] == ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA
+    assert receipt["pit_snapshot_digest"] == pit.spans_sha256
+    assert receipt["database_override_rows"] == 0
+    assert receipt["unresolved_keys"] == 0
+    assert receipt["overlay_rows"] == [
+        {
+            "ts_code": CODE,
+            "trade_date": day2.isoformat(),
+            "pre_close": "10.00",
+            "up_limit": "11.00",
+            "down_limit": "9.00",
+        }
+    ]
+    assert summary["rule_derived_rows"] == 1
+    raw_entry = {
+        "identity": f"stk_limit:{partition_key}",
+        "dataset": "stk_limit",
+        "partition_key": partition_key,
+        "role": "sealed_database_source",
+        "row_count": 1,
+        "content_digest": _digest("raw-limit-content"),
+        "schema_digest": _digest("raw-limit-schema"),
+        "rows_ref": cas.put_json({"raw": True}).as_dict(),
+        "monthly_content_leaves": [],
+        "source_table_schema_digest": None,
+        "source_code_membership_digest": None,
+        "min_key": [CODE, day1.isoformat()],
+        "max_key": [CODE, day1.isoformat()],
+    }
+    projection = artifact_ready_module._effective_partition_projection(
+        Component.DAILY_BIN,
+        (raw_entry, *entries),
+    )
+    assert {item["dataset"] for item in projection} == {"stk_limit", "stk_limit_rule_coverage"}
+    coverage_projection = next(item for item in projection if item["dataset"] == "stk_limit_rule_coverage")
+    assert coverage_projection["affected_instruments"] == ["000001.SZ"]
 
 
 def _component_baseline_from_artifact_ready(

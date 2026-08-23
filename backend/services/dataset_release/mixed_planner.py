@@ -297,6 +297,12 @@ def _plan_component(
     )
     previous_only.difference_update(tail_pairs)
     current_only.difference_update(tail_pairs.values())
+    sparse_historical_additions = {
+        identity
+        for identity in current_only
+        if current_by_id[identity].dataset == "stk_limit_rule_coverage"
+    }
+    current_only.difference_update(sparse_historical_additions)
     if previous_only:
         return _full(
             component,
@@ -311,6 +317,49 @@ def _plan_component(
     selective_codes: set[str] = set()
     selective = False
     incremental = False
+
+    for identity in sorted(sparse_historical_additions):
+        observed = current_by_id[identity]
+        affected = tuple(observed.affected_instruments)
+        changed_months = tuple(str(item["month"]) for item in observed.monthly_content_leaves)
+        if not affected or not changed_months or set(affected).difference(context.current_pit_instruments):
+            return _full(
+                component,
+                authority,
+                "rule-derived limit coverage lacks exact affected instruments/months",
+            )
+        rules = tuple(
+            rule
+            for rule in baseline.append_rules
+            if observed.dataset in rule.datasets
+            or (observed.dataset == "stk_limit_rule_coverage" and "stk_limit" in rule.datasets)
+        )
+        if not rules or component not in {Component.DAILY_BIN, Component.MINUTE_BIN}:
+            return _full(
+                component,
+                authority,
+                "rule-derived limit coverage lacks an exact bin mutation rule",
+            )
+        for rule in rules:
+            bounded_replace, _bounded_create = rule.targets_for_instruments(affected)
+            replace_targets.update(
+                path
+                for path in bounded_replace
+                if not path.startswith("qlib/calendars/")
+                and not path.startswith("qlib/instruments/")
+                and not _immutable_csv_lineage(path)
+            )
+            edges.update(rule.dependency_edges)
+        selective_codes.update(affected)
+        scopes.append(
+            {
+                "kind": "historical_source_revision",
+                "source_partition": identity,
+                "months": list(changed_months),
+                "affected_instruments": list(affected),
+            }
+        )
+        selective = True
 
     for identity in sorted(changed):
         previous = previous_by_id[identity]
@@ -340,11 +389,24 @@ def _plan_component(
             edges.update(partition.dependency_edges)
         if component in {Component.DAILY_BIN, Component.MINUTE_BIN}:
             requested = set(baseline.pit_instruments)
+            if observed.dataset == "stk_limit_rule_coverage":
+                requested = set(previous.affected_instruments).union(observed.affected_instruments)
+                if not requested or requested.difference(context.current_pit_instruments):
+                    return _full(
+                        component,
+                        authority,
+                        "rule-derived limit revision lacks exact affected instruments",
+                    )
             if component is Component.DAILY_BIN and observed.dataset == "index_daily_merged":
                 requested = set(baseline.instrument_file_targets).difference(baseline.pit_instruments)
             selective_codes.update(requested)
             affected_instruments = tuple(sorted(requested))
-            rules = tuple(rule for rule in baseline.append_rules if observed.dataset in rule.datasets)
+            rules = tuple(
+                rule
+                for rule in baseline.append_rules
+                if observed.dataset in rule.datasets
+                or (observed.dataset == "stk_limit_rule_coverage" and "stk_limit" in rule.datasets)
+            )
             if not rules:
                 return _full(
                     component,
@@ -637,7 +699,7 @@ def _plan_component(
         create_targets.add(f"csv_overrides/{revision_key}/manifest.json")
         create_targets.update(f"csv_overrides/{revision_key}/{code.casefold()}.csv" for code in selective_codes)
 
-    if not changed and not appended_identities and not pit_snapshot_changed:
+    if not changed and not appended_identities and not sparse_historical_additions and not pit_snapshot_changed:
         # Complete equality is component-local; another component may still rebuild.
         evidence = _reuse_evidence(
             baseline,
@@ -698,7 +760,10 @@ def _plan_component(
         mode=action.value.casefold(),
         canonical_lineage=canonical_lineage,
     )
-    changed_rows = sum(current_by_id[identity].row_count for identity in set(changed).union(appended_identities))
+    changed_rows = sum(
+        current_by_id[identity].row_count
+        for identity in set(changed).union(appended_identities).union(sparse_historical_additions)
+    )
     return ComponentPlan(
         component=component,
         partition_key="all",

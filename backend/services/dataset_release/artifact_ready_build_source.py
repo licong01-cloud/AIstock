@@ -16,9 +16,12 @@ from .artifact_ready_source import (
     ARTIFACT_READY_COMPONENT_SCHEMA,
     ARTIFACT_READY_DAILY_COVERAGE_SCHEMA,
     ARTIFACT_READY_INDEX_CHUNK_SCHEMA,
+    ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA,
     ARTIFACT_READY_MINUTE_COVERAGE_SCHEMA,
+    _validate_limit_overlay_manifest_contract,
     load_artifact_ready_contract,
 )
+from .a_share_limit_rule import PRICE_LIMIT_RULE_VERSION
 from .cas_store import CASRef, CASStore
 from .contracts import Component
 from .errors import DatasetReleaseError
@@ -241,6 +244,8 @@ class ArtifactReadyBuildSource:
             )
             if effective and dataset == "adj_factor":
                 rows = self._effective_adj_rows(component, descriptor, rows)
+            elif effective and dataset == "stk_limit" and self.profile.pit_authority_status == "ACTIVE_CANONICAL":
+                rows = self._effective_limit_rows(component, descriptor, rows)
             elif effective and dataset == "kline_daily_raw" and self.profile.pit_authority_status == "ACTIVE_CANONICAL":
                 rows = self._effective_daily_rows(component, descriptor, rows)
             elif effective and dataset == "kline_minute_raw":
@@ -416,6 +421,10 @@ class ArtifactReadyBuildSource:
             if not isinstance(entry, Mapping):
                 raise ArtifactReadyBuildSourceError("component source entry is invalid")
             _complete_ref(self.cas, entry.get("rows_ref"))
+        try:
+            _validate_limit_overlay_manifest_contract(self.profile, component, value)
+        except DatasetReleaseError as exc:
+            raise ArtifactReadyBuildSourceError(str(exc)) from exc
 
     def _raw_descriptor(self, entry: Mapping[str, Any]) -> Mapping[str, Any]:
         identity = str(entry["identity"])
@@ -481,6 +490,46 @@ class ArtifactReadyBuildSource:
             (dict(row) for row in overlay),
             key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
             source="kline_daily_raw",
+        )
+
+    def _effective_limit_rows(
+        self,
+        component: Component,
+        descriptor: Mapping[str, Any],
+        database_rows: Iterable[Mapping[str, Any]],
+    ) -> Iterator[Mapping[str, Any]]:
+        matches = [
+            item
+            for item in self.component_manifests[component]["partitions"]
+            if isinstance(item, Mapping)
+            and item.get("dataset") == "stk_limit_rule_coverage"
+            and item.get("partition_key") == str(descriptor["partition_key"])
+        ]
+        if not matches:
+            yield from database_rows
+            return
+        if len(matches) != 1:
+            raise ArtifactReadyBuildSourceError("stk_limit rule overlay entry is ambiguous")
+        entry = matches[0]
+        receipt = self._derived_receipt(entry, ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA)
+        overlay = receipt.get("overlay_rows")
+        if (
+            receipt.get("raw_partition_identity") != f"stk_limit:{descriptor['partition_key']}"
+            or receipt.get("pit_snapshot_digest") != self.pit_snapshot.spans_sha256
+            or receipt.get("rule_version") != PRICE_LIMIT_RULE_VERSION
+            or receipt.get("database_override_rows") != 0
+            or receipt.get("unresolved_keys") != 0
+            or receipt.get("safety") != _ZERO_SAFETY
+            or receipt.get("effective_content_root") != entry.get("content_digest")
+            or not isinstance(overlay, list)
+            or any(not isinstance(row, Mapping) for row in overlay)
+        ):
+            raise ArtifactReadyBuildSourceError("stk_limit rule overlay receipt is invalid")
+        yield from _merge_missing_only(
+            database_rows,
+            (dict(row) for row in overlay),
+            key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
+            source="stk_limit",
         )
 
     def _effective_minute_rows(

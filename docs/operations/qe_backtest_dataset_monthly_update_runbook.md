@@ -294,6 +294,10 @@ backend 重启不应丢任务；control catalog 和 Worker heartbeat 是 authori
 - canonical v2 只为历史 D/P 股票扫描/保留日线子集；缺口按股票以 Tushare `pro_bar` 一次有界窗口请求，
   转换到 DB 的厘/手单位后只写 candidate CAS overlay。数据库重叠键逐字段不一致、overlay 仍缺键或单股票
   返回超过 3,000 行均 fail closed；不会把八年全市场 panel 保留在内存；
+- canonical PIT v2 内的 `stk_limit` 缺口不使用 NaN、补零或“不可交易”替代。artifact-ready 阶段按版本化
+  沪深主板/创业板/科创板规则，以 raw 前收和 `adj_prev/adj_current` 生成 missing-only candidate CAS overlay；
+  DB 行不得覆盖。overlay 绑定精确股票代码和月份，首次采用只生成这些代码的 full-history override，禁止
+  把稀疏缺口误分类为普通 tail 或全市场重导；未知板块、无涨跌幅日、缺参考输入或 unresolved 键均阻断；
 - 在没有可信 DB partition revision ledger 时，初次 source freeze 与 publish 前 DB-only recheck 仍可能分别做一次截止日内的全值扫描；MVCC/provenance watermark 不能替代内容一致性；
 - 因此“候选只重写新增/失效部分”不等于“整条月更只读取新增月份”；等待、DB read、provider、compute、validation 时间必须分项报告；
 - fixture/synthetic benchmark 只证明算法复杂度和内存上限，不能宣称真实全量耗时；真实 full/new-cutoff telemetry 只能在未来数据更新另获授权后产生；

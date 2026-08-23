@@ -30,6 +30,7 @@ from .canonical_stock_transformer import (
     QfqDenominatorAuthority,
     qfq_denominator_authority_from_mapping,
 )
+from .a_share_limit_rule import PRICE_LIMIT_RULE_VERSION
 from .cas_store import CASRef, CASStore, CASStoreError
 from .contracts import Component
 from .errors import DatasetReleaseError, IndexOverlapConflict, SourceManifestError
@@ -56,6 +57,11 @@ from .source_rows_codec import (
     validate_rows_codec_identity,
     validate_rows_envelope,
 )
+from .stk_limit_overlay import (
+    STK_LIMIT_RULE_OVERLAY_SCHEMA,
+    LimitReferencePoint,
+    build_stk_limit_rule_overlay,
+)
 
 
 ARTIFACT_READY_CONTRACT_SCHEMA = "dataset_release_artifact_ready_contract_v1"
@@ -65,6 +71,7 @@ ARTIFACT_READY_INDEX_CHUNK_SCHEMA = "dataset_release_artifact_ready_index_chunk_
 ARTIFACT_READY_ADJ_COVERAGE_SCHEMA = "dataset_release_artifact_ready_adj_factor_coverage_v1"
 ARTIFACT_READY_FACTOR_OVERLAY_SCHEMA = "dataset_release_artifact_ready_factor_overlay_coverage_v1"
 ARTIFACT_READY_DAILY_COVERAGE_SCHEMA = "dataset_release_artifact_ready_daily_coverage_v1"
+ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA = STK_LIMIT_RULE_OVERLAY_SCHEMA
 ARTIFACT_READY_RECHECK_SCHEMA = "dataset_release_artifact_ready_recheck_v1"
 ARTIFACT_READY_EFFECTIVE_SCHEMA = "dataset_release_artifact_ready_effective_v1"
 ARTIFACT_READY_PROVENANCE_SCHEMA = "dataset_release_artifact_ready_provenance_v1"
@@ -331,6 +338,10 @@ def load_artifact_ready_contract(
         or set(raw_components) != expected_components
     ):
         raise ArtifactReadySourceError("artifact-ready contract identity differs")
+    if profile.pit_authority_status == "ACTIVE_CANONICAL":
+        limit_summary = payload.get("stk_limit_rule_overlay_summary")
+        if not isinstance(limit_summary, Mapping) or limit_summary.get("rule_version") != PRICE_LIMIT_RULE_VERSION:
+            raise ArtifactReadySourceError("canonical artifact-ready limit policy is missing")
     qfq_ref = _complete_ref(
         cas,
         payload.get("qfq_denominator_authority_ref"),
@@ -366,6 +377,7 @@ def load_artifact_ready_contract(
             or not isinstance(manifest.get("effective_partitions"), list)
         ):
             raise ArtifactReadySourceError("artifact-ready component manifest identity differs")
+        _validate_limit_overlay_manifest_contract(profile, component, manifest)
         for partition in manifest["partitions"]:
             if not isinstance(partition, Mapping):
                 raise ArtifactReadySourceError("artifact-ready component partition is invalid")
@@ -767,6 +779,14 @@ class ArtifactReadySourceBuilder:
             checkpoint=checkpoint,
             daily_overlay_keys=daily_overlay_keys,
         )
+        limit_entries, limit_derived, limit_summary = self._limit_entries(
+            view,
+            snapshot=snapshot,
+            trading_dates=trading_dates,
+            daily_entries=daily_entries,
+            adj_entries=adj_entries,
+            checkpoint=checkpoint,
+        )
         minute_entries, minute_provider, minute_derived, minute_summary = self._minute_entries(
             view,
             snapshot=snapshot,
@@ -785,6 +805,7 @@ class ArtifactReadySourceBuilder:
             (
                 *adj_derived,
                 *daily_derived,
+                *limit_derived,
                 *minute_derived,
                 *index_derived,
                 qfq_authority_ref,
@@ -807,6 +828,9 @@ class ArtifactReadySourceBuilder:
                     "qfq_denominator_authority_ref": qfq_authority_ref.as_dict(),
                     "daily_provider_summary": daily_summary,
                 }
+            if component in {Component.DAILY_BIN, Component.MINUTE_BIN}:
+                derived = (*derived, *limit_entries)
+                details = {**details, "stk_limit_rule_overlay_summary": limit_summary}
             if component is Component.DAILY_BIN:
                 derived = (*derived, *index_entries)
             if component is Component.FACTOR_H5_STATIC:
@@ -837,6 +861,7 @@ class ArtifactReadySourceBuilder:
             "qfq_denominator_authority_digest": qfq_summary["qfq_denominator_authority_digest"],
             "qfq_source_summary": qfq_summary,
             "daily_provider_summary": daily_summary,
+            "stk_limit_rule_overlay_summary": limit_summary,
             "factor_overlay_summary": factor_overlay_summary,
             "factor_overlay_coverage_ref": factor_overlay_ref.as_dict(),
             "component_manifests": {key: component_refs[key].as_dict() for key in sorted(component_refs)},
@@ -1164,6 +1189,10 @@ class ArtifactReadySourceBuilder:
             or value.get("safety") != _ZERO_SAFETY
         ):
             raise ArtifactReadySourceError("artifact-ready contract identity differs")
+        if self.profile.pit_authority_status == "ACTIVE_CANONICAL":
+            limit_summary = value.get("stk_limit_rule_overlay_summary")
+            if not isinstance(limit_summary, Mapping) or limit_summary.get("rule_version") != PRICE_LIMIT_RULE_VERSION:
+                raise ArtifactReadySourceError("canonical artifact-ready limit policy is missing")
         for raw in (
             *components.values(),
             *(value.get("provider_receipt_refs") or ()),
@@ -1546,6 +1575,200 @@ class ArtifactReadySourceBuilder:
             content_digest=content_root,
         )
         return entry, self.cas.verify(reference), summary
+
+    def _limit_entries(
+        self,
+        view: ArtifactSourceView,
+        *,
+        snapshot: ArtifactSnapshot,
+        trading_dates: Sequence[date],
+        daily_entries: Sequence[Mapping[str, Any]],
+        adj_entries: Sequence[Mapping[str, Any]],
+        checkpoint: Callable[[], None],
+    ) -> tuple[tuple[Mapping[str, Any], ...], tuple[CASRef, ...], Mapping[str, Any]]:
+        """Seal deterministic, candidate-local prices for missing PIT limit keys."""
+
+        if self.profile.pit_authority_status != "ACTIVE_CANONICAL":
+            return (), (), {
+                "source_precedence": "legacy_database_only_v1",
+                "rule_version": None,
+                "expected_pit_keys": 0,
+                "database_rows": 0,
+                "rule_derived_rows": 0,
+                "database_override_rows": 0,
+                "unresolved_keys": 0,
+                "peak_code_partition_rows": 0,
+            }
+        limit_descriptors = sorted(
+            view.descriptors("stk_limit"),
+            key=lambda item: str(item.get("partition_key", "")),
+        )
+        daily_descriptors = {str(item.get("partition_key")): item for item in view.descriptors("kline_daily_raw")}
+        adj_descriptors = {str(item.get("partition_key")): item for item in view.descriptors("adj_factor")}
+        if not limit_descriptors:
+            raise ArtifactReadyCoverageIncomplete("sealed stk_limit partitions are missing")
+        entries: list[Mapping[str, Any]] = []
+        derived_refs: list[CASRef] = []
+        state: Mapping[str, LimitReferencePoint] = {}
+        totals: dict[str, Any] = {
+            "source_precedence": "database_then_rule_derived_missing_only_v1",
+            "rule_version": PRICE_LIMIT_RULE_VERSION,
+            "expected_pit_keys": 0,
+            "database_rows": 0,
+            "rule_derived_rows": 0,
+            "database_override_rows": 0,
+            "unresolved_keys": 0,
+            "peak_code_partition_rows": 0,
+        }
+        previous_end: date | None = None
+        for descriptor in limit_descriptors:
+            partition_key = str(descriptor.get("partition_key", ""))
+            match = _DATE_PARTITION.fullmatch(partition_key)
+            daily_descriptor = daily_descriptors.get(partition_key)
+            adj_descriptor = adj_descriptors.get(partition_key)
+            if match is None or daily_descriptor is None or adj_descriptor is None:
+                raise ArtifactReadyCoverageIncomplete("stk_limit backing partition identity differs")
+            start = date.fromisoformat(match.group("start"))
+            end = min(snapshot.official_cutoff, date.fromisoformat(match.group("end")))
+            if end < start or (previous_end is not None and start <= previous_end):
+                raise ArtifactReadyCoverageIncomplete("stk_limit partitions overlap or regress")
+            previous_end = end
+            daily_overlay = self._coverage_overlay_rows(
+                daily_entries,
+                dataset="daily_coverage",
+                partition_key=partition_key,
+                schema=ARTIFACT_READY_DAILY_COVERAGE_SCHEMA,
+            )
+            adj_overlay = tuple(
+                {key: value for key, value in row.items() if key != "provider_ref"}
+                for row in self._coverage_overlay_rows(
+                    adj_entries,
+                    dataset="adj_factor_coverage",
+                    partition_key=partition_key,
+                    schema=ARTIFACT_READY_ADJ_COVERAGE_SCHEMA,
+                )
+            )
+            with (
+                _managed_partition_rows(view, descriptor) as database_limits,
+                _managed_partition_rows(view, daily_descriptor) as database_daily,
+                _managed_partition_rows(view, adj_descriptor) as database_adj,
+            ):
+                result = build_stk_limit_rule_overlay(
+                    pit_snapshot=snapshot.pit_snapshot,
+                    trading_dates=trading_dates,
+                    partition_start=start,
+                    partition_end=end,
+                    database_limit_rows=database_limits,
+                    daily_rows=_merge_rule_overlay_rows(
+                        database_daily,
+                        daily_overlay,
+                        source="kline_daily_raw",
+                    ),
+                    adj_factor_rows=_merge_rule_overlay_rows(
+                        database_adj,
+                        adj_overlay,
+                        source="adj_factor",
+                    ),
+                    reference_state=state,
+                )
+            state = result.reference_state
+            overlay_rows = [dict(row) for row in result.overlay_rows]
+            if not overlay_rows:
+                totals["expected_pit_keys"] += result.expected_pit_keys
+                totals["database_rows"] += result.database_rows
+                totals["peak_code_partition_rows"] = max(
+                    int(totals["peak_code_partition_rows"]),
+                    result.peak_code_partition_rows,
+                )
+                checkpoint()
+                continue
+            monthly_leaves = _limit_monthly_leaves(
+                overlay_rows=overlay_rows,
+                pit_snapshot_digest=snapshot.pit_snapshot_digest,
+            )
+            effective_root = digest_named_fields(
+                "dataset_release_stk_limit_rule_effective_partition_v1",
+                {
+                    "partition_key": partition_key,
+                    "pit_snapshot_digest": snapshot.pit_snapshot_digest,
+                    "rule_version": result.rule_version,
+                    "overlay_rows": overlay_rows,
+                },
+            )
+            receipt = {
+                "schema_version": ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA,
+                "raw_partition_identity": _identity(descriptor),
+                "partition_key": partition_key,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "rule_version": result.rule_version,
+                "pit_snapshot_digest": snapshot.pit_snapshot_digest,
+                "raw_content_digest": str(descriptor["content_digest"]),
+                "overlay_rows": overlay_rows,
+                "expected_pit_keys": result.expected_pit_keys,
+                "database_rows": result.database_rows,
+                "rule_derived_rows": result.rule_derived_rows,
+                "database_override_rows": result.database_override_rows,
+                "unresolved_keys": result.unresolved_keys,
+                "peak_code_partition_rows": result.peak_code_partition_rows,
+                "effective_content_root": effective_root,
+                "monthly_content_leaves": monthly_leaves,
+                "safety": dict(_ZERO_SAFETY),
+            }
+            reference = self.cas.put_json(receipt)
+            derived_refs.append(reference)
+            entries.append(
+                _derived_entry(
+                    dataset="stk_limit_rule_coverage",
+                    partition_key=partition_key,
+                    role="database_rule_derived_missing_only",
+                    row_count=result.rule_derived_rows,
+                    reference=reference,
+                    content_digest=effective_root,
+                    monthly_content_leaves=monthly_leaves,
+                    source_table_schema_digest=descriptor.get("source_table_schema_digest"),
+                    source_code_membership_digest=descriptor.get("source_code_membership_digest"),
+                    min_key=[overlay_rows[0]["ts_code"], overlay_rows[0]["trade_date"]],
+                    max_key=[overlay_rows[-1]["ts_code"], overlay_rows[-1]["trade_date"]],
+                    affected_instruments=tuple(sorted({str(row["ts_code"]) for row in overlay_rows})),
+                )
+            )
+            totals["expected_pit_keys"] += result.expected_pit_keys
+            totals["database_rows"] += result.database_rows
+            totals["rule_derived_rows"] += result.rule_derived_rows
+            totals["peak_code_partition_rows"] = max(
+                int(totals["peak_code_partition_rows"]),
+                result.peak_code_partition_rows,
+            )
+            checkpoint()
+        return tuple(entries), _dedupe_refs(derived_refs), totals
+
+    def _coverage_overlay_rows(
+        self,
+        entries: Sequence[Mapping[str, Any]],
+        *,
+        dataset: str,
+        partition_key: str,
+        schema: str,
+    ) -> tuple[Mapping[str, Any], ...]:
+        matches = [
+            item
+            for item in entries
+            if item.get("dataset") == dataset and item.get("partition_key") == partition_key
+        ]
+        if len(matches) != 1:
+            raise ArtifactReadyCoverageIncomplete(f"derived backing entry is missing: {dataset}:{partition_key}")
+        reference = _complete_ref(self.cas, matches[0].get("rows_ref"), field=f"{dataset} receipt")
+        receipt = self.cas.get_json_bounded(reference, max_bytes=MAX_CONTROL_RECEIPT_BYTES)
+        rows = receipt.get("overlay_rows") if isinstance(receipt, Mapping) else None
+        if (
+            not isinstance(receipt, Mapping)
+            or receipt.get("schema_version") != schema
+            or not isinstance(rows, list)
+            or any(not isinstance(row, Mapping) for row in rows)
+        ):
+            raise ArtifactReadyCoverageIncomplete(f"derived backing receipt is invalid: {dataset}:{partition_key}")
+        return tuple(dict(row) for row in rows)
 
     def _adj_factor_entries(
         self,
@@ -2936,6 +3159,78 @@ def _artifact_month_leaf(
     }
 
 
+def _limit_monthly_leaves(
+    *,
+    overlay_rows: Sequence[Mapping[str, Any]],
+    pit_snapshot_digest: str,
+) -> list[dict[str, Any]]:
+    overlay_by_month: dict[str, list[Mapping[str, Any]]] = {}
+    for row in overlay_rows:
+        overlay_by_month.setdefault(str(row["trade_date"])[:7], []).append(dict(row))
+    return [
+        _artifact_month_leaf(
+            month,
+            rows=[
+                {
+                    **dict(row),
+                    "pit_snapshot_digest": pit_snapshot_digest,
+                    "rule_version": PRICE_LIMIT_RULE_VERSION,
+                }
+                for row in rows
+            ],
+            min_key=[rows[0]["ts_code"], rows[0]["trade_date"]],
+            max_key=[rows[-1]["ts_code"], rows[-1]["trade_date"]],
+        )
+        for month, rows in sorted(overlay_by_month.items())
+    ]
+
+
+def _merge_rule_overlay_rows(
+    database: Iterable[Mapping[str, Any]],
+    overlay: Iterable[Mapping[str, Any]],
+    *,
+    source: str,
+) -> Iterator[Mapping[str, Any]]:
+    left = iter(database)
+    right = iter(overlay)
+    try:
+        left_row = next(left, None)
+        right_row = next(right, None)
+        previous: tuple[str, date] | None = None
+        while left_row is not None or right_row is not None:
+            if left_row is None:
+                row, right_row = right_row, next(right, None)
+            elif right_row is None:
+                row, left_row = left_row, next(left, None)
+            else:
+                left_key = _rule_row_key(left_row, source=source)
+                right_key = _rule_row_key(right_row, source=source)
+                if left_key == right_key:
+                    raise ArtifactReadyCoverageIncomplete(f"{source} overlay would override a database key")
+                if left_key < right_key:
+                    row, left_row = left_row, next(left, None)
+                else:
+                    row, right_row = right_row, next(right, None)
+            assert row is not None
+            key = _rule_row_key(row, source=source)
+            if previous is not None and key <= previous:
+                raise ArtifactReadyCoverageIncomplete(f"{source} effective rows are not ordered and unique")
+            previous = key
+            yield row
+    finally:
+        for iterator in (left, right):
+            close = getattr(iterator, "close", None)
+            if callable(close):
+                close()
+
+
+def _rule_row_key(row: Mapping[str, Any], *, source: str) -> tuple[str, date]:
+    code = str(row.get("ts_code", "")).strip().upper()
+    if not code:
+        raise ArtifactReadyCoverageIncomplete(f"{source} row has an empty code")
+    return code, _as_date(row.get("trade_date"), field=f"{source} trade_date")
+
+
 def _effective_day_monthly_leaves(
     rows: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -3055,8 +3350,9 @@ def _derived_entry(
     source_code_membership_digest: str | None = None,
     min_key: Any = None,
     max_key: Any = None,
+    affected_instruments: Sequence[str] = (),
 ) -> Mapping[str, Any]:
-    return {
+    value = {
         "identity": f"{dataset}:{partition_key}",
         "dataset": dataset,
         "partition_key": partition_key,
@@ -3074,6 +3370,9 @@ def _derived_entry(
         "min_key": min_key,
         "max_key": max_key,
     }
+    if affected_instruments:
+        value["affected_instruments"] = sorted({str(code).strip().upper() for code in affected_instruments})
+    return value
 
 
 def _effective_partition_projection(
@@ -3109,9 +3408,63 @@ def _effective_partition_projection(
                 "source_code_membership_digest": item.get("source_code_membership_digest"),
                 "min_key": item.get("min_key"),
                 "max_key": item.get("max_key"),
+                **(
+                    {"affected_instruments": list(item["affected_instruments"])}
+                    if item.get("affected_instruments")
+                    else {}
+                ),
             }
         )
     return sorted(output, key=lambda item: str(item["identity"]))
+
+
+def _validate_limit_overlay_manifest_contract(
+    profile: DatasetProfile,
+    component: Component | str,
+    manifest: Mapping[str, Any],
+) -> None:
+    if profile.pit_authority_status != "ACTIVE_CANONICAL":
+        return
+    component_name = component.value if isinstance(component, Component) else str(component)
+    if component_name not in {Component.DAILY_BIN.value, Component.MINUTE_BIN.value}:
+        return
+    partitions = manifest.get("partitions")
+    effective = manifest.get("effective_partitions")
+    details = manifest.get("details")
+    if not isinstance(partitions, list) or not isinstance(effective, list) or not isinstance(details, Mapping):
+        raise ArtifactReadySourceError("canonical stk_limit overlay manifest is incomplete")
+    raw_keys = {
+        str(item.get("partition_key"))
+        for item in partitions
+        if isinstance(item, Mapping)
+        and item.get("dataset") == "stk_limit"
+        and item.get("role") == "sealed_database_source"
+    }
+    coverage_keys = {
+        str(item.get("partition_key"))
+        for item in partitions
+        if isinstance(item, Mapping)
+        and item.get("dataset") == "stk_limit_rule_coverage"
+        and item.get("role") == "database_rule_derived_missing_only"
+    }
+    effective_raw = [item for item in effective if isinstance(item, Mapping) and item.get("dataset") == "stk_limit"]
+    effective_coverage = {
+        str(item.get("partition_key"))
+        for item in effective
+        if isinstance(item, Mapping) and item.get("dataset") == "stk_limit_rule_coverage"
+    }
+    summary = details.get("stk_limit_rule_overlay_summary")
+    if (
+        not raw_keys
+        or not coverage_keys.issubset(raw_keys)
+        or {str(item.get("partition_key")) for item in effective_raw} != raw_keys
+        or effective_coverage != coverage_keys
+        or not isinstance(summary, Mapping)
+        or summary.get("rule_version") != PRICE_LIMIT_RULE_VERSION
+        or summary.get("database_override_rows") != 0
+        or summary.get("unresolved_keys") != 0
+    ):
+        raise ArtifactReadySourceError("canonical stk_limit overlay manifest identity differs")
 
 
 def _identity(descriptor: Mapping[str, Any]) -> str:

@@ -59,6 +59,13 @@ targets:
   worker-scheduler:
     runtime_kind: worker_scheduler
     source_globs:
+      - backend/services/dataset_release/a_share_limit_rule.py
+      - backend/services/dataset_release/artifact_ready_build_source.py
+      - backend/services/dataset_release/artifact_ready_source.py
+      - backend/services/dataset_release/component_artifact_manifest.py
+      - backend/services/dataset_release/component_manifest_producer.py
+      - backend/services/dataset_release/mixed_planner.py
+      - backend/services/dataset_release/stk_limit_overlay.py
       - backend/services/rdagent_scheduler*.py
       - backend/services/**/*worker*.py
       - scripts/**/*scheduler*.py
