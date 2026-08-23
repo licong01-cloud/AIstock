@@ -9357,6 +9357,109 @@ def _batch_signature(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+_CLOSE_SYNC_PRODUCTION_GATE_KEYS = (
+    "production_ddl_gate",
+    "production_frontend_dependency_gate",
+    "production_backend_dependency_gate",
+)
+
+
+def _close_sync_production_gate_signature(value: dict[str, Any] | None) -> tuple[str, ...]:
+    value = value if isinstance(value, dict) else {}
+    return tuple(str(value.get(key) or "noop") for key in _CLOSE_SYNC_PRODUCTION_GATE_KEYS)
+
+
+def _close_sync_batch_compatibility(
+    records: list[dict[str, Any]],
+    runtime_contracts: dict[str, dict[str, Any]],
+    *,
+    requested_production_gates: dict[str, Any] | None,
+    pr_url: str | None,
+) -> dict[str, Any]:
+    """Return the fail-closed compatibility contract for close-sync-batch.
+
+    close-sync-batch writes one PR/merge identity into every BUG record. It is
+    therefore only safe for records that could have shared one source batch
+    PR and one validation/activation policy. Runtime restart receipts are
+    checked separately and remain single-issue.
+    """
+    modules = sorted({str(record.get("module") or "unknown") for record in records})
+    risk_tiers = sorted({flow._risk_from_severity(str(record.get("severity") or "P2")) for record in records})
+    verification_signatures = sorted(
+        {
+            tuple(flow._unique_strings(flow._as_list(record.get("required_verification"))))
+            for record in records
+        }
+    )
+    runtime_impacts = sorted(
+        {
+            str(runtime_contracts.get(str(record.get("bug_id")), {}).get("runtime_impact") or "unknown")
+            for record in records
+        }
+    )
+    activation_signatures = sorted(
+        {
+            json.dumps(
+                (runtime_contracts.get(str(record.get("bug_id")), {}).get("activation_states") or {}),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            for record in records
+        }
+    )
+    stored_gate_signatures = sorted(
+        {
+            _close_sync_production_gate_signature(record)
+            for record in records
+        }
+    )
+    requested_gate_signature = _close_sync_production_gate_signature(requested_production_gates)
+    source_prs = sorted({str(record.get("pr_url") or "").strip() for record in records if str(record.get("pr_url") or "").strip()})
+    blocking: list[str] = []
+    if len(modules) != 1:
+        blocking.append(f"close-sync-batch issues must share one module; got {modules}")
+    if len(risk_tiers) != 1:
+        blocking.append(f"close-sync-batch issues must share one risk tier; got {risk_tiers}")
+    if len(verification_signatures) != 1:
+        blocking.append("close-sync-batch issues must share the same required_verification signature")
+    if len(runtime_impacts) != 1:
+        blocking.append(f"close-sync-batch issues must share one runtime_impact; got {runtime_impacts}")
+    if len(activation_signatures) != 1:
+        blocking.append("close-sync-batch issues must share the same activation policy")
+    if len(stored_gate_signatures) != 1:
+        blocking.append("close-sync-batch issues must share the same production gate state")
+    if source_prs and len(source_prs) != 1:
+        blocking.append(
+            "close-sync-batch issues reference different source PRs; use one shared source batch PR or split the batch"
+        )
+    if pr_url and source_prs and source_prs[0] != pr_url:
+        blocking.append(
+            "close-sync-batch --pr-url does not match the existing source PR recorded by every BUG"
+        )
+    compatibility_fields = {
+        "module": modules[0] if len(modules) == 1 else modules,
+        "risk_tier": risk_tiers[0] if len(risk_tiers) == 1 else risk_tiers,
+        "required_verification": list(verification_signatures[0]) if len(verification_signatures) == 1 else verification_signatures,
+        "runtime_impact": runtime_impacts[0] if len(runtime_impacts) == 1 else runtime_impacts,
+        "activation_policy": activation_signatures[0] if len(activation_signatures) == 1 else activation_signatures,
+        "stored_production_gates": stored_gate_signatures,
+        "requested_production_gates": requested_gate_signature,
+        "source_prs": source_prs,
+        "backend_restart_required": sorted(
+            str(record.get("bug_id"))
+            for record in records
+            if (runtime_contracts.get(str(record.get("bug_id")), {}).get("backend_restart_required"))
+        ),
+    }
+    compatibility_fields["compatibility_key"] = f"close-sync:{_short_hash(compatibility_fields, length=12)}"
+    return {
+        "schema_version": "aistock_close_sync_batch_compatibility_v1",
+        **compatibility_fields,
+        "blocking": blocking,
+        "workflow_gate": "compatible" if not blocking else "blocked",
+    }
+
+
 def build_start_batch_plan(
     *,
     bug_ids: list[str],
@@ -16223,6 +16326,14 @@ def build_close_sync_batch_plan(
             "close-sync-batch cannot close runtime BUGs; use per-issue post-restart receipts: "
             + ", ".join(runtime_batch_bug_ids)
         )
+    compatibility = _close_sync_batch_compatibility(
+        [row["record"] for row in records],
+        runtime_contracts,
+        requested_production_gates=gates,
+        pr_url=pr_url,
+    )
+    if compatibility["blocking"]:
+        raise WorkflowError("close-sync-batch compatibility blocked: " + "; ".join(compatibility["blocking"]))
     registry_worktree_plan = _maybe_create_close_sync_batch_worktree(
         bug_ids=canonical_bug_ids,
         create=create_registry_worktree,
@@ -16262,6 +16373,7 @@ def build_close_sync_batch_plan(
         "merge_commit": merge_commit,
         "validation_evidence": evidence,
         "production_gates": gates,
+        "compatibility": compatibility,
         "dry_run": not apply,
         "workflow_gate": workflow_gate,
         "per_issue": [
@@ -16271,6 +16383,10 @@ def build_close_sync_batch_plan(
                 "github_issue_url": record.get("github_issue_url"),
                 "source_bug_json": _repo_rel(path, close_sync_root),
                 "missing_github_linkage": missing,
+                "source_pr_url": str(record.get("pr_url") or "") or None,
+                "source_fix_commit": str(record.get("fix_commit") or "") or None,
+                "runtime_contract": runtime_contracts.get(item),
+                "compatibility_key": compatibility["compatibility_key"],
             }
             for item, record, path, missing in target_pairs
         ],
@@ -16318,6 +16434,7 @@ def build_close_sync_batch_plan(
             "bug_id": item,
             "merge_commit": merge_commit,
             "updated_bug_json": _repo_rel(source_path, close_sync_root),
+            "per_issue_compatibility_key": compatibility["compatibility_key"],
         }
         github_syncs[item] = (
             {"status": "skipped_github_check_disabled"}
