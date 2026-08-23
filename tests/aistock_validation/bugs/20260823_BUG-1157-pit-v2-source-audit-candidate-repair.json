@@ -83,13 +83,15 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "fresh_process_evidence": [
-      "A fresh Python test process imported the patched dataset-release source/audit/overlay closure and passed the 119-test BUG-1157 matrix; the exact runtime classifier test proved the changed closure maps only to worker-scheduler."
+      "A fresh Python test process imported the patched dataset-release source/audit/overlay closure and passed the 119-test BUG-1157 matrix; the exact runtime classifier test proved the changed closure maps only to worker-scheduler.",
+      "python -c import-dataset-release-closure -> PASS fresh-import-pass at 891d6d9fde275278a5b5108ed729f8c2f105d4d1"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "not_required",
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
