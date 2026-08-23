@@ -1,0 +1,263 @@
+{
+  "actual": "76 historical rows remain FAILED_RETRYABLE; the existing BUG-1099 package cleanup intentionally cannot select them, and no governed retained-package terminalization tool exists.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/stale_simulation_run_terminalization_core.py",
+    "scripts/terminalize_stale_simulation_runs.py",
+    "backend/tests/simulation_runtime/test_stale_run_terminalization.py",
+    "tests/aistock_validation/bugs/20260823_BUG-1165-retained-package-historical-simulation-runs-remain-indefinitely-failed-r.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1165",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-23T18:19:55.634109Z",
+  "description": "76 historical rows remain FAILED_RETRYABLE; the existing BUG-1099 package cleanup intentionally cannot select them, and no governed retained-package terminalization tool exists.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260823-b509c3241c8d",
+      "timestamp": "2026-08-23T18:19:55.634092Z"
+    }
+  ],
+  "evidence_uris": [
+    "production-readonly:2026-08-24 retained-package FAILED_RETRYABLE local_sim=25 minqmt_sim=51"
+  ],
+  "expected": "A read-only deterministic plan identifies only explicit retained-package FAILED_RETRYABLE rows before an exact cutoff; DEV rollback proves exact CANCELLED/FAILED_TERMINAL classification and readback; production apply remains digest/source/authorization pinned and is not run in this BUG delivery turn.",
+  "file_scope_contract": {
+    "added_files": [
+      "scripts/stale_simulation_run_terminalization_core.py",
+      "scripts/terminalize_stale_simulation_runs.py",
+      "backend/tests/simulation_runtime/test_stale_run_terminalization.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "ownership": {
+      "changed_files": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/stale_simulation_run_terminalization_core.py",
+        "scripts/terminalize_stale_simulation_runs.py",
+        "backend/tests/simulation_runtime/test_stale_run_terminalization.py"
+      ],
+      "impacted_modules": [
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "scripts",
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime"
+      ],
+      "matched_rules": [
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "scripts/stale_simulation_run_terminalization_core.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "scripts/terminalize_stale_simulation_runs.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_stale_run_terminalization.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium",
+        "critical"
+      ],
+      "suggested_scope": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/stale_simulation_run_terminalization_core.py",
+        "scripts/terminalize_stale_simulation_runs.py",
+        "backend/tests/simulation_runtime/test_stale_run_terminalization.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/stale_simulation_run_terminalization_core.py",
+      "scripts/terminalize_stale_simulation_runs.py",
+      "backend/tests/simulation_runtime/test_stale_run_terminalization.py"
+    ]
+  },
+  "first_seen_at": "2026-08-23T18:19:55.634109Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3718,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3718",
+  "last_seen_at": "2026-08-23T18:19:55.634109Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "SELECT broker_backend,count(*),min(trade_date),max(trade_date) FROM paper_v2.simulation_daily_run WHERE status='FAILED_RETRYABLE' GROUP BY broker_backend",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_impact": "unknown",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "Retained-package historical simulation runs remain indefinitely FAILED_RETRYABLE after their retry window expires",
+  "trigger_condition": {
+    "fingerprint": "b509c3241c8dc421ccdb08a3",
+    "source_event_id": "FE-20260823-b509c3241c8d"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
