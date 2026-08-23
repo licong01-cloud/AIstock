@@ -200,6 +200,7 @@ class SourceQuerySpec:
     date_expression: str | None
     start_policy: str
     query_version: str
+    audit_non_null_value_columns: tuple[str, ...] = ()
     audit_dataset: str | None = None
     audit_eligible_sources: tuple[str, ...] = ()
     audit_eligible_quality_statuses: tuple[str, ...] = ("ok", "empty_valid")
@@ -216,6 +217,7 @@ class SourceQuerySpec:
             *self.required_columns,
             *self.derived_value_columns,
             *self.non_null_value_columns,
+            *self.audit_non_null_value_columns,
             *((self.audit_dataset,) if self.audit_dataset is not None else ()),
             *self.audit_eligible_sources,
             *self.audit_eligible_quality_statuses,
@@ -230,6 +232,8 @@ class SourceQuerySpec:
             raise ValueError("derived source values overlap physical values")
         if not set(self.non_null_value_columns).issubset({*self.value_columns, *self.derived_value_columns}):
             raise ValueError("non-null source values must be projected value fields")
+        if not set(self.audit_non_null_value_columns).issubset(self.value_columns):
+            raise ValueError("audit non-null values must be physical projected fields")
         if self.start_policy not in {"daily", "minute", "timeless"}:
             raise ValueError("source query start policy is invalid")
         if self.start_policy == "timeless" and self.date_expression is not None:
@@ -352,6 +356,7 @@ def _query(
     audit_dataset: str | None = None,
     audit_eligible_sources: Sequence[str] = (),
     audit_eligible_quality_statuses: Sequence[str] = ("ok", "empty_valid"),
+    audit_non_null_values: Sequence[str] | None = None,
     code_column: str | None = None,
     code_policy: str | None = None,
 ) -> SourceQuerySpec:
@@ -369,6 +374,15 @@ def _query(
         derived_value_columns=tuple(derived_values),
         required_columns=required_columns,
         non_null_value_columns=tuple(non_null_values),
+        audit_non_null_value_columns=tuple(
+            (
+                value
+                for value in non_null_values
+                if value in values
+            )
+            if audit_non_null_values is None
+            else audit_non_null_values
+        ),
         date_expression=date_expression,
         start_policy=start_policy,
         query_version=(
@@ -530,7 +544,8 @@ _QUERY_SPECS = (
         (Component.DAILY_BIN, Component.MINUTE_BIN),
         ("ts_code", "trade_date"),
         values=("pre_close", "up_limit", "down_limit"),
-        non_null_values=("pre_close", "up_limit", "down_limit"),
+        non_null_values=(),
+        audit_non_null_values=("pre_close", "up_limit", "down_limit"),
         date_expression="source_row.trade_date",
         audit_dataset="stk_limit",
         audit_eligible_sources=("physical_audit_seed", "tushare"),

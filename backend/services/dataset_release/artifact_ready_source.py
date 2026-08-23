@@ -151,6 +151,10 @@ class ArtifactReadyProviderUnavailable(ArtifactReadySourceError):
     retryable = True
 
 
+class ArtifactReadyProviderRateLimited(ArtifactReadyProviderUnavailable):
+    code = "WAITING_PROVIDER_RATE_LIMIT_40203"
+
+
 class ArtifactReadyMinuteConflict(ArtifactReadySourceError):
     code = "BLOCKED_MINUTE_PROVIDER_CONFLICT"
 
@@ -1351,9 +1355,12 @@ class ArtifactReadySourceBuilder:
             if code not in terminal_codes:
                 continue
             if str(span.exit_reason or "").lower() in {
+                "delist_event",
                 "delisted",
                 "delisting_confirmed",
+                "paused_listing",
                 "terminal",
+                "terminal_exit",
             }:
                 if code not in terminal_ranges_by_code:
                     terminal_ranges_by_code[code] = []
@@ -2704,8 +2711,14 @@ class ArtifactReadySourceBuilder:
         subject: str,
     ) -> None:
         status = getattr(exc, "status_code", getattr(exc, "status", None))
-        retryable = bool(getattr(exc, "retryable", False)) or _is_40203(exc)
-        effective_code = str(getattr(exc, "code", code)) if retryable else code
+        rate_limited = _is_40203(exc)
+        retryable = bool(getattr(exc, "retryable", False)) or rate_limited
+        if rate_limited:
+            effective_code = "WAITING_PROVIDER_RATE_LIMIT_40203"
+        elif retryable:
+            effective_code = str(getattr(exc, "code", code))
+        else:
+            effective_code = code
         receipt = self.cas.put_json(
             {
                 "schema_version": PROVIDER_FAILURE_SCHEMA,
@@ -2817,6 +2830,8 @@ class ArtifactReadySourceBuilder:
         except Exception as exc:
             if _is_40203(exc):
                 raise MinuteProviderRateLimitTerminal("Tushare minute request reached terminal 40203") from exc
+            if isinstance(exc, ArtifactReadyProviderTerminal):
+                raise MinuteProviderTerminal("Tushare minute response is invalid") from exc
             raise MinuteProviderUnavailable("Tushare minute request failed") from exc
 
     def _fetch_tushare_index_rows(
@@ -2842,6 +2857,8 @@ class ArtifactReadySourceBuilder:
         except Exception as exc:
             if _is_40203(exc):
                 raise IndexProviderRateLimitTerminal("Tushare index request reached terminal 40203") from exc
+            if isinstance(exc, ArtifactReadyProviderTerminal):
+                raise
             raise IndexProviderUnavailable("Tushare index request failed") from exc
 
     def _fetch_tushare_adj_factor_rows(self, day: date) -> Sequence[Mapping[str, Any]]:
@@ -2862,7 +2879,7 @@ class ArtifactReadySourceBuilder:
             )
         except Exception as exc:
             if _is_40203(exc):
-                raise ArtifactReadyProviderTerminal("Tushare adj_factor request reached terminal 40203") from exc
+                raise ArtifactReadyProviderRateLimited("Tushare adj_factor request reached 40203") from exc
             if isinstance(exc, ArtifactReadyProviderTerminal):
                 raise
             raise ArtifactReadyProviderUnavailable("Tushare adj_factor request failed") from exc
@@ -2884,7 +2901,7 @@ class ArtifactReadySourceBuilder:
                 fields="ts_code,trade_date,open,high,low,close,vol,amount",
             )
             records = _bounded_tushare_records(
-                frame.loc[:, ["ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"]],
+                frame,
                 dataset="daily_pro_bar",
                 expected_columns=("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"),
                 date_column="trade_date",
@@ -2895,7 +2912,7 @@ class ArtifactReadySourceBuilder:
             return tuple(_normalize_tushare_daily_row(row, expected_code=ts_code) for row in records)
         except Exception as exc:
             if _is_40203(exc):
-                raise ArtifactReadyProviderTerminal("Tushare daily request reached terminal 40203") from exc
+                raise ArtifactReadyProviderRateLimited("Tushare daily request reached 40203") from exc
             if isinstance(exc, ArtifactReadyProviderTerminal):
                 raise
             raise ArtifactReadyProviderUnavailable("Tushare daily request failed") from exc
@@ -3629,6 +3646,7 @@ __all__ = [
     "ArtifactReadyIndexConflict",
     "ArtifactReadyMinuteConflict",
     "ArtifactReadyProviderTerminal",
+    "ArtifactReadyProviderRateLimited",
     "ArtifactReadyRecheckResult",
     "ArtifactReadySourceBuilder",
     "ArtifactReadySourceBundle",

@@ -295,9 +295,14 @@ class _View:
         return iter(self.rows[f"{descriptor['dataset']}:{descriptor['partition_key']}"])
 
 
+@pytest.mark.parametrize(
+    "terminal_exit_reason",
+    ["delist_event", "delisted", "delisting_confirmed", "paused_listing", "terminal"],
+)
 def test_terminal_daily_suffix_is_non_trading_coverage_but_interior_gap_blocks(
     dataset_profile,
     tmp_path,
+    terminal_exit_reason,
 ) -> None:
     canonical_profile = replace(dataset_profile, pit_authority_status="ACTIVE_CANONICAL")
     days = (date(2026, 7, 29), date(2026, 7, 30), date(2026, 7, 31))
@@ -309,7 +314,7 @@ def test_terminal_daily_suffix_is_non_trading_coverage_but_interior_gap_blocks(
                 "eligible_start": days[0],
                 "eligible_end": days[-1],
                 "entry_reason": None,
-                "exit_reason": "terminal",
+                "exit_reason": terminal_exit_reason,
             }
         ],
         universe_key=canonical_profile.universe_key,
@@ -862,9 +867,10 @@ def test_tushare_minute_row_window_bound_precedes_record_materialization(
     )
     builder._tushare._provider = SimpleNamespace(stk_mins=lambda **_kwargs: frame)
 
-    with pytest.raises(artifact_ready_module.MinuteProviderTerminal):
+    with pytest.raises(artifact_ready_module.MinuteProviderTerminal) as caught:
         builder._fetch_tushare_minute_rows(CODE, DAY)
 
+    assert caught.value.retryable is False
     assert frame.to_dict_called is False
 
 
@@ -879,13 +885,44 @@ def test_tushare_index_column_bound_precedes_record_materialization(
     frame = _TrackingFrame(pd.DataFrame([row]))
     builder._tushare._provider = SimpleNamespace(index_daily=lambda **_kwargs: frame)
 
-    with pytest.raises(artifact_ready_module.IndexProviderUnavailable):
+    with pytest.raises(artifact_ready_module.ArtifactReadyProviderTerminal):
         builder._fetch_tushare_index_rows(
             DOMESTIC_INDEX_DEFINITIONS[0],
             DAY,
             DAY,
         )
 
+    assert frame.to_dict_called is False
+
+
+def test_tushare_daily_column_bound_is_terminal_not_retryable(
+    dataset_profile,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import tushare as ts
+
+    store = ControlStore.initialize(tmp_path / "daily-provider-control")
+    builder = ArtifactReadySourceBuilder(dataset_profile, CASStore(store.root))
+    row = {
+        "ts_code": CODE,
+        "trade_date": DAY.strftime("%Y%m%d"),
+        "open": 10.0,
+        "high": 10.0,
+        "low": 10.0,
+        "close": 10.0,
+        "vol": 100.0,
+        "amount": 100.0,
+        "unexpected": "field",
+    }
+    frame = _TrackingFrame(pd.DataFrame([row]))
+    builder._tushare._provider = object()
+    monkeypatch.setattr(ts, "pro_bar", lambda **_kwargs: frame)
+
+    with pytest.raises(artifact_ready_module.ArtifactReadyProviderTerminal) as caught:
+        builder._fetch_tushare_daily_rows(CODE, DAY, DAY)
+
+    assert caught.value.retryable is False
     assert frame.to_dict_called is False
 
 
@@ -910,6 +947,26 @@ def test_tushare_adj_factor_row_bound_precedes_record_materialization(
         builder._fetch_tushare_adj_factor_rows(DAY)
 
     assert frame.to_dict_called is False
+
+
+def test_tushare_adj_factor_40203_is_retryable_waiting(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    class RateLimited(RuntimeError):
+        code = 40203
+
+    store = ControlStore.initialize(tmp_path / "adj-provider-rate-limit-control")
+    builder = ArtifactReadySourceBuilder(dataset_profile, CASStore(store.root))
+    builder._tushare._provider = SimpleNamespace(
+        adj_factor=lambda **_kwargs: (_ for _ in ()).throw(RateLimited("40203"))
+    )
+
+    with pytest.raises(artifact_ready_module.ArtifactReadyProviderRateLimited) as caught:
+        builder._fetch_tushare_adj_factor_rows(DAY)
+
+    assert caught.value.code == "WAITING_PROVIDER_RATE_LIMIT_40203"
+    assert caught.value.retryable is True
 
 
 def test_tushare_receipt_byte_bound_is_stream_counted_without_large_json_blob(

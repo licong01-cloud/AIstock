@@ -260,6 +260,21 @@ def test_both_provider_transport_failures_are_retryable() -> None:
     assert raised.value.retryable is True
 
 
+def test_tushare_fetch_terminal_error_is_not_reclassified_as_retryable() -> None:
+    builder = MinuteOverlayBuilder(
+        fetch_tdx_rows=lambda *_args: _tdx_rows()[:-1],
+        fetch_tushare_rows=lambda *_args: (_ for _ in ()).throw(
+            MinuteProviderTerminal("invalid bounded provider payload")
+        ),
+        policy=POLICY,
+    )
+
+    with pytest.raises(MinuteProviderTerminal) as raised:
+        builder.build_one(MinuteGap(CODE, DAY), _database())
+
+    assert raised.value.retryable is False
+
+
 def test_provider_concurrency_has_no_bypass_parameter() -> None:
     with pytest.raises(TypeError, match="unexpected keyword"):
         MinuteOverlayBuilder(

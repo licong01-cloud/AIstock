@@ -117,6 +117,9 @@ rtk python scripts/seed_dataset_refresh_audit.py --database production --mode pl
 plan 的 PIT 股票类查询只统计权威 PIT 代码，不能让 ETF、北交所或池外证券污染结果。`bak_basic` 合法空日
 记为 `empty_valid`；`index_daily` 精确缺失键和 `stk_limit` 缺失/不完整键记为
 `candidate_repairable`，交给候选内 provider/规则层闭环；其他 required dense 内部缺口仍硬阻断。
+`stk_limit` 的三列 audit 非空要求与 raw CAS 允许修复列为空是两个层次：raw partial 行必须进入
+artifact-ready completion，最终只允许完整的 frozen-PIT 股票日进入 Qlib normalizer；不得在 source
+sealer 提前阻断，也不得把非 PIT partial 行泄漏到构建输出。
 
 生产 apply 是独立 target-specific DML 授权，并强制读取成功 DEV transactional receipt：
 

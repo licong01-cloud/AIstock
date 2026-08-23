@@ -192,7 +192,7 @@ def test_dataset_release_audit_seed_specs_match_registered_source_authority():
     assert all(audit_seed.AUTHORITY in spec.eligible_sources for spec in audit_seed.SPECS.values())
     assert all(
         set(audit_seed.SPECS[source.audit_dataset].non_null_columns)
-        == set(source.non_null_value_columns).intersection(source.value_columns)
+        == set(source.audit_non_null_value_columns)
         for source in audit_seed.PRODUCTION_QUERY_SPECS.values()
         if source.audit_dataset is not None
     )
@@ -201,6 +201,11 @@ def test_dataset_release_audit_seed_specs_match_registered_source_authority():
     assert audit_seed.SPECS["suspend_d"].sparse_ok is True
     assert audit_seed.SPECS["index_daily"].candidate_repairable is True
     assert audit_seed.SPECS["stk_limit"].candidate_repairable is True
+    assert audit_seed.SPECS["stk_limit"].non_null_columns == (
+        "pre_close",
+        "up_limit",
+        "down_limit",
+    )
     assert audit_seed.SPECS["trading_calendar"].table_identity == "market.trading_calendar"
 
 

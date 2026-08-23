@@ -82,6 +82,9 @@ sealed kline_daily_raw + sealed adj_factor        │
 - `ArtifactReadySourceBuilder.build(...)`：生成 candidate-local 派生 CAS 和 component manifest。
 - `ArtifactReadyBuildSource.ordered_partitions(...)`：向 build stage 暴露已验证的有效源流。
 - `_merge_stk_limit_completion(...)`：完整数据库行优先；只允许经过逐字段一致性验证的不完整行补全。
+- `SourceQuerySpec.audit_non_null_value_columns`：物理 audit 继续识别三列不完整行；raw source CAS 允许这些
+  已登记 repair columns 为 NULL，使其能够到达 artifact-ready overlay，最终 build source 只向 Qlib
+  暴露完整的 canonical PIT 股票日。
 - `FrozenPitSnapshot.spans`：唯一候选股票日范围，不使用当前 universe 或当前 ST 名称。
 - `CanonicalStockTransformer.transform_daily/transform_minute`：继续消费完整 `stk_limit`，不承载推导策略。
 
@@ -242,7 +245,7 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 | F-004 | typed `no_daily_limit` decision | `backend/tests/dataset_release/test_a_share_limit_rule.py` | verified | none |
 | F-005 | `derive_limit_prices` Decimal/tick 实现 | `backend/tests/dataset_release/test_a_share_limit_rule.py` | verified | none |
 | F-006 | `backend/services/dataset_release/stk_limit_overlay.py` reference state | `backend/tests/dataset_release/test_stk_limit_overlay.py` | verified | none |
-| F-007 | missing-only overlay 与合并冲突门禁 | `backend/tests/dataset_release/test_stk_limit_overlay.py`; `backend/tests/dataset_release/test_artifact_ready_build_source.py` | verified | none |
+| F-007 | raw nullable repair contract、missing/incomplete overlay 与合并冲突门禁 | `backend/tests/dataset_release/test_source_authority.py`; `backend/tests/dataset_release/test_stk_limit_overlay.py`; `backend/tests/dataset_release/test_artifact_ready_build_source.py` | verified | none |
 | F-008 | artifact-ready CAS receipt/identity | `backend/tests/dataset_release/test_artifact_ready_source.py` | verified | none |
 | F-009 | `ArtifactReadyBuildSource._effective_limit_rows` | `backend/tests/dataset_release/test_artifact_ready_build_source.py`; `backend/tests/dataset_release/test_canonical_stock_transformer.py` | verified | none |
 | F-010 | canonical PIT span 内明确 `is_st=False`；独立计算器覆盖 ST | `backend/tests/dataset_release/test_a_share_limit_rule.py`; `backend/tests/dataset_release/test_stk_limit_overlay.py` | verified | none |
@@ -277,3 +280,5 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 | R8 | 通用 backend fail-closed 分类会遗漏常驻 dataset Worker 的代码重载要求 | 只登记本功能实际进入 Worker 闭包的十个文件为 `worker-scheduler`；保留其他 backend/dataset_release 文件原分类 | resolved |
 | R9 | 每月分区内保存全部股票的 limit 键虽有界但仍高于必要峰值 | limit/daily/adj 三路按代码流式归并；内存仅保留 PIT 滚动状态、单代码单月行及受硬上限约束的实际 overlay | resolved |
 | R10 | 全 DEV 历史镜像、合法空日和候选可补缺口被误当成永久阻断 | DEV 改为事务内单行 DML 回滚验证；生产全范围只读 plan；引入自动/可重试/硬阻断三层语义 | resolved |
+| R11 | source sealer 仍要求 raw `stk_limit` 三列非空，会在不完整行到达 overlay 前阻断；同时非 PIT 历史 partial 行可能进入最终 normalizer | 拆分 audit 非空契约与 raw CAS nullable repair contract；有效源流在 completion 后按 frozen PIT span 过滤，PIT 行仍必须完整 | resolved |
+| R12 | bounded provider payload 的 schema/row-limit 错误会被外层包装成可重试网络失败；canonical terminal reason 枚举遗漏 `delist_event/paused_listing` | 保留 invalid payload 的 hard typed error，仅将 40203/transport 标为 retryable；terminal suffix 与 canonical builder 的终止原因集合对齐 | resolved |

@@ -297,3 +297,52 @@ def test_effective_limit_rows_complete_exact_partial_database_key(tmp_path) -> N
     database[0]["up_limit"] = "10.99"
     with pytest.raises(ArtifactReadyBuildSourceError, match="conflicts with database value"):
         list(source._effective_limit_rows(Component.DAILY_BIN, {"partition_key": partition_key}, database))
+
+
+def test_effective_limit_rows_ignore_partial_database_rows_outside_pit(tmp_path) -> None:
+    store = ControlStore.initialize(tmp_path / "control-limit-pit-filter")
+    cas = CASStore(store.root)
+    day = date(2024, 7, 23)
+    pit = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": "600001.SH",
+                "eligible_start": day,
+                "eligible_end": day,
+                "entry_reason": "eligible",
+                "exit_reason": None,
+            }
+        ],
+        universe_key="shsz_st_pit_active_v1",
+        rule_version="st_pub_next_trade_restore_active_l_v1",
+        scope_start=day,
+        cutoff=day,
+        state_identity="pit-filter-fixture",
+        source_fingerprint_sha256="a" * 64,
+        parameter_hash="b" * 64,
+    )
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source.cas = cas
+    source.pit_snapshot = pit
+    source.profile = SimpleNamespace(pit_authority_status="ACTIVE_CANONICAL")
+    source.component_manifests = {Component.DAILY_BIN: {"partitions": []}}
+    database = [
+        {
+            "ts_code": "600001.SH",
+            "trade_date": date(2024, 7, 22),
+            "pre_close": None,
+            "up_limit": "11.00",
+            "down_limit": "9.00",
+        },
+        {
+            "ts_code": "600001.SH",
+            "trade_date": day,
+            "pre_close": "10.00",
+            "up_limit": "11.00",
+            "down_limit": "9.00",
+        },
+    ]
+
+    assert list(
+        source._effective_limit_rows(Component.DAILY_BIN, {"partition_key": f"{day}_{day}"}, database)
+    ) == [database[1]]

@@ -507,7 +507,7 @@ class ArtifactReadyBuildSource:
             and item.get("partition_key") == str(descriptor["partition_key"])
         ]
         if not matches:
-            yield from database_rows
+            yield from _filter_stk_limit_rows_to_pit(database_rows, self.pit_snapshot)
             return
         if len(matches) != 1:
             raise ArtifactReadyBuildSourceError("stk_limit rule overlay entry is ambiguous")
@@ -528,10 +528,13 @@ class ArtifactReadyBuildSource:
             or any(not isinstance(row, Mapping) for row in overlay)
         ):
             raise ArtifactReadyBuildSourceError("stk_limit rule overlay receipt is invalid")
-        yield from _merge_stk_limit_completion(
-            database_rows,
-            (dict(row) for row in overlay),
-            expected_completion_rows=int(receipt["database_completion_rows"]),
+        yield from _filter_stk_limit_rows_to_pit(
+            _merge_stk_limit_completion(
+                database_rows,
+                (dict(row) for row in overlay),
+                expected_completion_rows=int(receipt["database_completion_rows"]),
+            ),
+            self.pit_snapshot,
         )
 
     def _effective_minute_rows(
@@ -720,6 +723,35 @@ def _require_limit_completion_match(
             raise ArtifactReadyBuildSourceError("stk_limit completion conflicts with database value")
     if missing == 0:
         raise ArtifactReadyBuildSourceError("stk_limit overlay attempts to override a complete database key")
+
+
+def _filter_stk_limit_rows_to_pit(
+    rows: Iterable[Mapping[str, Any]],
+    pit_snapshot: FrozenPitSnapshot,
+) -> Iterator[Mapping[str, Any]]:
+    """Expose only canonical PIT stock-days after validating global order.
+
+    Sealed ``stk_limit`` rows intentionally retain non-PIT history so the
+    artifact stage can prove source identity.  Nullable repair fields are
+    allowed there, but only PIT rows may enter the final Qlib normalizer.
+    """
+
+    mutable_ranges: dict[str, list[tuple[date, date]]] = {}
+    for span in pit_snapshot.spans:
+        mutable_ranges.setdefault(str(span.ts_code).upper(), []).append(
+            (span.eligible_start, span.eligible_end)
+        )
+    ranges_by_code: dict[str, tuple[tuple[date, date], ...]] = {
+        code: tuple(sorted(ranges)) for code, ranges in mutable_ranges.items()
+    }
+    previous: tuple[str, date] | None = None
+    for row in rows:
+        key = (str(row.get("ts_code", "")).upper(), _as_date(row.get("trade_date")))
+        if previous is not None and key <= previous:
+            raise ArtifactReadyBuildSourceError("stk_limit effective rows are duplicated or unordered")
+        previous = key
+        if any(start <= key[1] <= end for start, end in ranges_by_code.get(key[0], ())):
+            yield row
 
 
 def _close_iterator(iterator: Iterator[Mapping[str, Any]]) -> None:

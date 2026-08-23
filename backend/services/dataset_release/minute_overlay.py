@@ -264,6 +264,8 @@ class MinuteOverlayBuilder:
 
         try:
             raw_tushare = self._provider_call(self.fetch_tushare_rows, gap.ts_code, gap.trade_date)
+        except MinuteProviderTerminal:
+            raise
         except Exception as exc:
             if _is_40203(exc):
                 raise MinuteProviderRateLimitTerminal(

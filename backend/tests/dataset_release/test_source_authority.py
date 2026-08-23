@@ -423,6 +423,41 @@ def test_production_source_allowlist_uses_semantic_projection_and_code_major_ord
     )
     assert PRODUCTION_QUERY_SPECS["moneyflow_ts"].audit_dataset == ("stock_moneyflow_ts")
     assert "source_row.is_trading = TRUE" in PRODUCTION_QUERY_SPECS["trading_calendar"].sql
+    limit_spec = PRODUCTION_QUERY_SPECS["stk_limit"]
+    assert limit_spec.non_null_value_columns == ()
+    assert limit_spec.audit_non_null_value_columns == (
+        "pre_close",
+        "up_limit",
+        "down_limit",
+    )
+
+
+def test_stk_limit_raw_source_accepts_only_registered_nullable_repair_columns() -> None:
+    query = PRODUCTION_QUERY_SPECS["stk_limit"]
+    table = SourceTableSchema(query.table_identity, query.required_columns)
+    spec = source_authority_module._query_partition_spec(
+        query,
+        "2024-07-01_2024-07-31",
+        table,
+    )
+    payload = {
+        "ts_code": "600001.SH",
+        "trade_date": "2024-07-23",
+        "pre_close": None,
+        "up_limit": 11.0,
+        "down_limit": 9.0,
+    }
+
+    observed = source_authority_module._validate_query_row(
+        {
+            "row_key": json.dumps([payload["ts_code"], payload["trade_date"]]),
+            "row_payload": json.dumps(payload),
+        },
+        query,
+        spec,
+    )
+
+    assert json.loads(observed["row_payload"]) == payload
 
 
 def test_source_monthly_leaves_prove_june_to_july_moving_window_prefix(

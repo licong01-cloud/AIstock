@@ -84,7 +84,9 @@
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "fresh_process_evidence": [
       "A fresh Python test process imported the patched dataset-release source/audit/overlay closure and passed the 119-test BUG-1157 matrix; the exact runtime classifier test proved the changed closure maps only to worker-scheduler.",
-      "python -c import-dataset-release-closure -> PASS fresh-import-pass at 891d6d9fde275278a5b5108ed729f8c2f105d4d1"
+      "python -c import-dataset-release-closure -> PASS fresh-import-pass at 891d6d9fde275278a5b5108ed729f8c2f105d4d1",
+      "fresh Python imported source/audit/artifact/overlay closure and seed_dataset_refresh_audit.py --help -> passed",
+      "fresh process import -> passed"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",

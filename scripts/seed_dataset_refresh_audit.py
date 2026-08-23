@@ -183,9 +183,7 @@ def _registered_specs() -> Mapping[str, AuditSeedSpec]:
         dataset = str(source.audit_dataset)
         if dataset in result:
             raise AuditSeedError(f"{dataset}: duplicate source-audit registration")
-        physical_non_null_columns = tuple(
-            column for column in source.non_null_value_columns if column in source.value_columns
-        )
+        physical_non_null_columns = tuple(source.audit_non_null_value_columns)
         if not all(
             _IDENTIFIER.fullmatch(value)
             for value in (

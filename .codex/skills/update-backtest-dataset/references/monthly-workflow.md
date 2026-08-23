@@ -204,3 +204,7 @@ production_activation=not_requested
 ```
 
 This remains candidate-only; it does not authorize reading or rebuilding an older candidate to manufacture acceptance evidence.
+
+`stk_limit` 不完整行采用分层合同：physical audit 仍检查 `pre_close/up_limit/down_limit`，raw source CAS
+允许已登记 repair columns 暂时为空，artifact-ready overlay 完成并验证 PIT 键后才向构建器暴露。
+source sealer 不得提前拒绝可修复 partial，最终 Qlib 输入也不得包含任何 partial。
