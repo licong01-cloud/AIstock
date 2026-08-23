@@ -594,6 +594,8 @@ async function mockAdvisoryApis(page: Page, options: {
   modelShadowByProgramId?: Record<string, JsonObject>;
   forwardRunsByProgramId?: Record<string, JsonObject[]>;
   forwardDetailsById?: Record<string, JsonObject>;
+  forwardModelMetricsByProgramId?: Record<string, JsonObject>;
+  forwardModelMetricsDelayMs?: number;
   leaderboardDelayMs?: number;
   detailDelayMs?: number;
 } = {}) {
@@ -721,6 +723,22 @@ async function mockAdvisoryApis(page: Page, options: {
     const currentRouteProgramId = routeProgramId(path);
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/forward-runs`) && method === "GET") {
       return json(route, { ok: true, forward_runs: options.forwardRunsByProgramId?.[currentRouteProgramId] || [] });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/forward-model-metrics`) && method === "GET") {
+      await wait(options.forwardModelMetricsDelayMs);
+      return json(route, {
+        ok: true,
+        schema_version: "advisory_forward_model_metrics_response_v1",
+        program_id: currentRouteProgramId,
+        status: "EVIDENCE_IMMATURE",
+        observation_count: 0,
+        due_observation_count: 0,
+        next_maturity_trade_date: null,
+        reason_code: null,
+        error: null,
+        evaluation: null,
+        ...(options.forwardModelMetricsByProgramId?.[currentRouteProgramId] || {}),
+      });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/active-pool`) && method === "GET") {
       await wait(options.detailDelayMs);
@@ -2049,6 +2067,18 @@ test("Advisory page exposes initial list generation when a new program has no li
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/returns`) && method === "GET") {
       return json(route, { ok: true, returns: [], metrics: {} });
     }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/forward-model-metrics`) && method === "GET") {
+      return json(route, {
+        ok: true,
+        schema_version: "advisory_forward_model_metrics_response_v1",
+        program_id: newProgramId,
+        status: "EVIDENCE_IMMATURE",
+        observation_count: 0,
+        due_observation_count: 0,
+        next_maturity_trade_date: null,
+        evaluation: null,
+      });
+    }
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/reviews/preview`) && method === "POST") {
       const body = request.postDataJSON() as JsonObject;
       reviewBodies.push(body);
@@ -2144,6 +2174,7 @@ test("Advisory forward panel renders the frozen observation instead of the on-de
   };
   await mockShellApis(page);
   await mockAdvisoryApis(page, {
+    forwardModelMetricsDelayMs: 1500,
     forwardRunsByProgramId: { [PROGRAM_ID]: [forwardRun] },
     forwardDetailsById: {
       advfwd_ui_20260813: {
@@ -2163,17 +2194,48 @@ test("Advisory forward panel renders the frozen observation instead of the on-de
         },
       },
     },
+    forwardModelMetricsByProgramId: {
+      [PROGRAM_ID]: {
+        status: "READY",
+        observation_count: 4,
+        due_observation_count: 2,
+        evaluation: {
+          evaluation_id: "adveval_ui",
+          model_descriptor_sha256: "d".repeat(64),
+          bundle_id: "e".repeat(64),
+          first_target_trade_date: "2026-08-13",
+          as_of_trade_date: "2026-09-10",
+          last_due_maturity_trade_date: "2026-09-10",
+          observation_count: 4,
+          due_observation_count: 2,
+          matured_outcome_count: 2,
+          metrics_json: {
+            exited_episode_count: 3,
+            completed_episode_hit_rate: 2 / 3,
+            mean_daily_net_return_bps: 12.5,
+            mean_daily_net_excess_return_bps: 5.5,
+            maximum_drawdown: -0.021,
+            mean_turnover_fraction: 0.2,
+            coverage: 1,
+          },
+        },
+      },
+    },
   });
 
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/paper-v2/advisory");
   await expect(page.getByTestId("advisory-forward-latest")).toContainText("目标日 2026-08-13");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).toContainText("LOADING");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).not.toContainText("EVIDENCE_IMMATURE");
   await expect(page.getByTestId("advisory-forward-model-identity")).toContainText("Top5 2/2");
   await expect(page.getByTestId("advisory-forward-child-status")).toContainText("收益/周期 EXPERIMENTAL_SHADOW");
   await expect(page.getByTestId("advisory-forward-prediction-row")).toHaveCount(2);
   await expect(page.getByTestId("advisory-forward-prediction-table")).toContainText("000002.SZ");
   await expect(page.getByTestId("advisory-forward-prediction-table")).toContainText("3-10日");
   await expect(page.getByTestId("advisory-forward-prediction-table")).toContainText("9.90 - 10.10");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).toContainText("READY");
+  await expect(page.getByTestId("advisory-forward-model-metrics")).toContainText("成熟 observation 2/2");
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
   expect(pageErrors).toEqual([]);

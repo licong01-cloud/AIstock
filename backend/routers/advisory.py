@@ -640,6 +640,17 @@ def program_forward_runs(
         _raise_http(exc)
 
 
+@router.get("/programs/{program_id}/forward-model-metrics")
+def program_forward_model_metrics(
+    program_id: str,
+    service: AdvisoryForwardService = Depends(get_advisory_forward_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.model_metrics(program_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.post("/programs")
 def create_program(
     req: AdvisoryProgramCreateRequest,
