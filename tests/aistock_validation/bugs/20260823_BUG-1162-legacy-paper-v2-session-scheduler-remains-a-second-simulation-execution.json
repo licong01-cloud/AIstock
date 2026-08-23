@@ -179,7 +179,10 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "database_readback_ref": "not_required",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked BUG-1162 backend lifespan and router sources and passed 10 startup/retired-route tests; no production process, database, broker, session, or thread mutation.",
+      "Fresh nox process loaded the tracked BUG-1162 Paper v2 sources and passed paper_v2_backend: 1129 passed, 3 skipped, 2 expected xfails; no production process control."
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
