@@ -160,6 +160,7 @@ from backend.services.hmm_risk.security_identity import (  # noqa: E402
 )
 from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest  # noqa: E402
 from backend.services.hmm_risk.stock_fact_repository import (  # noqa: E402
+    MEMBER_CLASSIFICATION_CTES,
     PostgresStockFactReader,
     StockFactSourceSpec,
     load_direct_daily_aggregates,
@@ -630,8 +631,8 @@ def _c010_expected_opportunity_receipt(
     alias_rows = security_identity_manifest.alias_rows("market.kline_daily_raw")
     with conn.cursor() as cursor:
         cursor.execute(
-            """
-            WITH price_alias AS (
+            f"""
+            WITH {MEMBER_CLASSIFICATION_CTES}, price_alias AS (
               SELECT canonical_ts_code,source_ts_code,effective_start::date,effective_end::date
               FROM jsonb_to_recordset(%s::jsonb) AS item(
                 canonical_ts_code text,source_ts_code text,effective_start text,effective_end text,
@@ -658,10 +659,10 @@ def _c010_expected_opportunity_receipt(
             JOIN market.sw_index_member member
               ON member.ts_code=price.canonical_ts_code AND member.in_date<=price.trade_date
              AND (member.out_date IS NULL OR member.out_date>=price.trade_date)
-              JOIN market.sw_index_classify l1
-                ON l1.level='L1' AND member.l1_code IN (l1.index_code,l1.industry_code)
-              JOIN market.sw_index_classify l2
-                ON l2.level='L2' AND member.l2_code IN (l2.index_code,l2.industry_code)
+              JOIN l2_owner owner
+                ON owner.l2_code=member.l2_code AND owner.canonical_l1_count=1
+              JOIN canonical_l1_catalog l1 ON l1.index_code=owner.canonical_l1_code
+              JOIN l2_catalog l2 ON l2.index_code=member.l2_code
             ), grouped AS (
               SELECT canonical_ts_code,trade_date,
                      jsonb_agg(DISTINCT jsonb_build_object(
@@ -787,8 +788,8 @@ def _c010_provider_absence_partition(
         )
     with conn.cursor() as cursor:
         cursor.execute(
-            """
-            WITH requested AS (
+            f"""
+            WITH {MEMBER_CLASSIFICATION_CTES}, requested AS (
               SELECT canonical_ts_code,provider_source_ts_code,price_source_ts_code,trade_date::date trade_date
               FROM jsonb_to_recordset(%s::jsonb) AS item(
                 canonical_ts_code text,provider_source_ts_code text,price_source_ts_code text,trade_date text
@@ -810,10 +811,10 @@ def _c010_provider_absence_partition(
                        'l1_code',l1.index_code,'l1_name',l1.industry_name,
                        'l2_code',l2.index_code,'l2_name',l2.industry_name))
                      FROM market.sw_index_member member
-                     LEFT JOIN market.sw_index_classify l1
-                       ON l1.level='L1' AND member.l1_code IN (l1.index_code,l1.industry_code)
-                     LEFT JOIN market.sw_index_classify l2
-                       ON l2.level='L2' AND member.l2_code IN (l2.index_code,l2.industry_code)
+                     JOIN l2_owner owner
+                       ON owner.l2_code=member.l2_code AND owner.canonical_l1_count=1
+                     JOIN canonical_l1_catalog l1 ON l1.index_code=owner.canonical_l1_code
+                     JOIN l2_catalog l2 ON l2.index_code=member.l2_code
                      WHERE member.ts_code=r.canonical_ts_code AND member.in_date<=r.trade_date
                        AND (member.out_date IS NULL OR member.out_date>=r.trade_date)), '[]'::jsonb)
             FROM requested r ORDER BY r.canonical_ts_code,r.trade_date

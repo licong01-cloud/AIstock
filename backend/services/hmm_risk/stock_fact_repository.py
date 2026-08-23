@@ -30,7 +30,7 @@ _CANONICAL_SW_L1_CODE = re.compile(r"^801\d{3}\.SI$")
 _INDUSTRY_SW_L1_CODE = re.compile(r"^\d{6}$")
 
 
-_MEMBER_CLASSIFICATION_CTES = """
+MEMBER_CLASSIFICATION_CTES = """
 canonical_l1_catalog AS (
   SELECT l1_code index_code,min(BTRIM(l1_name)) industry_name
   FROM market.sw_index_member
@@ -476,7 +476,7 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH {_MEMBER_CLASSIFICATION_CTES}, calendar_history AS (
+            WITH {MEMBER_CLASSIFICATION_CTES}, calendar_history AS (
               SELECT cal_date::date trade_date,
                      lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
               FROM market.trading_calendar
@@ -667,7 +667,7 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH {_MEMBER_CLASSIFICATION_CTES}, calendar_history AS (
+            WITH {MEMBER_CLASSIFICATION_CTES}, calendar_history AS (
               SELECT cal_date::date trade_date,
                      lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
               FROM market.trading_calendar
@@ -1095,7 +1095,7 @@ class PostgresStockFactReader:
         cursor.itersize = fetch_size
         cursor.execute(
             f"""
-            WITH {_MEMBER_CLASSIFICATION_CTES}, calendar AS (
+            WITH {MEMBER_CLASSIFICATION_CTES}, calendar AS (
               SELECT cal_date::date trade_date FROM market.trading_calendar
               WHERE is_trading=true AND cal_date BETWEEN %s AND %s
             )
@@ -1200,7 +1200,7 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH {_MEMBER_CLASSIFICATION_CTES}, source_bounds AS (
+            WITH {MEMBER_CLASSIFICATION_CTES}, source_bounds AS (
               SELECT LEAST(%s::date,COALESCE(min(eligible_start),%s::date)) history_start,
                      %s::date history_end
               FROM market.stock_universe_pit_spans WHERE universe_key=%s
@@ -1468,7 +1468,7 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH {_MEMBER_CLASSIFICATION_CTES}, source_bounds AS (
+            WITH {MEMBER_CLASSIFICATION_CTES}, source_bounds AS (
               SELECT LEAST(%s::date,COALESCE(min(eligible_start),%s::date)) history_start,
                      %s::date history_end
               FROM market.stock_universe_pit_spans WHERE universe_key=%s
