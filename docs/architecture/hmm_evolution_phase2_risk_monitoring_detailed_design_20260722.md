@@ -3658,6 +3658,7 @@ replay request的`outputs`对象必须精确包含且只包含`acceptance_core_p
 六者必须互异并处于request声明的artifact root内。CLI在HR1模式增加`--acceptance-core-output|--model-output|--bundle-output`，现有`--output|--child-dir`继续使用；所有CLI实参必须与request逐项相等，
 failure path只由request派生且不得与成功输出重合。任一路径缺失、额外、自哈希改写、越界或CLI漂移均在fit前fail closed。
 父CLI以`--prepare-request --source-authority <path>`执行唯一正式request制备：只读取source authority中的`source`对象，由程序固定development end、计算calendar/fold、dataset/mapping/database、C-010 identity和全部输出authority后append-only写request；禁止人工拼装request或新增第二训练入口。
+当前正式制备允许`source-authority`为显式旧版`source`对象，或仓库跟踪的`pit_v2_source_freeze_receipt_v2`；后者必须逐项匹配canonical v2 profile路径及文件SHA、`aistock_equity_pit_canonical_v2`与`shsz_a_252td_st_delist_asof_v2`常量，并由当前tracked security/provider manifest计算canonical hash。禁止按数据库“最新一行”自动选universe，source preflight失败必须在0 fit回执中保留安全、可操作的底层reason message。
 正式写入顺序为replay acceptance core → component v2 → bundle v2 → final replay acceptance；core不含循环依赖的最终SHA，component/bundle绑定core，final再绑定实际component/bundle SHA。
 所有输出repo-external、绝对路径、append-only、collision-safe、canonical JSON duplicate-key/NaN拒绝，并从磁盘双向回读闭合。任何writer/readback失败保留已发生side effect，
 未闭合artifact不可消费；`database_write=false,runtime_action=false,ready_write=false`。
