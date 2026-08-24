@@ -221,11 +221,16 @@ class AutoEvolutionScheduler:
         self._log_stream_stop_requested: set[str] = set()
         self._resource_session_wait_tasks: set[asyncio.Task] = set()
         self._retry_resume_tasks: dict[str, asyncio.Task] = {}
+        self._zombie_resume_tasks: dict[str, asyncio.Task] = {}
         self._resource_schema_not_ready_logged = False
 
     def _ensure_retry_resume_state(self) -> None:
         if not hasattr(self, "_retry_resume_tasks"):
             self._retry_resume_tasks = {}
+
+    def _ensure_zombie_resume_state(self) -> None:
+        if not hasattr(self, "_zombie_resume_tasks"):
+            self._zombie_resume_tasks = {}
 
     @staticmethod
     def _retry_submission_metadata(config: Any) -> Dict[str, Any] | None:
@@ -293,6 +298,41 @@ class AutoEvolutionScheduler:
                 )
 
         task.add_done_callback(_done)
+
+    def _track_zombie_resume_task(self, task_id: str, task: asyncio.Task) -> None:
+        self._ensure_zombie_resume_state()
+        self._zombie_resume_tasks[task_id] = task
+
+        def _done(completed: asyncio.Task) -> None:
+            if self._zombie_resume_tasks.get(task_id) is completed:
+                self._zombie_resume_tasks.pop(task_id, None)
+            if completed.cancelled():
+                logger.error("QE zombie task recovery was cancelled: task=%s", task_id)
+                return
+            error = completed.exception()
+            if error is not None:
+                logger.error(
+                    "QE zombie task recovery failed: task=%s error=%s",
+                    task_id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+
+    def _schedule_zombie_recovery(self, task_id: str) -> bool:
+        """Schedule one process-local recovery attempt for a zombie task."""
+
+        self._ensure_zombie_resume_state()
+        active = self._zombie_resume_tasks.get(task_id)
+        if active is not None and not active.done():
+            return False
+        task = asyncio.create_task(
+            self._safe_submit_or_fail(task_id),
+            name=f"qe-zombie-recovery-{task_id}",
+        )
+        self._track_zombie_resume_task(task_id, task)
+        return True
 
     @staticmethod
     def _set_retry_submission_state(
@@ -2860,8 +2900,17 @@ class AutoEvolutionScheduler:
 
             # F5: 处理僵尸 task — 尝试提交下一轮
             for row in zombie_tasks:
-                logger.warning(f"Zombie task detected: {row['task_id']} is running but has no active loops, attempting recovery")
-                asyncio.create_task(self._safe_submit_or_fail(row['task_id']))
+                task_id = str(row["task_id"])
+                if self._schedule_zombie_recovery(task_id):
+                    logger.warning(
+                        "Zombie task detected and recovery scheduled: task=%s",
+                        task_id,
+                    )
+                else:
+                    logger.info(
+                        "Zombie task recovery already in flight: task=%s",
+                        task_id,
+                    )
 
             self._ensure_retry_resume_state()
             for row in pending_retry_loops:

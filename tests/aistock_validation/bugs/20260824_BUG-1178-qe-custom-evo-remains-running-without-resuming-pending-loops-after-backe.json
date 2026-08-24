@@ -2,7 +2,11 @@
   "actual": "MA-E19R had 12 configured serial loops. backend-main restarted at 11:00:22 while Loop3 was active; Loop3 callback completed at 11:02:55, but the new process retained task status=running with submitted_loop_count=3 and never submitted Loop4. Node remained healthy and idle, resume_allowed=true, and no running loop existed. Require startup/reconciliation recovery to resume exactly once from the first unsubmitted custom-evo loop, preserve completed loops, avoid duplicate submissions, and fail closed on ambiguous active-loop state.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260824_BUG-1178-qe-custom-evo-remains-running-without-resuming-pending-loops-after-backe.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/qe_reconciliation_coordinator.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/tests/unified_engine/test_qe_reconciliation_coordinator.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1178",
@@ -26,7 +30,14 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260824_BUG-1178-qe-custom-evo-remains-running-without-resuming-pending-loops-after-backe.json",
+      "backend/services/quantevolver/qe_reconciliation_coordinator.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_reconciliation_coordinator.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +47,14 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260824_BUG-1178-qe-custom-evo-remains-running-without-resuming-pending-loops-after-backe.json",
+      "backend/services/quantevolver/qe_reconciliation_coordinator.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_reconciliation_coordinator.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py"
+    ]
   },
   "first_seen_at": "2026-08-24T10:50:14.939640Z",
   "fix_branch": null,
@@ -54,22 +72,35 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "validation_module_registry_l0",
+    "qe_read_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process imported tracked qe_reconciliation_coordinator and qe_evolution_service sources; verified zombie-task due discovery and process-local single-flight recovery -> passed",
+      "Fresh pytest process imported tracked qe_reconciliation_coordinator and qe_evolution_service sources; zombie due discovery and process-local single-flight recovery passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -78,6 +109,13 @@
     "fingerprint": "619f5a2e43b4975a2da3a643",
     "source_event_id": "FE-20260824-619f5a2e43b4"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qe_reconciliation_coordinator.py -q -> 21 passed",
+    "python -m pytest selected custom-evo recovery/config truth nodeids -q -> 3 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s qe_read_backend -> 34 passed",
+    "python -m ruff check changed Python files; python -m py_compile changed runtime sources; git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -172,5 +210,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_pr"
 }

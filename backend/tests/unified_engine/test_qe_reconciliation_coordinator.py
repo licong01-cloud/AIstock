@@ -437,6 +437,57 @@ def test_due_probe_escapes_like_percent_for_psycopg2_binding(monkeypatch) -> Non
     assert not due.any_due
 
 
+def test_evolution_due_probe_includes_running_task_without_active_loop(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params):  # type: ignore[no-untyped-def]
+            captured["sql"] = " ".join(sql.split())
+
+        def fetchone(self):
+            return {
+                "reservation": False,
+                "experiment": False,
+                "evolution": True,
+                "long_trend": False,
+                "terminal_resource_session": False,
+                "resource_states": {},
+                "loop_states": {},
+            }
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return Cursor()
+
+    config = QEReconciliationConfig(
+        enabled_scopes=frozenset({QEReconciliationScope.EVOLUTION}),
+        family_intervals={scope: 60 for scope in QEReconciliationScope},
+        experiment_batch_size=1,
+    )
+    coordinator = QEReconciliationCoordinator(
+        config=config,
+        wake_bus=QEReconciliationWakeBus(),
+    )
+    monkeypatch.setattr(module, "get_conn", lambda: Connection())
+
+    due = coordinator._load_due_work()
+
+    assert due.evolution is True
+    assert "FROM qe_evolution_tasks t WHERE t.status = 'running'" in captured["sql"]
+
+
 async def _async_count(calls: Counter[str], key: str) -> None:
     calls[key] += 1
 

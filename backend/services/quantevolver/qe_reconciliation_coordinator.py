@@ -905,10 +905,8 @@ class QEReconciliationCoordinator:
         )
         evolution_due = (
             """EXISTS (
-                SELECT 1 FROM qe_evolution_loops l
-                JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                SELECT 1 FROM qe_evolution_tasks t
                 WHERE t.status = 'running'
-                  AND l.status IN ('pending', 'running', 'processing')
             )"""
             if self._scope_enabled(QEReconciliationScope.EVOLUTION)
             else "FALSE"
