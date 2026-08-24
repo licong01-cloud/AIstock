@@ -1,5 +1,5 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-08-22"
+updated_at: "2026-08-24"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
@@ -58,10 +58,14 @@ targets:
     startup_budget_seconds: 120
   worker-scheduler:
     runtime_kind: worker_scheduler
+    probe_mode: http
     source_globs:
       - backend/services/dataset_release/a_share_limit_rule.py
       - backend/services/dataset_release/artifact_ready_build_source.py
       - backend/services/dataset_release/artifact_ready_source.py
+      - backend/services/dataset_release/index_sources.py
+      - backend/services/dataset_release/minute_overlay.py
+      - backend/services/dataset_release/source_authority.py
       - backend/services/dataset_release/component_artifact_manifest.py
       - backend/services/dataset_release/component_manifest_producer.py
       - backend/services/dataset_release/mixed_planner.py
@@ -79,4 +83,28 @@ targets:
       identity_ref: bug_record.runtime_contract.identity_ref
       business_smoke_ref: bug_record.runtime_contract.business_smoke_ref
       database_readback_ref: bug_record.runtime_contract.database_readback_ref
+    probe_routes:
+      - route_id: dataset_release_worker_heartbeat
+        source_globs:
+          - backend/services/dataset_release/a_share_limit_rule.py
+          - backend/services/dataset_release/artifact_ready_build_source.py
+          - backend/services/dataset_release/artifact_ready_source.py
+          - backend/services/dataset_release/index_sources.py
+          - backend/services/dataset_release/minute_overlay.py
+          - backend/services/dataset_release/source_authority.py
+          - backend/services/dataset_release/component_artifact_manifest.py
+          - backend/services/dataset_release/component_manifest_producer.py
+          - backend/services/dataset_release/mixed_planner.py
+          - backend/services/dataset_release/stk_limit_overlay.py
+          - scripts/dataset_release_worker.py
+          - scripts/dataset_release_source_stage.py
+        probe_mode: dataset_release_worker_heartbeat
+        local_probe:
+          profile_path: configs/datasets/qe_backtest_monthly_v2.yaml
+          max_files: 200
+        probes:
+          health_ref: worker_heartbeat.health
+          identity_ref: worker_heartbeat.identity
+          business_smoke_ref: worker_heartbeat.business
+          database_readback_ref: not_required
     startup_budget_seconds: 180

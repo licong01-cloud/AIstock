@@ -6,6 +6,7 @@ import hashlib
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -506,7 +507,7 @@ class ArtifactReadyBuildSource:
             and item.get("partition_key") == str(descriptor["partition_key"])
         ]
         if not matches:
-            yield from database_rows
+            yield from _filter_stk_limit_rows_to_pit(database_rows, self.pit_snapshot)
             return
         if len(matches) != 1:
             raise ArtifactReadyBuildSourceError("stk_limit rule overlay entry is ambiguous")
@@ -517,6 +518,8 @@ class ArtifactReadyBuildSource:
             receipt.get("raw_partition_identity") != f"stk_limit:{descriptor['partition_key']}"
             or receipt.get("pit_snapshot_digest") != self.pit_snapshot.spans_sha256
             or receipt.get("rule_version") != PRICE_LIMIT_RULE_VERSION
+            or not isinstance(receipt.get("database_completion_rows"), int)
+            or receipt.get("database_completion_rows", -1) < 0
             or receipt.get("database_override_rows") != 0
             or receipt.get("unresolved_keys") != 0
             or receipt.get("safety") != _ZERO_SAFETY
@@ -525,11 +528,13 @@ class ArtifactReadyBuildSource:
             or any(not isinstance(row, Mapping) for row in overlay)
         ):
             raise ArtifactReadyBuildSourceError("stk_limit rule overlay receipt is invalid")
-        yield from _merge_missing_only(
-            database_rows,
-            (dict(row) for row in overlay),
-            key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
-            source="stk_limit",
+        yield from _filter_stk_limit_rows_to_pit(
+            _merge_stk_limit_completion(
+                database_rows,
+                (dict(row) for row in overlay),
+                expected_completion_rows=int(receipt["database_completion_rows"]),
+            ),
+            self.pit_snapshot,
         )
 
     def _effective_minute_rows(
@@ -643,6 +648,110 @@ def _merge_missing_only(
     finally:
         _close_iterator(left)
         _close_iterator(right)
+
+
+def _merge_stk_limit_completion(
+    database: Iterable[Mapping[str, Any]],
+    overlay: Iterable[Mapping[str, Any]],
+    *,
+    expected_completion_rows: int,
+) -> Iterator[Mapping[str, Any]]:
+    """Merge missing rows and exact completions without overriding valid data."""
+
+    def key(row: Mapping[str, Any]) -> tuple[str, date]:
+        return str(row["ts_code"]), _as_date(row["trade_date"])
+    left = iter(database)
+    right = iter(overlay)
+    completions = 0
+    try:
+        left_row = next(left, None)
+        right_row = next(right, None)
+        previous: tuple[Any, ...] | None = None
+        while left_row is not None or right_row is not None:
+            if left_row is None:
+                row, right_row = right_row, next(right, None)
+            elif right_row is None:
+                row, left_row = left_row, next(left, None)
+            else:
+                left_key, right_key = key(left_row), key(right_row)
+                if left_key == right_key:
+                    _require_limit_completion_match(left_row, right_row)
+                    row = right_row
+                    completions += 1
+                    left_row, right_row = next(left, None), next(right, None)
+                elif left_key < right_key:
+                    row, left_row = left_row, next(left, None)
+                else:
+                    row, right_row = right_row, next(right, None)
+            assert row is not None
+            observed = key(row)
+            if previous is not None and observed <= previous:
+                raise ArtifactReadyBuildSourceError("stk_limit effective rows are duplicated or unordered")
+            previous = observed
+            yield row
+        if completions != expected_completion_rows:
+            raise ArtifactReadyBuildSourceError("stk_limit completion receipt count differs")
+    finally:
+        _close_iterator(left)
+        _close_iterator(right)
+
+
+def _require_limit_completion_match(
+    database_row: Mapping[str, Any],
+    overlay_row: Mapping[str, Any],
+) -> None:
+    missing = 0
+    for field in ("pre_close", "up_limit", "down_limit"):
+        raw = database_row.get(field)
+        if raw is None or str(raw).strip() == "":
+            missing += 1
+            continue
+        try:
+            observed_raw = Decimal(str(raw))
+            expected_raw = Decimal(str(overlay_row[field]))
+            observed = observed_raw.quantize(Decimal("0.01"))
+            expected = expected_raw.quantize(Decimal("0.01"))
+        except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
+            raise ArtifactReadyBuildSourceError("stk_limit completion value is invalid") from exc
+        if (
+            not observed.is_finite()
+            or observed <= 0
+            or observed_raw != observed
+            or expected_raw != expected
+            or observed != expected
+        ):
+            raise ArtifactReadyBuildSourceError("stk_limit completion conflicts with database value")
+    if missing == 0:
+        raise ArtifactReadyBuildSourceError("stk_limit overlay attempts to override a complete database key")
+
+
+def _filter_stk_limit_rows_to_pit(
+    rows: Iterable[Mapping[str, Any]],
+    pit_snapshot: FrozenPitSnapshot,
+) -> Iterator[Mapping[str, Any]]:
+    """Expose only canonical PIT stock-days after validating global order.
+
+    Sealed ``stk_limit`` rows intentionally retain non-PIT history so the
+    artifact stage can prove source identity.  Nullable repair fields are
+    allowed there, but only PIT rows may enter the final Qlib normalizer.
+    """
+
+    mutable_ranges: dict[str, list[tuple[date, date]]] = {}
+    for span in pit_snapshot.spans:
+        mutable_ranges.setdefault(str(span.ts_code).upper(), []).append(
+            (span.eligible_start, span.eligible_end)
+        )
+    ranges_by_code: dict[str, tuple[tuple[date, date], ...]] = {
+        code: tuple(sorted(ranges)) for code, ranges in mutable_ranges.items()
+    }
+    previous: tuple[str, date] | None = None
+    for row in rows:
+        key = (str(row.get("ts_code", "")).upper(), _as_date(row.get("trade_date")))
+        if previous is not None and key <= previous:
+            raise ArtifactReadyBuildSourceError("stk_limit effective rows are duplicated or unordered")
+        previous = key
+        if any(start <= key[1] <= end for start, end in ranges_by_code.get(key[0], ())):
+            yield row
 
 
 def _close_iterator(iterator: Iterator[Mapping[str, Any]]) -> None:

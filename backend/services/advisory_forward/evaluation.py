@@ -17,12 +17,16 @@ from backend.services.advisory_forward.models import (
     AdvisoryForwardModelEvaluationV1,
     AdvisoryForwardModelObservationOutcomeV1,
 )
-from backend.services.advisory_model_first.model_binding_resolution import META_LABEL_MODEL_ROLE
+from backend.services.advisory_model_first.model_binding_resolution import (
+    META_LABEL_MODEL_ROLE,
+)
 from backend.services.advisory_model_first.policy_contracts import (
     AdvisoryPolicyCostV1,
     transition_policy_from_payload,
 )
-from backend.services.advisory_model_first.shadow_portfolio_policy import replay_shadow_portfolio
+from backend.services.advisory_model_first.shadow_portfolio_policy import (
+    replay_shadow_portfolio,
+)
 from backend.services.advisory_program import MARKET_PRICE_UNIT_DIVISOR
 from backend.services.selection_center.models import SelectionRunStatus
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
@@ -65,8 +69,12 @@ class AdvisoryForwardEvaluationMarketSource:
         end_trade_date: date,
     ) -> AdvisoryForwardEvaluationMarketData:
         if start_trade_date > end_trade_date:
-            raise ValueError("forward evaluation market range must satisfy start <= end")
-        normalized = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
+            raise ValueError(
+                "forward evaluation market range must satisfy start <= end"
+            )
+        normalized = sorted(
+            {str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()}
+        )
         if not normalized:
             raise _market_unavailable("forward evaluation symbol roster is empty")
         benchmark = str(benchmark_instrument).strip().upper()
@@ -137,45 +145,81 @@ class AdvisoryForwardEvaluationMarketSource:
                     (benchmark, start_trade_date, end_trade_date),
                 )
                 benchmark_rows = [dict(row) for row in cur.fetchall()]
-        calendar = pd.DatetimeIndex(
-            pd.Timestamp(row["cal_date"]).normalize() for row in calendar_rows
+        return build_forward_evaluation_market_data_from_rows(
+            calendar_rows=calendar_rows,
+            price_rows=price_rows,
+            suspend_rows=suspend_rows,
+            benchmark_rows=benchmark_rows,
+            symbols=normalized,
+            benchmark_instrument=benchmark,
+            start_trade_date=start_trade_date,
+            end_trade_date=end_trade_date,
         )
-        if len(calendar) < 2 or calendar[1].date() != start_trade_date or calendar[-1].date() != end_trade_date:
-            raise _market_unavailable(
-                "forward evaluation trading calendar does not cover the explicit range",
-                context={"start_trade_date": start_trade_date.isoformat(), "end_trade_date": end_trade_date.isoformat()},
-            )
-        daily = _daily_frame(price_rows)
-        benchmark_daily = _benchmark_frame(benchmark_rows, benchmark=benchmark)
-        suspended = _suspend_frame(suspend_rows)
-        expected_benchmark_dates = set(calendar[1:])
-        actual_benchmark_dates = set(benchmark_daily.reset_index()["datetime"])
-        if actual_benchmark_dates != expected_benchmark_dates:
-            raise _market_unavailable(
-                "forward evaluation benchmark does not cover every trading date",
-                context={
-                    "benchmark_instrument": benchmark,
-                    "missing_dates": sorted(item.date().isoformat() for item in expected_benchmark_dates - actual_benchmark_dates),
-                },
-            )
-        identity = {
-            "schema_version": "advisory_forward_evaluation_market_input_v1",
-            "start_trade_date": start_trade_date.isoformat(),
-            "end_trade_date": end_trade_date.isoformat(),
-            "symbols": normalized,
-            "benchmark_instrument": benchmark,
-            "calendar_rows": _canonical_rows(calendar_rows),
-            "price_rows": _canonical_rows(price_rows),
-            "suspend_rows": _canonical_rows(suspend_rows),
-            "benchmark_rows": _canonical_rows(benchmark_rows),
-        }
-        return AdvisoryForwardEvaluationMarketData(
-            daily=daily,
-            benchmark_daily=benchmark_daily,
-            suspend_rows=suspended,
-            trading_calendar=calendar,
-            input_sha256=canonical_json_sha256(identity),
+
+
+def build_forward_evaluation_market_data_from_rows(
+    *,
+    calendar_rows: Sequence[Mapping[str, Any]],
+    price_rows: Sequence[Mapping[str, Any]],
+    suspend_rows: Sequence[Mapping[str, Any]],
+    benchmark_rows: Sequence[Mapping[str, Any]],
+    symbols: Sequence[str],
+    benchmark_instrument: str,
+    start_trade_date: date,
+    end_trade_date: date,
+    input_schema_version: str = "advisory_forward_evaluation_market_input_v1",
+    extra_identity: Mapping[str, Any] | None = None,
+) -> AdvisoryForwardEvaluationMarketData:
+    calendar = pd.DatetimeIndex(
+        pd.Timestamp(row["cal_date"]).normalize() for row in calendar_rows
+    )
+    if (
+        len(calendar) < 2
+        or calendar[1].date() != start_trade_date
+        or calendar[-1].date() != end_trade_date
+    ):
+        raise _market_unavailable(
+            "forward evaluation trading calendar does not cover the explicit range",
+            context={
+                "start_trade_date": start_trade_date.isoformat(),
+                "end_trade_date": end_trade_date.isoformat(),
+            },
         )
+    daily = _daily_frame(price_rows)
+    benchmark_daily = _benchmark_frame(benchmark_rows, benchmark=benchmark_instrument)
+    suspended = _suspend_frame(suspend_rows)
+    expected_benchmark_dates = set(calendar[1:])
+    actual_benchmark_dates = set(benchmark_daily.reset_index()["datetime"])
+    if actual_benchmark_dates != expected_benchmark_dates:
+        raise _market_unavailable(
+            "forward evaluation benchmark does not cover every trading date",
+            context={
+                "benchmark_instrument": benchmark_instrument,
+                "missing_dates": sorted(
+                    item.date().isoformat()
+                    for item in expected_benchmark_dates - actual_benchmark_dates
+                ),
+            },
+        )
+    identity = {
+        "schema_version": input_schema_version,
+        "start_trade_date": start_trade_date.isoformat(),
+        "end_trade_date": end_trade_date.isoformat(),
+        "symbols": list(symbols),
+        "benchmark_instrument": benchmark_instrument,
+        "calendar_rows": _canonical_rows(calendar_rows),
+        "price_rows": _canonical_rows(price_rows),
+        "suspend_rows": _canonical_rows(suspend_rows),
+        "benchmark_rows": _canonical_rows(benchmark_rows),
+        **dict(extra_identity or {}),
+    }
+    return AdvisoryForwardEvaluationMarketData(
+        daily=daily,
+        benchmark_daily=benchmark_daily,
+        suspend_rows=suspended,
+        trading_calendar=calendar,
+        input_sha256=canonical_json_sha256(identity),
+    )
 
 
 def build_forward_model_evaluation(
@@ -188,30 +232,52 @@ def build_forward_model_evaluation(
     existing_outcome_observation_ids: set[str] | None = None,
     existing_outcome_count: int = 0,
 ) -> AdvisoryForwardEvaluationBuild:
-    ordered = sorted(observations, key=lambda row: (row["target_trade_date"], row["observation_id"]))
+    ordered = sorted(
+        observations, key=lambda row: (row["target_trade_date"], row["observation_id"])
+    )
     if not ordered:
         raise _contract_invalid("forward evaluation observation roster is empty")
-    due = [row for row in ordered if row.get("maturity_trade_date") and row["maturity_trade_date"] <= as_of_trade_date]
+    due = [
+        row
+        for row in ordered
+        if row.get("maturity_trade_date")
+        and row["maturity_trade_date"] <= as_of_trade_date
+    ]
     if not due:
-        raise _contract_invalid("forward evaluation has no observation due at the explicit as-of date")
+        raise _contract_invalid(
+            "forward evaluation has no observation due at the explicit as-of date"
+        )
     contract = _evaluation_contract(ordered)
     contexts = sorted(
         rank_contexts or observations,
-        key=lambda row: (row["target_trade_date"], str(row.get("forward_run_id") or "")),
+        key=lambda row: (
+            row["target_trade_date"],
+            str(row.get("forward_run_id") or ""),
+        ),
     )
-    if not contexts or contexts[0]["target_trade_date"] != ordered[0]["target_trade_date"]:
-        raise _sequence_incomplete("forward evaluation rank context does not start with the epoch")
+    if (
+        not contexts
+        or contexts[0]["target_trade_date"] != ordered[0]["target_trade_date"]
+    ):
+        raise _sequence_incomplete(
+            "forward evaluation rank context does not start with the epoch"
+        )
     expected_targets = [item.date() for item in market.trading_calendar[1:]]
     if market.trading_calendar[0].date() != contexts[0]["decision_as_of_trade_date"]:
         raise _sequence_incomplete(
             "forward evaluation calendar does not start at the first decision date",
-            context={"first_decision": ordered[0]["decision_as_of_trade_date"].isoformat()},
+            context={
+                "first_decision": ordered[0]["decision_as_of_trade_date"].isoformat()
+            },
         )
     actual_targets = [row["target_trade_date"] for row in contexts]
     if actual_targets != expected_targets:
         raise _sequence_incomplete(
             "forward evaluation observations are not continuous through the as-of watermark",
-            context={"expected_targets": [item.isoformat() for item in expected_targets], "actual_targets": [item.isoformat() for item in actual_targets]},
+            context={
+                "expected_targets": [item.isoformat() for item in expected_targets],
+                "actual_targets": [item.isoformat() for item in actual_targets],
+            },
         )
     ranking_records: list[dict[str, Any]] = []
     priority_records: list[dict[str, Any]] = []
@@ -227,20 +293,33 @@ def build_forward_model_evaluation(
                 context={"selection_run_id": selection_run_id},
             )
         run_status = getattr(run, "status", None)
-        if run_status not in {SelectionRunStatus.SUCCEEDED, SelectionRunStatus.SUCCEEDED.value, "SUCCEEDED"}:
+        if run_status not in {
+            SelectionRunStatus.SUCCEEDED,
+            SelectionRunStatus.SUCCEEDED.value,
+            "SUCCEEDED",
+        }:
             raise _sequence_incomplete(
                 "forward evaluation Selection run is not successful",
-                context={"selection_run_id": selection_run_id, "status": str(run_status)},
+                context={
+                    "selection_run_id": selection_run_id,
+                    "status": str(run_status),
+                },
             )
         if getattr(run, "trade_date", None) != context_row["target_trade_date"]:
             raise _sequence_incomplete(
                 "forward evaluation Selection run target date differs from observation",
                 context={"selection_run_id": selection_run_id},
             )
-        rows = sorted(run.aggregate_results, key=lambda item: (int(item.rank), str(item.symbol)))
+        rows = sorted(
+            run.aggregate_results, key=lambda item: (int(item.rank), str(item.symbol))
+        )
         top40 = [item for item in rows if int(item.rank) <= 40]
         ranks = [int(item.rank) for item in top40]
-        if len(top40) != 40 or ranks != list(range(1, 41)) or len({str(item.symbol).upper() for item in top40}) != 40:
+        if (
+            len(top40) != 40
+            or ranks != list(range(1, 41))
+            or len({str(item.symbol).upper() for item in top40}) != 40
+        ):
             raise _sequence_incomplete(
                 "forward evaluation Selection run does not contain an exact Top40",
                 context={"selection_run_id": selection_run_id, "ranks": ranks},
@@ -278,7 +357,11 @@ def build_forward_model_evaluation(
                 "decision_as_of_trade_date": decision.isoformat(),
                 "target_trade_date": target.isoformat(),
                 "top40": [
-                    {"symbol": str(item.symbol).upper(), "rank": int(item.rank), "score": float(item.score)}
+                    {
+                        "symbol": str(item.symbol).upper(),
+                        "rank": int(item.rank),
+                        "score": float(item.score),
+                    }
                     for item in top40
                 ],
             }
@@ -332,7 +415,9 @@ def build_forward_model_evaluation(
         observation_id = str(observation["observation_id"])
         if observation_id in existing_ids:
             continue
-        cohort = episodes_by_decision.get(observation["decision_as_of_trade_date"].isoformat(), [])
+        cohort = episodes_by_decision.get(
+            observation["decision_as_of_trade_date"].isoformat(), []
+        )
         active = [episode for episode in cohort if episode.get("status") != "EXITED"]
         if active:
             unresolved.append(observation_id)
@@ -343,7 +428,9 @@ def build_forward_model_evaluation(
         payload = {
             "schema_version": "advisory_forward_model_observation_outcome_v1",
             "observation_id": observation_id,
-            "decision_as_of_trade_date": observation["decision_as_of_trade_date"].isoformat(),
+            "decision_as_of_trade_date": observation[
+                "decision_as_of_trade_date"
+            ].isoformat(),
             "target_trade_date": observation["target_trade_date"].isoformat(),
             "maturity_trade_date": observation["maturity_trade_date"].isoformat(),
             "status": status,
@@ -362,7 +449,11 @@ def build_forward_model_evaluation(
                 status=status,
                 entered_episode_count=len(cohort),
                 exited_episode_count=len(exited),
-                completed_episode_hit_rate=(sum(value > 0 for value in returns) / len(returns)) if returns else None,
+                completed_episode_hit_rate=(
+                    (sum(value > 0 for value in returns) / len(returns))
+                    if returns
+                    else None
+                ),
                 mean_net_return_bps=mean(returns) if returns else None,
                 outcome_payload_json=payload,
             )
@@ -404,9 +495,16 @@ def build_forward_model_evaluation(
     ]
     result_payload = {
         "schema_version": EVALUATION_CONTRACT_VERSION,
-        "epoch": {key: contract[key] for key in (
-            "program_id", "model_descriptor_sha256", "bundle_id", "shadow_policy_sha256", "cost_policy_sha256"
-        )},
+        "epoch": {
+            key: contract[key]
+            for key in (
+                "program_id",
+                "model_descriptor_sha256",
+                "bundle_id",
+                "shadow_policy_sha256",
+                "cost_policy_sha256",
+            )
+        },
         "daily": daily_records,
         "episodes": episode_records,
         "metrics": metrics,
@@ -427,7 +525,10 @@ def build_forward_model_evaluation(
         due_observation_count=len(due),
         matured_outcome_count=resolved_total,
         observation_roster_sha256=canonical_json_sha256(
-            {"epoch_observations": roster_payload, "rank_context": context_roster_payload}
+            {
+                "epoch_observations": roster_payload,
+                "rank_context": context_roster_payload,
+            }
         ),
         selection_input_sha256=canonical_json_sha256(selection_identity),
         market_input_sha256=market.input_sha256,
@@ -450,7 +551,8 @@ def _evaluation_contract(observations: Sequence[Mapping[str, Any]]) -> dict[str,
         if (
             row.get("status") != "EXPERIMENTAL_SHADOW"
             or prediction.get("model_role") != META_LABEL_MODEL_ROLE
-            or prediction.get("evaluation_contract_version") != EVALUATION_CONTRACT_VERSION
+            or prediction.get("evaluation_contract_version")
+            != EVALUATION_CONTRACT_VERSION
         ):
             raise _contract_invalid(
                 "forward evaluation observation is not an eligible P0-D contract",
@@ -459,18 +561,26 @@ def _evaluation_contract(observations: Sequence[Mapping[str, Any]]) -> dict[str,
         current_policy = prediction.get("shadow_policy")
         current_cost = prediction.get("cost_policy")
         if not isinstance(current_policy, dict) or not isinstance(current_cost, dict):
-            raise _contract_invalid("forward evaluation observation omits frozen policy or cost")
+            raise _contract_invalid(
+                "forward evaluation observation omits frozen policy or cost"
+            )
         shadow_hash = str(prediction.get("shadow_policy_sha256") or "")
         cost_hash = str(prediction.get("cost_policy_sha256") or "")
         if canonical_json_sha256(current_policy) != shadow_hash:
-            raise _contract_invalid("forward evaluation shadow policy hash differs from payload")
+            raise _contract_invalid(
+                "forward evaluation shadow policy hash differs from payload"
+            )
         try:
             policy = transition_policy_from_payload(current_policy)
             cost = AdvisoryPolicyCostV1.model_validate(current_cost)
         except ValueError as exc:
-            raise _contract_invalid("forward evaluation policy contract is invalid") from exc
+            raise _contract_invalid(
+                "forward evaluation policy contract is invalid"
+            ) from exc
         if cost.policy_sha256 != cost_hash:
-            raise _contract_invalid("forward evaluation cost policy hash differs from payload")
+            raise _contract_invalid(
+                "forward evaluation cost policy hash differs from payload"
+            )
         identity = (
             str(row["program_id"]),
             str(row.get("model_descriptor_sha256") or ""),
@@ -486,11 +596,19 @@ def _evaluation_contract(observations: Sequence[Mapping[str, Any]]) -> dict[str,
         if current_policy != policy_payload or current_cost != cost_payload:
             raise _contract_invalid("forward evaluation epoch policy payload changed")
     if len(identities) != 1 or policy_payload is None or cost_payload is None:
-        raise _contract_invalid("forward evaluation observation roster crosses epoch identities")
+        raise _contract_invalid(
+            "forward evaluation observation roster crosses epoch identities"
+        )
     program_id, descriptor, bundle, shadow_hash, cost_hash = next(iter(identities))
     policy = transition_policy_from_payload(policy_payload)
-    if policy.target_count != 5 or policy.rank_enter_threshold != 5 or policy.rank_exit_threshold < 40:
-        raise _contract_invalid("forward evaluation shadow policy does not preserve Top5/Top40 semantics")
+    if (
+        policy.target_count != 5
+        or policy.rank_enter_threshold != 5
+        or policy.rank_exit_threshold < 40
+    ):
+        raise _contract_invalid(
+            "forward evaluation shadow policy does not preserve Top5/Top40 semantics"
+        )
     return {
         "program_id": program_id,
         "model_descriptor_sha256": descriptor,
@@ -502,13 +620,26 @@ def _evaluation_contract(observations: Sequence[Mapping[str, Any]]) -> dict[str,
     }
 
 
-def _validate_priorities(candidates: Sequence[Mapping[str, Any]], *, observation: Mapping[str, Any], top40: Sequence[Any]) -> None:
+def _validate_priorities(
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    observation: Mapping[str, Any],
+    top40: Sequence[Any],
+) -> None:
     if len(candidates) != 20:
-        raise _sequence_incomplete("forward evaluation observation does not contain exact Top20 priorities")
+        raise _sequence_incomplete(
+            "forward evaluation observation does not contain exact Top20 priorities"
+        )
     top20_by_symbol = {str(item.symbol).upper(): int(item.rank) for item in top40[:20]}
-    candidate_by_symbol = {str(item.get("symbol") or "").upper(): item for item in candidates}
-    entry_ranks = sorted(int(item.get("entry_priority_rank") or 0) for item in candidates)
-    if set(candidate_by_symbol) != set(top20_by_symbol) or entry_ranks != list(range(1, 21)):
+    candidate_by_symbol = {
+        str(item.get("symbol") or "").upper(): item for item in candidates
+    }
+    entry_ranks = sorted(
+        int(item.get("entry_priority_rank") or 0) for item in candidates
+    )
+    if set(candidate_by_symbol) != set(top20_by_symbol) or entry_ranks != list(
+        range(1, 21)
+    ):
         raise _sequence_incomplete(
             "forward evaluation Top20 priority roster differs from Selection",
             context={"observation_id": observation.get("observation_id")},
@@ -519,20 +650,35 @@ def _validate_priorities(candidates: Sequence[Mapping[str, Any]], *, observation
         if selection_rank != top20_by_symbol[symbol] or exit_rank != selection_rank:
             raise _sequence_incomplete(
                 "forward evaluation entry/exit rank contract differs from Selection",
-                context={"observation_id": observation.get("observation_id"), "symbol": symbol},
+                context={
+                    "observation_id": observation.get("observation_id"),
+                    "symbol": symbol,
+                },
             )
 
 
 def _daily_frame(rows: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
     records: list[dict[str, Any]] = []
     for row in rows:
-        factor = _required_number(row.get("adj_factor"), field="adj_factor") / _required_number(
-            row.get("base_adj_factor"), field="base_adj_factor"
+        factor = _required_number(
+            row.get("adj_factor"), field="adj_factor"
+        ) / _required_number(row.get("base_adj_factor"), field="base_adj_factor")
+        open_raw = (
+            _required_number(row.get("open_li"), field="open_li")
+            / MARKET_PRICE_UNIT_DIVISOR
         )
-        open_raw = _required_number(row.get("open_li"), field="open_li") / MARKET_PRICE_UNIT_DIVISOR
-        high_raw = _required_number(row.get("high_li"), field="high_li") / MARKET_PRICE_UNIT_DIVISOR
-        low_raw = _required_number(row.get("low_li"), field="low_li") / MARKET_PRICE_UNIT_DIVISOR
-        close_raw = _required_number(row.get("close_li"), field="close_li") / MARKET_PRICE_UNIT_DIVISOR
+        high_raw = (
+            _required_number(row.get("high_li"), field="high_li")
+            / MARKET_PRICE_UNIT_DIVISOR
+        )
+        low_raw = (
+            _required_number(row.get("low_li"), field="low_li")
+            / MARKET_PRICE_UNIT_DIVISOR
+        )
+        close_raw = (
+            _required_number(row.get("close_li"), field="close_li")
+            / MARKET_PRICE_UNIT_DIVISOR
+        )
         _required_number(row.get("pre_close"), field="pre_close")
         up_limit = _required_number(row.get("up_limit"), field="up_limit")
         down_limit = _required_number(row.get("down_limit"), field="down_limit")
@@ -547,19 +693,31 @@ def _daily_frame(rows: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
                 "close": close_raw * factor,
                 "up_limit_price": up_limit,
                 "down_limit_price": down_limit,
-                "limit_up": float(open_raw >= up_limit and low_raw >= up_limit and close_raw >= up_limit),
-                "limit_down": float(open_raw <= down_limit and high_raw <= down_limit and close_raw <= down_limit),
+                "limit_up": float(
+                    open_raw >= up_limit
+                    and low_raw >= up_limit
+                    and close_raw >= up_limit
+                ),
+                "limit_down": float(
+                    open_raw <= down_limit
+                    and high_raw <= down_limit
+                    and close_raw <= down_limit
+                ),
             }
         )
     if not records:
         raise _market_unavailable("forward evaluation stock market rows are empty")
     frame = pd.DataFrame(records)
     if frame.duplicated(["datetime", "instrument"]).any():
-        raise _market_unavailable("forward evaluation stock market rows contain duplicates")
+        raise _market_unavailable(
+            "forward evaluation stock market rows contain duplicates"
+        )
     return frame.set_index(["datetime", "instrument"]).sort_index()
 
 
-def _benchmark_frame(rows: Sequence[Mapping[str, Any]], *, benchmark: str) -> pd.DataFrame:
+def _benchmark_frame(
+    rows: Sequence[Mapping[str, Any]], *, benchmark: str
+) -> pd.DataFrame:
     records = [
         {
             "datetime": pd.Timestamp(row["trade_date"]).normalize(),
@@ -572,7 +730,9 @@ def _benchmark_frame(rows: Sequence[Mapping[str, Any]], *, benchmark: str) -> pd
         raise _market_unavailable("forward evaluation benchmark rows are empty")
     frame = pd.DataFrame(records)
     if frame["datetime"].duplicated().any():
-        raise _market_unavailable("forward evaluation benchmark rows contain duplicates")
+        raise _market_unavailable(
+            "forward evaluation benchmark rows contain duplicates"
+        )
     return frame.set_index(["datetime", "instrument"]).sort_index()
 
 
@@ -647,13 +807,25 @@ def _stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}_{canonical_json_sha256({'parts': list(parts)})[:32]}"
 
 
-def _contract_invalid(message: str, *, context: dict[str, Any] | None = None) -> AdvisoryForwardModelEvaluationError:
-    return AdvisoryForwardModelEvaluationError(message, reason_code=REASON_CONTRACT_INVALID, context=context)
+def _contract_invalid(
+    message: str, *, context: dict[str, Any] | None = None
+) -> AdvisoryForwardModelEvaluationError:
+    return AdvisoryForwardModelEvaluationError(
+        message, reason_code=REASON_CONTRACT_INVALID, context=context
+    )
 
 
-def _sequence_incomplete(message: str, *, context: dict[str, Any] | None = None) -> AdvisoryForwardModelEvaluationError:
-    return AdvisoryForwardModelEvaluationError(message, reason_code=REASON_SEQUENCE_INCOMPLETE, context=context)
+def _sequence_incomplete(
+    message: str, *, context: dict[str, Any] | None = None
+) -> AdvisoryForwardModelEvaluationError:
+    return AdvisoryForwardModelEvaluationError(
+        message, reason_code=REASON_SEQUENCE_INCOMPLETE, context=context
+    )
 
 
-def _market_unavailable(message: str, *, context: dict[str, Any] | None = None) -> AdvisoryForwardModelEvaluationError:
-    return AdvisoryForwardModelEvaluationError(message, reason_code=REASON_MARKET_UNAVAILABLE, context=context)
+def _market_unavailable(
+    message: str, *, context: dict[str, Any] | None = None
+) -> AdvisoryForwardModelEvaluationError:
+    return AdvisoryForwardModelEvaluationError(
+        message, reason_code=REASON_MARKET_UNAVAILABLE, context=context
+    )

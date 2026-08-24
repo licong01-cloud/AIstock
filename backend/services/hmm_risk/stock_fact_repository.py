@@ -7,6 +7,7 @@ import heapq
 import itertools
 import json
 import math
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -25,6 +26,111 @@ from .stock_fact_observation import (
 
 
 CIRC_MV_LOOKBACK_CONTRACT_VERSION = "hmm_risk_causal_circ_mv_source_window_v1"
+_CANONICAL_SW_L1_CODE = re.compile(r"^801\d{3}\.SI$")
+_INDUSTRY_SW_L1_CODE = re.compile(r"^\d{6}$")
+
+
+MEMBER_CLASSIFICATION_CTES = """
+canonical_l1_catalog AS (
+  SELECT l1_code index_code,min(BTRIM(l1_name)) industry_name
+  FROM market.sw_index_member
+  WHERE l1_code ~ '^801[0-9]{3}[.]SI$'
+  GROUP BY l1_code
+), l2_catalog AS (
+  SELECT l2_code index_code,min(BTRIM(l2_name)) industry_name
+  FROM market.sw_index_member
+  GROUP BY l2_code
+), l2_owner AS (
+  SELECT l2_code,
+         min(l1_code) FILTER (WHERE l1_code ~ '^801[0-9]{3}[.]SI$') canonical_l1_code,
+         count(DISTINCT l1_code) FILTER (WHERE l1_code ~ '^801[0-9]{3}[.]SI$') canonical_l1_count
+  FROM market.sw_index_member
+  GROUP BY l2_code
+)
+"""
+
+
+def _build_member_classification_lookup(rows: list[tuple[Any, ...]]) -> dict[tuple[str, str], dict[str, str]]:
+    """Derive the exact SW L1/L2 identity closure from durable member facts."""
+
+    normalized: list[tuple[str, str, str, str]] = []
+    canonical_l1_names: dict[str, set[str]] = {}
+    l2_names: dict[str, set[str]] = {}
+    l2_canonical_owners: dict[str, set[str]] = {}
+    for raw_row in rows:
+        if len(raw_row) != 4:
+            raise StateModelSetError("sw_index_member classification row shape is invalid")
+        l1_code, l1_name, l2_code, l2_name = (str(value or "").strip() for value in raw_row)
+        if not l1_code or not l2_code or not l2_name:
+            raise StateModelSetError("sw_index_member classification row is incomplete")
+        if not (_CANONICAL_SW_L1_CODE.fullmatch(l1_code) or _INDUSTRY_SW_L1_CODE.fullmatch(l1_code)):
+            raise StateModelSetError(f"sw_index_member L1 code representation is invalid: {l1_code}")
+        normalized.append((l1_code, l1_name, l2_code, l2_name))
+        l2_names.setdefault(l2_code, set()).add(l2_name)
+        if _CANONICAL_SW_L1_CODE.fullmatch(l1_code):
+            if not l1_name:
+                raise StateModelSetError("sw_index_member canonical L1 name is missing")
+            canonical_l1_names.setdefault(l1_code, set()).add(l1_name)
+            l2_canonical_owners.setdefault(l2_code, set()).add(l1_code)
+
+    if not normalized:
+        raise StateModelSetError("sw_index_member classification authority is empty")
+    if len(canonical_l1_names) != 31 or len(l2_names) != 131:
+        raise StateModelSetError(
+            "sw_index_member classification authority must contain canonical L1=31/L2=131; "
+            f"actual={len(canonical_l1_names)}/{len(l2_names)}"
+        )
+    conflicting_l1_names = sorted(code for code, names in canonical_l1_names.items() if len(names) != 1)
+    conflicting_l2_names = sorted(code for code, names in l2_names.items() if len(names) != 1)
+    if conflicting_l1_names or conflicting_l2_names:
+        raise StateModelSetError(
+            f"sw_index_member classification names conflict: l1={conflicting_l1_names},l2={conflicting_l2_names}"
+        )
+    invalid_l2_owners = sorted(code for code in l2_names if len(l2_canonical_owners.get(code, set())) != 1)
+    if invalid_l2_owners:
+        raise StateModelSetError(
+            f"sw_index_member L2 identity must resolve to exactly one canonical L1: {invalid_l2_owners}"
+        )
+
+    aliases_by_l1: dict[str, set[str]] = {code: {code} for code in canonical_l1_names}
+    for l1_code, _l1_name, l2_code, _l2_name in normalized:
+        canonical_l1 = next(iter(l2_canonical_owners[l2_code]))
+        aliases_by_l1.setdefault(canonical_l1, set()).add(l1_code)
+    ambiguous_aliases: dict[str, set[str]] = {}
+    for l1_code, _l1_name, l2_code, _l2_name in normalized:
+        canonical_l1 = next(iter(l2_canonical_owners[l2_code]))
+        ambiguous_aliases.setdefault(l1_code, set()).add(canonical_l1)
+    conflicts = sorted(alias for alias, owners in ambiguous_aliases.items() if len(owners) != 1)
+    if conflicts:
+        raise StateModelSetError(f"sw_index_member L1 alias maps to multiple canonical identities: {conflicts}")
+
+    classification_rows: list[dict[str, str]] = []
+    for canonical_l1 in sorted(canonical_l1_names):
+        noncanonical_aliases = sorted(
+            alias for alias in aliases_by_l1[canonical_l1] if not _CANONICAL_SW_L1_CODE.fullmatch(alias)
+        )
+        if len(noncanonical_aliases) > 1:
+            raise StateModelSetError(
+                f"sw_index_member canonical L1 has multiple industry aliases: {canonical_l1}={noncanonical_aliases}"
+            )
+        classification_rows.append(
+            {
+                "level": "L1",
+                "index_code": canonical_l1,
+                "industry_code": noncanonical_aliases[0] if noncanonical_aliases else canonical_l1,
+                "industry_name": next(iter(canonical_l1_names[canonical_l1])),
+            }
+        )
+    for l2_code in sorted(l2_names):
+        classification_rows.append(
+            {
+                "level": "L2",
+                "index_code": l2_code,
+                "industry_code": l2_code,
+                "industry_name": next(iter(l2_names[l2_code])),
+            }
+        )
+    return build_classification_lookup(classification_rows)
 
 
 def _full_day_suspension_exists_sql(*, trade_date: str, ts_code: str) -> str:
@@ -193,6 +299,7 @@ class PostgresStockFactReader:
         self.spec = spec
         self.security_identity_manifest = security_identity_manifest
         self.provider_absence_manifest = provider_absence_manifest
+        self._classification_lookup: dict[tuple[str, str], dict[str, str]] | None = None
 
     def _identity_alias_json(self, source_dataset: str) -> str:
         return json.dumps(
@@ -369,7 +476,7 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH calendar_history AS (
+            WITH {MEMBER_CLASSIFICATION_CTES}, calendar_history AS (
               SELECT cal_date::date trade_date,
                      lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
               FROM market.trading_calendar
@@ -398,10 +505,10 @@ class PostgresStockFactReader:
               JOIN market.sw_index_member member
                 ON member.ts_code=missing_keys.ts_code AND member.in_date<=missing_keys.trade_date
                AND (member.out_date IS NULL OR member.out_date>=missing_keys.trade_date)
-              JOIN market.sw_index_classify l1
-                ON l1.level='L1' AND member.l1_code IN (l1.index_code,l1.industry_code)
-              JOIN market.sw_index_classify l2
-                ON l2.level='L2' AND member.l2_code IN (l2.index_code,l2.industry_code)
+              JOIN l2_owner owner
+                ON owner.l2_code=member.l2_code AND owner.canonical_l1_count=1
+              JOIN canonical_l1_catalog l1 ON l1.index_code=owner.canonical_l1_code
+              JOIN l2_catalog l2 ON l2.index_code=member.l2_code
             ), canonical_identity AS (
               SELECT trade_date,previous_trade_date,ts_code,eligible_start,eligible_end,
                      l1_code,l1_name,l2_code,l2_name
@@ -560,7 +667,7 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH calendar_history AS (
+            WITH {MEMBER_CLASSIFICATION_CTES}, calendar_history AS (
               SELECT cal_date::date trade_date,
                      lag(cal_date::date,1) OVER (ORDER BY cal_date) previous_trade_date
               FROM market.trading_calendar
@@ -595,10 +702,10 @@ class PostgresStockFactReader:
               JOIN market.sw_index_member m
                 ON m.ts_code=s.ts_code AND m.in_date<=p.trade_date
                AND (m.out_date IS NULL OR m.out_date>=p.trade_date)
-              JOIN market.sw_index_classify l1
-                ON l1.level='L1' AND m.l1_code IN (l1.index_code,l1.industry_code)
-              JOIN market.sw_index_classify l2
-                ON l2.level='L2' AND m.l2_code IN (l2.index_code,l2.industry_code)
+              JOIN l2_owner owner
+                ON owner.l2_code=m.l2_code AND owner.canonical_l1_count=1
+              JOIN canonical_l1_catalog l1 ON l1.index_code=owner.canonical_l1_code
+              JOIN l2_catalog l2 ON l2.index_code=m.l2_code
               WHERE p.trade_date BETWEEN %s AND %s
             ), canonical_identity AS (
               SELECT trade_date,ts_code,eligible_start,eligible_end,
@@ -905,7 +1012,6 @@ class PostgresStockFactReader:
                         "suspend_d",
                         "trading_calendar",
                         "sw_index_member",
-                        "sw_index_classify",
                         "stock_universe_pit_spans",
                     ],
                 ),
@@ -924,25 +1030,19 @@ class PostgresStockFactReader:
         }
 
     def load_classification_lookup(self) -> dict[tuple[str, str], dict[str, str]]:
+        if self._classification_lookup is not None:
+            return self._classification_lookup
         with self._conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT level,index_code,industry_code,industry_name
-                FROM market.sw_index_classify
-                WHERE level IN ('L1','L2')
-                ORDER BY level,index_code
+                SELECT DISTINCT l1_code,l1_name,l2_code,l2_name
+                FROM market.sw_index_member
+                ORDER BY l1_code,l2_code,l1_name,l2_name
                 """
             )
-            rows = [
-                {
-                    "level": item[0],
-                    "index_code": item[1],
-                    "industry_code": item[2],
-                    "industry_name": item[3],
-                }
-                for item in cursor.fetchall()
-            ]
-        return build_classification_lookup(rows)
+            rows = [tuple(item) for item in cursor.fetchall()]
+        self._classification_lookup = _build_member_classification_lookup(rows)
+        return self._classification_lookup
 
     def validate_fact_uniqueness(self) -> None:
         with self._conn.cursor() as cursor:
@@ -990,11 +1090,12 @@ class PostgresStockFactReader:
             raise StateModelSetError(f"stock-fact source contains conflicting duplicate keys: {duplicates}")
 
     def iter_mapping_source_rows(self, *, fetch_size: int = 10_000) -> Iterator[dict[str, Any]]:
+        self.load_classification_lookup()
         cursor = self._conn.cursor(name="hmm_risk_mapping_source")
         cursor.itersize = fetch_size
         cursor.execute(
-            """
-            WITH calendar AS (
+            f"""
+            WITH {MEMBER_CLASSIFICATION_CTES}, calendar AS (
               SELECT cal_date::date trade_date FROM market.trading_calendar
               WHERE is_trading=true AND cal_date BETWEEN %s AND %s
             )
@@ -1009,10 +1110,10 @@ class PostgresStockFactReader:
             JOIN market.sw_index_member m
               ON m.ts_code=s.ts_code AND m.in_date<=c.trade_date
              AND (m.out_date IS NULL OR m.out_date>=c.trade_date)
-            JOIN market.sw_index_classify l1
-              ON l1.level='L1' AND m.l1_code IN (l1.index_code,l1.industry_code)
-            JOIN market.sw_index_classify l2
-              ON l2.level='L2' AND m.l2_code IN (l2.index_code,l2.industry_code)
+            JOIN l2_owner owner
+              ON owner.l2_code=m.l2_code AND owner.canonical_l1_count=1
+            JOIN canonical_l1_catalog l1 ON l1.index_code=owner.canonical_l1_code
+            JOIN l2_catalog l2 ON l2.index_code=m.l2_code
             ORDER BY c.trade_date,s.ts_code,l1.index_code,l2.index_code,m.in_date,m.out_date NULLS LAST
             """,
             (self.spec.source_start, self.spec.source_end, self.spec.universe_key),
@@ -1044,6 +1145,7 @@ class PostgresStockFactReader:
         _window_start: date | None = None,
         _window_end: date | None = None,
     ) -> Iterator[dict[str, Any]]:
+        self.load_classification_lookup()
         if sector_level not in {"L1", "L2"}:
             raise StateModelSetError("stock fact read level must be L1 or L2")
         if (_window_start is None) != (_window_end is None):
@@ -1098,7 +1200,7 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH source_bounds AS (
+            WITH {MEMBER_CLASSIFICATION_CTES}, source_bounds AS (
               SELECT LEAST(%s::date,COALESCE(min(eligible_start),%s::date)) history_start,
                      %s::date history_end
               FROM market.stock_universe_pit_spans WHERE universe_key=%s
@@ -1170,10 +1272,10 @@ class PostgresStockFactReader:
               JOIN market.sw_index_member m
                 ON m.ts_code=s.ts_code AND m.in_date<=p.trade_date
                AND (m.out_date IS NULL OR m.out_date>=p.trade_date)
-              JOIN market.sw_index_classify l1
-                ON l1.level='L1' AND m.l1_code IN (l1.index_code,l1.industry_code)
-              JOIN market.sw_index_classify l2
-                ON l2.level='L2' AND m.l2_code IN (l2.index_code,l2.industry_code)
+              JOIN l2_owner owner
+                ON owner.l2_code=m.l2_code AND owner.canonical_l1_count=1
+              JOIN canonical_l1_catalog l1 ON l1.index_code=owner.canonical_l1_code
+              JOIN l2_catalog l2 ON l2.index_code=m.l2_code
               WHERE p.trade_date BETWEEN %s AND %s
             ), canonical_identity AS (
               SELECT trade_date,ts_code,eligible_start,eligible_end,
@@ -1332,6 +1434,7 @@ class PostgresStockFactReader:
     ) -> Iterator[dict[str, Any]]:
         """Yield eligible, non-suspended symbol-days missing canonical price facts."""
 
+        self.load_classification_lookup()
         if sector_level not in {"L1", "L2"}:
             raise StateModelSetError("missing-price read level must be L1 or L2")
 
@@ -1365,7 +1468,7 @@ class PostgresStockFactReader:
         )
         cursor.execute(
             f"""
-            WITH source_bounds AS (
+            WITH {MEMBER_CLASSIFICATION_CTES}, source_bounds AS (
               SELECT LEAST(%s::date,COALESCE(min(eligible_start),%s::date)) history_start,
                      %s::date history_end
               FROM market.stock_universe_pit_spans WHERE universe_key=%s
@@ -1408,10 +1511,10 @@ class PostgresStockFactReader:
               JOIN market.sw_index_member m
                 ON m.ts_code=s.ts_code AND m.in_date<=c.trade_date
                AND (m.out_date IS NULL OR m.out_date>=c.trade_date)
-              JOIN market.sw_index_classify l1
-                ON l1.level='L1' AND m.l1_code IN (l1.index_code,l1.industry_code)
-              JOIN market.sw_index_classify l2
-                ON l2.level='L2' AND m.l2_code IN (l2.index_code,l2.industry_code)
+              JOIN l2_owner owner
+                ON owner.l2_code=m.l2_code AND owner.canonical_l1_count=1
+              JOIN canonical_l1_catalog l1 ON l1.index_code=owner.canonical_l1_code
+              JOIN l2_catalog l2 ON l2.index_code=m.l2_code
             ), canonical_identity AS (
               SELECT trade_date,previous_trade_date,previous_trade_ordinal,ts_code,eligible_start,eligible_end,
                      l1_code,l1_name,l2_code,l2_name

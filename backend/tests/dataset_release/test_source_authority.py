@@ -42,6 +42,7 @@ class FakeSnapshotSession:
         self.revision = "v1"
         self.query_revisions: dict[str, str] = {}
         self.audit_revisions: dict[str, str] = {}
+        self.audit_quality_overrides: dict[str, str] = {}
         self.pit_exit = date(2026, 7, 31)
         self.missing: str | None = None
         self.large_query: str | None = None
@@ -206,7 +207,7 @@ class FakeSnapshotSession:
                     "written_rows": 1,
                     "expected_rows": 1,
                     "coverage_ratio": "1",
-                    "quality_status": "ok",
+                    "quality_status": self.audit_quality_overrides.get(dataset, "ok"),
                     "failure_category": None,
                     "metadata_json": json.dumps(
                         {"opaque": self.audit_secret} if self.audit_secret is not None else {},
@@ -422,6 +423,41 @@ def test_production_source_allowlist_uses_semantic_projection_and_code_major_ord
     )
     assert PRODUCTION_QUERY_SPECS["moneyflow_ts"].audit_dataset == ("stock_moneyflow_ts")
     assert "source_row.is_trading = TRUE" in PRODUCTION_QUERY_SPECS["trading_calendar"].sql
+    limit_spec = PRODUCTION_QUERY_SPECS["stk_limit"]
+    assert limit_spec.non_null_value_columns == ()
+    assert limit_spec.audit_non_null_value_columns == (
+        "pre_close",
+        "up_limit",
+        "down_limit",
+    )
+
+
+def test_stk_limit_raw_source_accepts_only_registered_nullable_repair_columns() -> None:
+    query = PRODUCTION_QUERY_SPECS["stk_limit"]
+    table = SourceTableSchema(query.table_identity, query.required_columns)
+    spec = source_authority_module._query_partition_spec(
+        query,
+        "2024-07-01_2024-07-31",
+        table,
+    )
+    payload = {
+        "ts_code": "600001.SH",
+        "trade_date": "2024-07-23",
+        "pre_close": None,
+        "up_limit": 11.0,
+        "down_limit": 9.0,
+    }
+
+    observed = source_authority_module._validate_query_row(
+        {
+            "row_key": json.dumps([payload["ts_code"], payload["trade_date"]]),
+            "row_payload": json.dumps(payload),
+        },
+        query,
+        spec,
+    )
+
+    assert json.loads(observed["row_payload"]) == payload
 
 
 def test_source_monthly_leaves_prove_june_to_july_moving_window_prefix(
@@ -1266,5 +1302,32 @@ def test_refresh_audit_missing_or_failed_blocks_partition_reuse(
     else:
         fake.audit_fail = "kline_minute_raw"
     authority, _cas = _authority(dataset_profile, tmp_path, fake)
+    with pytest.raises(SourceAuditIncomplete):
+        authority.freeze(cutoff=date(2026, 7, 31))
+
+
+@pytest.mark.parametrize("dataset", ("index_daily", "stk_limit"))
+def test_candidate_repairable_audit_is_limited_to_registered_candidate_providers(
+    dataset_profile,
+    tmp_path,
+    dataset,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.audit_quality_overrides[dataset] = "candidate_repairable"
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
+    snapshot = authority.freeze(cutoff=date(2026, 7, 31))
+
+    assert snapshot.source_content_root
+
+
+def test_candidate_repairable_audit_cannot_relax_dense_daily_source(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.audit_quality_overrides["kline_daily_raw"] = "candidate_repairable"
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
     with pytest.raises(SourceAuditIncomplete):
         authority.freeze(cutoff=date(2026, 7, 31))

@@ -11,11 +11,15 @@ from backend.services.trading_core.errors import DataUnavailableError
 
 
 class TradingCalendarProvider(Protocol):
-    def is_trading_day(self, trade_date: date) -> bool:
-        ...
+    def is_trading_day(self, trade_date: date) -> bool: ...
 
-    def next_trading_day_after(self, trade_date: date) -> date:
-        ...
+    def next_trading_day_after(self, trade_date: date) -> date: ...
+
+
+class FrozenTPlusOneAuthority(Protocol):
+    """Optional exact T+1 predicate supplied by a frozen runtime authority."""
+
+    def tplus1_unlocked(self, open_date: date, as_of_date: date) -> bool: ...
 
 
 class DbTradingCalendarProvider:
@@ -85,8 +89,28 @@ class StaticTradingCalendarProvider:
         return self._days[idx]
 
 
-def tplus1_unlocked(open_date: date, as_of_date: date, calendar: TradingCalendarProvider) -> bool:
+def tplus1_unlocked(
+    open_date: date,
+    as_of_date: date,
+    calendar: TradingCalendarProvider | FrozenTPlusOneAuthority,
+) -> bool:
     """Return True only on/after the next valid trading day after ``open_date``."""
+
+    frozen_predicate = getattr(calendar, "tplus1_unlocked", None)
+    if frozen_predicate is not None:
+        if not callable(frozen_predicate):
+            raise TypeError("calendar.tplus1_unlocked must be callable when present")
+        result = frozen_predicate(open_date, as_of_date)
+        if type(result) is not bool:
+            raise DataUnavailableError(
+                "frozen T+1 authority must return a strict boolean",
+                context={
+                    "open_date": open_date.isoformat(),
+                    "as_of_date": as_of_date.isoformat(),
+                    "actual_type": type(result).__name__,
+                },
+            )
+        return result
 
     if not calendar.is_trading_day(as_of_date):
         return False

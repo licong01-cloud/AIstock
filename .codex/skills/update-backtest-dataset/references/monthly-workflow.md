@@ -99,11 +99,18 @@ explicit active-segment override evidence. Large writer targets use single-copy 
 most one baseline copy and the trusted parent performs a same-volume atomic rename with no final recopy. Minute source and
 dump-update code batches are split before materialization at the active rung, never above 20 codes.
 
-Historical `stk_limit` holes inside canonical PIT v2 are not a generic provider retry and are never represented as NaN or
-untradable. Artifact-ready resolution calculates only missing keys from the versioned exchange/board/date rule, raw previous
-close and adjustment-factor ratio, then seals a candidate-only sparse overlay. Its exact affected-instrument list drives
-full-history overrides only for those instruments. Unknown/no-limit days, missing price/adjustment inputs, DB overlap and
-unresolved keys block resolution. No DB row, existing candidate or production pointer is changed.
+Historical `stk_limit` holes inside canonical PIT v2 are never represented as NaN or untradable. Artifact-ready resolution
+calculates missing keys and completes partial keys from the versioned exchange/board/date rule, raw previous close and
+adjustment-factor ratio. A partial DB row is completable only when every non-null field equals the derived value at cent
+precision; a complete row remains authoritative. Its exact affected-instrument list drives full-history overrides only for
+those instruments. Unknown/no-limit days, missing price/adjustment inputs, non-null conflicts and unresolved internal keys
+block resolution. No DB row, existing candidate or production pointer is changed.
+
+Source-readiness uses three outcomes. Legal sparse empties, exact index candidate fill, limit completion and strict D/P
+terminal daily suffixes continue automatically. Provider rate/network/publication failures are retryable and retain the
+durable intent. Only authority conflicts, PIT/identity corruption, internal required gaps, missing deterministic inputs and
+safety/authorization violations are hard blockers. A new hard blocker must be analyzed and explicitly approved by the user
+before implementation; tests cannot introduce a new gate by implication.
 
 These materialization savings do not weaken source truth. Without a trusted revision ledger, source freeze and prepublish
 DB-only recheck may still scan all required values through cutoff. Fixture coverage does not prove real full-scale runtime.
@@ -197,3 +204,7 @@ production_activation=not_requested
 ```
 
 This remains candidate-only; it does not authorize reading or rebuilding an older candidate to manufacture acceptance evidence.
+
+`stk_limit` 不完整行采用分层合同：physical audit 仍检查 `pre_close/up_limit/down_limit`，raw source CAS
+允许已登记 repair columns 暂时为空，artifact-ready overlay 完成并验证 PIT 键后才向构建器暴露。
+source sealer 不得提前拒绝可修复 partial，最终 Qlib 输入也不得包含任何 partial。

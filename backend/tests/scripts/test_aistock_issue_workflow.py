@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -1753,7 +1754,10 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
         "backend/services/dataset_release/artifact_ready_source.py",
         "backend/services/dataset_release/component_artifact_manifest.py",
         "backend/services/dataset_release/component_manifest_producer.py",
+        "backend/services/dataset_release/index_sources.py",
+        "backend/services/dataset_release/minute_overlay.py",
         "backend/services/dataset_release/mixed_planner.py",
+        "backend/services/dataset_release/source_authority.py",
         "backend/services/dataset_release/stk_limit_overlay.py",
     ]
 
@@ -2153,6 +2157,274 @@ def test_post_restart_verify_is_read_only_and_writes_only_ignored_receipt(
     assert payload["probe_evidence_digest"]
     assert issue.read_text(encoding="utf-8") == before
     assert (isolated_workflow_root / payload["receipt_path"]).exists()
+
+
+def test_post_restart_verify_worker_scheduler_uses_local_heartbeat_not_fastapi_identity(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    worker_target = catalog["targets"]["worker-scheduler"]
+    worker_target.pop("probe_origins")
+    worker_target["probe_mode"] = "dataset_release_worker_heartbeat"
+    worker_target["local_probe"] = {
+        "profile_path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+        "max_files": 200,
+    }
+    worker_target["probes"] = {
+        "health_ref": "worker_heartbeat.health",
+        "identity_ref": "worker_heartbeat.identity",
+        "business_smoke_ref": "worker_heartbeat.business",
+        "database_readback_ref": "not_required",
+    }
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    profile_path = isolated_workflow_root / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml"
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text("profile: qe_hmm_full_v2\n", encoding="utf-8")
+    runbook = isolated_workflow_root / "docs" / "operations" / "dataset-release-worker.md"
+    runbook.parent.mkdir(parents=True, exist_ok=True)
+    runbook.write_text("# dataset release Worker\n", encoding="utf-8")
+    issue = _write_json(
+        isolated_workflow_root / "worker-runtime-bug.json",
+        _bug(
+            allowed_write_scope=["scripts/dataset_release_worker.py"],
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "worker_scheduler",
+                "target_id": "worker-scheduler",
+                "target_ids": ["worker-scheduler"],
+                "persistence_basis": "git_tracked_source",
+                "fresh_process_evidence": ["fresh worker import passed"],
+                "operator_runbook_ref": "docs/operations/dataset-release-worker.md",
+            },
+        ),
+    )
+    expected = "a" * 40
+    heartbeat_body = json.dumps(
+        {
+            "schema_version": "dataset_release_worker_heartbeat_v1",
+            "identity": {"code_sha": expected, "instance_id": "dsw_" + "1" * 32},
+            "status": "IDLE",
+            "stop_requested": False,
+            "claim_kind": None,
+            "claim_id": None,
+        },
+        sort_keys=True,
+    )
+    response_sha = hashlib.sha256(heartbeat_body.encode()).hexdigest()
+    semantic = {
+        "schema_version": workflow.BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+        "contract_id": "dataset_release_worker_heartbeat",
+        "verdict": "passed",
+        "reason": None,
+        "facts": {
+            "state": "healthy",
+            "worker_status": "IDLE",
+            "stop_requested": False,
+            "claim_present": False,
+        },
+        "expectation": None,
+        "expectation_digest": None,
+        "response_sha256": response_sha,
+    }
+    local_results = []
+    for name in ("health_ref", "identity_ref", "business_smoke_ref"):
+        result = {
+            "name": name,
+            "url": f"worker-heartbeat://worker-scheduler/{name}",
+            "status": "passed",
+            "status_code": None,
+            "transport": {"status_code": None, "ok": True, "error": None, "kind": "local_file"},
+            "payload_schema": {"json": True, "kind": "object"},
+            "response_sha256": response_sha,
+            "response_bytes": len(heartbeat_body.encode()),
+        }
+        if name == "identity_ref":
+            result["_response_body"] = json.dumps({"commit": expected}, sort_keys=True)
+        if name == "business_smoke_ref":
+            result["semantic"] = semantic
+        local_results.append(result)
+
+    monkeypatch.setattr(
+        workflow,
+        "_read_dataset_release_worker_heartbeat_probes",
+        lambda target, timeout_seconds: local_results,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker verification must not use HTTP")),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="worker-scheduler",
+        expected_identity=expected,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["runtime_identity_match"] is True
+    assert payload["observed_identity"] == expected
+    assert payload["business_smoke_semantic"] == semantic
+    assert payload["required_probe_names"] == ["health_ref", "identity_ref", "business_smoke_ref"]
+    assert all(probe["transport"]["kind"] == "local_file" for probe in payload["probes"])
+    assert all("_response_body" not in probe for probe in payload["probes"])
+
+
+def test_worker_scheduler_probe_route_is_exact_to_dataset_release_sources(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    worker_target = catalog["targets"]["worker-scheduler"]
+    worker_target["source_globs"].append("backend/services/**/*worker*.py")
+    worker_target["probe_mode"] = "http"
+    worker_target["probe_routes"] = [
+        {
+            "route_id": "dataset_release_worker_heartbeat",
+            "source_globs": ["scripts/dataset_release_worker.py"],
+            "probe_mode": "dataset_release_worker_heartbeat",
+            "local_probe": {
+                "profile_path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+                "max_files": 200,
+            },
+            "probes": {
+                "health_ref": "worker_heartbeat.health",
+                "identity_ref": "worker_heartbeat.identity",
+                "business_smoke_ref": "worker_heartbeat.business",
+                "database_readback_ref": "not_required",
+            },
+        }
+    ]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    profile_path = isolated_workflow_root / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml"
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text("profile: qe_hmm_full_v2\n", encoding="utf-8")
+    runbook = isolated_workflow_root / "docs" / "operations" / "worker.md"
+    runbook.parent.mkdir(parents=True, exist_ok=True)
+    runbook.write_text("# Worker\n", encoding="utf-8")
+    explicit = {
+        "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+        "runtime_impact": "worker_scheduler",
+        "target_id": "worker-scheduler",
+        "target_ids": ["worker-scheduler"],
+        "persistence_basis": "git_tracked_source",
+        "fresh_process_evidence": ["fresh import passed"],
+        "operator_runbook_ref": "docs/operations/worker.md",
+        "health_ref": "http://127.0.0.1:8001/api/v1/health",
+        "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+        "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+        "database_readback_ref": "not_required",
+    }
+
+    dataset_release = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=["scripts/dataset_release_worker.py"],
+            runtime_contract=explicit,
+        ),
+        changed_files=["scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+    )
+    generic_worker = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=["backend/services/example_worker.py"],
+            runtime_contract=explicit,
+        ),
+        changed_files=["backend/services/example_worker.py"],
+        root=isolated_workflow_root,
+    )
+    mixed_worker = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=[
+                "scripts/dataset_release_worker.py",
+                "backend/services/example_worker.py",
+            ],
+            runtime_contract=explicit,
+        ),
+        changed_files=[
+            "scripts/dataset_release_worker.py",
+            "backend/services/example_worker.py",
+        ],
+        root=isolated_workflow_root,
+    )
+
+    assert dataset_release["blocking"] == []
+    assert dataset_release["target"]["probe_route_id"] == "dataset_release_worker_heartbeat"
+    assert dataset_release["target"]["probe_mode"] == "dataset_release_worker_heartbeat"
+    assert generic_worker["blocking"] == []
+    assert generic_worker["target"].get("probe_route_id") is None
+    assert generic_worker["target"]["probe_mode"] == "http"
+    assert generic_worker["target"]["probes"]["identity_ref"].endswith("/runtime-identity")
+    assert any("mix routed and non-routed Worker sources" in item for item in mixed_worker["blocking"])
+
+
+@pytest.mark.parametrize(
+    ("health_state", "worker_status", "stop_requested", "claim_kind", "claim_id", "code_sha", "failed_names"),
+    [
+        ("stale", "IDLE", False, None, None, "a" * 40, {"health_ref", "business_smoke_ref"}),
+        ("healthy", "STOP_REQUESTED", True, None, None, "a" * 40, {"business_smoke_ref"}),
+        ("healthy", "IDLE", False, "build", None, "a" * 40, {"business_smoke_ref"}),
+        ("healthy", "IDLE", False, None, None, "not-a-commit", {"identity_ref", "business_smoke_ref"}),
+    ],
+)
+def test_dataset_release_worker_heartbeat_probes_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    health_state: str,
+    worker_status: str,
+    stop_requested: bool,
+    claim_kind: str | None,
+    claim_id: str | None,
+    code_sha: str,
+    failed_names: set[str],
+) -> None:
+    instance_id = "dsw_" + "2" * 32
+    last_poll_at = "2026-08-23T18:00:00+00:00"
+    capability_digest = "b" * 64
+    health = {
+        "state": health_state,
+        "reason": "worker_heartbeat_fresh" if health_state == "healthy" else "worker_stopped_or_heartbeat_expired",
+        "instance_id": instance_id,
+        "worker_status": worker_status,
+        "last_poll_at": last_poll_at,
+        "age_seconds": 1.0,
+        "capability_digest": capability_digest,
+        "files_scanned": 1,
+    }
+    payload = {
+        "schema_version": "dataset_release_worker_heartbeat_v1",
+        "identity": {
+            "schema_version": "dataset_release_worker_identity_v1",
+            "instance_id": instance_id,
+            "code_sha": code_sha,
+            "capability_digest": capability_digest,
+        },
+        "status": worker_status,
+        "last_poll_at": last_poll_at,
+        "counter": 1,
+        "claim_kind": claim_kind,
+        "claim_id": claim_id,
+        "stop_requested": stop_requested,
+    }
+    monkeypatch.setattr(
+        workflow,
+        "_load_dataset_release_worker_heartbeat_snapshot",
+        lambda _target: (health, payload),
+    )
+
+    results = workflow._read_dataset_release_worker_heartbeat_probes(
+        {"target_id": "worker-scheduler", "local_probe": {}},
+        3.0,
+    )
+
+    observed_failed = {result["name"] for result in results if result["status"] != "passed"}
+    assert observed_failed == failed_names
+    assert all(result["transport"]["kind"] == "local_file" for result in results)
+    assert next(result for result in results if result["name"] == "business_smoke_ref")["semantic"][
+        "verdict"
+    ] == ("failed" if "business_smoke_ref" in failed_names else "passed")
 
 
 def test_post_restart_verify_accepts_deployed_origin_main_descendant_with_strict_git_proof(

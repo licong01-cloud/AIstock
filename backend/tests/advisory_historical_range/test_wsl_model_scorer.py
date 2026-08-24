@@ -19,6 +19,7 @@ from backend.services.advisory_historical_range.wsl_model_scorer import (
     REASON_WSL_OUTPUT_INVALID,
     WSL_SCORE_RESULT_SCHEMA,
     WslFrozenFeatureMatrixScorer,
+    WslMetaLabelFeatureMatrixScorer,
 )
 from backend.tests.advisory_historical_range.conftest import digest
 from scripts.wsl.advisory_historical_model_predict import validate_request_identity
@@ -48,7 +49,9 @@ def test_wsl_scorer_keeps_ensemble_and_rank_semantics_in_host(tmp_path: Path) ->
                         [[0.01] * (feature_count + 1) for _ in range(row_count)]
                         for _ in QUALITY_SEEDS
                     ],
-                    "booster_feature_names": [list(MODEL_FEATURE_COLUMNS) for _ in QUALITY_SEEDS],
+                    "booster_feature_names": [
+                        list(MODEL_FEATURE_COLUMNS) for _ in QUALITY_SEEDS
+                    ],
                 }
             ),
             encoding="utf-8",
@@ -92,6 +95,60 @@ def test_wsl_scorer_rejects_output_identity_drift(tmp_path: Path) -> None:
         )(bundle, _features())
 
     assert raised.value.reason_code == REASON_WSL_OUTPUT_INVALID
+
+
+def test_wsl_meta_label_scorer_returns_production_probability_ranks(
+    tmp_path: Path,
+) -> None:
+    bundle_path = tmp_path / "meta-bundle"
+    bundle_path.mkdir()
+    (bundle_path / "model.txt").write_text(
+        "frozen meta model placeholder", encoding="utf-8"
+    )
+    bundle = {
+        "bundle_path": bundle_path,
+        "manifest": {"bundle_id": digest("meta-bundle")},
+        "manifest_file_sha256": digest("meta-manifest"),
+        "feature_schema": {
+            "trained_feature_names": list(MODEL_FEATURE_COLUMNS),
+            "categorical_vocabulary": {
+                column: [0, 1] for column in CATEGORICAL_FEATURE_COLUMNS
+            },
+        },
+    }
+    features = _features()
+    features["decision_as_of_trade_date"] = pd.Timestamp("2026-05-15")
+    features["target_trade_date"] = pd.Timestamp("2026-05-18")
+
+    def runner(**kwargs: object) -> SimpleNamespace:
+        request = kwargs["request"]
+        assert isinstance(request, dict)
+        output_path = kwargs["output_path"]
+        assert isinstance(output_path, Path)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": WSL_SCORE_RESULT_SCHEMA,
+                    "request_hash": request["request_hash"],
+                    "bundle_id": digest("meta-bundle"),
+                    "raw_scores": [[0.1, 0.9]],
+                    "raw_contributions": [],
+                    "booster_feature_names": [list(MODEL_FEATURE_COLUMNS)],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    scored = WslMetaLabelFeatureMatrixScorer(
+        repo_root=Path(__file__).resolve().parents[3],
+        runner=runner,
+        path_converter=lambda value: value.replace("\\", "/"),
+    )(bundle, features)
+
+    assert scored["instrument"].tolist() == ["000002.SZ", "000001.SZ"]
+    assert scored["entry_priority_rank"].tolist() == [1, 2]
+    assert scored["take_probability"].tolist() == [0.9, 0.1]
 
 
 def test_wsl_helper_recomputes_request_hash_and_binds_model_paths(

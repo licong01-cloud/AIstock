@@ -14,7 +14,9 @@ import numpy as np
 import pandas as pd
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
-from backend.services.advisory_model_first.meta_label_contracts import FrozenAdvisoryMetaLabelTrainingRequestV1
+from backend.services.advisory_model_first.meta_label_contracts import (
+    FrozenAdvisoryMetaLabelTrainingRequestV1,
+)
 from backend.services.advisory_model_first.policy_contracts import (
     AdvisoryPolicyCostV1,
     transition_policy_from_payload,
@@ -38,6 +40,7 @@ def publish_meta_label_bundle(
     baseline_comparison: Mapping[str, Any],
     training_log: Mapping[str, Any],
     resource_report: Mapping[str, Any],
+    reference_challenger_comparison: Mapping[str, Any] | None = None,
 ) -> tuple[str, Path, dict[str, Any]]:
     root = Path(request.output_root).resolve()
     target_root = root / "meta_label_bundles"
@@ -49,15 +52,29 @@ def publish_meta_label_bundle(
         source_manifest = Path(request.policy_dataset_bundle_root) / "manifest.json"
         shutil.copyfile(source_manifest, temp / "policy_dataset_manifest.json")
         _write_json(temp / "feature_schema.json", dict(feature_schema))
-        _write_json(temp / "fresh_hmm_models.json", _stable_hmm_payload(dict(runtime_hmm_models)))
-        _write_json(temp / "fresh_hmm_unavailable.json", _stable_hmm_payload(runtime_hmm_unavailable))
+        _write_json(
+            temp / "fresh_hmm_models.json",
+            _stable_hmm_payload(dict(runtime_hmm_models)),
+        )
+        _write_json(
+            temp / "fresh_hmm_unavailable.json",
+            _stable_hmm_payload(runtime_hmm_unavailable),
+        )
         _write_json(temp / "walk_forward_hmm_receipt.json", dict(walk_forward_hmm_receipt))
-        _write_json(temp / "family_specs.json", [item.model_dump(mode="json") for item in request.family_specs])
+        _write_json(
+            temp / "family_specs.json",
+            [item.model_dump(mode="json") for item in request.family_specs],
+        )
         trial_metrics.to_parquet(temp / "cpcv_trial_metrics.parquet", index=False)
         block_scores.to_parquet(temp / "cpcv_block_scores.parquet", index=False)
         _write_json(temp / "pbo_receipt.json", dict(pbo_receipt))
         _write_json(temp / "winner_receipt.json", dict(winner_receipt))
         _write_json(temp / "baseline_comparison.json", dict(baseline_comparison))
+        if reference_challenger_comparison is not None:
+            _write_json(
+                temp / "reference_challenger_comparison.json",
+                dict(reference_challenger_comparison),
+            )
         _write_json(temp / "training_log.json", dict(training_log))
         _write_json(temp / "resource_report.json", dict(resource_report))
         files = {
@@ -68,7 +85,12 @@ def publish_meta_label_bundle(
         identity_files = {
             name: descriptor
             for name, descriptor in files.items()
-            if name not in {"training_request.json", "training_log.json", "resource_report.json"}
+            if name
+            not in {
+                "training_request.json",
+                "training_log.json",
+                "resource_report.json",
+            }
         }
         payload = {
             "schema_version": "advisory_meta_label_bundle_v1",
@@ -91,6 +113,8 @@ def publish_meta_label_bundle(
             "model_role": "meta_label_take_skip_confidence",
             "identity_files": identity_files,
         }
+        if request.outcome_weighting is not None:
+            payload["training_objective"] = "OUTCOME_MAGNITUDE_WEIGHTED_BINARY_V1"
         bundle_id = canonical_json_sha256(payload)
         manifest = {"bundle_id": bundle_id, **payload, "files": files}
         _write_json(temp / "manifest.json", manifest)
@@ -162,7 +186,10 @@ def find_meta_label_bundle_for_request(
         raise AdvisoryModelFirstError(
             "multiple meta-label bundles claim the same frozen request",
             reason_code="ADVISORY_META_LABEL_BUNDLE_IDENTITY_CONFLICT",
-            context={"request_id": request.request_id, "bundle_ids": [item[0] for item in matches]},
+            context={
+                "request_id": request.request_id,
+                "bundle_ids": [item[0] for item in matches],
+            },
         )
     return matches[0] if matches else None
 
@@ -178,9 +205,7 @@ def load_meta_label_bundle(
             "meta-label manifest cannot be read",
             reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
         ) from exc
-    actual = canonical_json_sha256(
-        {key: value for key, value in manifest.items() if key not in {"bundle_id", "files"}}
-    )
+    actual = canonical_json_sha256({key: value for key, value in manifest.items() if key not in {"bundle_id", "files"}})
     if (
         root.name != expected_bundle_id
         or manifest.get("bundle_id") != expected_bundle_id
@@ -199,7 +224,11 @@ def load_meta_label_bundle(
                 "meta-label bundle file escapes its root",
                 reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
             ) from exc
-        if not path.is_file() or path.stat().st_size != int(descriptor["size_bytes"]) or _sha256(path) != descriptor["sha256"]:
+        if (
+            not path.is_file()
+            or path.stat().st_size != int(descriptor["size_bytes"])
+            or _sha256(path) != descriptor["sha256"]
+        ):
             raise AdvisoryModelFirstError(
                 "meta-label bundle file differs from manifest",
                 reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
@@ -284,10 +313,10 @@ def load_exact_meta_label_runtime_bundle(
         bundle_path / "policy_dataset_manifest.json",
         expected_type=dict,
     )
-    if (
-        policy_dataset_manifest.get("policy_dataset_bundle_id") != policy_dataset_bundle_id
-        or policy_dataset_manifest.get("shadow_policy_sha256")
-        != loaded["manifest"].get("shadow_policy_sha256")
+    if policy_dataset_manifest.get(
+        "policy_dataset_bundle_id"
+    ) != policy_dataset_bundle_id or policy_dataset_manifest.get("shadow_policy_sha256") != loaded["manifest"].get(
+        "shadow_policy_sha256"
     ):
         raise AdvisoryModelFirstError(
             "meta-label runtime policy dataset manifest differs from the frozen bundle identity",
@@ -317,23 +346,23 @@ def load_exact_meta_label_runtime_bundle(
         )
     feature_schema = _read_runtime_json(bundle_path / "feature_schema.json", expected_type=dict)
     hmm_models = _read_runtime_json(bundle_path / "fresh_hmm_models.json", expected_type=dict)
-    hmm_unavailable = _read_runtime_json(
-        bundle_path / "fresh_hmm_unavailable.json", expected_type=list
-    )
+    hmm_unavailable = _read_runtime_json(bundle_path / "fresh_hmm_unavailable.json", expected_type=list)
     baselines = _read_runtime_json(bundle_path / "baseline_comparison.json", expected_type=dict)
     models = hmm_models.get("models")
-    if hmm_models.get("schema_version") != "fresh_sector_hmm_bundle_v1" or not isinstance(models, Mapping) or not models:
+    if (
+        hmm_models.get("schema_version") != "fresh_sector_hmm_bundle_v1"
+        or not isinstance(models, Mapping)
+        or not models
+    ):
         raise AdvisoryModelFirstError(
             "meta-label runtime HMM bundle is invalid",
             reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
         )
-    cutoffs = {
-        str(model.get("continuation_cutoff") or "")
-        for model in models.values()
-        if isinstance(model, Mapping)
-    }
-    if len(cutoffs) != 1 or "" in cutoffs or len(models) != sum(
-        isinstance(model, Mapping) for model in models.values()
+    cutoffs = {str(model.get("continuation_cutoff") or "") for model in models.values() if isinstance(model, Mapping)}
+    if (
+        len(cutoffs) != 1
+        or "" in cutoffs
+        or len(models) != sum(isinstance(model, Mapping) for model in models.values())
     ):
         raise AdvisoryModelFirstError(
             "meta-label runtime HMM models do not share one continuation cutoff",
@@ -365,6 +394,30 @@ def load_exact_meta_label_runtime_bundle(
 
 
 def score_meta_label_bundle(bundle: Mapping[str, Any], features: pd.DataFrame) -> pd.DataFrame:
+    matrix = prepare_meta_label_feature_matrix(bundle, features)
+    booster = bundle["booster"]
+    names = tuple(matrix.columns)
+    try:
+        if tuple(booster.feature_name()) != names:
+            raise AdvisoryModelFirstError(
+                "meta-label model feature order differs from its frozen schema",
+                reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+            )
+        probability = booster.predict(matrix)
+    except AdvisoryModelFirstError:
+        raise
+    except Exception as exc:
+        raise AdvisoryModelFirstError(
+            "meta-label model scoring failed",
+            reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    return format_meta_label_probabilities(features, probability)
+
+
+def prepare_meta_label_feature_matrix(bundle: Mapping[str, Any], features: pd.DataFrame) -> pd.DataFrame:
+    """Prepare the exact frozen P0-D matrix without loading LightGBM."""
+
     root = Path(bundle["bundle_path"])
     schema = bundle.get("feature_schema")
     if not isinstance(schema, Mapping):
@@ -395,40 +448,45 @@ def score_meta_label_bundle(bundle: Mapping[str, Any], features: pd.DataFrame) -
             matrix.loc[unseen, missing_indicator] = 1
             numeric = numeric.mask(unseen)
         matrix[column] = pd.Categorical(numeric, categories=values)
-    booster = bundle["booster"]
-    try:
-        if tuple(booster.feature_name()) != names:
-            raise AdvisoryModelFirstError(
-                "meta-label model feature order differs from its frozen schema",
-                reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
-            )
-        probability = booster.predict(matrix)
-    except AdvisoryModelFirstError:
-        raise
-    except Exception as exc:
-        raise AdvisoryModelFirstError(
-            "meta-label model scoring failed",
-            reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
-            context={"error_type": type(exc).__name__},
-        ) from exc
+    return matrix
+
+
+def format_meta_label_probabilities(features: pd.DataFrame, probability: Any) -> pd.DataFrame:
+    """Validate WSL/host probabilities and apply the production rank contract."""
+
     probability = np.asarray(probability, dtype=float)
     if probability.ndim != 1 or len(probability) != len(features):
         raise AdvisoryModelFirstError(
             "meta-label model returned an invalid probability shape",
             reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
-            context={"expected_rows": len(features), "actual_shape": list(probability.shape)},
+            context={
+                "expected_rows": len(features),
+                "actual_shape": list(probability.shape),
+            },
         )
     if not np.isfinite(probability).all() or ((probability < 0.0) | (probability > 1.0)).any():
         raise AdvisoryModelFirstError(
             "meta-label model returned an invalid probability",
             reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
         )
-    output = features[["decision_as_of_trade_date", "target_trade_date", "instrument", "selection_effective_rank"]].copy()
+    output = features[
+        [
+            "decision_as_of_trade_date",
+            "target_trade_date",
+            "instrument",
+            "selection_effective_rank",
+        ]
+    ].copy()
     output["take_probability"] = probability
     output["skip_probability"] = 1.0 - probability
     output["advisory_model_confidence"] = abs(output["take_probability"] - 0.5) * 2.0
     output = output.sort_values(
-        ["decision_as_of_trade_date", "take_probability", "selection_effective_rank", "instrument"],
+        [
+            "decision_as_of_trade_date",
+            "take_probability",
+            "selection_effective_rank",
+            "instrument",
+        ],
         ascending=[True, False, True, True],
     )
     output["entry_priority_rank"] = output.groupby("decision_as_of_trade_date").cumcount().add(1)

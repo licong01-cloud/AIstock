@@ -47,9 +47,7 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (
     P2_3C_REPORT_SCHEMA_VERSION,
     P2_3C_COMPONENT_SCHEMA_VERSION,
     RL1_ALGORITHM_VERSION,
-    RL1_CANDIDATE_PAYLOAD_KEYS,
-    RL1_COMPONENT_SCHEMA_VERSION,
-    RL1_CONTRACT_VERSION,
+    RL1_CANDIDATE_PAYLOAD_KEYS as HR1_REPLAY_PAYLOAD_KEYS,
     RL1_DEVELOPMENT_END,
     RL1_HOLDOUT_END,
     RL1_HOLDOUT_START,
@@ -58,7 +56,6 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (
     RL1_MEDIAN_SPREAD_MINIMUM,
     RL1_NEWEY_WEST_LAG,
     RL1_NEWEY_WEST_T_MINIMUM,
-    RL1_REPORT_SCHEMA_VERSION,
     RidgeFit,
     STATE_FRACTION,
     STATE_TIE_TOLERANCE,
@@ -67,6 +64,14 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (
     project_daily_states,
 )
 from backend.services.hmm_risk.state_model_set import canonical_json_bytes, canonical_sha256, sha256_bytes
+
+# This reader remains the immutable C-012-RL1 pre-HR1 holdout authority.  HR1
+# intentionally uses new replay schemas in the candidate module; importing its
+# live constants must not reinterpret already-written candidate/holdout files.
+RL1_CONTRACT_VERSION = "C-012-RL1-D1-D6"
+RL1_REPORT_SCHEMA_VERSION = "hmm_risk_rotation_l1_candidate_report_v1"
+RL1_COMPONENT_SCHEMA_VERSION = "hmm_risk_rotation_l1_component_model_v1"
+RL1_CANDIDATE_PAYLOAD_KEYS = frozenset(HR1_REPLAY_PAYLOAD_KEYS - {"replay_coverage"})
 
 CONTRACT_VERSION = "C-011-P2-4-D1-D6"
 ALGORITHM_VERSION = "hmm_risk_market_conditioned_ridge_holdout_v1"

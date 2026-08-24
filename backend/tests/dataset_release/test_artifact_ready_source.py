@@ -270,6 +270,19 @@ def _index_row(code: str, *, close: float = 10.0, trade_date: date = DAY) -> dic
     }
 
 
+def _portable_daily_fixture(day: date) -> dict[str, Any]:
+    return {
+        "ts_code": CODE,
+        "trade_date": day.isoformat(),
+        "open_li": 10_000,
+        "high_li": 10_100,
+        "low_li": 9_900,
+        "close_li": 10_000,
+        "volume_hand": 100,
+        "amount_li": 1_000,
+    }
+
+
 @dataclass
 class _View:
     values: dict[str, list[Mapping[str, Any]]]
@@ -280,6 +293,117 @@ class _View:
 
     def iter_partition_rows(self, descriptor: Mapping[str, Any]):
         return iter(self.rows[f"{descriptor['dataset']}:{descriptor['partition_key']}"])
+
+
+@pytest.mark.parametrize(
+    "terminal_exit_reason",
+    ["delist_event", "delisted", "delisting_confirmed", "paused_listing", "terminal"],
+)
+def test_terminal_daily_suffix_is_non_trading_coverage_but_interior_gap_blocks(
+    dataset_profile,
+    tmp_path,
+    terminal_exit_reason,
+) -> None:
+    canonical_profile = replace(dataset_profile, pit_authority_status="ACTIVE_CANONICAL")
+    days = (date(2026, 7, 29), date(2026, 7, 30), date(2026, 7, 31))
+    partition_key = f"{days[0].isoformat()}_{days[-1].isoformat()}"
+    pit = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": CODE,
+                "eligible_start": days[0],
+                "eligible_end": days[-1],
+                "entry_reason": None,
+                "exit_reason": terminal_exit_reason,
+            }
+        ],
+        universe_key=canonical_profile.universe_key,
+        rule_version=canonical_profile.universe_rule_version,
+        scope_start=days[0],
+        cutoff=days[-1],
+        state_identity=_digest("terminal-daily-state"),
+        source_fingerprint_sha256=_digest("terminal-daily-source"),
+        parameter_hash=canonical_profile.pit_rule_parameters_digest,
+    )
+    snapshot = SimpleNamespace(official_cutoff=days[-1], pit_snapshot=pit)
+    stock_descriptor = {"dataset": "stock_basic", "partition_key": "all"}
+    daily_descriptor = {"dataset": "kline_daily_raw", "partition_key": partition_key}
+    values = {"stock_basic": [stock_descriptor], "kline_daily_raw": [daily_descriptor]}
+    store = ControlStore.initialize(tmp_path / "terminal-daily-control")
+    cas = CASStore(store.root)
+    builder = ArtifactReadySourceBuilder(
+        canonical_profile,
+        cas,
+        fetch_tushare_daily_rows=lambda *_args: (),
+    )
+
+    suffix_view = _View(
+        values=values,
+        rows={
+            "stock_basic:all": [{"ts_code": CODE, "list_status": "D"}],
+            f"kline_daily_raw:{partition_key}": [_portable_daily_fixture(days[0])],
+        },
+    )
+    entries, _provider, _derived, summary, overlay_keys = builder._daily_entries(
+        suffix_view,
+        snapshot=snapshot,
+        trading_dates=days,
+        suspended=frozenset(),
+        checkpoint=lambda: None,
+    )
+
+    assert overlay_keys == frozenset()
+    assert summary["terminal_suffix_omitted_keys"] == 2
+    assert summary["terminal_suffix_codes"] == 1
+    receipt = cas.get_json(entries[0]["rows_ref"])
+    assert receipt["terminal_suffix_omitted_keys"] == 2
+
+    interior_view = _View(
+        values=values,
+        rows={
+            "stock_basic:all": [{"ts_code": CODE, "list_status": "D"}],
+            f"kline_daily_raw:{partition_key}": [
+                _portable_daily_fixture(days[0]),
+                _portable_daily_fixture(days[-1]),
+            ],
+        },
+    )
+    with pytest.raises(ArtifactReadySourceError) as caught:
+        builder._daily_entries(
+            interior_view,
+            snapshot=snapshot,
+            trading_dates=days,
+            suspended=frozenset(),
+            checkpoint=lambda: None,
+        )
+    assert caught.value.code == ArtifactReadyCoverageIncomplete.code
+
+    active_pit = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": CODE,
+                "eligible_start": days[0],
+                "eligible_end": days[-1],
+                "entry_reason": None,
+                "exit_reason": "scope_end",
+            }
+        ],
+        universe_key=canonical_profile.universe_key,
+        rule_version=canonical_profile.universe_rule_version,
+        scope_start=days[0],
+        cutoff=days[-1],
+        state_identity=_digest("active-daily-state"),
+        source_fingerprint_sha256=_digest("active-daily-source"),
+        parameter_hash=canonical_profile.pit_rule_parameters_digest,
+    )
+    with pytest.raises(ArtifactReadySourceError):
+        builder._daily_entries(
+            suffix_view,
+            snapshot=SimpleNamespace(official_cutoff=days[-1], pit_snapshot=active_pit),
+            trading_dates=days,
+            suspended=frozenset(),
+            checkpoint=lambda: None,
+        )
 
 
 def _fixture(
@@ -743,9 +867,10 @@ def test_tushare_minute_row_window_bound_precedes_record_materialization(
     )
     builder._tushare._provider = SimpleNamespace(stk_mins=lambda **_kwargs: frame)
 
-    with pytest.raises(artifact_ready_module.MinuteProviderTerminal):
+    with pytest.raises(artifact_ready_module.MinuteProviderTerminal) as caught:
         builder._fetch_tushare_minute_rows(CODE, DAY)
 
+    assert caught.value.retryable is False
     assert frame.to_dict_called is False
 
 
@@ -760,13 +885,44 @@ def test_tushare_index_column_bound_precedes_record_materialization(
     frame = _TrackingFrame(pd.DataFrame([row]))
     builder._tushare._provider = SimpleNamespace(index_daily=lambda **_kwargs: frame)
 
-    with pytest.raises(artifact_ready_module.IndexProviderUnavailable):
+    with pytest.raises(artifact_ready_module.ArtifactReadyProviderTerminal):
         builder._fetch_tushare_index_rows(
             DOMESTIC_INDEX_DEFINITIONS[0],
             DAY,
             DAY,
         )
 
+    assert frame.to_dict_called is False
+
+
+def test_tushare_daily_column_bound_is_terminal_not_retryable(
+    dataset_profile,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import tushare as ts
+
+    store = ControlStore.initialize(tmp_path / "daily-provider-control")
+    builder = ArtifactReadySourceBuilder(dataset_profile, CASStore(store.root))
+    row = {
+        "ts_code": CODE,
+        "trade_date": DAY.strftime("%Y%m%d"),
+        "open": 10.0,
+        "high": 10.0,
+        "low": 10.0,
+        "close": 10.0,
+        "vol": 100.0,
+        "amount": 100.0,
+        "unexpected": "field",
+    }
+    frame = _TrackingFrame(pd.DataFrame([row]))
+    builder._tushare._provider = object()
+    monkeypatch.setattr(ts, "pro_bar", lambda **_kwargs: frame)
+
+    with pytest.raises(artifact_ready_module.ArtifactReadyProviderTerminal) as caught:
+        builder._fetch_tushare_daily_rows(CODE, DAY, DAY)
+
+    assert caught.value.retryable is False
     assert frame.to_dict_called is False
 
 
@@ -791,6 +947,26 @@ def test_tushare_adj_factor_row_bound_precedes_record_materialization(
         builder._fetch_tushare_adj_factor_rows(DAY)
 
     assert frame.to_dict_called is False
+
+
+def test_tushare_adj_factor_40203_is_retryable_waiting(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    class RateLimited(RuntimeError):
+        code = 40203
+
+    store = ControlStore.initialize(tmp_path / "adj-provider-rate-limit-control")
+    builder = ArtifactReadySourceBuilder(dataset_profile, CASStore(store.root))
+    builder._tushare._provider = SimpleNamespace(
+        adj_factor=lambda **_kwargs: (_ for _ in ()).throw(RateLimited("40203"))
+    )
+
+    with pytest.raises(artifact_ready_module.ArtifactReadyProviderRateLimited) as caught:
+        builder._fetch_tushare_adj_factor_rows(DAY)
+
+    assert caught.value.code == "WAITING_PROVIDER_RATE_LIMIT_40203"
+    assert caught.value.retryable is True
 
 
 def test_tushare_receipt_byte_bound_is_stream_counted_without_large_json_blob(
@@ -1715,10 +1891,13 @@ def test_tushare_terminal_or_still_missing_never_claims_complete(
         builder.build(snapshot, source_view=view)
 
     if tushare_rows == "rate-limit":
-        assert caught.value.code == "BLOCKED_PROVIDER_TERMINAL_40203"
+        assert caught.value.code == "WAITING_PROVIDER_RATE_LIMIT_40203"
+        assert caught.value.retryable is True
     else:
         assert caught.value.code == "BLOCKED_ARTIFACT_READY_COVERAGE_INCOMPLETE"
     failure = cas.get_json(caught.value.context["failure_receipt_ref"])
+    if tushare_rows == "rate-limit":
+        assert failure["retryable"] is True
     assert "SHOULD_NOT_PERSIST" not in str(failure)
 
 
@@ -1784,6 +1963,34 @@ def test_index_provider_runs_only_for_missing_code_and_overlay_is_immutable(
     receipt = cas.get_json(merged["rows_ref"])
     assert len(receipt["rows"]) == len(DOMESTIC_INDEX_DEFINITIONS)
     assert receipt["details"][missing]["provider_fill_rows"] == 1
+
+
+def test_index_provider_transport_failure_is_retryable_waiting(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    missing = DOMESTIC_INDEX_DEFINITIONS[0].daily_code
+    cas, view, snapshot = _fixture(
+        dataset_profile,
+        tmp_path,
+        minute_rows=_minute_rows(),
+        missing_index_code=missing,
+    )
+    builder = ArtifactReadySourceBuilder(
+        dataset_profile,
+        cas,
+        fetch_tdx_rows=lambda *_args: (),
+        fetch_tushare_minute_rows=lambda *_args: (),
+        fetch_tushare_index_rows=lambda *_args: (_ for _ in ()).throw(
+            artifact_ready_module.IndexProviderUnavailable("provider transport unavailable")
+        ),
+    )
+
+    with pytest.raises(ArtifactReadySourceError) as caught:
+        builder.build(snapshot, source_view=view)
+
+    assert caught.value.code == "DATASET_RELEASE_INDEX_PROVIDER_UNAVAILABLE"
+    assert caught.value.retryable is True
 
 
 def _star_base_point_index_view(*, include_required_row: bool) -> tuple[_View, tuple[date, date]]:
