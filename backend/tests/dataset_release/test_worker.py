@@ -221,7 +221,12 @@ def _run(store: ControlStore, suffix: str):
     )
 
 
-def _resource_gate(dataset_profile, *, available: int = 32 * GIB) -> ResourceGate:
+def _resource_gate(
+    dataset_profile,
+    *,
+    available: int = 32 * GIB,
+    low_memory: bool = False,
+) -> ResourceGate:
     return ResourceGate(
         dataset_profile,
         host_probe=lambda: HostMemorySnapshot(
@@ -232,7 +237,7 @@ def _resource_gate(dataset_profile, *, available: int = 32 * GIB) -> ResourceGat
             pagefile_used_bytes=2 * GIB,
             pagefile_limit_bytes=32 * GIB,
             page_reads_per_second=0.0,
-            low_memory_signaled=False,
+            low_memory_signaled=low_memory,
         ),
         disk_probe=lambda predicted: DiskSpaceSnapshot(
             control_free_bytes=128 * GIB,
@@ -397,7 +402,7 @@ def test_resource_wait_happens_before_any_build_lease_or_supervisor(tmp_path, da
         identity=_identity("b", clock),
         registry=ProcessorRegistry(build=processor),
         supervisor_factory=lambda request: FakeSupervisor(request, entered),
-        resource_gate_factory=lambda _resources, _stage: _resource_gate(dataset_profile, available=10 * GIB),
+        resource_gate_factory=lambda _resources, _stage: _resource_gate(dataset_profile, low_memory=True),
         now=clock,
         sleep=lambda _seconds: None,
     )
@@ -441,7 +446,7 @@ def test_production_supervisor_without_resource_gate_blocks_before_source_claim(
     assert store._many("SELECT * FROM leases WHERE attempt_id IS NOT NULL", ()) == []
 
 
-def test_source_resource_wait_uses_durable_first_wait_and_times_out(tmp_path, dataset_profile) -> None:
+def test_source_resource_wait_deadline_never_becomes_terminal(tmp_path, dataset_profile) -> None:
     clock = Clock()
     store = ControlStore.initialize(tmp_path / "control")
     submission = _submission(store, "resource-timeout")
@@ -456,7 +461,7 @@ def test_source_resource_wait_uses_durable_first_wait_and_times_out(tmp_path, da
         identity=_identity("d", clock),
         registry=ProcessorRegistry(resolution=processor),
         supervisor_factory=lambda request: FakeSupervisor(request, []),
-        resource_gate_factory=lambda _resources, _stage: _resource_gate(dataset_profile, available=10 * GIB),
+        resource_gate_factory=lambda _resources, _stage: _resource_gate(dataset_profile, low_memory=True),
         retry_backoff_seconds=1,
         now=clock,
         sleep=lambda _seconds: None,
@@ -468,13 +473,14 @@ def test_source_resource_wait_uses_durable_first_wait_and_times_out(tmp_path, da
 
     durable = store.get_submission(submission["submission_id"])
     assert first.state == "WAITING_SOURCE"
-    assert second.state == "BLOCKED_CONTRACT"
-    assert second.detail == "BLOCKED_RESOURCE_TIMEOUT"
-    assert durable["terminal_receipt_ref"] is not None
-    receipt = worker.cas.get_json(durable["terminal_receipt_ref"])
-    assert receipt["error_code"] == "BLOCKED_RESOURCE_TIMEOUT"
+    assert second.state == "WAITING_SOURCE"
+    assert second.detail == "RESOURCE_OS_LOW_MEMORY_SIGNAL"
+    assert durable["terminal_receipt_ref"] is None
+    events = store.list_events(submission_id=submission["submission_id"])
+    receipt = worker.cas.get_json(events[-1]["payload_ref"])
+    assert receipt["error_code"] == "RESOURCE_OS_LOW_MEMORY_SIGNAL"
+    assert receipt["context"]["wait_deadline_observed"] is True
     assert receipt["context"]["resource_admission_class"] == "full"
-    assert receipt["context"]["effective_host_start_commit_headroom_bytes"] == 16 * GIB
 
 
 def test_context_exposes_only_supervised_launch_and_forwards_pressure_rung(tmp_path, dataset_profile) -> None:
@@ -779,6 +785,33 @@ def test_resolution_retry_exhaustion_binds_latest_error_receipt(tmp_path) -> Non
     assert receipt["kind"] == "resolution"
     assert receipt["target_id"] == submission["submission_id"]
     assert receipt["disposition"] == "RETRYABLE"
+
+
+def test_resolution_waiting_does_not_consume_retry_budget(tmp_path) -> None:
+    clock = Clock()
+    store = ControlStore.initialize(tmp_path / "control")
+    submission = _submission(store, "resolution-waiting")
+    processor = StaticProcessor(ProcessorResult.waiting("SOURCE_NOT_READY", retry_after_seconds=0))
+    worker, _entered = _worker(
+        store,
+        clock=clock,
+        registry=ProcessorRegistry(resolution=processor),
+        max_attempts=1,
+        retry_backoff_seconds=0,
+    )
+
+    reports = [worker.run_once(), worker.run_once(), worker.run_once()]
+
+    durable = store.get_submission(submission["submission_id"])
+    attempts = store._many(
+        "SELECT * FROM resolution_attempts WHERE submission_id=? ORDER BY ordinal",
+        (submission["submission_id"],),
+    )
+    assert [report.state for report in reports] == ["WAITING_SOURCE"] * 3
+    assert durable["state"] == "WAITING_SOURCE"
+    assert durable["terminal_receipt_ref"] is None
+    assert len(attempts) == 3
+    assert {attempt["state"] for attempt in attempts} == {"RELEASED_WAITING"}
 
 
 def test_build_retry_exhaustion_binds_latest_error_receipt_and_missing_ref_fails_closed(

@@ -1070,14 +1070,16 @@ class DatasetReleaseWorker:
         observed = self._now()
         first_wait = self._resource_wait_started(kind, target_id) or observed
         waited_seconds = max(0.0, (observed - first_wait).total_seconds())
-        timed_out = waited_seconds >= int(wait_deadline_seconds)
-        terminal = hard_failure or timed_out
-        effective_reason = "BLOCKED_RESOURCE_TIMEOUT" if timed_out and not hard_failure else reason_code
+        wait_deadline_observed = waited_seconds >= int(wait_deadline_seconds)
+        terminal = hard_failure
+        effective_reason = reason_code
         context = {
             "resource_reason_code": reason_code,
             "pressure_rung": int(pressure_rung),
             "data_scope_changed": False,
             "waited_seconds": waited_seconds,
+            "wait_deadline_seconds": int(wait_deadline_seconds),
+            "wait_deadline_observed": wait_deadline_observed,
         }
         if gate_sample is not None:
             context.update(
@@ -1894,16 +1896,19 @@ class DatasetReleaseWorker:
                     (submission["submission_id"],),
                 ).fetchall()
                 attempts = len(resolution_rows)
-                next_state = "BLOCKED_RETRY_EXHAUSTED" if attempts >= self.max_attempts else "QUEUED_RESOLUTION"
+                waiting = submission["state"] == "WAITING_SOURCE"
+                next_state = (
+                    "QUEUED_RESOLUTION"
+                    if waiting or attempts < self.max_attempts
+                    else "BLOCKED_RETRY_EXHAUSTED"
+                )
                 terminal_ref = None
                 if next_state == "BLOCKED_RETRY_EXHAUSTED":
                     terminal_ref = self._verified_retry_exhaustion_ref(
                         kind="resolution",
                         target_id=str(submission["submission_id"]),
                         row=resolution_rows[0] if resolution_rows else None,
-                        expected_attempt_state=(
-                            "RELEASED_WAITING" if submission["state"] == "WAITING_SOURCE" else "RELEASED_RETRYABLE"
-                        ),
+                        expected_attempt_state="RELEASED_RETRYABLE",
                     )
                 connection.execute(
                     """

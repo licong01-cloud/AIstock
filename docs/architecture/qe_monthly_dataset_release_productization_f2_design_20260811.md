@@ -715,14 +715,12 @@ Run：
 | `not_exists` | `SUCCEEDED` | resolution Worker；仅 fresh unchanged probe + current-source-equivalent attestation；原子创建 `NO_OP_VERIFIED` run | yes |
 | `QUEUED` | `WAITING_RESOURCE` | resource preflight without heavy claim | no |
 | `WAITING_RESOURCE` | `QUEUED` | hysteresis satisfied | no |
-| `WAITING_RESOURCE` | `BLOCKED_RESOURCE_TIMEOUT` | bounded deadline | yes |
+| `WAITING_RESOURCE` | `QUEUED` | 条件恢复；等待 deadline 只写 warning，不产生 terminal state | no |
 | `QUEUED` | `REATTESTING` or `EXECUTING` | build Worker claim + new attempt/fence | no |
 | `REATTESTING` | `FINALIZING_ATTESTATION` | attestation receipt CAS staged；不使用 candidate publish | no |
 | `FINALIZING_ATTESTATION` | `SUCCEEDED` | SQLite attestation/ref/outcome/event 原子提交 | yes |
 | `EXECUTING` | `WAITING_RESOURCE` | safe checkpoint releases attempt and clears active attempt | no |
-| `EXECUTING` | `WAITING_PERFORMANCE_REGRESSION` | normalized compute throughput 持续越过 30%/70% 门限；安全 checkpoint | no |
-| `WAITING_PERFORMANCE_REGRESSION` | `QUEUED` | 有下一 pressure-ladder rung 且 DB/provider/resource preflight healthy | no |
-| `WAITING_PERFORMANCE_REGRESSION` | `BLOCKED_PERFORMANCE_REGRESSION` | ladder/deadline exhausted；不缩业务范围 | yes |
+| `EXECUTING` | `EXECUTING` | normalized compute throughput 退化只写 performance warning；不暂停、不改变 rung | no |
 | `EXECUTING` | `VALIDATING` | all required component manifests committed | no |
 | `VALIDATING` | `BLOCKED_SOURCE_REVISED` | pre-publish fresh source/PIT readback 与 resolved intent 不同 | yes |
 | `VALIDATING` | `PREPARING_PUBLISH` | candidate receipt/manifest staged | no |
@@ -732,7 +730,7 @@ Run：
 | `WAITING_PUBLISH_RECOVERY` | `PUBLISHING` | same active owner/attempt/fences healthy，或 old tree quiescent + new finalizer fence CAS adoption | no |
 | `PUBLISHING` | `BLOCKED_PUBLISH_CONFLICT` | final tree/marker 与 prepared immutable identity 不一致 | yes |
 | owned pre-publish-commit active | `CANCEL_REQUESTED` -> `CANCELLED` | Worker cooperative checkpoint | yes |
-| unclaimed `QUEUED/WAITING_RESOURCE/WAITING_PERFORMANCE_REGRESSION` | `CANCELLED` | control service direct terminal cancellation | yes |
+| unclaimed `QUEUED/WAITING_RESOURCE` | `CANCELLED` | control service direct terminal cancellation | yes |
 | owned pre-publish-commit active | `FAILED_RETRYABLE` | typed error, release attempt/lease | no |
 | `FAILED_RETRYABLE` | `QUEUED` | retry budget; new attempt ordinal on next claim | no |
 | `FAILED_RETRYABLE` | `BLOCKED_RETRY_EXHAUSTED` | retry budget exhausted | yes |
@@ -836,9 +834,9 @@ publish commit point 先提交时，cancel 只能走上述 too-late 分支。
 
 ### 10.1 Resource Budget
 
-每个 stage 冻结：启动最小 host available/system commit headroom、运行 emergency headroom、Windows Job
-private commit、WSL cgroup memory/swap、process-tree RSS telemetry、DB pool/statement timeout、batch/chunk 大小、
-X 盘最小空间、等待超时。
+每个 stage 冻结：Windows Job private commit、WSL cgroup memory/swap、process-tree RSS telemetry、DB
+pool/statement timeout、batch/chunk 大小及基于 predicted remaining new bytes 的 X 盘容量。host available/system
+commit headroom、paging/pagefile、WSL host available 和等待 deadline 仅为 telemetry/warning。
 
 `qe_hmm_full_v1` 首版默认值与 hard maximum 固定如下（`GiB=2^30`）。profile 可以降低并发/块大小、提高
 available-memory reserve；超过 hard max 或降低 reserve 必须拒绝加载，不允许以 CLI/env 临时绕过。调整这些
@@ -851,11 +849,10 @@ available-memory reserve；超过 hard max 或降低 reserve 必须拒绝加载�
 | Windows-only stage Job commit | cap 8 GiB | `JOB_OBJECT_LIMIT_JOB_MEMORY=8 GiB` |
 | hybrid/WSL stage Windows-side Job commit | cap 4 GiB | `JOB_OBJECT_LIMIT_JOB_MEMORY=4 GiB` |
 | WSL task cgroup `memory.high/max/swap.max` | 6 / 8 / 0 GiB | 6 / 8 / 0 GiB |
-| host start `MemAvailable` | >=16 GiB | 不得低于 16 GiB |
-| host emergency `MemAvailable` | 8 GiB | 不得低于 8 GiB |
-| host start/emergency system commit headroom | 16 / 8 GiB | 不得降低 |
-| WSL start `MemAvailable`（WSL stage） | >=12 GiB | 不得低于 12 GiB |
-| WSL emergency `MemAvailable`（WSL stage） | 6 GiB | 不得低于 6 GiB |
+| host `MemAvailable` / system commit headroom | 兼容遥测阈值 | warning only，不参与 admission/checkpoint/terminal |
+| host paging / pagefile | 实时遥测 | warning only |
+| WSL host `MemAvailable`（WSL stage） | 兼容遥测阈值 | warning only；task cgroup hard caps 仍生效 |
+| OS `LowMemoryResourceNotification` | 明确信号 | safe pause；等待不耗尽重试 |
 | DB pool / simultaneous row-producing query | 4 / 1 | 4 / 1 |
 | DB statement timeout | 300 s | 300 s；超时 typed retry，不扩大 |
 | provider request concurrency | 1 | 1 |
@@ -863,8 +860,8 @@ available-memory reserve；超过 hard max 或降低 reserve 必须拒绝加载�
 | minute code batch / date chunk | 20 / 3 months | 20 / 3 months |
 | H5 load batch / date chunk | 100 / 3 months | 100 / 3 months |
 | Parquet row group / validation read chunk | 100,000 / 100,000 rows | 100,000 / 100,000 rows |
-| enforcement sample / receipt rollup / wait deadline | 1 s / 5 s / 3,600 s | sample <=1 s；deadline <=3,600 s |
-| candidate free-space start reserve | max(32 GiB, 1.25x predicted new bytes) | 不得降低 |
+| enforcement sample / receipt rollup / wait deadline | 1 s / 5 s / 3,600 s | deadline 仅告警，不 terminalize |
+| candidate required free space | 1.25x predicted remaining new bytes | 不使用固定 32 GiB floor |
 
 所有 data-bearing resolution/build/validation helper 必须由 task-owned resource supervisor 以 suspended state
 创建，先加入 non-breakaway Windows Job 后才 resume；Windows-only 子 Job commit cap=8 GiB，WSL/hybrid
@@ -889,11 +886,10 @@ Linux PID/create-time/cgroup quiescence，不能因“应该已被 guardian 停�
 Windows Job commit 与 WSL `memory.current` 相加为 aggregate owned private commit；Windows owned counters 明确
 排除 `vmmemWSL`，避免双算。RSS/working set 继续记录但不作为唯一内存安全证据。
 
-system gate 用 `GetPerformanceInfo`/等价 Win32 API 采集 `CommitTotal/CommitLimit`，并读取
-`LowMemoryResourceNotification`、Available Bytes、Page Reads/sec 与 pagefile used/limit。start 必须同时满足
-available 和 commit headroom >=16 GiB 且无 low-memory signal；运行中任一 available/commit headroom <8 GiB、
-low-memory signal，或 `Page Reads/sec>=256` 连续 3 个 1 秒样本且 available/commit headroom 任一 <12 GiB，
-都触发 emergency。Job/cgroup 是连续硬限，1 秒采样只做提前 checkpoint 与系统压力判定，不承担防突增的唯一责任。
+system telemetry 用 `GetPerformanceInfo`/等价 Win32 API 采集 `CommitTotal/CommitLimit`，并读取
+`LowMemoryResourceNotification`、Available Bytes、Page Reads/sec 与 pagefile used/limit。除明确 OS low-memory
+信号可请求 safe pause 外，所有 host-wide 数值只写 warning，不阻止 admission、不触发 pressure rung、不产生
+terminal state；缺少可选 system telemetry 也必须显式写 warning。Job/cgroup 才是连续 task-owned 硬限。
 每个 SQL/provider response 在进入 transform 前即受 batch/chunk 硬上限，禁止先物化超大 frame 再切块。
 
 Worker 记录：
@@ -926,12 +922,12 @@ Worker 记录：
 为避免一次压力尖峰让每月任务反复失败，resource contract 内置 deterministic pressure ladder，仅能在安全
 checkpoint 后对下一 attempt 依次缩小实际物理执行单元：minute batch `20->10->5`、
 date chunk `3->1 month`、row/read group `100k->50k`、dump workers `8->4->2`。触发条件为连续两次
-aggregate private commit >=85% cap 或 available/commit headroom 接近 emergency reserve 1 GiB；每次变化写 resource fingerprint/event
+本任务 aggregate private commit >=85% cap；每次变化写 resource fingerprint/event
 并通过同值 parity oracle。它不得减少股票、日期、字段、PIT、指数、H5 或验证范围，也不得扩大任一 hard max；
 factor H5/static 的实际内存边界是单日切片与 `row_group_rows`；`h5_batch=100->50->20` 只保留为 v1 profile/receipt
 兼容遥测，明确标记 `reserved_profile_telemetry_not_consumed_v1`，不得把它计作已生效的降压能力。分钟批大小同时由子进程
 manifest 与父进程所选 pressure rung 双重绑定，禁止子进程漂回 20。
-最低档仍 breach 才 checkpoint 后进入 typed `WAITING_RESOURCE/BLOCKED_RESOURCE_TIMEOUT`，不继续挤占内存。
+最低档仍 breach 才 checkpoint 后进入 typed `WAITING_RESOURCE` 或 task-owned hard failure；等待 deadline 不转 terminal。
 
 性能 pass/fail 基于相同 semantic workload：source rows、instrument-days、component actions、cache/reuse 命中、
 冷/热 cache 标签必须相同。源码合入门禁至少使用 checked-in synthetic/fixture data，对“未改 orchestration 的当前
@@ -950,9 +946,8 @@ bytes 和 peak memory。源码阶段若 synthetic workload 不可比，`benchmar
 历史约 28 GiB private commit/27.15 GiB RSS 失控路径的 full 目标是 aggregate owned private commit <=12 GiB
 （至少约 57% commit 降低）；Job/cgroup 是硬执行而非轮询愿望。该绝对 cap 是
 运行 hard gate，真实 full 耗时仍须在下一次获授权月更按上述同 workload 口径复核，不用重导旧 cutoff 来造证据。
-生产月更因 DB/I/O 抖动不以单窗口 10% 退化自动重配：同 stage/action/profile 按 rows/bytes 归一化，>10% 记录
-warning；持续 15 分钟 compute throughput <70% baseline 或退化 >30% 才在安全 checkpoint 暂停为
-`WAITING_PERFORMANCE_REGRESSION`。零进展 30 分钟、单 SQL 300 秒超时或资源 hard breach 立即停止当前 attempt。
+生产月更因 DB/I/O 抖动不以性能退化自动重配：同 stage/action/profile 按 rows/bytes 归一化并记录 warning，
+不暂停、不阻断、不改变 pressure rung。单 SQL 300 秒超时或 task-owned resource hard breach 仍 typed fail 当前 attempt。
 恢复仍只可使用上述 pressure ladder，禁止用缺字段、缺历史或降低验证换取速度。
 
 ### 10.2 Bounded Logs

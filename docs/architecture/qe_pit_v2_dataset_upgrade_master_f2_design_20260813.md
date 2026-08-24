@@ -605,25 +605,23 @@ rollback创建新的单调递增generation，并让其引用最后一个已验�
 | aggregate private commit | hard max | 12 GiB；可以收紧，不能扩大 |
 | Windows Job / hybrid Windows | hard max | 8 GiB / 4 GiB；可以收紧，不能扩大 |
 | WSL memory high/max/swap | exact hard | 6/8/0 GiB；swap必须恒为0 |
-| WSL start/emergency MemAvailable | minimum reserve | 12/6 GiB；不得降低，可提高 |
-| host start/emergency available及commit headroom | minimum reserve | 16/8 GiB；不得降低，可提高 |
+| WSL host MemAvailable | telemetry only | 兼容阈值只写 warning；task cgroup hard caps 不变 |
+| host available、commit headroom、paging/pagefile | telemetry only | warning only；不参与 admission/checkpoint/terminal |
 | DB pool/row-producing/provider concurrency | max | 4/1/1；不得提高 |
 | minute batch/date chunk/row group/dump workers | pressure ladder max | 20→10→5；3→1月；100k→50k；8→4→2，只能在安全checkpoint后收紧 |
 | H5 batch 100→50→20 | telemetry only | `reserved_profile_telemetry_not_consumed_v1`；不能宣称为有效降压；实际由单日切片和row-group限内存 |
-| candidate free space | minimum reserve | `max(32 GiB, 1.25 × predicted_new_bytes)`；不得降低 |
+| candidate required free space | predicted capacity | `1.25 × predicted_remaining_new_bytes`；无固定 32 GiB floor |
 
 验收要求：
 
 1. 源码合入gate：同cache class、相同semantic workload的合成benchmark各至少3次，median要求
    `compute_seconds_new <= 1.10 × baseline`、`rows/s_new >= 0.90 × baseline`、row-producing query增量不超过
    `max(2,5%)`，peak commit不超过hard cap且不超过`max(1.10 × baseline, baseline+256 MiB)`。
-2. 真实月更runtime gate：按stage记录source-read/provider/compute/validation/resource-wait、rows/bytes、query和I/O，
-   resource receipt必须包含WSL start/emergency MemAvailable readback；
-   >10%归一化退化先记warning，只有持续15分钟`throughput <70% baseline`或退化>30%才在checkpoint进入
-   `WAITING_PERFORMANCE_REGRESSION`，不能自动加并发。
+2. 真实月更runtime telemetry：按stage记录source-read/provider/compute/validation/resource-wait、rows/bytes、query和I/O；
+   resource receipt包含host/WSL system warning。性能退化只记warning，不进入等待/阻断、不改变pressure rung、不能自动加并发。
 3. 资源等待不能计入compute regression，但必须单独报告；无可信DB revision ledger时，source freeze和publish前
    recheck仍可能各做一次全值扫描，“选择性少写”不等于“仅读新增月”。
-4. 任一hard breach、swap使用、零进展30分钟或单SQL超过300秒，立即checkpoint并typed fail/wait。
+4. 任一task-owned hard breach、swap使用或单SQL超过300秒，立即checkpoint并typed fail/wait；等待和source-not-ready不耗尽重试预算。
 5. 资源监管只能管理identity-bound当前task child，绝不停止其他窗口、QE实验或用户进程。
 
 ## 8. PR、审核与合入顺序

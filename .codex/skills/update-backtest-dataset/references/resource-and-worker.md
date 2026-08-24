@@ -29,9 +29,10 @@ Read live values from the selected allowlisted profile. `qe_hmm_full_v1` reprodu
 | Windows-only child Job commit | 8 GiB |
 | hybrid/WSL Windows-side Job commit | 4 GiB |
 | WSL `memory.high` / `memory.max` / `swap.max` | 6 GiB / 8 GiB / 0 |
-| host start/emergency available | 16 GiB / 8 GiB |
-| host start/emergency commit headroom | 16 GiB / 8 GiB |
-| WSL start/emergency available | 12 GiB / 6 GiB |
+| host available / system commit headroom | telemetry + warning only |
+| host paging / pagefile | telemetry + warning only |
+| WSL host available | telemetry + warning only |
+| explicit OS low-memory notification | safe pause; never retry exhaustion |
 | DB pool / simultaneous row-producing query | 4 / 1 |
 | DB statement timeout | 300 s |
 | provider request concurrency | 1 |
@@ -39,10 +40,10 @@ Read live values from the selected allowlisted profile. `qe_hmm_full_v1` reprodu
 | minute code batch / date chunk | 20 / 3 months |
 | H5 compatibility setting / date chunk | 100 (telemetry only) / 3 months |
 | Parquet row group / validation read chunk | 100,000 / 100,000 rows |
-| enforcement sample / receipt rollup / wait deadline | 1 s / 5 s / 3,600 s |
-| candidate free-space reserve | max(32 GiB, 1.25 × predicted new bytes) |
+| enforcement sample / receipt rollup / wait deadline | 1 s / 5 s / 3,600 s telemetry; deadline is non-terminal |
+| candidate required free space | 1.25 x predicted remaining new bytes; no fixed floor |
 
-Profiles may reduce concurrency/chunk size or increase reserves. They may not increase a maximum, lower a reserve, enable WSL swap or bypass a limit through CLI/env. Resource contract changes require a versioned policy and comparable benchmark; they do not change data-byte identity.
+Profiles may reduce task-owned concurrency/chunk size. They may not increase a task-owned maximum, enable WSL swap or bypass a limit through CLI/env. Historical system reserve fields remain receipt-compatible telemetry and cannot block admission. Resource contract changes require a versioned policy and comparable benchmark; they do not change data-byte identity.
 
 Every SQL/provider response is bounded before transform. “Load a large response and split it afterward” violates the contract.
 
@@ -58,7 +59,7 @@ row group rows: 100000 -> 50000
 dump workers:         8 -> 4 -> 2
 ```
 
-At a safe checkpoint, a new attempt may select the next rung when resource preflight is otherwise healthy. Never reduce stocks, dates, fields, PIT spans, 12-index scope or validation to fit memory. If the lowest rung still fails, enter typed `WAITING_RESOURCE` or resource block; do not keep allocating.
+At a safe checkpoint, a new attempt may select the next rung only after sustained release-owned aggregate commit reaches 85% of its cap. Host-wide pressure from unrelated databases, WSL jobs, experiments or model training cannot select a rung. Never reduce stocks, dates, fields, PIT spans, 12-index scope or validation to fit memory. If the lowest rung breaches a task-owned cap, enter typed `WAITING_RESOURCE` or task failure; do not keep allocating.
 
 Factor H5/static memory is actively bounded by one-date-slice processing plus
 `row_group_rows`; the historical `h5_batch` profile field is retained only for
@@ -123,11 +124,11 @@ Never recover by killing another process, deleting a lock, clearing a lease row 
 
 | State/category | Meaning | Operator action |
 |---|---|---|
-| `WAITING_RESOURCE` | reserve/free-space pressure before work | leave durable task; recheck later |
-| `WAITING_PERFORMANCE_REGRESSION` | comparable workload outside threshold | inspect receipt; do not widen caps |
+| `WAITING_RESOURCE` | explicit OS low-memory signal, task-owned pressure, or predicted-capacity shortage | leave durable task; recheck later; deadline does not terminalize it |
+| performance warning | comparable workload outside threshold | inspect receipt; no automatic pause/block/rung change |
 | `WAITING_SOURCE` | required source not yet ready | wait for source; do not fill silently |
 | `WAITING_ORPHAN_QUIESCENCE` | old owned tree alive/unknown | observe only; do not kill/delete |
-| resource hard failure | Job/cgroup/OOM/system commit/guardian loss | task-only fail-stop, retain staging/checkpoint |
+| resource hard failure | Job/cgroup/OOM/guardian loss | task-only fail-stop, retain staging/checkpoint |
 | provider terminal | 40203/conflict/incomplete canonical session | report pending scope; no retries disguised as success |
 
 Wait time, provider wait and compute time must be recorded separately. Resource waiting may increase wall time without being a compute regression.
@@ -158,7 +159,7 @@ Without a trusted DB revision ledger, initial source freeze and prepublish DB-on
 through cutoff. MVCC/watermark reuse is disabled for content equivalence. A future ledger is a separate F2 plus DEV and
 target-specific production DDL/DML authorization; it is not silently created by this workflow.
 
-For an authorized production-sized monthly run, a normalized compute regression above 10% is a warning. Sustained for 15 minutes, throughput below 70% of baseline or regression above 30% enters `WAITING_PERFORMANCE_REGRESSION` at a safe checkpoint. Zero progress for 30 minutes, one SQL exceeding the 300-second timeout, or a hard resource breach stops the current attempt. Recovery may move only to the next pressure-ladder rung. Real full-data telemetry remains separately authorized.
+For an authorized production-sized monthly run, normalized compute regression is telemetry and warning only. It never enters `WAITING_PERFORMANCE_REGRESSION`, blocks the monthly release, or changes a pressure rung. One SQL exceeding the 300-second query timeout or a task-owned hard resource breach still ends the current attempt with its typed error. Waiting/source-not-ready states do not consume retry-exhaustion budget. Real full-data telemetry remains separately authorized.
 
 Current implementation acceptance is candidate-only and fixture-scoped:
 

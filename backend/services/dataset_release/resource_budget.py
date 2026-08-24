@@ -32,11 +32,8 @@ class PressureRung:
     dump_workers: int
 
 
-_PAGE_READS_PER_SECOND_LIMIT = 256.0
-_PAGE_READS_SUSTAINED_SAMPLES = 3
 _PRESSURE_RATIO = 0.85
 _COMMIT_PRESSURE_SUSTAINED_SAMPLES = 2
-_EMERGENCY_APPROACH_BYTES = GIB
 _TELEMETRY_CAPACITY = 7_200
 
 
@@ -191,6 +188,7 @@ class ResourceDecision:
     reason_code: str
     pressure_rung: int
     hard_failure: bool = False
+    warning_codes: tuple[str, ...] = ()
 
 
 class SnapshotProbe(Protocol):
@@ -369,7 +367,13 @@ class _WindowsLowMemoryProbe:
 
 
 class HostTelemetrySampler:
-    """Strict production host sampler; no required field has a fallback value."""
+    """Production host sampler with explicit optional system telemetry.
+
+    Dataset-release-owned counters are collected by the supervised Job/cgroup
+    probe.  Host-wide commit, paging and low-memory counters are observational;
+    an unavailable optional counter is represented as ``None`` and surfaced in
+    the resource receipt instead of preventing a monthly release.
+    """
 
     def __init__(
         self,
@@ -391,12 +395,13 @@ class HostTelemetrySampler:
         try:
             if page_reads_probe is None:
                 self._owned_page_probe = _WindowsPageReadsCounter(sleep=prime_sleep)
+        except Exception:
+            self._owned_page_probe = None
+        try:
             if low_memory_probe is None:
                 self._owned_low_probe = _WindowsLowMemoryProbe()
-        except BaseException:
-            if self._owned_page_probe is not None:
-                self._owned_page_probe.close()
-            raise
+        except Exception:
+            self._owned_low_probe = None
         self._page_reads_probe = page_reads_probe or self._owned_page_probe
         self._low_memory_probe = low_memory_probe or self._owned_low_probe
         self._lock = threading.Lock()
@@ -406,9 +411,6 @@ class HostTelemetrySampler:
             try:
                 virtual = self._virtual_memory()
                 swap = self._swap_memory()
-                commit_total, commit_limit = self._commit_probe()
-                page_reads = float(self._page_reads_probe())
-                low_memory = bool(self._low_memory_probe())
                 available = int(getattr(virtual, "available"))
                 pagefile_used = int(getattr(swap, "used"))
                 pagefile_limit = int(getattr(swap, "total"))
@@ -416,24 +418,40 @@ class HostTelemetrySampler:
                 raise
             except (AttributeError, OSError, TypeError, ValueError) as exc:
                 raise ResourceTelemetryUnavailable("mandatory host resource telemetry is unavailable") from exc
+            try:
+                commit_total, commit_limit = self._commit_probe()
+            except (ResourceTelemetryUnavailable, AttributeError, OSError, TypeError, ValueError):
+                commit_total, commit_limit = None, None
+            try:
+                page_reads = float(self._page_reads_probe()) if self._page_reads_probe is not None else None
+            except (ResourceTelemetryUnavailable, AttributeError, OSError, TypeError, ValueError):
+                page_reads = None
+            try:
+                raw_low_memory = self._low_memory_probe() if self._low_memory_probe is not None else None
+                low_memory = raw_low_memory if type(raw_low_memory) is bool else None
+            except (ResourceTelemetryUnavailable, AttributeError, OSError, TypeError, ValueError):
+                low_memory = None
         if (
-            commit_total is None
-            or commit_limit is None
-            or commit_total < 0
-            or commit_limit <= 0
-            or commit_total > commit_limit
-            or available < 0
+            available < 0
             or pagefile_used < 0
             or pagefile_limit < 0
             or pagefile_used > pagefile_limit
-            or page_reads < 0
+            or (commit_total is None) != (commit_limit is None)
+            or (commit_total is not None and commit_total < 0)
+            or (commit_limit is not None and commit_limit <= 0)
+            or (
+                commit_total is not None
+                and commit_limit is not None
+                and commit_total > commit_limit
+            )
+            or (page_reads is not None and page_reads < 0)
         ):
             raise ResourceTelemetryUnavailable("mandatory host resource telemetry violates its contract")
         return HostMemorySnapshot(
             observed_monotonic=self._monotonic(),
             available_bytes=available,
-            commit_total_bytes=int(commit_total),
-            commit_limit_bytes=int(commit_limit),
+            commit_total_bytes=(int(commit_total) if commit_total is not None else None),
+            commit_limit_bytes=(int(commit_limit) if commit_limit is not None else None),
             pagefile_used_bytes=pagefile_used,
             pagefile_limit_bytes=pagefile_limit,
             page_reads_per_second=page_reads,
@@ -504,7 +522,6 @@ class ResourceBudget:
         self._probe = probe
         self._sleep = sleep
         self._monotonic = monotonic
-        self._page_pressure_samples = 0
         self._commit_pressure_samples = 0
         self._telemetry: deque[ResourceSnapshot] = deque(maxlen=_TELEMETRY_CAPACITY)
 
@@ -513,21 +530,44 @@ class ResourceBudget:
         return tuple(self._telemetry)
 
     def _record_pressure(self, snapshot: ResourceSnapshot) -> None:
-        page_reads = snapshot.host.page_reads_per_second
-        headroom = snapshot.host.commit_headroom_bytes
-        near_pressure = snapshot.host.available_bytes < self.admission_thresholds.host_start_available_bytes or (
-            headroom is not None
-            and headroom < self.admission_thresholds.host_start_commit_headroom_bytes
-        )
-        if page_reads is not None and page_reads >= _PAGE_READS_PER_SECOND_LIMIT and near_pressure:
-            self._page_pressure_samples += 1
-        else:
-            self._page_pressure_samples = 0
         ratio = snapshot.owned.aggregate_commit_bytes / self.policy.aggregate_private_commit_bytes
         if ratio >= _PRESSURE_RATIO:
             self._commit_pressure_samples += 1
         else:
             self._commit_pressure_samples = 0
+
+    def _system_warning_codes(self, snapshot: ResourceSnapshot) -> tuple[str, ...]:
+        """Describe host-wide pressure without blocking a monthly release.
+
+        These counters include unrelated databases, WSL workloads and model
+        training.  They remain useful operational telemetry, but only the
+        release-owned Job/cgroup counters may drive the pressure ladder.
+        """
+
+        warnings: list[str] = []
+        headroom = snapshot.host.commit_headroom_bytes
+        if snapshot.host.available_bytes < self.admission_thresholds.host_start_available_bytes:
+            warnings.append("SYSTEM_AVAILABLE_MEMORY_LOW")
+        if headroom is None:
+            warnings.append("SYSTEM_COMMIT_TELEMETRY_UNAVAILABLE")
+        elif headroom < self.admission_thresholds.host_start_commit_headroom_bytes:
+            warnings.append("SYSTEM_COMMIT_HEADROOM_LOW")
+        if snapshot.host.page_reads_per_second is None:
+            warnings.append("SYSTEM_PAGE_READS_TELEMETRY_UNAVAILABLE")
+        elif snapshot.host.page_reads_per_second >= 256.0:
+            warnings.append("SYSTEM_PAGING_ACTIVITY_HIGH")
+        if snapshot.host.pagefile_limit_bytes and (
+            snapshot.host.pagefile_used_bytes / snapshot.host.pagefile_limit_bytes >= _PRESSURE_RATIO
+        ):
+            warnings.append("SYSTEM_PAGEFILE_USAGE_HIGH")
+        if snapshot.host.low_memory_signaled is None:
+            warnings.append("SYSTEM_LOW_MEMORY_SIGNAL_UNAVAILABLE")
+        if snapshot.wsl_required:
+            if snapshot.wsl_available_bytes is None:
+                warnings.append("SYSTEM_WSL_AVAILABLE_TELEMETRY_UNAVAILABLE")
+            elif snapshot.wsl_available_bytes < self.admission_thresholds.wsl_start_available_bytes:
+                warnings.append("SYSTEM_WSL_AVAILABLE_MEMORY_LOW")
+        return tuple(warnings)
 
     def _telemetry_complete(self, snapshot: ResourceSnapshot) -> bool:
         integer_counters = (
@@ -561,22 +601,17 @@ class ResourceBudget:
             return False
         if snapshot.host.pagefile_used_bytes > snapshot.host.pagefile_limit_bytes:
             return False
-        if (
-            snapshot.host.page_reads_per_second is None
-            or isinstance(snapshot.host.page_reads_per_second, bool)
+        if snapshot.host.page_reads_per_second is not None and (
+            isinstance(snapshot.host.page_reads_per_second, bool)
             or not isinstance(snapshot.host.page_reads_per_second, (int, float))
             or snapshot.host.page_reads_per_second < 0
         ):
             return False
-        if type(snapshot.host.low_memory_signaled) is not bool:
+        if snapshot.host.low_memory_signaled is not None and type(snapshot.host.low_memory_signaled) is not bool:
             return False
         if snapshot.wsl_available_bytes is not None and (
             type(snapshot.wsl_available_bytes) is not int or snapshot.wsl_available_bytes < 0
         ):
-            return False
-        if os.name == "nt" and snapshot.host.commit_headroom_bytes is None:
-            return False
-        if snapshot.wsl_required and snapshot.wsl_available_bytes is None:
             return False
         return True
 
@@ -592,12 +627,14 @@ class ResourceBudget:
                 hard_failure=True,
             )
         self._record_pressure(snapshot)
+        warnings = self._system_warning_codes(snapshot)
         if snapshot.owned.aggregate_commit_bytes > self.policy.aggregate_private_commit_bytes:
             return ResourceDecision(
                 "FAILED",
                 "FAILED_RESOURCE_HARD_LIMIT",
                 pressure_rung,
                 hard_failure=True,
+                warning_codes=warnings,
             )
         windows_limit = (
             self.policy.hybrid_job_commit_bytes if snapshot.wsl_required else self.policy.windows_job_commit_bytes
@@ -608,6 +645,7 @@ class ResourceBudget:
                 "FAILED_WINDOWS_JOB_COMMIT_LIMIT",
                 pressure_rung,
                 hard_failure=True,
+                warning_codes=warnings,
             )
         if snapshot.owned.wsl_cgroup_current_bytes > self.policy.wsl_memory_max_bytes:
             return ResourceDecision(
@@ -615,58 +653,27 @@ class ResourceBudget:
                 "FAILED_WSL_CGROUP_MEMORY_MAX",
                 pressure_rung,
                 hard_failure=True,
+                warning_codes=warnings,
+            )
+        if snapshot.host.low_memory_signaled is True:
+            return ResourceDecision(
+                "WAITING_RESOURCE",
+                "RESOURCE_OS_LOW_MEMORY_SIGNAL",
+                pressure_rung,
+                warning_codes=warnings,
             )
 
-        headroom = snapshot.host.commit_headroom_bytes
-        page_pressure = self._page_pressure_samples >= _PAGE_READS_SUSTAINED_SAMPLES
-        emergency = (
-            snapshot.host.available_bytes < self.policy.host_emergency_available_bytes
-            or (headroom is not None and headroom < self.policy.host_emergency_commit_headroom_bytes)
-            or snapshot.host.low_memory_signaled is True
-            or page_pressure
-            or (
-                snapshot.wsl_required
-                and snapshot.wsl_available_bytes is not None
-                and snapshot.wsl_available_bytes < self.policy.wsl_emergency_available_bytes
-            )
-        )
-        if emergency:
-            return ResourceDecision("WAITING_RESOURCE", "RESOURCE_EMERGENCY", pressure_rung)
-
-        near_emergency = (
-            snapshot.host.available_bytes < self.policy.host_emergency_available_bytes + _EMERGENCY_APPROACH_BYTES
-            or (
-                headroom is not None
-                and headroom < self.policy.host_emergency_commit_headroom_bytes + _EMERGENCY_APPROACH_BYTES
-            )
-            or (
-                snapshot.wsl_required
-                and snapshot.wsl_available_bytes is not None
-                and snapshot.wsl_available_bytes < self.policy.wsl_emergency_available_bytes + _EMERGENCY_APPROACH_BYTES
-            )
-        )
         commit_pressure = self._commit_pressure_samples >= _COMMIT_PRESSURE_SUSTAINED_SAMPLES
-        if (near_emergency or commit_pressure) and pressure_rung < len(self.pressure_ladder) - 1:
+        if commit_pressure and pressure_rung < len(self.pressure_ladder) - 1:
             self._commit_pressure_samples = 0
             return ResourceDecision(
                 "CHECKPOINT_PRESSURE",
-                "RESOURCE_PRESSURE_LADDER",
+                "RESOURCE_OWNED_COMMIT_PRESSURE_LADDER",
                 pressure_rung + 1,
+                warning_codes=warnings,
             )
 
-        start_wait = snapshot.host.available_bytes < self.admission_thresholds.host_start_available_bytes or (
-            headroom is not None
-            and headroom < self.admission_thresholds.host_start_commit_headroom_bytes
-        )
-        if snapshot.wsl_required and snapshot.wsl_available_bytes is not None:
-            start_wait = (
-                start_wait
-                or snapshot.wsl_available_bytes < self.admission_thresholds.wsl_start_available_bytes
-            )
-        if start_wait:
-            return ResourceDecision("WAITING_RESOURCE", "RESOURCE_ADMISSION_WAIT", pressure_rung)
-
-        return ResourceDecision("READY", "RESOURCE_READY", pressure_rung)
+        return ResourceDecision("READY", "RESOURCE_READY", pressure_rung, warning_codes=warnings)
 
     def wait_until_ready(self, stage: str, *, wsl_required: bool, pressure_rung: int = 0) -> ResourceDecision:
         started = self._monotonic()
@@ -686,11 +693,19 @@ class ResourceBudget:
             else:
                 consecutive_ready = 0
             self._sleep(self.policy.enforcement_sample_seconds)
+        if last is None:
+            return ResourceDecision(
+                "WAITING_RESOURCE",
+                "RESOURCE_WAIT_DEADLINE_OBSERVED",
+                pressure_rung,
+                warning_codes=("RESOURCE_WAIT_DEADLINE_EXCEEDED",),
+            )
         return ResourceDecision(
-            "BLOCKED",
-            "BLOCKED_RESOURCE_TIMEOUT",
-            last.pressure_rung if last else pressure_rung,
-            hard_failure=True,
+            last.status,
+            last.reason_code,
+            last.pressure_rung,
+            hard_failure=False,
+            warning_codes=tuple(dict.fromkeys((*last.warning_codes, "RESOURCE_WAIT_DEADLINE_EXCEEDED"))),
         )
 
 
