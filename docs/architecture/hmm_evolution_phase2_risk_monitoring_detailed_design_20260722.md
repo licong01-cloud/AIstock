@@ -5722,3 +5722,22 @@ canonical PIT v2 当前完整候选集。
 3. **业务与实验合同不变**：本修复只更新 active 输入权威，不修改 HR1 estimator、特征、fold、阈值、seed、24-fit、selection、
    capability 或 READY 语义；不执行 DDL/DML、依赖安装、runtime activation 或服务启停。
 4. **完成边界**：manifest/parser/定向测试通过只证明 source preflight 可继续；不推导 24-fit replay、模型验收或板块轮动产品能力成功。
+
+### 23.34 BUG-1170：C-010 contributor ledger 与 stock-fact 行业权威统一
+
+BUG-1169 修复后的 HR1 生产只读 request preflight 已越过全部 563 个 provider-absence exact key，但在 0 fits 处对
+`002505.SZ/2022-01-04` 返回 `hmm_risk_c010_contributor_receipt_mismatch`。该日证券仍在 canonical PIT universe 与
+SW member authority 中但没有 raw price，因此由 missing-price 路径进入完整 stock-fact denominator；C-010 所谓 full-universe
+expected-opportunity ledger 却从 `market.kline_daily_raw` 起表，并另行 join `market.sw_index_classify`，同时漏掉无价格机会和偏离
+BUG-1167 后统一的 `market.sw_index_member` canonical 31-L1/131-L2 owner closure。
+
+1. **真正 full-universe ledger**：C-010 opportunity query 必须从 trading calendar × canonical PIT spans 构造全部预期
+   symbol/date，不得依赖 raw price 存在；missing-price 行必须能在 ledger 中闭合，而不是被误判为未知 contributor。
+2. **单一行业权威**：opportunity query 与 provider-absence domain partition 必须复用 `stock_fact_repository` 的
+   member-classification CTE，按 L2 的唯一 canonical L1 owner 解析 `l1_code/l2_code`；不得继续读取
+   `sw_index_classify`、字符串截断、首行或 latest mapping。
+3. **完整性不放宽**：canonical L1=31、L2=131、L2 owner 唯一、成员区间覆盖和单日 mapping 唯一仍 fail closed；修复只消除
+   authority 分叉，不允许缺 contributor、重复 mapping 或非法 identity 被视为可用。
+4. **实验合同不变**：不修改 HR1 estimator、特征、fold、阈值、seed、24-fit、selection、capability 或 READY 语义；不执行
+   DDL/DML、依赖安装、runtime activation 或服务启停。修复后必须重新执行完整 request preparation，且只有 0-fit request
+   成功生成后才可启动正式 24-fit replay。
