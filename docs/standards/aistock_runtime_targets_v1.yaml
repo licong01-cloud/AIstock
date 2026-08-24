@@ -12,7 +12,9 @@ non_runtime_source_paths:
   - scripts/repair_announcement_event_signal_issuer_binding.py
   - scripts/seed_dataset_refresh_audit.py
   - scripts/simulation_history_cleanup_core.py
+  - scripts/stale_simulation_run_terminalization_core.py
   - scripts/sync_stock_namechange.py
+  - scripts/terminalize_stale_simulation_runs.py
 targets:
   backend-main:
     runtime_kind: backend
