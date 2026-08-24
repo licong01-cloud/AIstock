@@ -2,7 +2,20 @@
   "actual": "A five-instrument PIT v2 initial-migration sample waited about 23 minutes because resolution used the full-run 16 GiB host commit-headroom admission threshold even while 36-40 GiB physical memory was available. The source-freeze stage ran only about 14 seconds once admitted. Introduce workload-class-specific admission for resolution_light/sample/full while preserving full-run hard caps, emergency reserve, single-heavy concurrency, Job/cgroup enforcement and zero-swap. Do not add any new hard blocker; future new gate categories require explicit user approval.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260824_BUG-1172-dataset-release-sample-resolution-inherits-full-run-commit-headroom-gate.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/dataset_release/resource_budget.py",
+    "backend/services/dataset_release/resource_gate.py",
+    "backend/services/dataset_release/worker.py",
+    "backend/services/dataset_release/resolution_processor.py",
+    "backend/services/dataset_release/build_processor.py",
+    "scripts/dataset_release_worker.py",
+    "backend/tests/dataset_release/test_resource_budget.py",
+    "backend/tests/dataset_release/test_resource_gate.py",
+    "backend/tests/dataset_release/test_resolution_processor.py",
+    "backend/tests/dataset_release/test_build_processor.py",
+    "backend/tests/dataset_release/test_worker.py",
+    "backend/tests/dataset_release/test_worker_cli.py",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1172",

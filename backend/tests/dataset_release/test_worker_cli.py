@@ -11,9 +11,11 @@ import pytest
 from backend.services.dataset_release.control_store import ControlStore
 from backend.services.dataset_release.lease import ClaimedAttempt
 from backend.services.dataset_release.profile import load_dataset_profile
+from backend.services.dataset_release.resource_budget import ResourceAdmissionClass
 from backend.services.dataset_release.worker import (
     LeaseOwnerSnapshot,
     PublishRecoveryConflict,
+    WorkResourceSpec,
     WorkerError,
 )
 from scripts.dataset_release_control_store import main as control_store_main
@@ -24,6 +26,28 @@ import scripts.dataset_release_worker as worker_cli
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 PROFILE = REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v1.yaml"
+
+
+def test_resource_gate_factory_forwards_approved_workload_class(monkeypatch) -> None:
+    profile = load_dataset_profile(PROFILE)
+    observed = {}
+
+    def fake_gate(bound_profile, **kwargs):
+        observed["profile"] = bound_profile
+        observed.update(kwargs)
+        return "gate"
+
+    monkeypatch.setattr(worker_cli, "ResourceGate", fake_gate)
+    factory = worker_cli.build_resource_gate_factory(profile, lambda: None)
+    resources = WorkResourceSpec(
+        profile.resource_policy,
+        hybrid_wsl=False,
+        admission_class=ResourceAdmissionClass.RESOLUTION_LIGHT,
+    )
+
+    assert factory(resources, "resolution-admission") == "gate"
+    assert observed["profile"] is profile
+    assert observed["admission_class"] is ResourceAdmissionClass.RESOLUTION_LIGHT
 
 
 def test_worker_help_exposes_only_bounded_modes(capsys) -> None:

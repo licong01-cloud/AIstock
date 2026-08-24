@@ -26,6 +26,7 @@ from .resource_budget import (
     HostMemorySnapshot,
     OwnedMemorySnapshot,
     PressureRung,
+    ResourceAdmissionClass,
     ResourceBudget,
     ResourceDecision,
     ResourceSnapshot,
@@ -223,6 +224,9 @@ class ResourceGateSample:
     snapshot: ResourceSnapshot
     owned_runtime: OwnedRuntimeSnapshot
     disk: DiskSpaceSnapshot
+    admission_class: ResourceAdmissionClass
+    effective_host_start_available_bytes: int
+    effective_host_start_commit_headroom_bytes: int
 
 
 class ResourceGate:
@@ -235,11 +239,13 @@ class ResourceGate:
         host_probe: HostProbe = probe_host_memory,
         disk_probe: DiskProbe | None = None,
         predicted_new_bytes: int | None = None,
+        admission_class: ResourceAdmissionClass = ResourceAdmissionClass.FULL,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.profile = profile
         self.policy = profile.resource_policy
+        self.admission_class = admission_class
         self._host_probe = host_probe
         if predicted_new_bytes is not None and (type(predicted_new_bytes) is not int or predicted_new_bytes < 0):
             raise ResourceGateError("predicted new bytes are invalid")
@@ -254,6 +260,7 @@ class ResourceGate:
         self._budget = ResourceBudget(
             profile,
             self._probe,
+            admission_class=admission_class,
             sleep=sleep,
             monotonic=monotonic,
         )
@@ -345,6 +352,13 @@ class ResourceGate:
             snapshot=snapshot,
             owned_runtime=self._last_owned,
             disk=disk,
+            admission_class=self.admission_class,
+            effective_host_start_available_bytes=(
+                self._budget.admission_thresholds.host_start_available_bytes
+            ),
+            effective_host_start_commit_headroom_bytes=(
+                self._budget.admission_thresholds.host_start_commit_headroom_bytes
+            ),
         )
         self._samples.append(sample)
         self._sample_count += 1
@@ -370,6 +384,13 @@ class ResourceGate:
             "retained_sample_count": len(self._samples),
             "final_status": final.decision.status,
             "final_reason_code": final.decision.reason_code,
+            "admission_class": self.admission_class.value,
+            "effective_host_start_available_bytes": (
+                self._budget.admission_thresholds.host_start_available_bytes
+            ),
+            "effective_host_start_commit_headroom_bytes": (
+                self._budget.admission_thresholds.host_start_commit_headroom_bytes
+            ),
             "checkpoint_requested": any(item.decision.status not in {"READY"} for item in self._samples),
             "pressure_rung": final.decision.pressure_rung,
             "next_pressure_rung": next_pressure_rung,

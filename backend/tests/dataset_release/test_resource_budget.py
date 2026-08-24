@@ -12,6 +12,7 @@ from backend.services.dataset_release.resource_budget import (
     HostTelemetrySampler,
     HostMemorySnapshot,
     OwnedMemorySnapshot,
+    ResourceAdmissionClass,
     ResourceBudget,
     ResourceSnapshot,
 )
@@ -102,6 +103,44 @@ def test_system_commit_and_low_memory_gate_do_not_report_ready(
     low = budget.classify(_snapshot(low_memory=True))
     assert commit.reason_code == "RESOURCE_EMERGENCY"
     assert low.reason_code == "RESOURCE_EMERGENCY"
+
+
+def test_workload_admission_classes_relax_only_start_reserves(
+    dataset_profile: DatasetProfile,
+) -> None:
+    snapshot = _snapshot(available=13 * GIB, commit_headroom=13 * GIB)
+
+    full = ResourceBudget(dataset_profile, lambda _stage, _wsl: snapshot)
+    sample = ResourceBudget(
+        dataset_profile,
+        lambda _stage, _wsl: snapshot,
+        admission_class=ResourceAdmissionClass.SAMPLE,
+    )
+    light = ResourceBudget(
+        dataset_profile,
+        lambda _stage, _wsl: snapshot,
+        admission_class=ResourceAdmissionClass.RESOLUTION_LIGHT,
+    )
+
+    assert full.classify(snapshot).reason_code == "RESOURCE_ADMISSION_WAIT"
+    assert sample.classify(snapshot).reason_code == "RESOURCE_READY"
+    assert light.classify(snapshot).reason_code == "RESOURCE_READY"
+    assert sample.admission_thresholds.host_start_commit_headroom_bytes == 12 * GIB
+    assert light.admission_thresholds.host_start_commit_headroom_bytes == 10 * GIB
+
+
+def test_lighter_admission_class_never_weakens_emergency_reserve(
+    dataset_profile: DatasetProfile,
+) -> None:
+    budget = ResourceBudget(
+        dataset_profile,
+        lambda _stage, _wsl: _snapshot(),
+        admission_class=ResourceAdmissionClass.RESOLUTION_LIGHT,
+    )
+
+    decision = budget.classify(_snapshot(available=7 * GIB, commit_headroom=7 * GIB))
+
+    assert decision.reason_code == "RESOURCE_EMERGENCY"
 
 
 def test_sustained_page_reads_require_three_samples_and_low_headroom(

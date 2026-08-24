@@ -52,6 +52,7 @@ from .resolution import (
     SourceSnapshot,
     ResolutionService,
 )
+from .resource_budget import ResourceAdmissionClass
 from .source_authority import (
     SOURCE_AUTHORITY_POLICY_VERSION,
     SOURCE_MANIFEST_ARTIFACT_SCHEMA,
@@ -515,6 +516,7 @@ class MonthlyResolutionProcessor:
     def resource_spec(self, submission: Mapping[str, Any]) -> WorkResourceSpec:
         if str(submission.get("logical_request_key", "")) == "":
             raise ResolutionRequestInvalid("resolution submission lacks logical identity")
+        request = self._read_request(submission)
         return WorkResourceSpec(
             policy=self.profile.resource_policy,
             hybrid_wsl=False,
@@ -531,6 +533,11 @@ class MonthlyResolutionProcessor:
                 "TDX_DB_PORT",
                 "TDX_DB_USER",
                 "TUSHARE_TOKEN",
+            ),
+            admission_class=(
+                ResourceAdmissionClass.RESOLUTION_LIGHT
+                if request.scope is Scope.SAMPLE
+                else ResourceAdmissionClass.FULL
             ),
         )
 

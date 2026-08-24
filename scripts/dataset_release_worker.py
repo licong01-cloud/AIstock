@@ -172,6 +172,7 @@ def build_resource_gate_factory(
             profile,
             host_probe=host_sampler,
             predicted_new_bytes=resources.predicted_new_bytes,
+            admission_class=resources.admission_class,
         )
 
     return factory
