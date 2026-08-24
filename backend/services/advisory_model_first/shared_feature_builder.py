@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.feature_schema_v1 import (
-    IDENTITY_COLUMNS,
-    MODEL_FEATURE_COLUMNS,
-    OPTIONAL_FEATURE_COLUMNS,
-    REQUIRED_FEATURE_COLUMNS,
+    IDENTITY_COLUMNS as V1_IDENTITY_COLUMNS,
+    MODEL_FEATURE_COLUMNS as V1_MODEL_FEATURE_COLUMNS,
+    OPTIONAL_FEATURE_COLUMNS as V1_OPTIONAL_FEATURE_COLUMNS,
+    REQUIRED_FEATURE_COLUMNS as V1_REQUIRED_FEATURE_COLUMNS,
+)
+from backend.services.advisory_model_first.feature_schema_v2 import (
+    FEATURE_SCHEMA_VERSION as FEATURE_SCHEMA_V2,
+    IDENTITY_COLUMNS as V2_IDENTITY_COLUMNS,
+    MODEL_FEATURE_COLUMNS as V2_MODEL_FEATURE_COLUMNS,
+    OPTIONAL_FEATURE_COLUMNS as V2_OPTIONAL_FEATURE_COLUMNS,
+    REQUIRED_FEATURE_COLUMNS as V2_REQUIRED_FEATURE_COLUMNS,
+)
+from backend.services.advisory_model_first.suspension_aware_bar_policy import (
+    build_suspension_aware_bar_panel,
 )
 from backend.services.advisory_model_first.target_binding import FUND_LEG_ID, LSTM_LEG_ID
 
@@ -32,10 +43,40 @@ def build_advisory_feature_matrix(
     hmm_states: pd.DataFrame,
     component_roles: dict[str, str] | None = None,
     incomplete_candidate_policy: str = "drop_date",
+    feature_schema_version: str = "advisory_feature_schema_v1",
+    trading_calendar: Sequence[pd.Timestamp] | None = None,
 ) -> FeatureBuildResult:
-    if incomplete_candidate_policy not in {"drop_date", "drop_candidate"}:
-        raise ValueError("incomplete_candidate_policy must be drop_date or drop_candidate")
-    panel = candidate_daily.join(candidate_static, how="left").sort_index()
+    is_v2 = feature_schema_version == FEATURE_SCHEMA_V2
+    if is_v2:
+        if incomplete_candidate_policy != "preserve_exact":
+            raise ValueError("feature schema v2 requires preserve_exact candidate policy")
+        if trading_calendar is None:
+            raise ValueError("feature schema v2 requires the bound trading calendar")
+        normalized = build_suspension_aware_bar_panel(
+            daily=candidate_daily,
+            suspend_rows=suspend_rows,
+            trading_calendar=trading_calendar,
+        )
+        daily_panel = normalized.panel
+        identity_columns = V2_IDENTITY_COLUMNS
+        model_feature_columns = V2_MODEL_FEATURE_COLUMNS
+        optional_feature_columns = V2_OPTIONAL_FEATURE_COLUMNS
+        required_feature_columns = V2_REQUIRED_FEATURE_COLUMNS
+    else:
+        if feature_schema_version != "advisory_feature_schema_v1":
+            raise ValueError(f"unsupported feature schema version: {feature_schema_version}")
+        if incomplete_candidate_policy not in {"drop_date", "drop_candidate"}:
+            raise ValueError("incomplete_candidate_policy must be drop_date or drop_candidate")
+        daily_panel = candidate_daily
+        identity_columns = V1_IDENTITY_COLUMNS
+        model_feature_columns = V1_MODEL_FEATURE_COLUMNS
+        optional_feature_columns = V1_OPTIONAL_FEATURE_COLUMNS
+        required_feature_columns = V1_REQUIRED_FEATURE_COLUMNS
+    # Complexity boundary: both inputs are bounded by request history sessions
+    # x the frozen candidate-symbol union. The datetime/instrument index is the
+    # one-to-one join key, so validate prevents accidental row multiplication;
+    # all rolling operations below remain vectorized per instrument.
+    panel = daily_panel.join(candidate_static, how="left", validate="one_to_one").sort_index()
     panel_features = _build_instrument_features(panel)
     panel_features.index = panel_features.index.set_names(["decision_as_of_trade_date", "instrument"])
     sector_features = _build_sector_features(candidate_static, benchmark_daily)
@@ -58,9 +99,7 @@ def build_advisory_feature_matrix(
 
     rows["parent_combined_score"] = pd.to_numeric(rows["combined_score"], errors="coerce")
     denominator = (pd.to_numeric(rows["candidate_group_size"], errors="coerce") - 1).clip(lower=1)
-    rows["parent_rank_pct"] = 1.0 - (
-        pd.to_numeric(rows["selection_effective_rank"], errors="coerce") - 1
-    ) / denominator
+    rows["parent_rank_pct"] = 1.0 - (pd.to_numeric(rows["selection_effective_rank"], errors="coerce") - 1) / denominator
     roles = component_roles or {"lstm": LSTM_LEG_ID, "fund": FUND_LEG_ID}
     if set(roles) != {"lstm", "fund"} or any(not str(value).strip() for value in roles.values()):
         raise AdvisoryModelFirstError(
@@ -83,9 +122,9 @@ def build_advisory_feature_matrix(
         rows[f"{role}_weight"] = rows[f"weight__{component_id}"]
     rows["leg_norm_score_gap"] = rows["lstm_norm_score"] - rows["fund_norm_score"]
     rows["leg_rank_gap"] = rows["lstm_leg_rank"] - rows["fund_leg_rank"]
-    rows["leg_direction_agreement"] = (
-        np.sign(rows["lstm_norm_score"]) == np.sign(rows["fund_norm_score"])
-    ).astype("int8")
+    rows["leg_direction_agreement"] = (np.sign(rows["lstm_norm_score"]) == np.sign(rows["fund_norm_score"])).astype(
+        "int8"
+    )
     rows["weight_concentration"] = rows["lstm_weight"] ** 2 + rows["fund_weight"] ** 2
 
     sector_index = pd.MultiIndex.from_arrays(
@@ -104,9 +143,7 @@ def build_advisory_feature_matrix(
         (pd.Timestamp(item.trade_date).normalize(), str(item.instrument).upper())
         for item in suspend_rows.itertuples(index=False)
     }
-    rows["decision_is_suspended"] = [
-        int((date, instrument) in suspended) for date, instrument in rows.index
-    ]
+    rows["decision_is_suspended"] = [int((date, instrument) in suspended) for date, instrument in rows.index]
     rows["decision_limit_up"] = pd.to_numeric(rows["limit_up"], errors="coerce")
     rows["decision_limit_down"] = pd.to_numeric(rows["limit_down"], errors="coerce")
     adjusted_limit_up = pd.to_numeric(rows["up_limit_price"], errors="coerce") * pd.to_numeric(
@@ -119,17 +156,22 @@ def build_advisory_feature_matrix(
     rows["distance_to_limit_up"] = adjusted_limit_up / current_close - 1.0
     rows["distance_to_limit_down"] = adjusted_limit_down / current_close - 1.0
 
-    for column in OPTIONAL_FEATURE_COLUMNS:
-        rows[f"{column}__missing"] = rows[column].isna().astype("int8")
     numeric_columns = rows.select_dtypes(include=[np.number]).columns
-    rows.loc[:, numeric_columns] = rows.loc[:, numeric_columns].replace([np.inf, -np.inf], np.nan)
-    required_missing = rows[list(REQUIRED_FEATURE_COLUMNS)].isna().any(axis=1)
-    required_missing_by_column = rows[list(REQUIRED_FEATURE_COLUMNS)].isna()
+    if is_v2:
+        rows.loc[:, numeric_columns] = rows.loc[:, numeric_columns].replace([np.inf, -np.inf], np.nan)
+    for column in optional_feature_columns:
+        rows[f"{column}__missing"] = rows[column].isna().astype("int8")
+    if not is_v2:
+        # Preserve the exact v1 ordering/bytes. Schema v2 fixes the indicator
+        # ordering above without silently changing existing P0-D runtimes.
+        rows.loc[:, numeric_columns] = rows.loc[:, numeric_columns].replace([np.inf, -np.inf], np.nan)
+    required_missing = rows[list(required_feature_columns)].isna().any(axis=1)
+    required_missing_by_column = rows[list(required_feature_columns)].isna()
     by_date = required_missing.groupby(level="decision_as_of_trade_date").any()
     modelable_by_date = (~required_missing).groupby(level="decision_as_of_trade_date").sum()
     valid_dates = (
         by_date.index[~by_date]
-        if incomplete_candidate_policy == "drop_date"
+        if incomplete_candidate_policy in {"drop_date", "preserve_exact"}
         else modelable_by_date.index[modelable_by_date > 0]
     )
     coverage = pd.DataFrame(
@@ -142,18 +184,20 @@ def build_advisory_feature_matrix(
                 sorted(
                     required_missing_by_column.loc[
                         required_missing_by_column.index.get_level_values("decision_as_of_trade_date") == decision
-                    ].columns[
+                    ]
+                    .columns[
                         required_missing_by_column.loc[
                             required_missing_by_column.index.get_level_values("decision_as_of_trade_date") == decision
                         ].any(axis=0)
-                    ].tolist()
+                    ]
+                    .tolist()
                 )
                 for decision in by_date.index
             ],
             "status": np.where(
                 (
                     ~by_date.to_numpy()
-                    if incomplete_candidate_policy == "drop_date"
+                    if incomplete_candidate_policy in {"drop_date", "preserve_exact"}
                     else modelable_by_date.reindex(by_date.index).to_numpy() > 0
                 ),
                 "available",
@@ -161,13 +205,23 @@ def build_advisory_feature_matrix(
             ),
         }
     )
-    output_columns = [*IDENTITY_COLUMNS, *MODEL_FEATURE_COLUMNS]
+    output_columns = [*identity_columns, *model_feature_columns]
     missing_output = sorted(set(output_columns) - set(rows.columns))
     if missing_output:
         raise AdvisoryModelFirstError(
             "feature builder did not produce the frozen schema",
             reason_code="ADVISORY_MODEL_QE_SCHEMA_MISMATCH",
             context={"missing_columns": missing_output},
+        )
+    if is_v2 and required_missing.any():
+        samples = [f"{date.date().isoformat()}:{instrument}" for date, instrument in rows.index[required_missing][:10]]
+        raise AdvisoryModelFirstError(
+            "feature schema v2 cannot preserve exact candidate coverage",
+            reason_code="ADVISORY_FEATURE_V2_COVERAGE_INVALID",
+            context={
+                "required_missing_row_count": int(required_missing.sum()),
+                "samples": samples,
+            },
         )
     eligible = rows.index.get_level_values("decision_as_of_trade_date").isin(valid_dates)
     if incomplete_candidate_policy == "drop_candidate":
@@ -246,9 +300,9 @@ def _build_instrument_features(panel: pd.DataFrame) -> pd.DataFrame:
     out["gross_margin"] = _number(out.get("bb_gpr"))
     out["net_margin"] = _number(out.get("bb_npr"))
     out["chip_winner_rate"] = _number(out.get("cp_winner_rate"))
-    out["chip_cost_spread"] = (
-        _number(out.get("cp_cost_95pct")) - _number(out.get("cp_cost_5pct"))
-    ) / close.where(close > 0)
+    out["chip_cost_spread"] = (_number(out.get("cp_cost_95pct")) - _number(out.get("cp_cost_5pct"))) / close.where(
+        close > 0
+    )
     out["chip_cost_position"] = (close - _number(out.get("cp_cost_50pct"))) / close.where(close > 0)
     margin = _number(out.get("md_rzye"))
     out["margin_balance_log"] = np.log1p(margin.clip(lower=0))
@@ -256,6 +310,21 @@ def _build_instrument_features(panel: pd.DataFrame) -> pd.DataFrame:
         5, fill_method=None
     )
     out["l2_code_id"] = _number(out.get("l2_code_id"))
+    if "bar_is_suspended_verified" in out:
+        suspended = _number(out["bar_is_suspended_verified"]).fillna(0).astype("int8")
+        for horizon in (5, 20, 60):
+            out[f"suspend_session_count_{horizon}"] = _rolling(suspended.astype(float), horizon, "sum")
+        out["suspend_fraction_20"] = out["suspend_session_count_20"] / 20.0
+        out["suspend_fraction_60"] = out["suspend_session_count_60"] / 60.0
+        out["sessions_since_last_suspend"] = suspended.groupby(level="instrument", group_keys=False).transform(
+            _sessions_since_last_suspend
+        )
+        out["current_bar_synthetic"] = suspended
+        zero_liquidity = (volume.le(0) | amount.le(0)).astype(float)
+        for horizon in (5, 20):
+            out[f"zero_liquidity_window_{horizon}"] = (
+                _rolling(zero_liquidity, horizon, "sum").eq(float(horizon)).astype("int8")
+            )
     return out
 
 
@@ -281,9 +350,7 @@ def _build_sector_features(static: pd.DataFrame, benchmark_daily: pd.DataFrame) 
     close = _number(sector["sw2_close"])
     amount = _number(sector["sw2_amount"])
     benchmark = _benchmark_close(benchmark_daily)
-    benchmark_returns = {
-        horizon: benchmark.pct_change(horizon, fill_method=None) for horizon in (1, 5, 20)
-    }
+    benchmark_returns = {horizon: benchmark.pct_change(horizon, fill_method=None) for horizon in (1, 5, 20)}
     for horizon in (1, 5, 20):
         sector[f"sector_ret_{horizon}"] = close.groupby(level="l2_code_id", group_keys=False).pct_change(
             horizon, fill_method=None
@@ -409,3 +476,13 @@ def _number(value: pd.Series | None) -> pd.Series:
     if value is None:
         return pd.Series(dtype=float)
     return pd.to_numeric(value, errors="coerce").astype(float)
+
+
+def _sessions_since_last_suspend(values: pd.Series) -> pd.Series:
+    positions = np.arange(len(values), dtype=float)
+    suspended_positions = np.where(values.to_numpy(dtype=float) > 0, positions, np.nan)
+    last_suspended = pd.Series(suspended_positions, index=values.index).ffill().to_numpy()
+    # Before the first suspension, elapsed sessions start at one. This keeps the
+    # feature total and causal without inventing a historical suspension date.
+    elapsed = np.where(np.isnan(last_suspended), positions + 1.0, positions - last_suspended)
+    return pd.Series(elapsed, index=values.index, dtype=float)
