@@ -132,8 +132,8 @@
   },
   "first_seen_at": "2026-08-24T19:59:42.072071Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d3d650ac4d0aacd9b5326de6fcce4910aeacf39f",
+  "fixed_at": "2026-08-24T20:36:21Z",
   "github_issue_number": 3780,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3780",
   "last_seen_at": "2026-08-24T19:59:42.072071Z",
@@ -141,6 +141,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3781",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -158,6 +159,8 @@
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -167,7 +170,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -176,6 +179,12 @@
     "fingerprint": "69580be3de2d1dcd3fff1ffa",
     "source_event_id": "FE-20260824-69580be3de2d"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_dataset_release_source_stage.py backend/tests/dataset_release/test_resolution_processor.py -q -p no:cacheprovider -> 15 passed, 1 skipped",
+    "python -m pytest backend/tests/dataset_release/test_worker.py -q -p no:cacheprovider -> 30 passed",
+    "python -m nox -s qlib_data_backend -> 15 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
