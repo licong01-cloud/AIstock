@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -156,6 +157,11 @@ def test_policy_utility_pipeline_rejects_invalid_request_with_typed_error(tmp_pa
     with pytest.raises(AdvisoryModelFirstError) as excinfo:
         run_policy_utility_pipeline(request_path)
     assert excinfo.value.reason_code == "ADVISORY_POLICY_UTILITY_REQUEST_INVALID"
+
+
+def test_policy_utility_pipeline_requests_only_authoritative_full_day_suspensions() -> None:
+    source = Path("backend/services/advisory_model_first/policy_utility_pipeline.py").read_text(encoding="utf-8")
+    assert "full_day_only=True" in source
 
 
 def test_feature_v2_coverage_requires_exact_7720_identity_rows() -> None:
