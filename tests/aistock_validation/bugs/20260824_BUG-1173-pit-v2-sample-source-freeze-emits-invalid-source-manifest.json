@@ -1,6 +1,10 @@
 {
   "actual": "After BUG-1157 audit repair and 23,163 physical_audit_seed rows were validated and applied, the authorized five-instrument qe_hmm_full_v2 initial-migration sample passed resource admission but the supervised resolution source-freeze terminated after about 14 seconds with DATASET_RELEASE_SOURCE_MANIFEST_INVALID. Submission dss_7ebccae72c4762fe5b343711137f0e8f and attempt dsra_e3a7182c761a48f6b3c3d6f4f0e2cf79 wrote zero candidate/source-database/production-pointer changes. Diagnose the exact manifest invariant, add RED-to-GREEN real-shape regression coverage, and preserve fail-closed source/PIT/index/moneyflow semantics without resubmitting or overwriting any dataset.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/source_authority.py",
+    "scripts/seed_dataset_refresh_audit.py",
+    "backend/tests/dataset_release/test_source_authority.py",
+    "backend/tests/test_dataset_refresh_audit.py",
     "tests/aistock_validation/bugs/20260824_BUG-1173-pit-v2-sample-source-freeze-emits-invalid-source-manifest.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -16,6 +20,18 @@
   "description": "After BUG-1157 audit repair and 23,163 physical_audit_seed rows were validated and applied, the authorized five-instrument qe_hmm_full_v2 initial-migration sample passed resource admission but the supervised resolution source-freeze terminated after about 14 seconds with DATASET_RELEASE_SOURCE_MANIFEST_INVALID. Submission dss_7ebccae72c4762fe5b343711137f0e8f and attempt dsra_e3a7182c761a48f6b3c3d6f4f0e2cf79 wrote zero candidate/source-database/production-pointer changes. Diagnose the exact manifest invariant, add RED-to-GREEN real-shape regression coverage, and preserve fail-closed source/PIT/index/moneyflow semantics without resubmitting or overwriting any dataset.",
   "events": [
     {
+      "action": "refine_root_cause",
+      "actor": "codex",
+      "note": "The sanitized message hash uniquely matched stk_limit:2021-05-01_2021-07-31:pre_close; production read-only evidence found PostgreSQL numeric NaN values, including 600462.SH/2021-05-13, which jsonb text exposes as the string marker NaN.",
+      "timestamp": "2026-08-24T03:45:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Production read-only diagnosis uniquely matched PostgreSQL numeric NaN markers in stk_limit.pre_close to the source-manifest failure; scope adds the exact source canonicalization, audit classification, and direct regression tests.",
+      "timestamp": "2026-08-24T03:40:00Z"
+    },
+    {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260824-409bf36a13ed",
@@ -23,7 +39,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "PostgreSQL numeric NaN/Infinity markers in the three rule-repairable stk_limit fields must enter the raw sealed source as explicit null overlay inputs, with a bumped query identity and matching physical-audit candidate_repairable classification; arbitrary text, other datasets and non-repairable fields must remain fail-closed.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +68,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest backend/tests/dataset_release/test_source_authority.py -k stk_limit_postgres_numeric_non_finite_marker -q",
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend"
@@ -60,13 +76,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "business_smoke_ref": "worker_heartbeat.business",
+    "fresh_process_evidence": [
+      "fresh Python production read-only real-shape check normalized 600462.SH/2021-05-13 PostgreSQL numeric NaN to null, retained numeric limits, classified four invalid rows, and performed zero writes"
+    ],
+    "health_ref": "worker_heartbeat.health",
+    "identity_ref": "worker_heartbeat.identity",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
