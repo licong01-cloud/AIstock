@@ -39,6 +39,7 @@ from .resource_gate import (
     ResourceGateError,
     ResourceGateSample,
 )
+from .resource_budget import ResourceAdmissionClass
 from .state_machine import RUN_TRANSITIONS, TERMINAL_RUN_STATES
 from .worker_commands import WorkerCommandCoordinator
 from .worker_identity import WorkerHeartbeatStore, WorkerIdentity
@@ -184,9 +185,12 @@ class WorkResourceSpec:
     pressure_rung: int = 0
     predicted_new_bytes: int | None = None
     credential_env_allowlist: tuple[str, ...] = ()
+    admission_class: ResourceAdmissionClass = ResourceAdmissionClass.FULL
 
     def __post_init__(self) -> None:
         validate_resource_policy(self.policy)
+        if not isinstance(self.admission_class, ResourceAdmissionClass):
+            raise ProcessorContractViolation("processor resource admission class is not approved")
         if self.acquire_host is not True:
             raise ProcessorContractViolation("data-bearing Worker processors must acquire the host resource lease")
         if not isinstance(self.hybrid_wsl, bool) or not self.io_class.strip():
@@ -1081,6 +1085,13 @@ class DatasetReleaseWorker:
                     "host_available_bytes": gate_sample.snapshot.host.available_bytes,
                     "host_commit_headroom_bytes": (gate_sample.snapshot.host.commit_headroom_bytes),
                     "aggregate_owned_commit_bytes": (gate_sample.snapshot.owned.aggregate_commit_bytes),
+                    "resource_admission_class": gate_sample.admission_class.value,
+                    "effective_host_start_available_bytes": (
+                        gate_sample.effective_host_start_available_bytes
+                    ),
+                    "effective_host_start_commit_headroom_bytes": (
+                        gate_sample.effective_host_start_commit_headroom_bytes
+                    ),
                 }
             )
         result = (

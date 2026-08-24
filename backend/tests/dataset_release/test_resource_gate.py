@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.services.dataset_release.resource_budget import GIB, HostMemorySnapshot
+from backend.services.dataset_release.resource_budget import ResourceAdmissionClass
 from backend.services.dataset_release.resource_gate import (
     ChildResourceCheckpoint,
     DiskSpaceGuard,
@@ -63,6 +64,24 @@ def test_gate_requires_two_host_ready_samples_before_data_child_admission(
     receipt = gate.receipt()
     assert receipt["sample_count"] == 2
     assert receipt["data_scope_changed"] is False
+
+
+def test_gate_receipt_discloses_effective_sample_admission_thresholds(dataset_profile) -> None:
+    gate = ResourceGate(
+        dataset_profile,
+        host_probe=lambda: _host(available=13 * GIB, headroom=13 * GIB),
+        disk_probe=_disk,
+        admission_class=ResourceAdmissionClass.SAMPLE,
+        sleep=lambda _seconds: None,
+    )
+
+    admitted = gate.admit("sample-admission", wsl_required=False, pressure_rung=0)
+    receipt = gate.receipt()
+
+    assert admitted.decision.status == "READY"
+    assert receipt["admission_class"] == "sample"
+    assert receipt["effective_host_start_available_bytes"] == 12 * GIB
+    assert receipt["effective_host_start_commit_headroom_bytes"] == 12 * GIB
 
 
 def test_disk_guard_uses_floor_or_one_point_two_five_times_remaining_bytes(tmp_path, dataset_profile) -> None:

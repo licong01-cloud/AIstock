@@ -1090,6 +1090,7 @@ def test_production_build_processor_supervises_every_data_stage_and_publishes_at
 
     resource = processor.resource_spec(run)
     assert resource.predicted_new_bytes == 128 * 1024**3
+    assert resource.admission_class.value == "full"
     result = processor.process(context)
 
     assert resource.release_id == release.release_id
