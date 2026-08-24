@@ -46,7 +46,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from backend.services.dataset_release.profile import load_dataset_profile  # noqa: E402
 from backend.services.dataset_release.source_authority import (  # noqa: E402
+    POSTGRES_NUMERIC_NON_FINITE_MARKERS,
     PRODUCTION_QUERY_SPECS,
+    STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS,
 )
 
 
@@ -299,9 +301,13 @@ def _physical_counts(
         predicate = f"{spec.date_expression} >= %s AND {spec.date_expression} < %s"
     if spec.dataset == "trading_calendar":
         predicate += " AND source_row.is_trading = TRUE"
-    invalid_expression = (
-        " OR ".join(f"source_row.{column} IS NULL" for column in spec.non_null_columns) or "FALSE"
-    )
+    invalid_terms: list[str] = []
+    for column in spec.non_null_columns:
+        invalid_terms.append(f"source_row.{column} IS NULL")
+        if spec.dataset == "stk_limit" and column in STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS:
+            markers = ",".join(f"'{value}'" for value in POSTGRES_NUMERIC_NON_FINITE_MARKERS)
+            invalid_terms.append(f"source_row.{column}::text IN ({markers})")
+    invalid_expression = " OR ".join(invalid_terms) or "FALSE"
     if spec.code_policy == "profile_index_codes":
         sql = f"""
             SELECT ({spec.date_expression})::date AS trade_date,

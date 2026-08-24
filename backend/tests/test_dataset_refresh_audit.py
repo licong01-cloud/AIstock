@@ -321,6 +321,39 @@ def test_candidate_repairable_gap_is_admitted_for_candidate_local_repair():
     assert invalid_index.blocked_dates == (day,)
 
 
+def test_stk_limit_physical_audit_treats_postgres_non_finite_numeric_as_repairable():
+    day = dt.date(2026, 7, 31)
+    conn = _FakeConn(fetchall_result=[(day, 5000, None, 92)])
+    profile = SimpleNamespace(
+        indices=(),
+        source_date_chunk_months=3,
+        universe_key="aistock_equity_pit_canonical_v2",
+    )
+
+    counts = audit_seed._physical_counts(
+        conn,
+        audit_seed.SPECS["stk_limit"],
+        day,
+        day,
+        profile=profile,
+    )
+    sql = conn.executed[0][0]
+    for column in ("pre_close", "up_limit", "down_limit"):
+        assert f"source_row.{column}::text IN ('NaN','Infinity','-Infinity')" in sql
+
+    plan = audit_seed._build_dataset_plan(
+        audit_seed.SPECS["stk_limit"],
+        start=day,
+        end=day,
+        expected_dates=(day,),
+        physical_counts=counts,
+        existing_ready_dates=(),
+    )
+    assert [(row.row_count, row.quality_status) for row in plan.planned_rows] == [
+        (5000, "candidate_repairable")
+    ]
+
+
 def test_existing_registered_authority_is_reused_without_seed_rewrite():
     day = dt.date(2026, 7, 31)
     plan = audit_seed._build_dataset_plan(

@@ -251,18 +251,22 @@ def _frame(panel: pd.DataFrame) -> pd.DataFrame:
 
 def _calendar_slice(calendar: Sequence[date], start: date, end: date, expected: int) -> tuple[date, ...]:
     values = tuple(item for item in calendar if start <= item <= end)
-    if (
-        len(values) != expected
-        or not values
-        or values[0] != start
-        or values[-1] != end
-        or values != tuple(sorted(set(values)))
-    ):
+    if len(values) != expected or not values or values != tuple(sorted(set(values))):
         raise _fail(
             REASON_FOLD_BOUNDARY,
             "calendar slice does not match the approved fold",
             stage="fold_boundary",
-            evidence={"start": start.isoformat(), "end": end.isoformat(), "actual_count": len(values)},
+            evidence={
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "actual_count": len(values),
+                "calendar_start": start.isoformat(),
+                "calendar_end": end.isoformat(),
+                "expected_trading_day_count": expected,
+                "observed_trading_day_count": len(values),
+                "observed_trading_start": values[0].isoformat() if values else None,
+                "observed_trading_end": values[-1].isoformat() if values else None,
+            },
         )
     return values
 
