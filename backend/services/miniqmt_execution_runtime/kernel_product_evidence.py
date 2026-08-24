@@ -45,6 +45,7 @@ from .plugin_contracts import (
     ExecutionCommandChildMappingV1,
     ExecutionProjectionRefV1,
     ExecutionProjectionSetV1,
+    ExchangeSessionAuthorityV1,
     KernelProjectionTypeV1,
     MiniQMTRiskDecisionReceiptV1,
     OMSPreflightDecisionV1,
@@ -251,46 +252,49 @@ def bind_product_transition_bundle_v3(
     )
 
 
-class _CursorTradingCalendar:
-    def __init__(self, cur: Any) -> None:
-        self._cur = cur
+class _FrozenSessionTPlusOneCalendar:
+    """Use the hash-closed exchange-session authority for the exact T+1 predicate.
+
+    A lot opened on a prior trade date is necessarily unlocked on the frozen
+    current trading date.  The product path therefore needs no historical
+    calendar lookup and must never infer weekends or holidays locally.
+    """
+
+    def __init__(self, authority: ExchangeSessionAuthorityV1) -> None:
+        if not isinstance(authority, ExchangeSessionAuthorityV1):
+            raise TypeError("authority must be ExchangeSessionAuthorityV1")
+        self._authority = ExchangeSessionAuthorityV1.model_validate_json(authority.model_dump_json())
+        self._trade_date = date.fromisoformat(self._authority.exchange_trade_date)
 
     def is_trading_day(self, trade_date: date) -> bool:
-        self._cur.execute(
-            "SELECT is_trading FROM market.trading_calendar WHERE cal_date=%s FOR SHARE",
-            (trade_date,),
-        )
-        row = self._cur.fetchone()
-        if row is None:
-            raise KernelProductEvidenceError(
-                "MINIQMT_K6_PRODUCT_CALENDAR_AUTHORITY_MISSING",
-                "trading calendar authority is missing",
-                context={"trade_date": trade_date.isoformat()},
-            )
-        value = row["is_trading"] if isinstance(row, dict) else row[0]
-        if type(value) is not bool:
-            raise KernelProductEvidenceError(
-                "MINIQMT_K6_PRODUCT_CALENDAR_AUTHORITY_INVALID",
-                "trading calendar authority is not a strict boolean",
-                context={"trade_date": trade_date.isoformat(), "actual_type": type(value).__name__},
-            )
-        return value
+        if type(trade_date) is not date:
+            raise TypeError("trade_date must be a date")
+        return trade_date == self._trade_date
 
     def next_trading_day_after(self, trade_date: date) -> date:
-        self._cur.execute(
-            "SELECT cal_date AS next_day FROM market.trading_calendar "
-            "WHERE cal_date>%s AND is_trading=TRUE ORDER BY cal_date LIMIT 1 FOR SHARE",
-            (trade_date,),
+        raise KernelProductEvidenceError(
+            "MINIQMT_K6_PRODUCT_CALENDAR_SUCCESSOR_QUERY_FORBIDDEN",
+            "frozen session authority exposes the exact T+1 predicate, not a historical calendar query",
+            context={
+                "trade_date": trade_date.isoformat(),
+                "exchange_trade_date": self._trade_date.isoformat(),
+            },
         )
-        row = self._cur.fetchone()
-        value = None if row is None else (row["next_day"] if isinstance(row, dict) else row[0])
-        if type(value) is not date:
+
+    def tplus1_unlocked(self, open_date: date, as_of_date: date) -> bool:
+        if type(open_date) is not date or type(as_of_date) is not date:
+            raise TypeError("open_date and as_of_date must be dates")
+        if as_of_date != self._trade_date:
             raise KernelProductEvidenceError(
-                "MINIQMT_K6_PRODUCT_CALENDAR_SUCCESSOR_MISSING",
-                "next trading day authority is missing",
-                context={"trade_date": trade_date.isoformat()},
+                "MINIQMT_K6_PRODUCT_CALENDAR_TRADE_DATE_CONFLICT",
+                "lot availability date differs from frozen exchange-session authority",
+                context={
+                    "open_date": open_date.isoformat(),
+                    "as_of_date": as_of_date.isoformat(),
+                    "exchange_trade_date": self._trade_date.isoformat(),
+                },
             )
-        return value
+        return open_date < as_of_date
 
 
 class _CursorLedgerReadRepository:
@@ -542,7 +546,7 @@ class KernelProductEvidenceProviderV3:
 
         plan = self._locked_plan_context(cur, event=event, algo=algo)
         ledger = _CursorLedgerReadRepository(cur)
-        calendar = _CursorTradingCalendar(cur)
+        calendar = self._locked_session_calendar(cur, event=event, trade_date=plan["trade_date"])
         service = QmtManagedOrderService(repository=ledger, broker=None, calendar_provider=calendar)
         account = self._exact_virtual_account(
             ledger,
@@ -850,6 +854,55 @@ class KernelProductEvidenceProviderV3:
             "intent": intent,
             "trading_rule_decision": decision_matches[0],
         }
+
+    @staticmethod
+    def _locked_session_calendar(
+        cur: Any,
+        *,
+        event: RuntimeEventEnvelopeV2,
+        trade_date: date,
+    ) -> _FrozenSessionTPlusOneCalendar:
+        cur.execute(
+            "SELECT authority_json FROM qmt_strategy.execution_exchange_session_authority "
+            "WHERE runtime_id=%s AND exchange_trade_date=%s FOR SHARE",
+            (event.runtime_id, trade_date),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise KernelProductEvidenceError(
+                "MINIQMT_K6_PRODUCT_CALENDAR_AUTHORITY_MISSING",
+                "frozen exchange-session calendar authority is missing",
+                context={"runtime_id": event.runtime_id, "trade_date": trade_date.isoformat()},
+            )
+        raw = row["authority_json"] if isinstance(row, dict) else row[0]
+        try:
+            authority = (
+                ExchangeSessionAuthorityV1.model_validate_json(raw)
+                if isinstance(raw, str)
+                else ExchangeSessionAuthorityV1.model_validate(raw)
+            )
+        except Exception as exc:
+            raise KernelProductEvidenceError(
+                "MINIQMT_K6_PRODUCT_CALENDAR_AUTHORITY_INVALID",
+                "frozen exchange-session calendar authority is invalid",
+                context={
+                    "runtime_id": event.runtime_id,
+                    "trade_date": trade_date.isoformat(),
+                    "exception_type": type(exc).__name__,
+                },
+            ) from exc
+        if authority.runtime_id != event.runtime_id or authority.exchange_trade_date != trade_date.isoformat():
+            raise KernelProductEvidenceError(
+                "MINIQMT_K6_PRODUCT_CALENDAR_AUTHORITY_CONFLICT",
+                "frozen exchange-session calendar authority conflicts with product owner",
+                context={
+                    "runtime_id": event.runtime_id,
+                    "trade_date": trade_date.isoformat(),
+                    "authority_runtime_id": authority.runtime_id,
+                    "authority_trade_date": authority.exchange_trade_date,
+                },
+            )
+        return _FrozenSessionTPlusOneCalendar(authority)
 
     @staticmethod
     def _exact_virtual_account(ledger: Any, *, account_id: str, strategy_name: str) -> Any:
