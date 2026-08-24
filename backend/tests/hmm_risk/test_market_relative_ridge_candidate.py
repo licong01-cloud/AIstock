@@ -1433,6 +1433,104 @@ def test_c012_rl1_fold_calendar_uses_frozen_trading_dates_when_calendar_boundary
     assert folds[-1]["validation_days"] == 116
 
 
+def test_ridge_calendar_slice_accepts_non_trading_boundary_and_rejects_count_drift() -> None:
+    trading_dates = (date(2025, 10, 9), date(2025, 10, 10))
+
+    assert (
+        subject._calendar_slice(
+            trading_dates,
+            start=date(2025, 10, 1),
+            end=date(2025, 10, 10),
+            expected_days=2,
+        )
+        == trading_dates
+    )
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject._calendar_slice(
+            trading_dates,
+            start=date(2025, 10, 1),
+            end=date(2025, 10, 10),
+            expected_days=3,
+        )
+
+    error = captured.value
+    assert error.reason_code == subject.REASON_INPUT_IDENTITY
+    assert error.stage == "fold_boundary"
+    assert error.evidence["expected_trading_day_count"] == 3
+    assert error.evidence["observed_trading_day_count"] == 2
+    assert error.evidence["observed_trading_start"] == "2025-10-09"
+    assert error.evidence["observed_trading_end"] == "2025-10-10"
+
+
+def test_c012_rl1_maps_shared_fold_boundary_to_typed_development_fold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _rl1_request()
+    calendar = _rl1_calendar()
+
+    def receipt(name: str) -> dict[str, object]:
+        body = {"name": name}
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    inputs = {
+        "trading_dates": tuple(calendar),
+        "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
+        "mapping_manifest": {"rows": []},
+        "database": {"host": "redacted", "dbname": "dev"},
+        "provider_absence_manifest": {"manifest": "v1"},
+        "security_identity_manifest": {"manifest": "v1"},
+        "c010_diagnostic": {
+            "eligibility": receipt("eligibility"),
+            "aggregate_evidence": receipt("aggregate"),
+            "l1_cross_section_evidence": receipt("l1-cross"),
+            "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
+        },
+    }
+    _bind_rl1_request_inputs(request, inputs)
+
+    def fail_on_shared_boundary(*args: object, **kwargs: object) -> subject.MarketConditioningFold:
+        fold = kwargs["fold"]
+        attempt_log = kwargs["attempt_log"]
+        assert isinstance(fold, dict)
+        assert isinstance(attempt_log, list)
+        attempt_log.append({"component": "market", "fold": fold["fold"], "status": "fit_completed"})
+        if fold["fold"] == "fold-5":
+            raise jump_subject.JumpSpikeError(
+                jump_subject.REASON_FOLD_BOUNDARY,
+                "calendar slice does not match the approved fold",
+                stage="fold_boundary",
+                evidence={"calendar_start": "2025-10-01", "observed_trading_start": "2025-10-09"},
+            )
+        return subject.MarketConditioningFold(
+            fold=str(fold["fold"]),
+            train_states={date(2024, 1, 2): "risk_on"},
+            validation_states={date(2024, 1, 3): "risk_off"},
+            receipt=_stage_receipt(str(fold["fold"])),
+        )
+
+    monkeypatch.setattr(subject, "_market_fold_conditioning", fail_on_shared_boundary)
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject.run_c012_rl1_candidate_process(
+            inputs,
+            request,
+            producer_commit="a" * 40,
+            process_index=1,
+        )
+
+    error = captured.value
+    assert error.reason_code == subject.REASON_RL1_FOLD
+    assert error.stage == "fold_boundary"
+    assert error.evidence["source_reason_code"] == jump_subject.REASON_FOLD_BOUNDARY
+    assert error.evidence["source_stage"] == "fold_boundary"
+    assert error.evidence["completed_fit_count"] == 5
+    assert len(error.evidence["fit_attempts"]) == 5
+    assert error.evidence["fit_attempts"][-1]["fold"] == "fold-5"
+    assert error.evidence["calendar_start"] == "2025-10-01"
+    assert error.evidence["observed_trading_start"] == "2025-10-09"
+
+
 def test_c012_rl1_fold_calendar_drift_persists_typed_boundary_evidence() -> None:
     request = _rl1_request()
     full_calendar = _rl1_calendar()

@@ -315,18 +315,22 @@ def _calendar_slice(
     expected_days: int,
 ) -> tuple[date, ...]:
     result = tuple(day for day in calendar if start <= day <= end)
-    if (
-        len(result) != expected_days
-        or not result
-        or result[0] != start
-        or result[-1] != end
-        or result != tuple(sorted(set(result)))
-    ):
+    if len(result) != expected_days or not result or result != tuple(sorted(set(result))):
         raise _fail(
             REASON_INPUT_IDENTITY,
             "calendar slice differs from the approved development fold",
             stage="fold_boundary",
-            evidence={"start": start.isoformat(), "end": end.isoformat(), "actual_count": len(result)},
+            evidence={
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "actual_count": len(result),
+                "calendar_start": start.isoformat(),
+                "calendar_end": end.isoformat(),
+                "expected_trading_day_count": expected_days,
+                "observed_trading_day_count": len(result),
+                "observed_trading_start": result[0].isoformat() if result else None,
+                "observed_trading_end": result[-1].isoformat() if result else None,
+            },
         )
     return result
 
@@ -3261,7 +3265,7 @@ def run_c012_rl1_candidate_process(
             mapped_reason = REASON_RL1_METRIC
         elif exc.stage in {"development_acceptance", "market_conditioning"}:
             mapped_reason = REASON_RL1_DEVELOPMENT
-        elif exc.stage in {"fit", "development"}:
+        elif exc.stage in {"fit", "development", "fold_boundary"}:
             mapped_reason = REASON_RL1_FOLD
         else:
             mapped_reason = REASON_RL1_UNEXPECTED
