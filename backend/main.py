@@ -335,18 +335,14 @@ async def _lifespan(app: FastAPI):
         strategy_scheduler.start()
 
 
-    # Paper Trading v2 session scheduler is opt-in so development ports do not
-    # accidentally advance durable v2 sessions while production 8001 is running.
-    enable_pt_v2 = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
+    # The Paper v2 session scheduler is a retired execution path.  The old env
+    # may remain on a host during migration, but it must never create a second
+    # scheduler beside the unified simulation-runtime owner.
+    legacy_pt_v2_requested = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
     logging.getLogger("uvicorn.error").info(
-        "Paper Trading v2 scheduler autostart=%s interval=%s auto_run=%s",
-        enable_pt_v2 in {"1", "true", "yes", "y", "on"},
-        os.getenv("PAPER_TRADING_V2_SCHEDULER_INTERVAL_SEC") or "30",
-        os.getenv("PAPER_V2_AUTO_RUN_ENABLED") or "true",
+        "Paper Trading v2 legacy scheduler retired env_requested=%s env_ignored=true replacement=/api/v1/simulation-runtime",
+        legacy_pt_v2_requested in {"1", "true", "yes", "y", "on"},
     )
-    if enable_pt_v2 in {"1", "true", "yes", "y", "on"}:
-        from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
-        paper_trading_v2_scheduler.start()
 
     enable_advisory_forward = (os.getenv("AISTOCK_ADVISORY_FORWARD_SCHEDULER_ENABLED") or "").strip().lower()
     logging.getLogger("uvicorn.error").info(

@@ -32,6 +32,8 @@ CHINA_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULTS_REQUIRED_DATASETS = ("kline_minute_raw", "stk_limit", "suspend_d")
 MINIQMT_PATH_P_DEPRECATED_REASON_CODE = "MINIQMT_PATH_P_AUTO_RUN_DEPRECATED"
 MINIQMT_PATH_S_ENTRYPOINT = "/api/v1/simulation-runtime release+binding"
+LEGACY_SESSION_SCHEDULER_RETIRED_REASON_CODE = "PAPER_V2_LEGACY_SESSION_SCHEDULER_RETIRED"
+LEGACY_SESSION_SCHEDULER_REPLACEMENT = "/api/v1/simulation-runtime"
 
 
 class CreatePortfolioRequest(BaseModel):
@@ -278,6 +280,27 @@ def _raise_minqmt_path_p_deprecated(*, endpoint: str, broker_backend: str) -> No
                 "deprecated_path": "paper-v2 auto-run Path P",
                 "required_path": "simulation-runtime Path S release+binding",
                 "required_entrypoint": MINIQMT_PATH_S_ENTRYPOINT,
+            },
+        },
+    )
+
+
+def _raise_legacy_session_scheduler_retired(*, endpoint: str) -> NoReturn:
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error_code": "EXECUTION_PATH_NOT_CANONICAL",
+            "reason_code": LEGACY_SESSION_SCHEDULER_RETIRED_REASON_CODE,
+            "message": (
+                "Paper v2 legacy session scheduling is retired; all LocalSIM and MiniQMT simulation execution "
+                "must use the unified simulation-runtime scheduler."
+            ),
+            "context": {
+                "endpoint": endpoint,
+                "required_runtime_owner": "SimulationLifecycleScheduler",
+                "replacement": LEGACY_SESSION_SCHEDULER_REPLACEMENT,
+                "broker_called": False,
+                "legacy_fallback": False,
             },
         },
     )
@@ -1260,9 +1283,8 @@ def get_session_scheduler_bootstrap_status() -> dict[str, Any]:
 
 @router.post("/session-scheduler/start")
 def start_session_scheduler(req: SchedulerStartRequest) -> dict[str, Any]:
-    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
-
-    return {"ok": True, "scheduler": paper_trading_v2_scheduler.start(interval_seconds=req.interval_seconds)}
+    del req
+    _raise_legacy_session_scheduler_retired(endpoint="/api/v1/paper-v2/session-scheduler/start")
 
 
 @router.post("/session-scheduler/stop")
@@ -1274,24 +1296,14 @@ def stop_session_scheduler() -> dict[str, Any]:
 
 @router.post("/session-scheduler/run-once")
 def run_session_scheduler_once(req: SchedulerRunOnceRequest) -> dict[str, Any]:
-    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
-
-    return {"ok": True, "result": paper_trading_v2_scheduler.run_once(limit=req.limit, as_of_time=req.as_of_time)}
+    del req
+    _raise_legacy_session_scheduler_retired(endpoint="/api/v1/paper-v2/session-scheduler/run-once")
 
 
 @router.post("/session-scheduler/recover-auto-run")
 def recover_session_scheduler_auto_run(req: SchedulerRunOnceRequest | None = None) -> dict[str, Any]:
-    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
-
-    limit = req.limit if req else 50
-    as_of_time = req.as_of_time if req else None
-    return {
-        "ok": True,
-        "recovery": paper_trading_v2_scheduler.auto_run_coordinator.recover_enabled_portfolios(
-            limit=limit,
-            as_of_time=as_of_time,
-        ),
-    }
+    del req
+    _raise_legacy_session_scheduler_retired(endpoint="/api/v1/paper-v2/session-scheduler/recover-auto-run")
 
 
 @router.post("/coldstart-sanity/sentinel-order")

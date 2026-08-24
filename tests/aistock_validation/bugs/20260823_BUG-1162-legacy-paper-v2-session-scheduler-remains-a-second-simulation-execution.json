@@ -1,0 +1,320 @@
+{
+  "actual": "backend-main can autostart the legacy PaperTradingV2SessionScheduler when ENABLE_PAPER_TRADING_V2_SCHEDULER remains true in the production environment, while the unified simulation lifecycle scheduler is also active. The legacy thread scans auto-run portfolios and tickable sessions every 30 seconds and can advance a second durable execution path; today it is operationally idle only because session_count and enabled portfolios are zero. Retire this execution entry fail closed: backend lifespan must ignore the legacy autostart env, bootstrap/status must disclose retired and env-ignored state, and POST start/run-once/recover-auto-run must return a typed HTTP 410 pointing to /api/v1/simulation-runtime without touching DB, broker, sessions, or threads. Keep read-only status and idempotent shutdown for diagnostics/safety, preserve unified scheduler semantics, and add startup plus router regression tests. Do not control any running process.",
+  "allowed_write_scope": [
+    "backend/main.py",
+    "backend/services/paper_trading_v2/scheduler.py",
+    "backend/routers/paper_trading_v2.py",
+    "backend/tests/test_simulation_runtime_scheduler_startup.py",
+    "backend/tests/paper_trading_v2/test_auto_run.py",
+    "backend/tests/paper_trading_v2/test_router_auto_run.py",
+    "tests/aistock_validation/bugs/20260823_BUG-1162-legacy-paper-v2-session-scheduler-remains-a-second-simulation-execution.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1162",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-23T17:17:05.671913Z",
+  "description": "backend-main can autostart the legacy PaperTradingV2SessionScheduler when ENABLE_PAPER_TRADING_V2_SCHEDULER remains true in the production environment, while the unified simulation lifecycle scheduler is also active. The legacy thread scans auto-run portfolios and tickable sessions every 30 seconds and can advance a second durable execution path; today it is operationally idle only because session_count and enabled portfolios are zero. Retire this execution entry fail closed: backend lifespan must ignore the legacy autostart env, bootstrap/status must disclose retired and env-ignored state, and POST start/run-once/recover-auto-run must return a typed HTTP 410 pointing to /api/v1/simulation-runtime without touching DB, broker, sessions, or threads. Keep read-only status and idempotent shutdown for diagnostics/safety, preserve unified scheduler semantics, and add startup plus router regression tests. Do not control any running process.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260823-f163c088c0d3",
+      "timestamp": "2026-08-23T17:17:05.671894Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/main.py",
+      "backend/services/paper_trading_v2/scheduler.py",
+      "backend/routers/paper_trading_v2.py",
+      "backend/tests/test_simulation_runtime_scheduler_startup.py",
+      "backend/tests/paper_trading_v2/test_auto_run.py",
+      "backend/tests/paper_trading_v2/test_router_auto_run.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/main.py",
+        "backend/services/paper_trading_v2/scheduler.py",
+        "backend/routers/paper_trading_v2.py",
+        "backend/tests/test_simulation_runtime_scheduler_startup.py",
+        "backend/tests/paper_trading_v2/test_auto_run.py",
+        "backend/tests/paper_trading_v2/test_router_auto_run.py"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db",
+        "paper_v2",
+        "selection_center",
+        "strategy_package",
+        "platform.api",
+        "qe.single_experiment",
+        "qe.custom_evolution"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/main.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/services/paper_trading_v2/scheduler.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/routers/paper_trading_v2.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/test_simulation_runtime_scheduler_startup.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_auto_run.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_router_auto_run.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/main.py",
+        "backend/services/paper_trading_v2/scheduler.py",
+        "backend/routers/paper_trading_v2.py",
+        "backend/tests/test_simulation_runtime_scheduler_startup.py",
+        "backend/tests/paper_trading_v2/test_auto_run.py",
+        "backend/tests/paper_trading_v2/test_router_auto_run.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/main.py",
+      "backend/services/paper_trading_v2/scheduler.py",
+      "backend/routers/paper_trading_v2.py",
+      "backend/tests/test_simulation_runtime_scheduler_startup.py",
+      "backend/tests/paper_trading_v2/test_auto_run.py",
+      "backend/tests/paper_trading_v2/test_router_auto_run.py"
+    ]
+  },
+  "first_seen_at": "2026-08-23T17:17:05.671913Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3711,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3711",
+  "last_seen_at": "2026-08-23T17:17:05.671913Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "paper_v2_backend",
+    "platform_api_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked BUG-1162 backend lifespan and router sources and passed 10 startup/retired-route tests; no production process, database, broker, session, or thread mutation.",
+      "Fresh nox process loaded the tracked BUG-1162 Paper v2 sources and passed paper_v2_backend: 1129 passed, 3 skipped, 2 expected xfails; no production process control.",
+      "Fresh nox Paper v2 process loaded tracked BUG-1162 sources and passed 1129 tests with 3 skips and 2 expected xfails; no production process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Legacy Paper v2 session scheduler remains a second simulation execution entry",
+  "trigger_condition": {
+    "fingerprint": "f163c088c0d38e2ee33c259e",
+    "source_event_id": "FE-20260823-f163c088c0d3"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "paper_v2",
+        "qe_read",
+        "platform_api"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "paper_v2_backend",
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "paper_v2",
+          "qe_read",
+          "platform_api"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "paper_v2_backend",
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

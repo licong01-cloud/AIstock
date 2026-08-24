@@ -111,3 +111,33 @@ def test_local_sim_portfolio_creation_still_uses_path_p(monkeypatch: pytest.Monk
     assert payload["portfolio"]["portfolio_id"] == "paper_local_router_guard"
     assert payload["portfolio"]["broker_backend"] == "local_sim"
     assert _FakePortfolioService.calls[0]["broker_backend"] == "local_sim"
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/api/v1/paper-v2/session-scheduler/start", {"interval_seconds": 30}),
+        ("/api/v1/paper-v2/session-scheduler/run-once", {"limit": 50}),
+        ("/api/v1/paper-v2/session-scheduler/recover-auto-run", {"limit": 50}),
+    ],
+)
+def test_legacy_session_scheduler_mutations_are_retired(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    payload: dict[str, Any],
+) -> None:
+    client = _client(monkeypatch)
+
+    response = client.post(path, json=payload)
+
+    assert response.status_code == 410
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "EXECUTION_PATH_NOT_CANONICAL"
+    assert detail["reason_code"] == "PAPER_V2_LEGACY_SESSION_SCHEDULER_RETIRED"
+    assert detail["context"] == {
+        "endpoint": path,
+        "required_runtime_owner": "SimulationLifecycleScheduler",
+        "replacement": "/api/v1/simulation-runtime",
+        "broker_called": False,
+        "legacy_fallback": False,
+    }
