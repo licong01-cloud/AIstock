@@ -112,9 +112,16 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh WSL rdagent-gpu Python process loaded the frozen candidate universe and built 995848 fixed-session rows for 1465 symbols: explicit_suspended=1225, causal_continued=7, suspended_verified=1232, with no unexplained missing or future-price lookup."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
