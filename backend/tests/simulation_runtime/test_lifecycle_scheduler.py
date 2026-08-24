@@ -154,6 +154,7 @@ from backend.services.strategy_package.execution_policy import (
     LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID,
     LOCALSIM_TWAP_ONLY_REASON_CODE,
     compute_execution_policy_sha256,
+    local_sim_twap_only_policy_snapshot,
     normalize_execution_policy_json,
 )
 from backend.services.trading_core.errors import (
@@ -5355,9 +5356,32 @@ def test_scheduler_rolls_forward_expired_localsim_binding_for_unattended_daily_r
     assert new_binding.binding_config_json["metadata"]["purpose"] == "localsim_unattended_daily_roll_forward"
     assert new_binding.binding_config_json["metadata"]["extends_binding_id"] == local_binding.binding_id
     new_release = repo.get_strategy_runtime_release(new_binding.release_id)
+    twap_policy = local_sim_twap_only_policy_snapshot()
     assert new_release.base_release_id == release.release_id
     assert new_release.effective_from == next_trade_day
     assert new_release.effective_to == next_trade_day
+    assert new_release.execution_policy_version_id == twap_policy["policy_version_id"]
+    assert new_release.execution_policy_sha256 == twap_policy["policy_sha256"]
+    assert new_release.release_config_json["execution_policy"] == twap_policy
+    assert new_release.daily_strategy_profile_version_id == release.daily_strategy_profile_version_id
+    assert new_release.tail_policy_version_id == release.tail_policy_version_id
+    assert new_release.tail_policy_sha256 == release.tail_policy_sha256
+    assert new_release.release_config_json["metadata"]["execution_policy_authority"] == {
+        "schema_version": "simulation_roll_forward_execution_policy_authority_v1",
+        "source_policy_version_id": release.execution_policy_version_id,
+        "source_policy_sha256": release.execution_policy_sha256,
+        "effective_policy_version_id": twap_policy["policy_version_id"],
+        "effective_policy_sha256": twap_policy["policy_sha256"],
+        "authority_source": "localsim_twap_only_runtime_policy",
+        "source_policy_consulted_for_execution": False,
+        "fallback_used": False,
+    }
+    assert new_release.validation_evidence["execution_policy_authority"] == (
+        new_release.release_config_json["metadata"]["execution_policy_authority"]
+    )
+    assert result.results[0].execution_plan.execution_policy_version_id == new_release.execution_policy_version_id
+    assert result.results[0].execution_plan.execution_policy_sha256 == new_release.execution_policy_sha256
+    assert result.results[0].execution_plan.plan_payload_json["execution_policy"]["payload"] == twap_policy
     assert rerun.reused_count == 1
     assert rerun.results[0].run.binding_id == new_binding.binding_id
     local_bindings = repo.list_simulation_release_bindings(
@@ -5524,6 +5548,19 @@ def test_scheduler_rolls_forward_expired_miniqmt_binding_for_unattended_daily_ru
     assert new_release.base_release_id == release.release_id
     assert new_release.effective_from == next_trade_day
     assert new_release.effective_to == next_trade_day
+    assert new_release.execution_policy_version_id == release.execution_policy_version_id
+    assert new_release.execution_policy_sha256 == release.execution_policy_sha256
+    assert new_release.release_config_json["execution_policy"] == release.release_config_json["execution_policy"]
+    assert new_release.release_config_json["metadata"]["execution_policy_authority"] == {
+        "schema_version": "simulation_roll_forward_execution_policy_authority_v1",
+        "source_policy_version_id": release.execution_policy_version_id,
+        "source_policy_sha256": release.execution_policy_sha256,
+        "effective_policy_version_id": release.execution_policy_version_id,
+        "effective_policy_sha256": release.execution_policy_sha256,
+        "authority_source": "source_runtime_release",
+        "source_policy_consulted_for_execution": True,
+        "fallback_used": False,
+    }
     assert new_release.release_config_json["metadata"]["purpose"] == "miniqmt_unattended_daily_roll_forward"
     assert rerun.reused_count == 1
     assert rerun.results[0].run.binding_id == new_binding.binding_id

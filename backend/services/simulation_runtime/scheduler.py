@@ -8272,6 +8272,10 @@ class SimulationLifecycleScheduler:
             trade_date=trade_date,
             authoritative_manifest_sha256=resolved_manifest_sha256,
         )
+        execution_policy = self._roll_forward_execution_policy(
+            source_release=source_release,
+            broker_backend=source.broker_backend,
+        )
         new_release = release_service.create_release(
             package_id=source_release.package_id,
             manifest_sha256=resolved_manifest_sha256,
@@ -8279,11 +8283,11 @@ class SimulationLifecycleScheduler:
             runtime_profile_version_id=source_release.runtime_profile_version_id,
             runtime_profile_sha256=source_release.runtime_profile_sha256,
             daily_strategy_profile_version_id=source_release.daily_strategy_profile_version_id,
-            execution_policy_version_id=source_release.execution_policy_version_id,
-            execution_policy_sha256=source_release.execution_policy_sha256,
+            execution_policy_version_id=execution_policy["policy_version_id"],
+            execution_policy_sha256=execution_policy["policy_sha256"],
             tail_policy_version_id=source_release.tail_policy_version_id,
             tail_policy_sha256=source_release.tail_policy_sha256,
-            execution_policy_json=self._release_execution_policy_json(source_release),
+            execution_policy_json=execution_policy["policy_json"],
             base_release_id=source_release.release_id,
             validation_state=source_release.validation_state,
             validation_evidence=validation_evidence,
@@ -8386,6 +8390,45 @@ class SimulationLifecycleScheduler:
         return deepcopy(policy_json) if isinstance(policy_json, dict) and policy_json else None
 
     @staticmethod
+    def _roll_forward_execution_policy(
+        *,
+        source_release: StrategyRuntimeRelease,
+        broker_backend: SimulationBrokerBackend,
+    ) -> dict[str, Any]:
+        if broker_backend is SimulationBrokerBackend.LOCAL_SIM:
+            return local_sim_twap_only_policy_snapshot()
+        return {
+            "policy_version_id": source_release.execution_policy_version_id,
+            "policy_sha256": source_release.execution_policy_sha256,
+            "policy_json": SimulationLifecycleScheduler._release_execution_policy_json(source_release),
+        }
+
+    @staticmethod
+    def _roll_forward_execution_policy_authority(
+        *,
+        source_release: StrategyRuntimeRelease,
+        broker_backend: SimulationBrokerBackend,
+    ) -> dict[str, Any]:
+        effective = SimulationLifecycleScheduler._roll_forward_execution_policy(
+            source_release=source_release,
+            broker_backend=broker_backend,
+        )
+        return {
+            "schema_version": "simulation_roll_forward_execution_policy_authority_v1",
+            "source_policy_version_id": source_release.execution_policy_version_id,
+            "source_policy_sha256": source_release.execution_policy_sha256,
+            "effective_policy_version_id": effective["policy_version_id"],
+            "effective_policy_sha256": effective["policy_sha256"],
+            "authority_source": (
+                "localsim_twap_only_runtime_policy"
+                if broker_backend is SimulationBrokerBackend.LOCAL_SIM
+                else "source_runtime_release"
+            ),
+            "source_policy_consulted_for_execution": broker_backend is not SimulationBrokerBackend.LOCAL_SIM,
+            "fallback_used": False,
+        }
+
+    @staticmethod
     def _roll_forward_release_metadata(
         *,
         source_release: StrategyRuntimeRelease,
@@ -8408,6 +8451,10 @@ class SimulationLifecycleScheduler:
                 "source_release_manifest_sha256": source_release.manifest_sha256,
                 "authoritative_manifest_sha256": authoritative_manifest_sha256,
                 "manifest_identity_changed": source_release.manifest_sha256 != authoritative_manifest_sha256,
+                "execution_policy_authority": SimulationLifecycleScheduler._roll_forward_execution_policy_authority(
+                    source_release=source_release,
+                    broker_backend=source_binding.broker_backend,
+                ),
                 "roll_forward_policy": {
                     "schema_version": "localsim_roll_forward_policy_v1",
                     "immutable_daily_release": True,
@@ -8441,6 +8488,10 @@ class SimulationLifecycleScheduler:
                     "identity_changed": source_release.manifest_sha256 != authoritative_manifest_sha256,
                     "strategy_package_revalidation_performed": False,
                 },
+                "execution_policy_authority": SimulationLifecycleScheduler._roll_forward_execution_policy_authority(
+                    source_release=source_release,
+                    broker_backend=source_binding.broker_backend,
+                ),
             }
         )
         return evidence
