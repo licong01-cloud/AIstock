@@ -1105,14 +1105,16 @@ def test_source_row_non_finite_optional_value_is_rejected(
         authority.freeze(cutoff=date(2026, 7, 31))
 
 
+@pytest.mark.parametrize("column", ["pre_close", "up_limit", "down_limit"])
 @pytest.mark.parametrize("marker", ["NaN", "Infinity", "-Infinity"])
 def test_stk_limit_postgres_numeric_non_finite_marker_becomes_repairable_null(
     dataset_profile,
     tmp_path,
+    column,
     marker,
 ) -> None:
     fake = FakeSnapshotSession()
-    fake.payload_overrides["stk_limit"] = {"pre_close": marker}
+    fake.payload_overrides["stk_limit"] = {column: marker}
     authority, cas = _authority(dataset_profile, tmp_path, fake)
 
     frozen = authority.freeze(cutoff=date(2026, 7, 31))
@@ -1121,7 +1123,7 @@ def test_stk_limit_postgres_numeric_non_finite_marker_becomes_repairable_null(
     with reader.iter_rows("stk_limit", partition["partition_key"]) as rows:
         row = next(rows)
 
-    assert row["pre_close"] is None
+    assert row[column] is None
     assert PRODUCTION_QUERY_SPECS["stk_limit"].query_version.endswith(":nonfinite_numeric_to_null_v1")
 
 
@@ -1131,6 +1133,18 @@ def test_stk_limit_arbitrary_text_numeric_value_remains_fail_closed(
 ) -> None:
     fake = FakeSnapshotSession()
     fake.payload_overrides["stk_limit"] = {"pre_close": "not-a-number"}
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
+    with pytest.raises(SourceManifestError, match="numeric value is invalid"):
+        authority.freeze(cutoff=date(2026, 7, 31))
+
+
+def test_postgres_numeric_marker_outside_stk_limit_remains_fail_closed(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.payload_overrides["daily_basic"] = {"pe": "NaN"}
     authority, _cas = _authority(dataset_profile, tmp_path, fake)
 
     with pytest.raises(SourceManifestError, match="numeric value is invalid"):
