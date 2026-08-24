@@ -104,7 +104,7 @@ def _rl1_calendar() -> list[date]:
     return [
         *_approved_calendar(),
         *_segment(date(2025, 4, 1), date(2025, 9, 30), 126),
-        *_segment(date(2025, 10, 1), date(2026, 3, 31), 116),
+        *_segment(date(2025, 10, 9), date(2026, 3, 31), 116),
     ]
 
 
@@ -1421,6 +1421,83 @@ def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path)
     with pytest.raises(subject.RidgeCandidateError) as captured:
         subject.validate_c012_rl1_static_request(escaped)
     assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+
+def test_c012_rl1_fold_calendar_uses_frozen_trading_dates_when_calendar_boundary_is_closed() -> None:
+    request = _rl1_request()
+
+    folds = subject._c012_rl1_folds(tuple(_rl1_calendar()), request)
+
+    assert folds[-1]["validation_start"] == date(2025, 10, 1)
+    assert folds[-1]["validation_end"] == date(2026, 3, 31)
+    assert folds[-1]["validation_days"] == 116
+
+
+def test_c012_rl1_fold_calendar_drift_persists_typed_boundary_evidence() -> None:
+    request = _rl1_request()
+    full_calendar = _rl1_calendar()
+    calendar = tuple(day for day in full_calendar if day != date(2025, 10, 9))
+    request["development_calendar"] = {
+        **request["development_calendar"],
+        "trading_day_count": len(calendar),
+        "date_set_sha256": subject.canonical_sha256([day.isoformat() for day in calendar]),
+    }
+
+    def receipt(name: str) -> dict[str, object]:
+        body = {"name": name}
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    inputs = {
+        "trading_dates": calendar,
+        "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
+        "mapping_manifest": {"rows": []},
+        "database": {"host": "redacted", "dbname": "dev"},
+        "provider_absence_manifest": {"manifest": "v1"},
+        "security_identity_manifest": {"manifest": "v1"},
+        "c010_diagnostic": {
+            "eligibility": receipt("eligibility"),
+            "aggregate_evidence": receipt("aggregate"),
+            "l1_cross_section_evidence": receipt("l1-cross"),
+            "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
+        },
+    }
+    _bind_rl1_request_inputs(request, inputs)
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject.run_c012_rl1_candidate_process(
+            inputs,
+            request,
+            producer_commit="a" * 40,
+            process_index=1,
+        )
+
+    error = captured.value
+    assert error.reason_code == subject.REASON_RL1_FOLD
+    assert error.stage == "input"
+    assert error.evidence["source_reason_code"] == subject.REASON_RL1_FOLD
+    assert error.evidence["source_stage"] == "input"
+    assert error.evidence["completed_fit_count"] == 0
+    assert error.evidence["calendar_scope"] == "fold"
+    assert error.evidence["fold"] == "fold-5"
+    assert error.evidence["validation_calendar_start"] == "2025-10-01"
+    assert error.evidence["observed_validation_start"] != "2025-10-09"
+    assert error.evidence["observed_validation_trading_day_count"] == 115
+
+    report = subject.failure_report(
+        request,
+        producer_commit="a" * 40,
+        error=error,
+        completed_fit_count=0,
+        candidate_mode="c012-rl1",
+        process_index=1,
+    )
+    assert report["failure_evidence"]["source_reason_code"] == subject.REASON_RL1_FOLD
+    assert report["failure_evidence"]["calendar_scope"] == "fold"
+    assert report["failure_evidence"]["fold"] == "fold-5"
+    assert report["completed_fit_count"] == 0
+    assert report["selection_performed"] is False
+    assert report["model_write"] is False
+    assert report["ready_write"] is False
 
 
 def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: pytest.MonkeyPatch) -> None:

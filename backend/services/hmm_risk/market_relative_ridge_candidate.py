@@ -2671,33 +2671,70 @@ def _c012_rl1_c010_identity(inputs: Mapping[str, Any]) -> dict[str, Any]:
 def _c012_rl1_folds(calendar: tuple[date, ...], request: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
     development_dates = tuple(day for day in calendar if RL1_DEVELOPMENT_START <= day <= RL1_DEVELOPMENT_END)
     development = request["development_calendar"]
+    development_hash = canonical_sha256([day.isoformat() for day in development_dates])
     if (
         len(development_dates) != development["trading_day_count"]
         or not development_dates
         or development_dates[0] != RL1_DEVELOPMENT_START
         or development_dates[-1] != RL1_DEVELOPMENT_END
-        or canonical_sha256([day.isoformat() for day in development_dates]) != development["date_set_sha256"]
+        or development_hash != development["date_set_sha256"]
     ):
-        raise _fail(REASON_RL1_FOLD, "rotation L1 development calendar drifted", stage="input")
+        raise _fail(
+            REASON_RL1_FOLD,
+            "rotation L1 development calendar drifted",
+            stage="input",
+            evidence={
+                "calendar_scope": "development",
+                "expected_start": RL1_DEVELOPMENT_START.isoformat(),
+                "expected_end": RL1_DEVELOPMENT_END.isoformat(),
+                "expected_trading_day_count": development["trading_day_count"],
+                "expected_date_set_sha256": development["date_set_sha256"],
+                "observed_start": development_dates[0].isoformat() if development_dates else None,
+                "observed_end": development_dates[-1].isoformat() if development_dates else None,
+                "observed_trading_day_count": len(development_dates),
+                "observed_date_set_sha256": development_hash,
+            },
+        )
     output: list[dict[str, Any]] = []
     for authority, boundary in zip(request["folds"], RL1_FOLD_BOUNDARIES, strict=True):
         name, train_start, train_end, validation_start, validation_end = boundary
         train_dates = tuple(day for day in calendar if train_start <= day <= train_end)
         validation_dates = tuple(day for day in calendar if validation_start <= day <= validation_end)
+        train_hash = canonical_sha256([day.isoformat() for day in train_dates])
+        validation_hash = canonical_sha256([day.isoformat() for day in validation_dates])
         if (
             len(train_dates) != authority["train_trading_day_count"]
             or len(validation_dates) != authority["validation_trading_day_count"]
             or not train_dates
             or not validation_dates
-            or train_dates[0] != train_start
-            or train_dates[-1] != train_end
-            or validation_dates[0] != validation_start
-            or validation_dates[-1] != validation_end
-            or canonical_sha256([day.isoformat() for day in train_dates]) != authority["train_date_set_sha256"]
-            or canonical_sha256([day.isoformat() for day in validation_dates])
-            != authority["validation_date_set_sha256"]
+            or train_hash != authority["train_date_set_sha256"]
+            or validation_hash != authority["validation_date_set_sha256"]
         ):
-            raise _fail(REASON_RL1_FOLD, f"rotation L1 {name} calendar drifted", stage="input")
+            raise _fail(
+                REASON_RL1_FOLD,
+                f"rotation L1 {name} calendar drifted",
+                stage="input",
+                evidence={
+                    "calendar_scope": "fold",
+                    "fold": name,
+                    "train_calendar_start": train_start.isoformat(),
+                    "train_calendar_end": train_end.isoformat(),
+                    "validation_calendar_start": validation_start.isoformat(),
+                    "validation_calendar_end": validation_end.isoformat(),
+                    "expected_train_trading_day_count": authority["train_trading_day_count"],
+                    "expected_train_date_set_sha256": authority["train_date_set_sha256"],
+                    "observed_train_start": train_dates[0].isoformat() if train_dates else None,
+                    "observed_train_end": train_dates[-1].isoformat() if train_dates else None,
+                    "observed_train_trading_day_count": len(train_dates),
+                    "observed_train_date_set_sha256": train_hash,
+                    "expected_validation_trading_day_count": authority["validation_trading_day_count"],
+                    "expected_validation_date_set_sha256": authority["validation_date_set_sha256"],
+                    "observed_validation_start": validation_dates[0].isoformat() if validation_dates else None,
+                    "observed_validation_end": validation_dates[-1].isoformat() if validation_dates else None,
+                    "observed_validation_trading_day_count": len(validation_dates),
+                    "observed_validation_date_set_sha256": validation_hash,
+                },
+            )
         output.append(
             {
                 "fold": name,
@@ -3101,7 +3138,6 @@ def run_c012_rl1_candidate_process(
         raise _fail(REASON_RL1_INPUT, "trading calendar is not sorted and unique", stage="input")
     if any(day >= RL1_HOLDOUT_START for day in calendar):
         raise _fail(REASON_RL1_HOLDOUT, "development input contains new holdout dates", stage="input")
-    folds = _c012_rl1_folds(calendar, request)
     development_days = int(request["development_calendar"]["trading_day_count"])
     dataset_manifest = inputs.get("dataset_manifest")
     mapping_manifest = inputs.get("mapping_manifest")
@@ -3121,6 +3157,7 @@ def run_c012_rl1_candidate_process(
     fold_receipts: list[dict[str, Any]] = []
     market_folds: list[MarketConditioningFold] = []
     try:
+        folds = _c012_rl1_folds(calendar, request)
         for fold in folds:
             market = _market_fold_conditioning(
                 inputs, calendar=calendar, benchmark=benchmark, fold=fold, attempt_log=attempt_log
