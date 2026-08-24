@@ -280,13 +280,18 @@ backend 重启不应丢任务；control catalog 和 Worker heartbeat 是 authori
 - aggregate owned private commit≤12 GiB；
 - Windows-only Job≤8 GiB，hybrid Windows side≤4 GiB；
 - WSL memory high/max/swap=6/8/0 GiB；
-- host start/emergency available 和 commit headroom=16/8 GiB；
+- host emergency available 和 commit headroom=8 GiB，适用于所有 workload；启动余量按已批准 workload 分级：
+  `resolution_light=10 GiB`、`sample=12 GiB`、`full=16 GiB`；
 - DB pool=4、row-producing query=1、provider request=1；
 - minute batch/date chunk=20 stocks/3 months；factor H5/static 由单日切片与 Parquet row-group 控制；profile 中 `h5_batch=100` 仅为 v1 兼容遥测，不是生效的降压旋钮；
 - Parquet row group/validation chunk≤100,000 rows；
 - start free space=max(32 GiB, 1.25×predicted new bytes)。
 
 允许的降压只有 profile pressure ladder：batch/chunk/row-group/workers逐级降低。不得通过减少股票、日期、字段、PIT、指数、H5 或验证范围换性能。
+workload 分级只由已校验的 durable scope 决定：sample 的只读来源解析使用 `resolution_light`，sample 构建使用
+`sample`，所有 full resolution/build 和未知情况使用 `full`。CLI、环境变量和操作者不能覆盖该分类。分级只调整
+开始执行所需的 host available/commit headroom；12 GiB aggregate、Job/cgroup、WSL zero-swap、低内存信号、持续换页、
+8 GiB emergency 和磁盘保留均保持原标准。resource receipt 必须披露 workload class 和实际生效的启动阈值。
 
 性能边界必须如实区分：
 
@@ -318,8 +323,8 @@ backend 重启不应丢任务；control catalog 和 Worker heartbeat 是 authori
 - 可重试：provider 限流、网络错误、上游数据尚未发布；保留 intent/checkpoint，不改写为永久合同失败。
 - 硬阻断：权威值冲突、PIT/日期/identity 损坏、内部日线断点、必要推导输入缺失、越权写入/激活、
   无依据扩大为全量构建或资源安全越界。
-- 未来新增或扩大硬阻断前，必须先向用户提交触发条件、发生概率、误阻成本、准确性风险和替代方案，
-  经用户批准后才可实现；不得用测试或文档先行制造新门禁。
+- 未来新增或扩大任何门禁（包括等待、重试、阻断和失败条件）前，必须逐项向用户提交触发条件、发生概率、
+  误阻成本、准确性风险和替代方案，经用户逐一批准后才可实现；不得用测试或文档先行制造新门禁。
 
 外部 Qlib toolchain 也是 hard gate：Ubuntu、conda `rdagent-gpu`、`dump_bin.py` Windows/WSL path、repo guardian/runner
 以及冻结 SHA 必须与 profile 完全一致。零执行 `--preflight` 验证 Windows 侧冻结文件内容和 WSL 路径配置，

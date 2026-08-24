@@ -473,6 +473,8 @@ def test_source_resource_wait_uses_durable_first_wait_and_times_out(tmp_path, da
     assert durable["terminal_receipt_ref"] is not None
     receipt = worker.cas.get_json(durable["terminal_receipt_ref"])
     assert receipt["error_code"] == "BLOCKED_RESOURCE_TIMEOUT"
+    assert receipt["context"]["resource_admission_class"] == "full"
+    assert receipt["context"]["effective_host_start_commit_headroom_bytes"] == 16 * GIB
 
 
 def test_context_exposes_only_supervised_launch_and_forwards_pressure_rung(tmp_path, dataset_profile) -> None:

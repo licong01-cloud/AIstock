@@ -1752,13 +1752,18 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
         "backend/services/dataset_release/a_share_limit_rule.py",
         "backend/services/dataset_release/artifact_ready_build_source.py",
         "backend/services/dataset_release/artifact_ready_source.py",
+        "backend/services/dataset_release/build_processor.py",
         "backend/services/dataset_release/component_artifact_manifest.py",
         "backend/services/dataset_release/component_manifest_producer.py",
         "backend/services/dataset_release/index_sources.py",
         "backend/services/dataset_release/minute_overlay.py",
         "backend/services/dataset_release/mixed_planner.py",
+        "backend/services/dataset_release/resolution_processor.py",
+        "backend/services/dataset_release/resource_budget.py",
+        "backend/services/dataset_release/resource_gate.py",
         "backend/services/dataset_release/source_authority.py",
         "backend/services/dataset_release/stk_limit_overlay.py",
+        "backend/services/dataset_release/worker.py",
     ]
 
     inference = workflow._classify_runtime_impact(changed_files)

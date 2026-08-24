@@ -6,6 +6,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from enum import Enum
 from typing import Callable, Protocol
 
 import psutil
@@ -37,6 +38,60 @@ _PRESSURE_RATIO = 0.85
 _COMMIT_PRESSURE_SUSTAINED_SAMPLES = 2
 _EMERGENCY_APPROACH_BYTES = GIB
 _TELEMETRY_CAPACITY = 7_200
+
+
+class ResourceAdmissionClass(str, Enum):
+    """Approved workload classes for start-reserve admission only."""
+
+    FULL = "full"
+    SAMPLE = "sample"
+    RESOLUTION_LIGHT = "resolution_light"
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceAdmissionThresholds:
+    host_start_available_bytes: int
+    host_start_commit_headroom_bytes: int
+    wsl_start_available_bytes: int
+
+
+def _admission_thresholds(
+    policy: ProfileResourcePolicy,
+    admission_class: ResourceAdmissionClass,
+) -> ResourceAdmissionThresholds:
+    if not isinstance(admission_class, ResourceAdmissionClass):
+        raise ProfileValidationError("resource admission class is not approved")
+
+    if admission_class is ResourceAdmissionClass.FULL:
+        available = policy.host_start_available_bytes
+        headroom = policy.host_start_commit_headroom_bytes
+    elif admission_class is ResourceAdmissionClass.SAMPLE:
+        approved_floor = 12 * GIB
+        available = min(
+            policy.host_start_available_bytes,
+            max(approved_floor, policy.host_emergency_available_bytes + GIB),
+        )
+        headroom = min(
+            policy.host_start_commit_headroom_bytes,
+            max(approved_floor, policy.host_emergency_commit_headroom_bytes + GIB),
+        )
+    elif admission_class is ResourceAdmissionClass.RESOLUTION_LIGHT:
+        approved_floor = 10 * GIB
+        available = min(
+            policy.host_start_available_bytes,
+            max(approved_floor, policy.host_emergency_available_bytes + GIB),
+        )
+        headroom = min(
+            policy.host_start_commit_headroom_bytes,
+            max(approved_floor, policy.host_emergency_commit_headroom_bytes + GIB),
+        )
+    else:  # pragma: no cover - enum exhaustiveness guard for future changes
+        raise ProfileValidationError("resource admission class lacks user-approved thresholds")
+    return ResourceAdmissionThresholds(
+        host_start_available_bytes=available,
+        host_start_commit_headroom_bytes=headroom,
+        wsl_start_available_bytes=policy.wsl_start_available_bytes,
+    )
 
 
 def _project_pressure_ladder(profile: DatasetProfile) -> tuple[PressureRung, ...]:
@@ -438,10 +493,13 @@ class ResourceBudget:
         profile: DatasetProfile,
         probe: SnapshotProbe,
         *,
+        admission_class: ResourceAdmissionClass = ResourceAdmissionClass.FULL,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.policy: ProfileResourcePolicy = validate_resource_policy(profile.resource_policy)
+        self.admission_class = admission_class
+        self.admission_thresholds = _admission_thresholds(self.policy, admission_class)
         self.pressure_ladder = _project_pressure_ladder(profile)
         self._probe = probe
         self._sleep = sleep
@@ -457,8 +515,9 @@ class ResourceBudget:
     def _record_pressure(self, snapshot: ResourceSnapshot) -> None:
         page_reads = snapshot.host.page_reads_per_second
         headroom = snapshot.host.commit_headroom_bytes
-        near_pressure = snapshot.host.available_bytes < self.policy.host_start_available_bytes or (
-            headroom is not None and headroom < self.policy.host_start_commit_headroom_bytes
+        near_pressure = snapshot.host.available_bytes < self.admission_thresholds.host_start_available_bytes or (
+            headroom is not None
+            and headroom < self.admission_thresholds.host_start_commit_headroom_bytes
         )
         if page_reads is not None and page_reads >= _PAGE_READS_PER_SECOND_LIMIT and near_pressure:
             self._page_pressure_samples += 1
@@ -595,11 +654,15 @@ class ResourceBudget:
                 pressure_rung + 1,
             )
 
-        start_wait = snapshot.host.available_bytes < self.policy.host_start_available_bytes or (
-            headroom is not None and headroom < self.policy.host_start_commit_headroom_bytes
+        start_wait = snapshot.host.available_bytes < self.admission_thresholds.host_start_available_bytes or (
+            headroom is not None
+            and headroom < self.admission_thresholds.host_start_commit_headroom_bytes
         )
         if snapshot.wsl_required and snapshot.wsl_available_bytes is not None:
-            start_wait = start_wait or snapshot.wsl_available_bytes < self.policy.wsl_start_available_bytes
+            start_wait = (
+                start_wait
+                or snapshot.wsl_available_bytes < self.admission_thresholds.wsl_start_available_bytes
+            )
         if start_wait:
             return ResourceDecision("WAITING_RESOURCE", "RESOURCE_ADMISSION_WAIT", pressure_rung)
 
@@ -638,6 +701,8 @@ __all__ = [
     "HostMemorySnapshot",
     "OwnedMemorySnapshot",
     "PressureRung",
+    "ResourceAdmissionClass",
+    "ResourceAdmissionThresholds",
     "ResourceBudget",
     "ResourceDecision",
     "ResourceSnapshot",

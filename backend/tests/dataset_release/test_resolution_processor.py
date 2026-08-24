@@ -45,6 +45,7 @@ from backend.services.dataset_release.source_authority import (
     SOURCE_AUTHORITY_POLICY_VERSION,
     SOURCE_REUSE_MANIFEST_SCHEMA,
 )
+from backend.services.dataset_release.resource_budget import ResourceAdmissionClass
 from backend.services.dataset_release.worker import WORKER_ERROR_RECEIPT_SCHEMA
 
 
@@ -158,6 +159,7 @@ def test_resolution_resource_spec_restores_waiting_pressure_rung(
         source_authority=object(),
     )
     processor._predicted_new_bytes = lambda _submission: 0
+    processor._read_request = lambda _submission: SimpleNamespace(scope=Scope.FULL)
     assert processor.resource_spec(submission).pressure_rung == 1
 
 
@@ -239,6 +241,11 @@ def test_resolution_reader_revalidates_fixed_initial_plan_and_sample_scope(tmp_p
     assert request.is_initial_migration is True
     assert request.cutoff == date(2026, 7, 31)
     assert request.sample_instruments == plan.sample_instruments
+    processor._predicted_new_bytes = lambda _submission: 0
+    assert (
+        processor.resource_spec(store.get_submission(submitted["submission_id"])).admission_class
+        is ResourceAdmissionClass.RESOLUTION_LIGHT
+    )
 
     valid_outer = cas.get_json_bounded(
         store.get_submission(submitted["submission_id"])["request_ref"],

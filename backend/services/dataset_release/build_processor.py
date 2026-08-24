@@ -61,6 +61,7 @@ from .pit import (
 )
 from .publisher import DatasetPublisher, PublishSpec
 from .resource_gate import RESOURCE_GATE_RECEIPT_SCHEMA
+from .resource_budget import ResourceAdmissionClass
 from .resolution import (
     BUILD_INPUTS_SCHEMA_VERSION,
     RESOLUTION_PLAN_SCHEMA_VERSION,
@@ -260,6 +261,11 @@ class ProductionBuildProcessor:
             staging_ref=None,
             pressure_rung=self._resume_pressure_rung(str(run["run_id"])),
             predicted_new_bytes=int(build_inputs["predicted_new_bytes"]),
+            admission_class=(
+                ResourceAdmissionClass.SAMPLE
+                if release.scope is Scope.SAMPLE
+                else ResourceAdmissionClass.FULL
+            ),
         )
 
     def _resume_pressure_rung(self, run_id: str) -> int:
