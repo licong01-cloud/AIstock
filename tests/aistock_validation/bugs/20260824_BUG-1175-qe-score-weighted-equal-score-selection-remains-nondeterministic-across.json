@@ -76,9 +76,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "backend/tests/unified_engine/test_score_weighted_strategy_determinism.py launches fresh Python subprocesses that import tracked scripts/score_weighted_strategy_v2.py and verifies hash-seed stability, input-order permutation stability, sell-boundary stability, and unchanged distinct-score ordering -> 4 passed",
-      "Fresh Python subprocesses imported tracked scripts/score_weighted_strategy_v2.py and verified hash-seed, input-order permutation, sell-boundary, and distinct-score ordering contracts -> 4 passed",
-      "Fresh Python subprocesses imported tracked scripts/score_weighted_strategy_v2.py and verified hash-seed, input-order permutation, sell-boundary, and distinct-score ordering contracts -> 4 passed on final HEAD"
+      "backend/tests/unified_engine/test_score_weighted_strategy_determinism.py launches fresh Python subprocesses that import tracked scripts/score_weighted_strategy_v2.py and verifies hash-seed stability, input-order permutation stability, sell-boundary stability, and unchanged distinct-score ordering -> 4 passed on final HEAD"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
