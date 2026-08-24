@@ -78,7 +78,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "worker_heartbeat.business",
     "fresh_process_evidence": [
-      "fresh Python production read-only real-shape check normalized 600462.SH/2021-05-13 PostgreSQL numeric NaN to null, retained numeric limits, classified four invalid rows, and performed zero writes"
+      "fresh Python production read-only real-shape check normalized 600462.SH/2021-05-13 PostgreSQL numeric NaN to null, retained numeric limits, classified four invalid rows, and performed zero writes",
+      "python -c import source-authority and audit closure -> passed: fresh-import-pass"
     ],
     "health_ref": "worker_heartbeat.health",
     "identity_ref": "worker_heartbeat.identity",
