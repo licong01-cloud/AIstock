@@ -4516,6 +4516,12 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-012-RL1-HR1-D4 | capability、basis与forward状态 | `SOURCE_IMPLEMENTED_VERIFIED_PENDING_FORMAL_REPLAY` | 通过后CAPABILITY_AVAILABLE + HISTORICAL_CAUSAL_WALK_FORWARD + forward PENDING + ready=false；其余三能力NOT_AVAILABLE |
 | C-012-RL1-HR1-D5 | replay acceptance/component v2/bundle v2 | `SOURCE_IMPLEMENTED_VERIFIED_PENDING_FORMAL_REPLAY` | repo-external append-only最小writer与双向hash closure；失败不写component/bundle/READY |
 | C-012-RL1-HR1-D6 | 非阻塞forward confirmation与停止 | `SOURCE_IMPLEMENTED_VERIFIED_PENDING_FORMAL_REPLAY` | future window只作一次0-fit确认；PENDING不阻断P2-5/P2-6，FAILED停止新日常预测但保留历史分析 |
+| C-013-PIT-ID-D1 | 行业成员如何形成order-invariant、可回放的版本化唯一身份 | `PROPOSED_PENDING_USER_APPROVAL` | 使用taxonomy version、成员有效区间、source/receipt hash；禁止首行、排序、LIMIT 1、字典覆盖或逐股硬编码 |
+| C-013-PIT-ID-D2 | 历史行业分类采用as-published PIT还是stable-taxonomy backcast | `PROPOSED_PENDING_DATA_AUTHORITY_AND_USER_APPROVAL` | 两种basis不得混写；backcast不得冒充as-known causal；当前无权威版本/crosswalk时保持blocked |
+| C-013-PIT-ID-D3 | 同start多identity与顺序成员变更如何解析 | `PROPOSED_PENDING_USER_APPROVAL` | 仅权威严格递增边界可构造半开区间；同边界冲突返回typed unavailable |
+| C-013-PIT-ID-D4 | 行业identity unavailable是否删除股票或阻断全局流程 | `PROPOSED_PENDING_USER_APPROVAL` | 价格/alpha/股票池资格保持独立；行业contributor显式不可用并由既有coverage合同验收，不补neutral/当前行业/前值 |
+| C-013-PIT-ID-D5 | HMM、sector data、QE/Qlib、Selection/Paper与Advisory如何迁移 | `PROPOSED_PENDING_MODULE_OWNERS` | shared resolver contract先批准，各业务窗口独立PR；文档通过不冒充跨模块源码已修复 |
+| C-013-PIT-ID-D6 | 数据权威、resolver、消费者迁移与HMM回放的顺序 | `PROPOSED_PENDING_USER_APPROVAL` | P0设计→P1数据candidate→P2A shared core/P2B HMM adapter→P3/P4消费者→P5 0-fit预检/另行训练授权；生产动作独立授权 |
 | C-008-B3-D7-01 | B3 runtime dependency identity | `RESOLVED_USER_APPROVED_D7_01_A` | 未来实现声明 `hmmlearn==0.3.3`；本 docs-only PR 不安装依赖，未来 production dependency gate 独立 pending |
 | C-008-B3-FORMAL-EXEC-01 | 已批准 B3 合同在当前冻结输入上是否形成两-family READY | `VERIFIED_FORMAL_EXECUTION_BLOCKED_NO_READY` | producer `e2c01bae…` 完成 5184/5184 fits；formal canonical `e7992f87…39f`。D5 只选出 `legacy_covfix:L1/seed=43`，该 level 又在 D6 因 `801980.SI` failed；其余三个 family/level 无 eligible candidate。两 family blocked，selection未读validation/future utility，selection后未refit，model/READY/DB/runtime write均为false |
 | C-008-B3-FORMAL-BLOCKER-DIAG-01 | 是否按 formal rejection summaries 对全部 blocker pair 与 deterministic controls 执行两 fresh-process 定向根因诊断 | `VERIFIED_DIAGNOSTIC_COMPLETE_NO_SELECTION_NO_READY` | producer `ac3687c2…`；artifact canonical `10287e84…cffe8`；150 rejected+24 controls、348/348 fits、3-entry D6 no-refit replay闭合，两次payload hash bitwise相同；不选择seed、不改阈值/authority、不写model/READY/DB/runtime |
@@ -4553,7 +4559,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
 
-- F-011 parent：`P2_3_C_FORMAL_DEVELOPMENT_CANDIDATE_FROZEN_P2_4_EXACT_CONTRACT_USER_APPROVED_SOURCE_IMPLEMENTATION_AUTHORIZED_NO_CANONICAL_MODEL`；历史C-009、BUG-892 与
+- F-011 parent：`BUG_1184_PIT_MEMBER_AUTHORITY_BLOCKED_NO_CANONICAL_MODEL`；历史C-009、BUG-892 与
   C-010-FORMAL-A 已合入并完成 clean-main 601 日 formal preflight。两 fresh-process 共 5184 fits 和 D5/D6 已执行；formal canonical
   `e7992f87…39f` 为 blocked，未生成 model/READY。targeted blocker diagnostic 已按批准合同完成，canonical
   `10287e84…cffe8`；no-fit remediation diagnostic也已完成，canonical `48157a42…bb58`。两项都只完成根因证据闭合且未重跑
@@ -4562,15 +4568,16 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
   treatment/harness均16/16 `fit_completed`且descriptive covariance accepted，机制仍inconclusive。REFIT-03 covariance exact-evidence已完成48/48 fits并形成
   `mixed_seed_pattern`。其后最新P6完成2096/2096 fits并选择`autocycle_all_core:L2/seed=43`；BUG-1008零refit重放闭合131-entry
   posterior与carrier readback后，最新零refit重放为assignment 131/131 accepted、evidence 120/131 accepted与11/131 failed；D6-NA-A与BUG-1029均已合入并close-sync。TRAIN-STABILITY-DIAG-01和`TRANSITION-DWELL-B`均未形成完整候选seed。P2-3A jump v2已正式执行并以`NOT_AVAILABLE_FOR_PROMOTION`停止；formal canonical=`034fdf3c…12ec`、296/456 fits、无holdout/model/READY。P2-3B亦完成批准合同内的正式执行：formal canonical=`d3298654…fc45`、167/184 fits；market完成、L1开发fold完整，但selected alpha100的median Rank IC为负，故在L1 final/L2前正确停止。491个嵌套hash和指标重聚合闭合，canonical model、FULL_READY与COVERAGE_AVAILABLE仍为0。
-- F-011-A 数据/PIT/observation：`APPROVED_BY_USER_C010_A5_SOURCE_MERGED_601_DAY_PREFLIGHT_VERIFIED`；C-007-A 单位、PIT sector mapping、7/20 维公式、
+- F-011-A 数据/PIT/observation：`BUG_1184_HISTORICAL_MEMBER_INTERVAL_AUTHORITY_BLOCKED_DESIGN_PROPOSED`；C-007-A 单位、7/20 维公式、
   hard semantic authority、120/30 行合同与既有 `0.90` coverage authority 均保留。已批准 policy 只把 full-universe train-frozen
   contributor ledger、price/moneyflow 双层 coverage、同源 moneyflow denominator 与逐 feature cross-section 形式化；它不删除证券或
   feature，不改变 validation/runtime prediction universe。A2/A3 已批准，四个 moneyflow/横截面派生 feature 的公式 identity 必须从
   v1 显式升级为 `hmm_risk_l1_sector_factor_formula_v2_c010`，不得被描述为“公式不变”。设计、源码、formal preflight 与 formal child input
   identity 已完成历史验证。BUG-944 曾证明 full-market provider audit domain 与 direct-sector opportunity domain 未正式分离；
-  C-010-A5源码与新601日只读formal preflight已合入并闭合；F-011-A已完成。D1当前blocker是实验authority重基准，不是数据域或代码合入。
+  C-010-A5源码与此前601日只读formal preflight已合入，但BUG-1184证明当前`sw_index_member is_new=Y`不能单独充当完整历史成员区间；
+  23只冲突证券中4只存在同start多identity。F-011-A因此重新blocked于C-013数据权威/唯一resolver，不得沿用“数据域已完成”结论或直接恢复24 fits。
 - F-011-B numeric/sector semantic：`P2_4_FORMAL_EXECUTED_NUMERIC_VALID_PRODUCT_NOT_AVAILABLE`；历史P6/transition evidence不变。P2-3C保持批准的market-sign交互、target、score方向和state projection；正式holdout局部指标只作C-012能力分解输入，不追认candidate成功。
-- F-011-C product/family/selection：`P2_4_FORMAL_NOT_AVAILABLE_C012_RL1_HR1_SOURCE_IMPLEMENTED_VERIFIED_PENDING_FORMAL_REPLAY`；旧candidate、参数和holdout已终结，禁止reselection、阈值调整或复用holdout。下一active边界是唯一rotation_L1 24-fit历史因果回放；通过即可按显式historical basis进入P2-5，不等待未来日期。
+- F-011-C product/family/selection：`P2_4_FORMAL_NOT_AVAILABLE_C012_RL1_HR1_SOURCE_IMPLEMENTED_VERIFIED_REPLAY_BLOCKED_BY_BUG_1184`；旧candidate、参数和holdout已终结，禁止reselection、阈值调整或复用holdout。24-fit仍是模型侧下一实验，但只有C-013数据权威、resolver与601日0-fit预检闭合后才可另行授权，不得越过输入身份blocker。
 - F-011-D readiness/coverage：`FULL_READY_ZERO_CAPABILITY_AVAILABLE_ZERO_REPLAY_PENDING`；历史READY artifact数为0，HR1正式artifact尚未生成。未来coverage按能力独立报告，validation basis与forward状态必须可见；禁止用L1 directional、L2 Rank IC、120/131、单family或源码事实推导产品成功。
 - F-011-E state generator：`PENDING_UPSTREAM_CAPABILITY`；至少一个能力正式通过前不实施。共同水位、job、revision/dedupe与late-data属于P2-7，不再作为F-011模型验收前置。
 - F-012：advisory-only 写入与依赖隔离，不产生 Selection/Paper/QMT/QE/交易副作用。
@@ -4580,15 +4587,16 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/services/hmm_risk/{market_relative_ridge_candidate,market_relative_ridge_holdout,market_relative_jump_spike}.py`；父蓝图v2.32；§4.3.4.4～§4.3.4.8 | `backend/tests/hmm_risk/test_market_relative_ridge_candidate.py`；`backend/tests/hmm_risk/test_market_relative_ridge_holdout.py`；`validation-receipt:F2-design-validator-C012-HR1-20260824` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_VERIFIED_PENDING_FORMAL_REPLAY | P2-4 historical NOT_AVAILABLE canonical `16004b24…7c87`保持；C-012基础源码PR #3705已合入；HR1 request/coverage/component/bundle/readback源码已实现并验证，24 fits未执行；未来forward confirmation不再阻断产品纵切 |
-| F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A/C-009/C-010 contracts | `backend/tests/hmm_risk/test_observation_eligibility.py`；`backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`；C-010-A5 preflight与partition canonical `03d78534…ead6` | APPROVED_BY_USER_C010_A5_SOURCE_MERGED_601_DAY_PREFLIGHT_VERIFIED | `P_all=502/P_in=501/P_out=1`，已知002951 key按SW-domain-out保留完整证据；v1历史只读、v2新写、out-only denominator与同symbol in/out均闭合。不得伪造SW、删证券/absence、填值或回退v1输入 |
+| F-011 | `backend/services/hmm_risk/{market_relative_ridge_candidate,market_relative_ridge_holdout,market_relative_jump_spike}.py`；父蓝图v2.32；§4.3.4.4～§4.3.4.8；§23.35 | `artifact:F:/Dev/AIstock_artifacts/hmm_phase2_c012_rl1_hr1_bug1177_retry_20260824_9c628011/replay_acceptance.failure.json`；既有C-012直接测试/F2 receipt | VERIFIED_BUG_1184_INPUT_AUTHORITY_CONFLICT_NO_CANONICAL_MODEL | 无 |
+| F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A/C-009/C-010 contracts；§23.35 | `artifact:F:/Dev/AIstock_artifacts/hmm_phase2_c012_rl1_hr1_bug1177_retry_20260824_9c628011/replay_acceptance.failure.json`；C-010-A5历史preflight | VERIFIED_BUG_1184_HISTORICAL_MEMBER_INTERVAL_CONFLICT | 无 |
 | F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,b3_transition_dwell,b3_remediation_diagnostic,b3_d1_inactive_dimension,state_model_set}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_b3_transition_dwell,test_prepare_state_model_set_b3}.py`；historical formal/DIAG receipts；P6 `2096/2096` fits；TRAIN-STABILITY无完整seed；TRANSITION-DWELL-B双fresh-process `2096/2096` fits bitwise一致、完整对象canonical `e5f355fc…d4b54` | APPROVED_BY_USER_TRANSITION_DWELL_EXECUTED_NO_COMPLETE_CANDIDATE_BLOCKED | 原P6曾形成D5候选，但后续两个train-only结构实验均未形成完整候选seed；不得外推到其他level/family，不得自动改tau/self-center/阈值/seed/grid或执行selection、D6、model/READY |
 | F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`；D5 selected seed43；BUG-1029 zero-refit assignment 131/131、evidence 120/131 accepted | APPROVED_BY_USER_D5_SELECTED_D6_120_OF_131_ACCEPTED_11_FAILED | selection train-only且无refit/reselection；11个失败保持typed evidence，D6-NA-A不改变hard authority，B2不采用 |
 | C-008-B3-D6-NA-A calendar/availability amendment | `backend/services/hmm_risk/{stock_fact_observation,state_model_set,b3_acceptance,b3_training,b3_mixed_dimension}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_state_model_set,test_stock_fact_observation,test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`; PR #3258；BUG-1029/PR #3311 zero-refit report | APPROVED_BY_USER_SOURCE_MERGED_ZERO_REFIT_EXECUTED | carrier/manifest v2、T/O/U/E、composite selected schema、shared writer/readback与zero-refit lineage已实现并执行；11个真实D6 failure不被补值、删日或降级，不写model/READY |
 | F-011-D historical B3 two-family READY | `backend/services/hmm_risk/b3_training.py::write_b3_ready_model_set` | `artifact:F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_e2c01bae_bug912/b3_formal_preparation.json` top-level blocked/no-write receipt；`backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_BLOCKED_FORMAL_ACCEPTANCE | 历史B3 READY artifact数为0且四个family/level完整性未成立；该事实不变。父蓝图v2.25后的C-011 P2-4为独立唯一canonical product authority，不以旧B3 two-family合取作为第二套active gate |
 | F-011-E state generator | `backend/services/hmm_risk/state_generator.py` | `backend/tests/hmm_risk/test_state_generator.py` | APPROVED_BY_USER_PENDING_UPSTREAM_CAPABILITY | 至少一个能力达到CAPABILITY_AVAILABLE前不实施；共同水位、job、revision/dedupe与late-data已移至P2-7，不作为模型验收前置 |
 | C-011 product-aligned modeling and acceptance | 父蓝图v2.30；本设计§4.3.4.2～§4.3.4.5；`market_relative_ridge_{candidate,holdout}.py` | `artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_4_20260823_15e041f_postbug1153/p2_4_holdout_acceptance.json` canonical `16004b24…7c87`；直接测试与双fresh-process正式结果 | APPROVED_BY_USER_VERIFIED_P2_4_NOT_AVAILABLE_MODEL_WRITE_FALSE | C-011精确candidate合同已终结，不得重跑或调参；不是canonical product bundle |
-| C-012 capability-aligned product bundle | 父蓝图v2.32；本设计§4.3.4.6～§4.3.4.8 | `backend/tests/hmm_risk/test_market_relative_ridge_candidate.py`；`backend/tests/hmm_risk/test_market_relative_ridge_holdout.py`；`validation-receipt:F2-design-validator-C012-HR1-20260824` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_VERIFIED_PENDING_FORMAL_REPLAY | rotation_L1基础源码PR #3705已合入；HR1把原五fold升级为正式历史回放且源码已闭合最小artifact writer/readback；24 fits、真实component/bundle均未执行，严格产品进度不增加 |
+| C-012 capability-aligned product bundle | 父蓝图v2.32；本设计§4.3.4.6～§4.3.4.8；§23.35 | `backend/tests/hmm_risk/test_market_relative_ridge_candidate.py`；`backend/tests/hmm_risk/test_market_relative_ridge_holdout.py`；`artifact:F:/Dev/AIstock_artifacts/hmm_phase2_c012_rl1_hr1_bug1177_retry_20260824_9c628011/replay_acceptance.failure.json` | SOURCE_IMPLEMENTED_VERIFIED_REPLAY_NOT_STARTED_DUE_TO_BUG_1184 | 无 |
+| C-013 versioned industry PIT identity design | §23.35 D1～D6；BUG-1184 / Issue #3774 | `tests/aistock_validation/bugs/20260824_BUG-1184-hmm-pit.json`；`artifact:F:/Dev/AIstock_artifacts/hmm_phase2_c012_rl1_hr1_bug1177_retry_20260824_9c628011/replay_acceptance.failure.json` | VERIFIED_DESIGN_COMPLETE_NO_SOURCE_IMPLEMENTATION_USER_DECISIONS_REQUIRED | 无 |
 | C-011-P2-3A jump spike | §4.3.4.2 D1～D6；`backend/services/hmm_risk/market_relative_jump_spike.py` | `backend/tests/hmm_risk/test_market_relative_jump_spike.py`；`artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_3_v2_20260816/p2_3_jump_spike_report_c1c6c313.failure.json` | VERIFIED_NOT_AVAILABLE_FOR_PROMOTION | 无 |
 | C-011-P2-3B direct predictor exact contract | §4.3.4.3 D1～D6；`backend/services/hmm_risk/market_relative_ridge_candidate.py`；薄CLI | `artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_3b_20260817/p2_3b_ridge_candidate_report_24e4ae79_formal.failure.json`；`backend/tests/hmm_risk/test_market_relative_ridge_candidate.py`；167/184 fits；491个嵌套hash闭合 | APPROVED_BY_USER_VERIFIED_NOT_AVAILABLE_FOR_PROMOTION | D1～D6已正式执行；L1 selected alpha100的median Rank IC非正，按批准停止条件fail closed。未执行L1 final、L2、P2-4、model/READY |
 | C-011-P2-3C market-conditioned Ridge exact contract | §4.3.4.4 D1～D6；父蓝图v2.29 §11.6/§11.7 | candidate `artifact:F:/Dev/AIstock_artifacts/hmm_phase2_gate2_p2_3c_20260817/p2_3c_market_conditioned_ridge_candidate_8ca1b98d.json` canonical `792d4f6a…17e3`；`backend/tests/hmm_risk/test_market_relative_ridge_candidate.py` | APPROVED_BY_USER_SOURCE_MERGED_FORMAL_36_OF_36_CANDIDATE_FROZEN | market lambda4/seed42、L1/L2 alpha100、interaction与selection闭合；holdout/model/READY/DB/runtime均false |
@@ -5283,6 +5291,7 @@ D3-01-A、D3-02-B、D3-03-A、D4-01-MAP-A、D4-02-A、D4-03-PERSISTENT-A、D5-01
 C-008-B3-D4-L2-AUDIT-01 与受控 L2 重训设计 A，并登记 DIAG-02/03/04 historical evidence。C-008-B2 继续为
 `NOT_APPROVED`。C-009、BUG-892、C-010-FORMAL-A v1 与 C-010-A5 source/preflight均已合入；provider-audit/contributor-opportunity
 domain partition已不再是上游blocker。C-008-B3-REMEDIATION-DIAG-02 已按批准的no-fit合同完成并通过执行后正式审核。
+BUG-1184 新增的历史成员版本/区间冲突是独立上游blocker，不否定上述price/moneyflow/domain成果，但会阻止当前HR1 request进入fit。
 
 正式 B3 当前状态为：
 
@@ -5294,7 +5303,7 @@ domain partition已不再是上游blocker。C-008-B3-REMEDIATION-DIAG-02 已按�
   9/74/67 seed-sector pairs；
 - 两 family 均 `blocked`，READY artifact数为0，`model_write/ready_write/database_write/runtime_action=false`。
 
-当前 F-011 parent 为 `P2_4_FORMAL_EXECUTED_NOT_AVAILABLE_C012_RL1_HR1_SOURCE_IMPLEMENTED_VERIFIED_PENDING_REPLAY_NO_CANONICAL_BUNDLE`。F-011-A历史数据/PIT/observation证据继续有效；旧B3、P2-3A与P2-3B失败只作历史决策证据。P2-3C candidate canonical=`792d4f6a…17e3`已完成正式P2-4，acceptance canonical=`16004b24…7c87`且状态`NOT_AVAILABLE`；旧candidate/holdout不得重试。C-012-RL1基础源码已由PR #3705合入，HR1 request制备、五foldcoverage、component/bundle/final acceptance及readback源码已实现并验证，但正式24 fits与真实component/bundle仍未执行。F-011-D当前为`FULL_READY_ZERO_CAPABILITY_AVAILABLE_ZERO_REPLAY_PENDING`。F-012保持`DESIGN_READY_USER_APPROVED`，F-013保持`APPROVED_BY_USER_PENDING_UPSTREAM_CAPABILITY`。
+当前 F-011 parent 为 `BUG_1184_PIT_MEMBER_AUTHORITY_BLOCKED_NO_CANONICAL_BUNDLE`。旧B3、P2-3A与P2-3B失败只作历史决策证据；P2-3C/P2-4 terminal结果及C-012-RL1源码事实保持不变。HR1正式24 fits尚未执行，且不得在BUG-1184的P1数据权威与P2 shared resolver闭合前恢复。下一优先级严格为：本节设计审核与用户决策→数据准备窗口构建versioned candidate→本HMM窗口实现resolver/HMM adapter→601日0-fit预检；只有预检通过后才另行请求训练授权。F-011-D仍为`FULL_READY_ZERO_CAPABILITY_AVAILABLE_ZERO_REPLAY_PENDING`，F-012保持`DESIGN_READY_USER_APPROVED`，F-013保持`APPROVED_BY_USER_PENDING_UPSTREAM_CAPABILITY`。
 
 历史`C-008-B3-FORMAL-BLOCKER-DIAG-01`、`C-008-B3-REMEDIATION-DIAG-02`与REFIT-01/02/03证据保持append-only只读，用于解释既有合同来源；它们已经完成，不再产生后续任务、重复fit或新的产品验收计数。
 
@@ -5692,7 +5701,9 @@ immutable；producer `b474170f…` 已使用current authority创建append-only b
 
 HR1 首次正式 request preflight 在 0 fits 处正确停止，但暴露两个源码缺陷：CLI 只接受已过时的 C-010 source envelope，且 typed failure receipt
 没有保存安全的底层错误消息。改为显式验证 tracked canonical PIT v2 source receipt 后，第二次 0-fit smoke 又证明 DEV
-`market.sw_index_classify` 为空，而完整 `market.sw_index_member` 已包含可闭合的 31 个 canonical L1、131 个 L2 与历史成员区间。
+`market.sw_index_classify` 为空；当时的源码验证仅证明 `market.sw_index_member` 能闭合 31 个 canonical L1、131 个 L2 catalog，
+不能证明每个 symbol/date 的历史成员区间完整。BUG-1184 的真实只读回放已推翻“当前 member rows 等同完整历史 PIT 区间”这一过宽结论；
+后续以 §23.35 的版本化成员身份合同为准。
 
 1. **权威没有降级或 fallback**：HMM mapping 的明确权威改为 `sw_index_member` member closure；不是“classify 为空才换表”，也不自动读取 latest。
    canonical L1 必须匹配 `801xxx.SI`，每个 L2 必须恰有一个 canonical L1 owner，历史 industry alias 跨共享 L2 必须唯一指向同一 owner。
@@ -5741,3 +5752,147 @@ BUG-1167 后统一的 `market.sw_index_member` canonical 31-L1/131-L2 owner clos
 4. **实验合同不变**：不修改 HR1 estimator、特征、fold、阈值、seed、24-fit、selection、capability 或 READY 语义；不执行
    DDL/DML、依赖安装、runtime activation 或服务启停。修复后必须重新执行完整 request preparation，且只有 0-fit request
    成功生成后才可启动正式 24-fit replay。
+
+### 23.35 BUG-1184：申万成员版本边界、唯一行业身份与跨消费者迁移详细设计
+
+#### 23.35.1 结论、事实边界与非目标
+
+BUG-1184 的直接失败为 `300741.SZ/2020-07-30` 同时解析到 `801030.SI/801034.SI` 与
+`801120.SI/801124.SI`，HR1 在 0/24 fits 处以 `hmm_risk_rotation_l1_input_identity_mismatch` 正确
+fail closed。只读核验同时确认：canonical universe、交易日与价格行均唯一，冲突来自行业成员关系，不是停牌、证券代码变更、
+价格缺失、HMM estimator 或验收阈值。
+
+当前 `market.sw_index_member` 共 5,587 行，全部为 `is_new='Y'`、`out_date=NULL`；Tushare
+`index_member_all(ts_code=..., is_new='Y')` 对冲突证券返回相同多身份。它是当前成员集合，不足以单独证明历史有效区间。
+在 HR1 的 `2020-07-30..2026-03-31` 读取范围内共有 23 只证券、23,326 个 symbol-day 多身份，约占
+5,999,301 个 canonical opportunity symbol-day 的 0.389%；其中 19 只能按不同 `in_date` 形成顺序候选，另有
+`300741.SZ`、`300858.SZ`、`603020.SH`、`605077.SH` 四只在同一源生效日仍有不同身份，不能用排序解决。
+
+公开资料只作为根因交叉证据，不成为运行时数据源：Tushare `index_member_all` 的字段与 `is_new` 语义见
+<https://tushare.pro/document/2?doc_id=335>；新浪相关资料页对
+[`300741.SZ`](https://vip.stock.finance.sina.com.cn/corp/go.php/vCI_CorpXiangGuan/stockid/sz300741.phtml)、
+[`300858.SZ`](https://vip.stock.finance.sina.com.cn/corp/go.php/vCI_CorpXiangGuan/stockid/sz300858.phtml) 与
+[`603020.SH`](https://vip.stock.finance.sina.com.cn/corp/go.php/vCI_CorpXiangGuan/stockid/sh603020.phtml)
+明确显示旧食品分类在 2021-12-13 结束、随后转入基础化工；
+`605077.SH` 的公开资料也同时证明旧申万“食品综合”和申万 2021“基础化工/化学制品/食品及饲料添加剂”两种口径，
+参见[新浪旧申万板块](https://money.finance.sina.com.cn/corp/go.php/vCI_CorpOtherInfo/stockid/605077/menu_num/0.phtml)及
+[公开发行材料中的申万2021分类](https://disc.static.szse.cn/disc/disk03/finalpage/2022-09-22/3c4e2c60-d5b5-4c36-b1e3-79ed711b89bb.PDF)；
+但本次未取得足以固化逐股精确切换日的权威历史记录。因此禁止猜测 `605077.SH` 的日期，也禁止把四只证券写成源码例外。
+
+本设计不修改 HMM 模型、特征、fold、threshold、seed、hard semantic authority、24-fit 预算、selection、capability 或 READY
+语义；不回写旧实验、CAS、模型或历史 artifact；不执行 DDL/DML、依赖安装、部署、runtime activation 或进程控制。
+
+#### 23.35.2 唯一权威对象与解析合同（C-013-PIT-ID-D1～D3）
+
+1. **版本与成员区间必须分离**：每条候选至少包含 `taxonomy_version`、`taxonomy_effective_from`、
+   `source_ts_code`、canonical symbol、L1/L2/L3 code/name、`membership_valid_from`、`membership_valid_to_exclusive`、
+   source identity、source row hash 与 authority receipt hash。`is_new='Y'` 不是 PIT 版本，也不得推导
+   `membership_valid_to_exclusive=NULL`。
+2. **顺序区间只处理有序事实**：同一 canonical symbol、同一 taxonomy version 内，若多个不同 identity 具有严格递增且权威的
+   membership start，可构造 `[start_i,start_{i+1})`；相同 identity 的精确重复行可合并并保留全部 source hashes。
+   相同 start 指向不同 identity、来源版本未知、切换日期无权威证据或区间重叠时，返回
+   `industry_identity_ambiguous`，不得以 `MIN/MAX`、`DISTINCT ON`、`LIMIT 1`、输入顺序、字典覆盖或字符串前缀裁决。
+3. **分类口径必须预先冻结**：每次 dataset/request 明确携带 `industry_classification_basis` 与
+   `taxonomy_contract_id`。`as_published_pit` 使用交易日当时生效的分类版本；`stable_taxonomy_backcast` 只有在用户另行批准其
+   非 as-known 研究语义、版本化 crosswalk 与可使用日期后才允许。两者不得混写同一 artifact/hash，也不得把后者冒充 causal PIT。
+4. **当前 HMM 继续使用固定 31/131 denominator，但不得伪造成员关系**：resolver 只能输出唯一已证明 identity 或 typed
+   unavailable。若所选 taxonomy contract 无法把历史日期闭合到固定 31/131 catalog，request 保持 blocked，必须由数据准备窗口
+   提交版本/crosswalk 决策，不得由 HMM 代码临时映射。
+5. **resolver 输出是共享数据合同而非 HMM 私有格式**：输入严格为 canonical symbol、trade date、taxonomy contract 与 authority
+   receipt；输出严格为 `resolved` 或 `unavailable`。`resolved` 必须携带唯一 L1/L2/L3、有效半开区间、taxonomy/source/row/receipt
+   hashes；`unavailable` 必须携带稳定 reason、全部冲突候选 identity/hash 且不含伪造行业。HMM 只通过 adapter 消费该合同。
+
+#### 23.35.3 不确定成员的业务语义（C-013-PIT-ID-D4）
+
+- 证券的价格、alpha、股票池和可交易资格与行业身份分离。行业身份不确定不删除证券，也不伪造停牌、退市、ST 或价格缺失。
+- 依赖行业身份的 contributor、sector aggregation、行业黑名单、sector overlay 与 HMM observation 对该 symbol/date 写入
+  `industry_identity_unavailable`；不得补 neutral、前值、当前行业、任意行业或系数 `1.0`。
+- sector aggregation 显式从对应行业 numerator/denominator 排除该 contributor，并保留 unavailable count/ratio；是否仍可形成
+  level/date output 只由既有批准 coverage 合同判断。单个 ambiguous symbol 不再自动终结全局流程，但 coverage 不足仍 fail closed。
+- 必须精确区分 `exact_duplicate_collapsed`、`sequential_interval_resolved`、`taxonomy_version_unavailable`、
+  `membership_boundary_unavailable`、`same_boundary_identity_conflict` 与 `catalog_identity_invalid`，不能压缩成 generic missing。
+
+#### 23.35.4 消费者迁移边界（C-013-PIT-ID-D5）
+
+| consumer | 当前风险 | 必须采用的目标语义 | owner |
+|---|---|---|---|
+| HMM `stock_fact_repository` / HR1 request | 多 identity 正确 fail closed，但会全局阻断 | 复用 shared resolver；typed unavailable 进入既有 contributor/coverage 合同；先完成 0-fit 601 日预检，再决定是否恢复 24 fits | 本 HMM 窗口 |
+| `sector_data_builder` | 当前四只同边界冲突使 preflight blocked | 只消费 versioned candidate；保留不可用 contributor 与 coverage，不写生产表 | 数据准备窗口 |
+| QE data service / Qlib exporter | `merge_asof` 或 `LATERAL ... LIMIT 1` 可静默选行 | 移除顺序依赖；candidate dataset 重建前显式 unavailable；只审计受行业字段影响的实验 | QE/数据导出窗口 |
+| Selection / Paper | provider 与字典覆盖可静默选择 | industry blacklist/overlay 要求身份时显式排除该候选并报告原因；不改变价格/选股 universe | 选股/模拟盘窗口 |
+| Advisory | 部分路径已 fail closed，部分路径需同权威 | 历史与实时都读取同一 resolver contract；不得把 unavailable 当“无行业限制” | 荐股业务窗口 |
+
+执行与券商下单、分钟执行、普通 OHLC/volume-only QE、无行业特征的 alpha 训练不在本 BUG 源码范围内；只有实际读取
+行业/sector identity 的路径需要迁移。既有不可变实验不重写，只对决策仍有效且确实消费行业字段的 dataset/实验给出重建或重跑清单。
+
+#### 23.35.5 分阶段实施、负责人和停止条件（C-013-PIT-ID-D6）
+
+| phase | 内容 | 负责人 | 完成条件 / 停止条件 |
+|---|---|---|---|
+| P0 设计与影响闭合 | 冻结本节合同、23/4 冲突清单、消费者矩阵、reason codes 与非目标 | 本 HMM 窗口 | 文档 F2 与正式审核通过；不实施代码 |
+| P1 数据权威准备 | 获取可回放的申万历史成员/版本数据；对冻结universe/window构建完整versioned candidate，23只冲突股作为强制回归集；构建repo-external candidate与只读readback | 数据准备窗口 | 全分母`resolved+unavailable=expected`，23/23均唯一或显式unavailable；`605077.SH`无权威切换日则保持unavailable；不得猜测或生产DML |
+| P2A shared resolver core | 在数据服务所属最小共享位置实现order-invariant resolver、schema/parser/readback与typed reason；补duplicate、顺序区间、同边界冲突和无未来数据测试 | 数据准备窗口 | 共享源码/数据合同多轮审核通过；不包含HMM、QE、Selection或Advisory业务判断；PR合入另行确认 |
+| P2B HMM adapter | 只在HMM边界接入共享resolver；把typed unavailable映射到既有contributor/coverage，不改变模型合同 | 本 HMM 窗口 | HMM定向测试与601日0-fit preflight无静默选择；源码PR合入另行确认 |
+| P3 数据构建与离线消费者 | 迁移 `sector_data_builder`、QE data service、Qlib exporter；产出 candidate-only dataset/readback 与受影响实验清单 | 数据准备窗口 + QE/数据导出窗口 | 同输入同 hash、完整分母闭合、四只无任意选择、无生产激活；跨模块 PR 分开合入 |
+| P4 业务消费者 | 迁移 Selection/Paper/Advisory 的行业读取与 unavailable 展示 | 各业务窗口 | 每个模块按自身设计/测试/部署流程完成；本 HMM 窗口不接管其业务逻辑 |
+| P5 HMM 恢复验证 | 在 P1/P2 已合入且 frozen request 闭合后，先运行完整 601 日只读预检，再由用户授权决定是否重启 24-fit HR1 replay | 本 HMM 窗口 | 预检失败即停止；不因单股 unavailable 全局失败，coverage 不足仍失败；训练/selection/model/READY 均需原授权边界 |
+
+并行边界：P1 可与P2A的纯schema/合成测试并行；P2A不得把未完成P1的猜测数据固化为生产逻辑，P2B只依赖已批准的shared接口。
+P3/P4只能在shared contract批准后各自实施，且不得跨窗口编辑同一文件。任一阶段不得为了“让回放继续”扩大write scope、降低HMM产品门禁、
+更改股票池或制造默认行业。
+
+#### 23.35.6 定向验证与验收矩阵
+
+1. resolver 输入顺序完全置换时输出/错误 reason/hash不变；精确重复只折叠、不丢 source lineage。
+2. 至少覆盖一个已证明的旧食品→基础化工顺序区间、四个同边界冲突和一个无行业冲突对照；未经 P1 权威补齐的
+   `605077.SH` 必须保持 unavailable。
+3. 对任意 trade date，resolver 不读取 `>trade_date` 才可获知的 membership mutation；若选择 backcast basis，artifact 必须显式
+   标识 `non_as_known_taxonomy=true`，且不得用于声称 as-known causal 验收。
+4. 数据 candidate 与 601 日 preflight 都必须以各自冻结的完整 universe/window 为分母，报告 total opportunity、resolved、unavailable、
+   按 reason/日期/sector 分布、coverage 与 canonical hash；23只冲突股只作强制回归集合，不能替代全量验收；
+   `resolved + unavailable = denominator`，禁止 inner join 缩分母。
+5. 对 `qe_data_service`、Qlib exporter、Selection/Paper 与 Advisory 现存首行/覆盖路径建立独立 BUG/Feature 后再改；本 BUG 的文档通过
+   不得冒充这些模块已修复。
+6. 历史 24-fit artifact 不迁移、不重签、不覆盖；新的 request 使用新的 authority revision。只有 0-fit preflight 与原 HR1
+   输入合同同时通过后，才可由用户另行授权训练。
+
+#### 23.35.7 决策与状态
+
+| decision | status | consequence |
+|---|---|---|
+| C-013-PIT-ID-D1 versioned resolver / no arbitrary tie-break | `PROPOSED_PENDING_USER_APPROVAL` | 取代“当前 is_new rows 等同历史 PIT”的错误前提 |
+| C-013-PIT-ID-D2 classification basis / taxonomy version | `PROPOSED_PENDING_DATA_AUTHORITY_AND_USER_APPROVAL` | `as_published_pit` 与 `stable_taxonomy_backcast` 必须二选一并版本化，当前不得猜测 |
+| C-013-PIT-ID-D3 interval and same-boundary semantics | `PROPOSED_PENDING_USER_APPROVAL` | 严格顺序可解析；同边界多 identity 显式 unavailable |
+| C-013-PIT-ID-D4 price/universe 与 industry unavailable 分离 | `PROPOSED_PENDING_USER_APPROVAL` | 少量行业缺失不删除股票；行业消费者按既有 coverage 合同验收 |
+| C-013-PIT-ID-D5 cross-consumer migration | `PROPOSED_PENDING_MODULE_OWNERS` | 各窗口独立 PR，不由 HMM 窗口跨模块实施 |
+| C-013-PIT-ID-D6 phased execution | `PROPOSED_PENDING_USER_APPROVAL` | P1 数据权威先于真实训练；任何生产 DML/部署/重启仍独立授权 |
+
+当前顶层状态为 `BUG_1184_DESIGN_REVIEWED_F2_PASS_USER_DECISIONS_REQUIRED_NO_SOURCE_IMPLEMENTATION`。HMM HR1 保持
+`0/24 fits`，rotation_L1 capability 仍为 `NOT_AVAILABLE`；PR、merge、close-sync、production DDL/DML、依赖、runtime、服务进程、
+model/READY 均无变化。
+
+### 23.36 BUG-1184 详细设计正式审核
+
+审核范围仅为BUG-1184事实边界、C-013-PIT-ID-D1～D6、总Decision/Acceptance Index、§24优先级及跨窗口职责；不审核或授权尚未
+实现的resolver、数据candidate、业务消费者迁移或HMM replay。
+
+1. **第一轮——状态一致性**：发现§24仍把24-fit列为直接下一步，且C-013未进入总Decision/Acceptance Index。已把F-011/F-011-A/C、
+   C-012与§24统一为输入权威冲突事实，并明确24-fit必须排在数据authority、resolver和601日0-fit预检之后。
+2. **第二轮——所有权与完整分母**：发现shared resolver被错误归给HMM窗口，且P1只要求23只冲突股闭合。已拆为数据准备窗口拥有的
+   P2A shared core与本HMM窗口拥有的P2B adapter；P1/P3验收改为冻结universe/window全分母，23只仅为强制回归集。
+3. **第三轮——F2验收语义**：发现自定义blocked状态与非可执行证据不符合矩阵schema。已在不伪造用户批准的前提下改为
+   `VERIFIED_*`事实状态，绑定BUG JSON和真实failure artifact；待决业务合同继续只在Decision Index中保持
+   `PROPOSED_PENDING_*`，没有把它们升级为active gate。
+4. **禁止简化交付：PASS**。设计覆盖完整universe/window、23只已知冲突、全部五类直接消费者和resolved/unavailable完整分母；
+   不以四只硬编码、仅HMM局部修复、latest映射或删除证券代替完整机制。
+5. **禁止静默错误：PASS**。同边界多identity、未知taxonomy、缺少成员边界、catalog非法分别typed fail closed；禁止首行、排序、
+   `LIMIT 1`、字典覆盖、neutral、前值、当前行业或系数1.0 fallback。
+6. **禁止业务逻辑迁移：PASS_FOR_PROPOSED_DESIGN**。股票池、价格/alpha资格、HMM模型/seed/fold/threshold/hard semantic和
+   既有coverage合同均不变；“行业unavailable与证券资格分离”及classification basis仍明确等待用户批准，未进入源码。
+7. **禁止未经确认的门禁/审批：PASS**。新增项是确定性数据合同与typed状态，不是运行时人工审批；D1～D6均保持proposed，
+   production DDL/DML、依赖、部署、runtime、进程控制、训练和merge仍是独立授权。
+8. **可验证性：PASS**。F2 validator为`PASS / 16 matrix rows / warnings=0`；changed-files仅为BUG metadata与本权威设计，
+   `validation_module_registry_l0=8 passed / 14 of 14 mapped`，L0 guardrail为0 finding，`git diff --check`通过。
+
+审核结论：`PASS_DOCUMENT_MERGE_READY_USER_DECISIONS_REQUIRED_NO_IMPLEMENTATION_AUTHORITY`。这里的merge-ready只表示文档内部一致、
+事实与职责可审计；不表示C-013-D1～D6已获用户批准、数据已准备、跨模块源码已修复、24-fit可启动或产品能力可用。
