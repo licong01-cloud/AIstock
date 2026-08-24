@@ -174,6 +174,7 @@ def test_daily_and_minute_share_one_verified_effective_limit_overlay(tmp_path) -
             "partition_key": partition_key,
             "rule_version": PRICE_LIMIT_RULE_VERSION,
             "pit_snapshot_digest": pit.spans_sha256,
+            "database_completion_rows": 0,
             "database_override_rows": 0,
             "unresolved_keys": 0,
             "effective_content_root": effective_root,
@@ -221,3 +222,127 @@ def test_daily_and_minute_share_one_verified_effective_limit_overlay(tmp_path) -
     }
     with pytest.raises(ArtifactReadyBuildSourceError, match="receipt is invalid"):
         list(source._effective_limit_rows(Component.DAILY_BIN, descriptor, database))
+
+
+def test_effective_limit_rows_complete_exact_partial_database_key(tmp_path) -> None:
+    store = ControlStore.initialize(tmp_path / "control-limit-completion")
+    cas = CASStore(store.root)
+    day = date(2024, 7, 23)
+    pit = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": "600001.SH",
+                "eligible_start": day,
+                "eligible_end": day,
+                "entry_reason": None,
+                "exit_reason": None,
+            }
+        ],
+        universe_key="shsz_st_pit_active_v1",
+        rule_version="st_pub_next_trade_restore_active_l_v1",
+        scope_start=day,
+        cutoff=day,
+        state_identity="pit-completion-fixture",
+        source_fingerprint_sha256="a" * 64,
+        parameter_hash="b" * 64,
+    )
+    partition_key = f"{day.isoformat()}_{day.isoformat()}"
+    overlay = {
+        "ts_code": "600001.SH",
+        "trade_date": day.isoformat(),
+        "pre_close": "10.00",
+        "up_limit": "11.00",
+        "down_limit": "9.00",
+    }
+    zero_safety = {
+        "database_writes": 0,
+        "provider_database_writes": 0,
+        "candidate_writes": 0,
+        "production_writes": 0,
+        "production_deletes": 0,
+        "production_pointer_changes": 0,
+        "service_process_controls": 0,
+    }
+    reference = cas.put_json(
+        {
+            "schema_version": ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA,
+            "raw_partition_identity": f"stk_limit:{partition_key}",
+            "rule_version": PRICE_LIMIT_RULE_VERSION,
+            "pit_snapshot_digest": pit.spans_sha256,
+            "database_completion_rows": 1,
+            "database_override_rows": 0,
+            "unresolved_keys": 0,
+            "effective_content_root": "d" * 64,
+            "overlay_rows": [overlay],
+            "safety": zero_safety,
+        }
+    )
+    entry = {
+        "dataset": "stk_limit_rule_coverage",
+        "partition_key": partition_key,
+        "content_digest": "d" * 64,
+        "rows_ref": reference.as_dict(),
+    }
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source.cas = cas
+    source.pit_snapshot = pit
+    source.profile = SimpleNamespace(pit_authority_status="ACTIVE_CANONICAL")
+    source.component_manifests = {Component.DAILY_BIN: {"partitions": [entry]}}
+    database = [{**overlay, "pre_close": None}]
+
+    assert list(
+        source._effective_limit_rows(Component.DAILY_BIN, {"partition_key": partition_key}, database)
+    ) == [overlay]
+
+    database[0]["up_limit"] = "10.99"
+    with pytest.raises(ArtifactReadyBuildSourceError, match="conflicts with database value"):
+        list(source._effective_limit_rows(Component.DAILY_BIN, {"partition_key": partition_key}, database))
+
+
+def test_effective_limit_rows_ignore_partial_database_rows_outside_pit(tmp_path) -> None:
+    store = ControlStore.initialize(tmp_path / "control-limit-pit-filter")
+    cas = CASStore(store.root)
+    day = date(2024, 7, 23)
+    pit = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": "600001.SH",
+                "eligible_start": day,
+                "eligible_end": day,
+                "entry_reason": "eligible",
+                "exit_reason": None,
+            }
+        ],
+        universe_key="shsz_st_pit_active_v1",
+        rule_version="st_pub_next_trade_restore_active_l_v1",
+        scope_start=day,
+        cutoff=day,
+        state_identity="pit-filter-fixture",
+        source_fingerprint_sha256="a" * 64,
+        parameter_hash="b" * 64,
+    )
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source.cas = cas
+    source.pit_snapshot = pit
+    source.profile = SimpleNamespace(pit_authority_status="ACTIVE_CANONICAL")
+    source.component_manifests = {Component.DAILY_BIN: {"partitions": []}}
+    database = [
+        {
+            "ts_code": "600001.SH",
+            "trade_date": date(2024, 7, 22),
+            "pre_close": None,
+            "up_limit": "11.00",
+            "down_limit": "9.00",
+        },
+        {
+            "ts_code": "600001.SH",
+            "trade_date": day,
+            "pre_close": "10.00",
+            "up_limit": "11.00",
+            "down_limit": "9.00",
+        },
+    ]
+
+    assert list(
+        source._effective_limit_rows(Component.DAILY_BIN, {"partition_key": f"{day}_{day}"}, database)
+    ) == [database[1]]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -34,18 +35,27 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (  # noqa:
     REASON_INPUT_IDENTITY,
     REASON_RL1_INPUT,
     RidgeCandidateError,
+    build_c012_rl1_capability_bundle,
+    build_c012_rl1_component_model,
+    build_c012_rl1_replay_request,
     canonical_json_bytes,
     canonical_sha256,
     close_c012_rl1_candidate_children,
     failure_report,
+    finalize_c012_rl1_replay_acceptance,
     preflight_output_path,
     report_for_write,
     run_p2_3b_candidate,
     run_p2_3c_candidate,
     run_c012_rl1_candidate_process,
+    validate_c012_rl1_replay_artifacts,
     validate_c012_rl1_static_request,
     validate_p2_3c_static_request,
     write_report,
+)
+from backend.services.canonical_equity_pit import (  # noqa: E402
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_UNIVERSE_KEY,
 )
 from backend.services.hmm_risk.state_model_set import StateModelSetError  # noqa: E402
 from scripts.hmm_risk.prepare_state_model_set import _load_l1_source_inputs  # noqa: E402
@@ -164,17 +174,195 @@ def _child_path(directory: Path, index: int) -> Path:
 
 
 def _c012_artifact_outputs(args: argparse.Namespace) -> dict[str, str]:
-    candidate = args.output.resolve()
-    first = _child_path(args.child_dir, 1)
-    second = _child_path(args.child_dir, 2)
     return {
-        "candidate_output": str(candidate),
-        "candidate_failure_output": str(_failure_path(candidate)),
-        "child_1_output": str(first),
-        "child_1_failure_output": str(_failure_path(first)),
-        "child_2_output": str(second),
-        "child_2_failure_output": str(_failure_path(second)),
+        "acceptance_core_path": str(args.acceptance_core_output.resolve()),
+        "acceptance_path": str(args.output.resolve()),
+        "component_model_path": str(args.model_output.resolve()),
+        "capability_bundle_path": str(args.bundle_output.resolve()),
+        "child_dir": str(args.child_dir.resolve()),
+        "failure_path": str(_failure_path(args.output.resolve())),
     }
+
+
+def _source_authority(path: Path) -> dict[str, Any]:
+    value = _load_request(path)
+    if value.get("schema_version") == "pit_v2_source_freeze_receipt_v2":
+        profiles = value.get("profiles")
+        profile = profiles.get("canonical_v2") if isinstance(profiles, Mapping) else None
+        if not isinstance(profile, Mapping):
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                "canonical PIT v2 source profile is missing",
+                stage="request_preparation",
+            )
+        config_path = str(profile.get("path") or "")
+        if config_path != "configs/datasets/qe_backtest_monthly_v2.yaml":
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                "canonical PIT v2 source profile path drifted",
+                stage="request_preparation",
+            )
+        config = (ROOT / config_path).resolve()
+        try:
+            config.relative_to(ROOT)
+        except ValueError as exc:
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                "canonical PIT v2 source profile escapes the repository",
+                stage="request_preparation",
+            ) from exc
+        if (
+            not config.is_file()
+            or hashlib.sha256(config.read_bytes()).hexdigest() != profile.get("file_sha256")
+            or profile.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY
+            or profile.get("rule_version") != CANONICAL_PIT_RULE_VERSION
+            or profile.get("declared_target_authority_status") != "ACTIVE_CANONICAL"
+        ):
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                "canonical PIT v2 source profile identity is invalid",
+                stage="request_preparation",
+            )
+        security_path = "backend/services/hmm_risk/manifests/security_source_identity_v1.json"
+        absence_path = "backend/services/hmm_risk/manifests/provider_absence_v1.json"
+        return {
+            "source_start": "2020-07-30",
+            "circ_mv_history_start": "2020-07-30",
+            "source_end": RL1_DEVELOPMENT_END.isoformat(),
+            "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+            "universe_rule_version": CANONICAL_PIT_RULE_VERSION,
+            "security_identity_manifest_path": security_path,
+            "security_identity_manifest_sha256": canonical_sha256(_load_request(ROOT / security_path)),
+            "provider_absence_manifest_path": absence_path,
+            "provider_absence_manifest_sha256": canonical_sha256(_load_request(ROOT / absence_path)),
+        }
+    source = value.get("source") if "source" in value else value
+    if not isinstance(source, dict):
+        raise RidgeCandidateError(REASON_RL1_INPUT, "source authority is missing", stage="request_preparation")
+    required = {
+        "source_start",
+        "circ_mv_history_start",
+        "universe_key",
+        "universe_rule_version",
+        "security_identity_manifest_path",
+        "security_identity_manifest_sha256",
+        "provider_absence_manifest_path",
+        "provider_absence_manifest_sha256",
+    }
+    if set(source) != required | {"source_end"}:
+        raise RidgeCandidateError(REASON_RL1_INPUT, "source authority is incomplete", stage="request_preparation")
+    return dict(source)
+
+
+def _validate_c012_cli_output_scope(args: argparse.Namespace) -> None:
+    root = args.output.resolve().parent
+    file_paths = (
+        args.request.resolve(),
+        args.output.resolve(),
+        args.acceptance_core_output.resolve(),
+        args.model_output.resolve(),
+        args.bundle_output.resolve(),
+        _failure_path(args.output.resolve()),
+    )
+    if any(path.parent != root for path in file_paths):
+        raise RidgeCandidateError(
+            REASON_RL1_INPUT,
+            "rotation L1 request and artifact files must share one artifact root",
+            stage="output_preflight",
+        )
+    try:
+        args.child_dir.resolve().relative_to(root)
+    except ValueError as exc:
+        raise RidgeCandidateError(
+            REASON_RL1_INPUT,
+            "rotation L1 child directory escapes the artifact root",
+            stage="output_preflight",
+        ) from exc
+
+
+def _prepare_c012_rl1_request(args: argparse.Namespace) -> int:
+    producer_commit = "unknown"
+    request: dict[str, Any] = {}
+    failure_output = _failure_path(args.output.resolve())
+    try:
+        producer_commit = _producer_commit()
+        _validate_c012_cli_output_scope(args)
+        outputs = _c012_artifact_outputs(args)
+        for path in (
+            args.request.resolve(),
+            args.output.resolve(),
+            args.acceptance_core_output.resolve(),
+            args.model_output.resolve(),
+            args.bundle_output.resolve(),
+            _child_path(args.child_dir, 1),
+            _child_path(args.child_dir, 2),
+        ):
+            preflight_output_path(path, repository_root=ROOT)
+        source = _source_authority(args.source_authority.resolve())
+        source["source_end"] = RL1_DEVELOPMENT_END.isoformat()
+        source["source_revision"] = "c012-rl1-hr1-development-v1"
+        loader_request = {
+            "source": source,
+            "families": [
+                {
+                    "train_start": RL1_DEVELOPMENT_START.isoformat(),
+                    "train_end": RL1_DEVELOPMENT_END.isoformat(),
+                },
+                {
+                    "train_start": RL1_DEVELOPMENT_START.isoformat(),
+                    "train_end": RL1_DEVELOPMENT_END.isoformat(),
+                },
+            ],
+        }
+        try:
+            inputs = _load_l1_source_inputs(loader_request, db_prefix=str(args.db_env_prefix), c010_formal=True)
+        except StateModelSetError as exc:
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                str(exc),
+                stage="source_preflight",
+                evidence={"exception_type": type(exc).__name__, "error_message": str(exc)},
+            ) from exc
+        request = build_c012_rl1_replay_request(
+            inputs,
+            source=source,
+            outputs=outputs,
+            producer_commit=producer_commit,
+        )
+        write_report(args.request.resolve(), request, repository_root=ROOT)
+        sys.stdout.buffer.write(
+            canonical_json_bytes(
+                {
+                    "status": "request_prepared",
+                    "output": str(args.request.resolve()),
+                    "request_sha256": request["request_sha256"],
+                }
+            )
+            + b"\n"
+        )
+        return 0
+    except Exception as exc:
+        completed = int(exc.evidence.get("completed_fit_count") or 0) if isinstance(exc, RidgeCandidateError) else 0
+        report = report_for_write(
+            failure_report(
+                request,
+                producer_commit=producer_commit,
+                error=exc,
+                completed_fit_count=completed,
+                candidate_mode="c012-rl1",
+            ),
+            failure=True,
+        )
+        try:
+            write_report(failure_output, report, repository_root=ROOT)
+        except Exception as write_exc:
+            sys.stderr.write(
+                "c012-rl1 request preparation failed and failure receipt could not be written: "
+                f"{type(write_exc).__name__}: {write_exc}\n"
+            )
+            return 2
+        sys.stderr.write(f"c012-rl1 request preparation failed: {report['failure_reason_code']}\n")
+        return 1
 
 
 def _load_c012_child_failure(
@@ -235,25 +423,44 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
     producer_commit = "unknown"
     output = _child_path(args.child_dir, int(args.child_index)) if args.child_index else args.output.resolve()
     failure_output = _failure_path(output)
+    acceptance_core_written = False
+    model_written = False
+    bundle_written = False
     try:
         output = preflight_output_path(output, repository_root=ROOT)
         request = _load_request(args.request.resolve())
         validate_c012_rl1_static_request(request)
-        failure_key = (
-            "child_{}_failure_output".format(int(args.child_index)) if args.child_index else "candidate_failure_output"
-        )
-        failure_output = Path(str(request["artifact_outputs"][failure_key]))
-        if request.get("artifact_outputs") != _c012_artifact_outputs(args):
+        failure_output = _failure_path(output) if args.child_index else Path(str(request["outputs"]["failure_path"]))
+        _validate_c012_cli_output_scope(args)
+        if request.get("outputs") != _c012_artifact_outputs(args):
             raise RidgeCandidateError(
                 REASON_RL1_INPUT,
                 "rotation L1 CLI outputs differ from request authority",
                 stage="input",
             )
+        for authorized_path in (
+            args.acceptance_core_output.resolve(),
+            args.model_output.resolve(),
+            args.bundle_output.resolve(),
+            args.output.resolve(),
+        ):
+            preflight_output_path(authorized_path, repository_root=ROOT)
         producer_commit = _producer_commit()
+        if request.get("expected_producer_commit") != producer_commit:
+            raise RidgeCandidateError(
+                REASON_RL1_INPUT,
+                "rotation L1 producer commit differs from request authority",
+                stage="input",
+            )
         if args.child_index is not None:
             loader_request = _loader_request(request, "c012-rl1")
             try:
-                inputs = _load_l1_source_inputs(loader_request, db_prefix=str(args.db_env_prefix), c010_formal=True)
+                inputs = _load_l1_source_inputs(
+                    loader_request,
+                    db_prefix=str(args.db_env_prefix),
+                    c010_formal=True,
+                    expected_database_identity=request["input_identity"]["database_identity"],
+                )
             except StateModelSetError as exc:
                 raise RidgeCandidateError(
                     "hmm_risk_rotation_l1_input_identity_mismatch",
@@ -272,7 +479,12 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
             return 0
 
         child_paths = [_child_path(args.child_dir, index) for index in (1, 2)]
-        for path in child_paths:
+        for path in (
+            *child_paths,
+            args.acceptance_core_output.resolve(),
+            args.model_output.resolve(),
+            args.bundle_output.resolve(),
+        ):
             preflight_output_path(path, repository_root=ROOT)
         environment = os.environ.copy()
         for key in (
@@ -294,6 +506,12 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
             str(args.output.resolve()),
             "--child-dir",
             str(args.child_dir.resolve()),
+            "--acceptance-core-output",
+            str(args.acceptance_core_output.resolve()),
+            "--model-output",
+            str(args.model_output.resolve()),
+            "--bundle-output",
+            str(args.bundle_output.resolve()),
             "--db-env-prefix",
             str(args.db_env_prefix),
         ]
@@ -331,17 +549,35 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
                     },
                 )
         first, second = (_load_request(path) for path in child_paths)
-        report = report_for_write(
-            close_c012_rl1_candidate_children(
-                first,
-                second,
-                request=request,
-                producer_commit=producer_commit,
-            ),
-            failure=False,
+        acceptance_core = close_c012_rl1_candidate_children(
+            first,
+            second,
+            request=request,
+            producer_commit=producer_commit,
         )
-        write_report(output, report, repository_root=ROOT)
-        sys.stdout.buffer.write(canonical_json_bytes({"status": report["status"], "output": str(output)}) + b"\n")
+        component_model = build_c012_rl1_component_model(acceptance_core)
+        capability_bundle = build_c012_rl1_capability_bundle(acceptance_core, component_model)
+        final_acceptance = finalize_c012_rl1_replay_acceptance(
+            acceptance_core,
+            component_model,
+            capability_bundle,
+        )
+        write_report(args.acceptance_core_output.resolve(), acceptance_core, repository_root=ROOT)
+        acceptance_core_written = True
+        write_report(args.model_output.resolve(), component_model, repository_root=ROOT)
+        model_written = True
+        write_report(args.bundle_output.resolve(), capability_bundle, repository_root=ROOT)
+        bundle_written = True
+        write_report(output, final_acceptance, repository_root=ROOT)
+        validate_c012_rl1_replay_artifacts(
+            _load_request(args.acceptance_core_output.resolve()),
+            _load_request(args.model_output.resolve()),
+            _load_request(args.bundle_output.resolve()),
+            _load_request(output),
+        )
+        sys.stdout.buffer.write(
+            canonical_json_bytes({"status": final_acceptance["status"], "output": str(output)}) + b"\n"
+        )
         return 0
     except Exception as exc:
         completed = int(exc.evidence.get("completed_fit_count") or 0) if isinstance(exc, RidgeCandidateError) else 0
@@ -356,6 +592,21 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
             ),
             failure=True,
         )
+        if args.child_index is None and (acceptance_core_written or model_written or bundle_written):
+            body = {key: value for key, value in report.items() if key != "report_sha256"}
+            prior_evidence = body.get("failure_evidence")
+            body["failure_evidence"] = {
+                **(dict(prior_evidence) if isinstance(prior_evidence, Mapping) else {}),
+                "partial_artifact_writes": {
+                    "acceptance_core_write": acceptance_core_written,
+                    "model_write": model_written,
+                    "bundle_write": bundle_written,
+                },
+            }
+            body["candidate_receipt_write"] = acceptance_core_written
+            body["model_write"] = model_written
+            body["bundle_write"] = bundle_written
+            report = {**body, "report_sha256": canonical_sha256(body)}
         try:
             path = write_report(failure_output, report, repository_root=ROOT)
         except Exception as write_exc:
@@ -376,14 +627,47 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db-env-prefix", required=True)
     parser.add_argument("--child-dir", type=Path)
     parser.add_argument("--child-index", type=int, choices=(1, 2))
+    parser.add_argument("--acceptance-core-output", type=Path)
+    parser.add_argument("--model-output", type=Path)
+    parser.add_argument("--bundle-output", type=Path)
+    parser.add_argument("--prepare-request", action="store_true")
+    parser.add_argument("--source-authority", type=Path)
     args = parser.parse_args(argv)
 
     if args.candidate_mode == "c012-rl1":
-        if args.child_dir is None:
-            parser.error("--child-dir is required for c012-rl1")
+        required = {
+            "--child-dir": args.child_dir,
+            "--acceptance-core-output": args.acceptance_core_output,
+            "--model-output": args.model_output,
+            "--bundle-output": args.bundle_output,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            parser.error(f"{', '.join(missing)} required for c012-rl1")
+        if args.prepare_request:
+            if args.child_index is not None:
+                parser.error("--prepare-request and --child-index are mutually exclusive")
+            if args.source_authority is None:
+                parser.error("--source-authority is required with --prepare-request")
+            return _prepare_c012_rl1_request(args)
+        if args.source_authority is not None:
+            parser.error("--source-authority is only valid with --prepare-request")
         return _run_c012_rl1(args)
-    if args.child_dir is not None or args.child_index is not None:
-        parser.error("--child-dir/--child-index are only valid for c012-rl1")
+    if (
+        any(
+            value is not None
+            for value in (
+                args.child_dir,
+                args.child_index,
+                args.acceptance_core_output,
+                args.model_output,
+                args.bundle_output,
+                args.source_authority,
+            )
+        )
+        or args.prepare_request
+    ):
+        parser.error("c012-rl1-only arguments are not valid for other candidate modes")
 
     request: dict[str, Any] = {}
     producer_commit = "unknown"

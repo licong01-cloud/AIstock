@@ -1,0 +1,248 @@
+{
+  "actual": "qe_hmm_full_v2 固定五股 sample 在任何导出前被 BLOCKED_SOURCE_AUDIT_INCOMPLETE 阻断。只读诊断确认：BUG-1150 seeder 未按 pit_stock_codes 过滤物理计数，非 PIT ETF/BJ 空字段会毒化 stk_limit 整日；PIT 内另有 92 行 pre_close NULL，PR #3698 missing-only overlay 只处理整行不存在；index_daily 的 166 个 required-index 键本可由已登记 Tushare provider 补齐却在 provider 前阻断；bak_basic 18 个合法历史空日仍按 dense 阻断；4 只退市股最后交易日后的 829 个长期停牌尾段被 daily provider coverage 误判为缺失。要求贯通 source-audit、artifact-ready 和 fail-closed candidate repair；不得写生产数据库、不得覆盖现有 2026-07-31 数据集、不得放宽未知或内部缺口。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260823_BUG-1157-pit-v2-source-audit-candidate-repair.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/seed_dataset_refresh_audit.py",
+    "backend/services/dataset_release/source_authority.py",
+    "backend/services/dataset_release/artifact_ready_source.py",
+    "backend/services/dataset_release/stk_limit_overlay.py",
+    "backend/services/dataset_release/artifact_ready_build_source.py",
+    "backend/services/dataset_release/index_sources.py",
+    "backend/services/dataset_release/minute_overlay.py",
+    "backend/tests/test_dataset_refresh_audit.py",
+    "backend/tests/dataset_release/test_source_authority.py",
+    "backend/tests/dataset_release/test_artifact_ready_source.py",
+    "backend/tests/dataset_release/test_stk_limit_overlay.py",
+    "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+    "backend/tests/dataset_release/test_index_sources.py",
+    "backend/tests/dataset_release/test_minute_overlay.py",
+    "docs/architecture/qe_stk_limit_rule_derived_overlay_f2_design_20260823.md",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    ".codex/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/references/monthly-workflow.md",
+    ".codex/skills/update-backtest-dataset/references/fingerprint-and-reuse.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1157",
+  "closed_at": "2026-08-23T20:22:02.806050Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-23T06:12:20.508346Z",
+  "description": "qe_hmm_full_v2 固定五股 sample 在任何导出前被 BLOCKED_SOURCE_AUDIT_INCOMPLETE 阻断。只读诊断确认：BUG-1150 seeder 未按 pit_stock_codes 过滤物理计数，非 PIT ETF/BJ 空字段会毒化 stk_limit 整日；PIT 内另有 92 行 pre_close NULL，PR #3698 missing-only overlay 只处理整行不存在；index_daily 的 166 个 required-index 键本可由已登记 Tushare provider 补齐却在 provider 前阻断；bak_basic 18 个合法历史空日仍按 dense 阻断；4 只退市股最后交易日后的 829 个长期停牌尾段被 daily provider coverage 误判为缺失。要求贯通 source-audit、artifact-ready 和 fail-closed candidate repair；不得写生产数据库、不得覆盖现有 2026-07-31 数据集、不得放宽未知或内部缺口。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260823-d27cfd80acea",
+      "timestamp": "2026-08-23T06:12:20.508332Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "PIT v2 source audit only evaluates canonical PIT stock-days; legal sparse empties and exact candidate-local repairs continue automatically; provider transport/rate limits are retryable; authority conflicts, internal gaps and missing deterministic inputs remain hard blockers without modifying existing datasets or production data.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-23T06:12:20.508346Z",
+  "fix_branch": null,
+  "fix_commit": "4fb896744e1739bd92a571614ff9e4a5e8fdb591",
+  "fixed_at": "2026-08-23T18:13:22Z",
+  "github_issue_number": 3700,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3700",
+  "last_seen_at": "2026-08-23T06:12:20.508346Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3706",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "validation_module_registry_l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "fresh_process_evidence": [
+      "A fresh Python test process imported the patched dataset-release source/audit/overlay closure and passed the 119-test BUG-1157 matrix; the exact runtime classifier test proved the changed closure maps only to worker-scheduler.",
+      "python -c import-dataset-release-closure -> PASS fresh-import-pass at 891d6d9fde275278a5b5108ed729f8c2f105d4d1",
+      "fresh Python imported source/audit/artifact/overlay closure and seed_dataset_refresh_audit.py --help -> passed",
+      "fresh process import -> passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1157/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1157",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "1942f6b91fbd7ed2b1db05b209a4d485169c827d0a184acb9b4cdfb5367ff3fd",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "4fb896744e1739bd92a571614ff9e4a5e8fdb591",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-23T20:21:06.815335Z",
+      "mode": "read_only",
+      "observed_identity": "4fb896744e1739bd92a571614ff9e4a5e8fdb591",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "728a26cd8df41b587df28f43f756c2d2e0796faa8f23958eb591320257decfd5",
+      "receipt_sha256": "c3a678f7c8ba186eb46a6f0cf3392c9faddcc1ce70d3e92b7cdfe113dc200aa5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "970d3920e5b8fb23edcbd3853dc0ded2c4203156cf32a5dc88275942dd0bb937",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "PIT v2 首次迁移 source-audit 与 candidate repair 契约断层",
+  "trigger_condition": {
+    "fingerprint": "d27cfd80acead55dd899b428",
+    "source_event_id": "FE-20260823-d27cfd80acea"
+  },
+  "validation_evidence": [
+    "pytest targeted BUG-1157 matrix -> 128 passed",
+    "PR #3706 CI -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

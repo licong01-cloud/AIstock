@@ -1447,8 +1447,9 @@ def _minimal_c010_policy() -> dict:
 
 
 class _C010Cursor:
-    def __init__(self, rows):
+    def __init__(self, rows, queries):
         self.rows = rows
+        self.queries = queries
 
     def __enter__(self):
         return self
@@ -1459,6 +1460,7 @@ class _C010Cursor:
     def execute(self, query, params):
         self.query = query
         self.params = params
+        self.queries.append(str(query))
 
     def fetchall(self):
         return self.rows
@@ -1467,9 +1469,10 @@ class _C010Cursor:
 class _C010Connection:
     def __init__(self, rows):
         self.rows = rows
+        self.queries = []
 
     def cursor(self):
-        return _C010Cursor(self.rows)
+        return _C010Cursor(self.rows, self.queries)
 
 
 class _C010Resolution:
@@ -1544,8 +1547,9 @@ def test_c010_partition_keeps_known_sw_domain_out_key_without_fabricating_sector
         )
     ]
 
+    connection = _C010Connection(rows)
     partition, _ = subject._c010_provider_absence_partition(
-        _C010Connection(rows),
+        connection,
         source_spec,
         security_identity_manifest=_C010SecurityManifest(),
         provider_absence_manifest=provider_manifest,
@@ -1564,6 +1568,12 @@ def test_c010_partition_keeps_known_sw_domain_out_key_without_fabricating_sector
         "sw_l2_identity_valid",
     ]
     assert partition["entries"][0]["primary_reason_code"] == ("hmm_risk_c010_sw_identity_unavailable_for_opportunity")
+    query = " ".join(connection.queries[0].split())
+    assert "market.sw_index_classify" not in query
+    assert "canonical_l1_catalog AS" in query
+    assert "JOIN l2_owner owner" in query
+    assert "owner.canonical_l1_count=1" in query
+    assert "JOIN l2_catalog l2" in query
 
 
 def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping() -> None:
@@ -1578,16 +1588,25 @@ def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping(
         "l1_code": "801010.SI",
         "l2_code": "801011.SI",
     }
+    connection = _C010Connection([("000001.SZ", date(2022, 1, 4), [valid_mapping])])
     receipt = subject._c010_expected_opportunity_receipt(
-        _C010Connection([("000001.SZ", date(2022, 1, 4), [valid_mapping])]),
+        connection,
         source_spec,
-        security_identity_manifest=_C010SecurityManifest(),
         train_start=date(2022, 1, 1),
         train_end=date(2024, 6, 30),
         authority_identities=[authority],
     )
     assert receipt["opportunity_key_count"] == 1
     assert receipt["entries"][0]["opportunity_dates"] == ["2022-01-04"]
+    query = " ".join(connection.queries[0].split())
+    assert "market.sw_index_classify" not in query
+    assert "market.kline_daily_raw" not in query
+    assert "FROM market.trading_calendar calendar" in query
+    assert "JOIN market.stock_universe_pit_spans spans" in query
+    assert "canonical_l1_catalog AS" in query
+    assert "JOIN l2_owner owner" in query
+    assert "owner.canonical_l1_count=1" in query
+    assert "JOIN l2_catalog l2" in query
 
     with pytest.raises(StateModelSetError, match="opportunity mapping is not unique"):
         subject._c010_expected_opportunity_receipt(
@@ -1601,7 +1620,6 @@ def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping(
                 ]
             ),
             source_spec,
-            security_identity_manifest=_C010SecurityManifest(),
             train_start=date(2022, 1, 1),
             train_end=date(2024, 6, 30),
             authority_identities=[authority],

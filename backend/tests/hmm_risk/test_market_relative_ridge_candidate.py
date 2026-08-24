@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import subprocess
 from datetime import date, timedelta
@@ -110,9 +111,10 @@ def _rl1_calendar() -> list[date]:
 def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> dict[str, object]:
     calendar = _rl1_calendar()
     root = (artifact_root or Path("F:/AIstock_artifacts/c012_rl1_unit")).resolve()
-    candidate = root / "candidate.json"
-    first = root / "children" / "rotation_l1_candidate.fresh_process_1.json"
-    second = root / "children" / "rotation_l1_candidate.fresh_process_2.json"
+    acceptance = root / "acceptance.json"
+    acceptance_core = root / "acceptance.core.json"
+    component_model = root / "rotation_l1.component.json"
+    capability_bundle = root / "capability_bundle.json"
     fold_rows: list[dict[str, object]] = []
     for name, train_start, train_end, validation_start, validation_end in subject.RL1_FOLD_BOUNDARIES:
         train = [day for day in calendar if train_start <= day <= train_end]
@@ -130,6 +132,15 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
                 "validation_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in validation]),
             }
         )
+    c010_body = {
+        "eligibility_receipt_sha256": "d" * 64,
+        "aggregate_receipt_sha256": "e" * 64,
+        "l1_cross_section_receipt_sha256": "f" * 64,
+        "l1_feature_definition_sha256": "1" * 64,
+        "provider_absence_manifest_sha256": "2" * 64,
+        "security_identity_manifest_sha256": "3" * 64,
+    }
+    database_identity = {"dbname": "dev"}
     body: dict[str, object] = {
         "schema_version": subject.RL1_REQUEST_SCHEMA_VERSION,
         "contract_version": subject.RL1_CONTRACT_VERSION,
@@ -173,14 +184,32 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
             "source_start": "2020-07-30",
             "source_end": subject.RL1_DEVELOPMENT_END.isoformat(),
             "source_revision": "unit-c012-rl1-development-v1",
+            "circ_mv_history_start": "2020-07-30",
+            "universe_key": "unit-universe",
+            "universe_rule_version": "unit-rule",
+            "security_identity_manifest_path": "security.json",
+            "security_identity_manifest_sha256": "4" * 64,
+            "provider_absence_manifest_path": "absence.json",
+            "provider_absence_manifest_sha256": "5" * 64,
         },
-        "artifact_outputs": {
-            "candidate_output": str(candidate),
-            "candidate_failure_output": str(candidate.with_name("candidate.failure.json")),
-            "child_1_output": str(first),
-            "child_1_failure_output": str(first.with_name("rotation_l1_candidate.fresh_process_1.failure.json")),
-            "child_2_output": str(second),
-            "child_2_failure_output": str(second.with_name("rotation_l1_candidate.fresh_process_2.failure.json")),
+        "input_identity": {
+            "dataset_manifest_sha256": "b" * 64,
+            "mapping_manifest_sha256": "c" * 64,
+            "database_identity": database_identity,
+            "database_identity_sha256": subject.canonical_sha256(database_identity),
+        },
+        "c010_formal_evidence": {
+            **c010_body,
+            "receipt_sha256": subject.canonical_sha256(c010_body),
+        },
+        "artifact_root": str(root),
+        "outputs": {
+            "acceptance_core_path": str(acceptance_core),
+            "acceptance_path": str(acceptance),
+            "component_model_path": str(component_model),
+            "capability_bundle_path": str(capability_bundle),
+            "child_dir": str((root / "children").resolve()),
+            "failure_path": str(acceptance.with_name("acceptance.failure.json")),
         },
     }
     return {**body, "request_sha256": subject.canonical_sha256(body)}
@@ -210,6 +239,11 @@ def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, o
     folds = [_stage_receipt(f"fold-{index}") for index in range(1, 6)]
     attempts = [{"fit": index} for index in range(12)]
     acceptance_body = {"component": "development", "accepted": True}
+    coverage_body = {
+        "validation_basis": "HISTORICAL_CAUSAL_WALK_FORWARD",
+        "coverage_status": "FULL_COVERAGE",
+        "coverage_accepted": True,
+    }
     return {
         "contract_version": subject.RL1_CONTRACT_VERSION,
         "algorithm_version": subject.RL1_ALGORITHM_VERSION,
@@ -220,8 +254,8 @@ def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, o
         "request_identity_sha256": subject.canonical_sha256(request_identity),
         "dataset_manifest_sha256": "b" * 64,
         "mapping_manifest_sha256": "c" * 64,
-        "c010_formal_evidence": {"receipt_sha256": "d" * 64},
-        "database_identity": {"dbname": "dev"},
+        "c010_formal_evidence": request["c010_formal_evidence"],
+        "database_identity": request["input_identity"]["database_identity"],
         "development_start": subject.RL1_DEVELOPMENT_START.isoformat(),
         "development_end": subject.RL1_DEVELOPMENT_END.isoformat(),
         "development_trading_day_count": len(_rl1_calendar()),
@@ -231,10 +265,14 @@ def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, o
             **acceptance_body,
             "receipt_sha256": subject.canonical_sha256(acceptance_body),
         },
+        "replay_coverage": {
+            **coverage_body,
+            "receipt_sha256": subject.canonical_sha256(coverage_body),
+        },
         "market": _stage_receipt("market"),
         "rotation_L1": _stage_receipt("rotation_L1", selected_alpha=100.0),
         "capabilities": {
-            "rotation_L1": "CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT",
+            "rotation_L1": "REPLAY_ACCEPTED_PENDING_PARENT_CLOSURE",
             "rotation_L2": "NOT_AVAILABLE",
             "risk_L1": "NOT_AVAILABLE",
             "risk_L2": "NOT_AVAILABLE",
@@ -252,6 +290,20 @@ def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, o
         "database_write": False,
         "runtime_action": False,
     }
+
+
+def _bind_rl1_request_inputs(request: dict[str, object], inputs: dict[str, object]) -> None:
+    database_identity = inputs["database"]
+    request["input_identity"] = {
+        "dataset_manifest_sha256": subject.canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest_sha256": subject.canonical_sha256(inputs["mapping_manifest"]),
+        "database_identity": database_identity,
+        "database_identity_sha256": subject.canonical_sha256(database_identity),
+    }
+    request["c010_formal_evidence"] = subject._c012_rl1_c010_identity(inputs)
+    request["request_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in request.items() if key != "request_sha256"}
+    )
 
 
 def _prepared_relative_component(values: np.ndarray) -> jump_subject.PreparedComponent:
@@ -1211,7 +1263,7 @@ def test_c012_rl1_request_freezes_exact_parameters_folds_and_new_holdout() -> No
     request = _rl1_request()
     identity = subject.validate_c012_rl1_static_request(request)
 
-    assert identity["contract_version"] == "C-012-RL1-D1-D6"
+    assert identity["contract_version"] == "C-012-RL1-HR1-D1-D6"
     assert identity["fixed_ridge_parameters"]["alpha"] == 100.0
     assert len(identity["folds"]) == 5
     assert identity["new_holdout"] == {
@@ -1284,6 +1336,93 @@ def test_c012_rl1_fold_metrics_rejects_daily_denominator_below_28() -> None:
     assert metrics["insufficient_denominator_dates"] == [day.isoformat()]
 
 
+def test_c012_rl1_replay_coverage_uses_full_state_date_and_sector_denominators() -> None:
+    dates = tuple(date(2025, 1, 2) + timedelta(days=index) for index in range(10))
+    codes = tuple(f"L1-{index:02d}" for index in range(31))
+    target_values = {(code, day): 0.0 for day in dates for code in codes}
+    targets = subject.TargetRows("L1", dates[0], dates[-1], dates, target_values, {})
+    full_states = {(code, day): "neutral" for day in dates for code in codes}
+
+    full = subject._c012_rl1_fold_replay_coverage(
+        fold="fold-1",
+        validation_dates=dates,
+        canonical_codes=codes,
+        states=full_states,
+        targets=targets,
+    )
+    assert full["coverage_status"] == "FULL_COVERAGE"
+    assert full["expected_identity_count"] == 310
+    assert full["abstention_count"] == 0
+
+    partial_states = dict(full_states)
+    for code in codes[:3]:
+        partial_states.pop((code, dates[0]))
+    partial = subject._c012_rl1_fold_replay_coverage(
+        fold="fold-1",
+        validation_dates=dates,
+        canonical_codes=codes,
+        states=partial_states,
+        targets=targets,
+    )
+    assert partial["coverage_status"] == "COVERAGE_AVAILABLE"
+    assert partial["daily_denominator"][0][1] == 28
+    assert partial["outcome_only_count"] == 3
+
+    insufficient_states = {identity: value for identity, value in full_states.items() if identity[0] != codes[0]}
+    insufficient = subject._c012_rl1_fold_replay_coverage(
+        fold="fold-1",
+        validation_dates=dates,
+        canonical_codes=codes,
+        states=insufficient_states,
+        targets=targets,
+    )
+    assert insufficient["coverage_status"] == "INSUFFICIENT_COVERAGE"
+    assert insufficient["minimum_sector_coverage_ratio"] == 0.0
+
+
+def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path) -> None:
+    calendar = _rl1_calendar()
+
+    def receipt(name: str) -> dict[str, object]:
+        body = {"name": name}
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    inputs = {
+        "trading_dates": tuple(calendar),
+        "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
+        "mapping_manifest": {"rows": []},
+        "database": {"dbname": "dev"},
+        "provider_absence_manifest": {"manifest": "v1"},
+        "security_identity_manifest": {"manifest": "v1"},
+        "c010_diagnostic": {
+            "eligibility": receipt("eligibility"),
+            "aggregate_evidence": receipt("aggregate"),
+            "l1_cross_section_evidence": receipt("l1-cross"),
+            "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
+        },
+    }
+    template = _rl1_request(artifact_root=tmp_path)
+    request = subject.build_c012_rl1_replay_request(
+        inputs,
+        source={**template["source"], "source_end": "2099-01-01"},
+        outputs=template["outputs"],
+        producer_commit="a" * 40,
+    )
+    identity = subject.validate_c012_rl1_static_request(request)
+    assert identity["input_identity"]["dataset_manifest_sha256"] == subject.canonical_sha256(inputs["dataset_manifest"])
+    assert identity["source"]["source_end"] == "2026-03-31"
+    assert identity["artifact_root"] == str(tmp_path.resolve())
+
+    escaped = dict(request)
+    escaped["outputs"] = {**request["outputs"], "component_model_path": str(tmp_path.parent / "escaped.json")}
+    escaped["request_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in escaped.items() if key != "request_sha256"}
+    )
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject.validate_c012_rl1_static_request(escaped)
+    assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+
 def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     request = _rl1_request()
     calendar = _rl1_calendar()
@@ -1306,6 +1445,7 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
             "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
         },
     }
+    _bind_rl1_request_inputs(request, inputs)
     attempts_by_market: list[dict[str, object]] = []
 
     def fake_market(*args: object, **kwargs: object) -> subject.MarketConditioningFold:
@@ -1358,6 +1498,33 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
 
     monkeypatch.setattr(subject, "predict_scores", fake_scores)
     monkeypatch.setattr(subject, "project_daily_states", lambda *args, **kwargs: ({}, _stage_receipt("states")))
+    fold_coverage_body = {
+        "fold": "unit",
+        "coverage_status": "FULL_COVERAGE",
+        "coverage_accepted": True,
+    }
+    monkeypatch.setattr(
+        subject,
+        "_c012_rl1_fold_replay_coverage",
+        lambda **kwargs: {
+            **fold_coverage_body,
+            "fold": kwargs["fold"],
+            "receipt_sha256": subject.canonical_sha256({**fold_coverage_body, "fold": kwargs["fold"]}),
+        },
+    )
+    replay_coverage_body = {
+        "validation_basis": "HISTORICAL_CAUSAL_WALK_FORWARD",
+        "coverage_status": "FULL_COVERAGE",
+        "coverage_accepted": True,
+    }
+    monkeypatch.setattr(
+        subject,
+        "_c012_rl1_replay_coverage",
+        lambda *args, **kwargs: {
+            **replay_coverage_body,
+            "receipt_sha256": subject.canonical_sha256(replay_coverage_body),
+        },
+    )
     metric_index = iter(range(5))
     monkeypatch.setattr(
         subject,
@@ -1394,7 +1561,7 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
     assert [item["fold"] for item in payload["folds"]][-2:] == ["fold-4", "fold-5"]
     assert len({item["scores"]["receipt_sha256"] for item in payload["folds"]}) == 5
     assert payload["capabilities"] == {
-        "rotation_L1": "CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT",
+        "rotation_L1": "REPLAY_ACCEPTED_PENDING_PARENT_CLOSURE",
         "rotation_L2": "NOT_AVAILABLE",
         "risk_L1": "NOT_AVAILABLE",
         "risk_L2": "NOT_AVAILABLE",
@@ -1411,7 +1578,8 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
     )
     assert report["planned_fit_count"] == 24
     assert report["completed_fit_count"] == 24
-    assert report["status"] == "ROTATION_L1_CANDIDATE_FROZEN_PENDING_NEW_HOLDOUT"
+    assert report["status"] == "CAPABILITY_AVAILABLE"
+    assert report["record_type"] == "acceptance_core"
     assert report["model_write"] is False
     assert report["bundle_write"] is False
     assert report["ready_write"] is False
@@ -1423,7 +1591,7 @@ def test_c012_rl1_cli_parent_closes_two_durable_children_without_database_access
     request_value = _rl1_request(artifact_root=tmp_path)
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(request_value), encoding="utf-8")
-    output = tmp_path / "candidate.json"
+    output = Path(str(request_value["outputs"]["acceptance_path"]))
     child_dir = tmp_path / "children"
     producer = "a" * 40
     payload = _rl1_child_payload(request_value, producer)
@@ -1459,6 +1627,12 @@ def test_c012_rl1_cli_parent_closes_two_durable_children_without_database_access
             str(output),
             "--child-dir",
             str(child_dir),
+            "--acceptance-core-output",
+            str(request_value["outputs"]["acceptance_core_path"]),
+            "--model-output",
+            str(request_value["outputs"]["component_model_path"]),
+            "--bundle-output",
+            str(request_value["outputs"]["capability_bundle_path"]),
             "--db-env-prefix",
             "UNIT",
         ]
@@ -1466,8 +1640,252 @@ def test_c012_rl1_cli_parent_closes_two_durable_children_without_database_access
     assert result == 0
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["completed_fit_count"] == 24
-    assert report["candidate_receipt_write"] is True
+    assert report["status"] == "CAPABILITY_AVAILABLE"
+    assert report["ready"] is False
     assert report["holdout_accessed"] is False
+
+
+def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calendar = _rl1_calendar()
+
+    def receipt(name: str) -> dict[str, object]:
+        body = {"name": name}
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    inputs = {
+        "trading_dates": tuple(calendar),
+        "dataset_manifest": {"calendar_benchmark": {"rows": [[day.isoformat(), 0.0] for day in calendar]}},
+        "mapping_manifest": {"rows": []},
+        "database": {"dbname": "dev"},
+        "provider_absence_manifest": {"manifest": "v1"},
+        "security_identity_manifest": {"manifest": "v1"},
+        "c010_diagnostic": {
+            "eligibility": receipt("eligibility"),
+            "aggregate_evidence": receipt("aggregate"),
+            "l1_cross_section_evidence": receipt("l1-cross"),
+            "l1_feature_definition": {"features": list(subject.RELATIVE_FEATURES)},
+        },
+    }
+    source_authority = tmp_path / "source.json"
+    source_authority.write_text(
+        json.dumps(
+            {
+                "source": {
+                    "source_start": "2020-07-30",
+                    "circ_mv_history_start": "2020-07-30",
+                    "source_end": "2025-04-30",
+                    "universe_key": "unit-universe",
+                    "universe_rule_version": "unit-rule",
+                    "security_identity_manifest_path": "security.json",
+                    "security_identity_manifest_sha256": "1" * 64,
+                    "provider_absence_manifest_path": "absence.json",
+                    "provider_absence_manifest_sha256": "2" * 64,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", lambda *args, **kwargs: inputs)
+    request_path = tmp_path / "request.json"
+    result = cli.main(
+        [
+            "--candidate-mode",
+            "c012-rl1",
+            "--prepare-request",
+            "--source-authority",
+            str(source_authority),
+            "--request",
+            str(request_path),
+            "--output",
+            str(tmp_path / "acceptance.json"),
+            "--child-dir",
+            str(tmp_path / "children"),
+            "--acceptance-core-output",
+            str(tmp_path / "acceptance.core.json"),
+            "--model-output",
+            str(tmp_path / "rotation_l1.component.json"),
+            "--bundle-output",
+            str(tmp_path / "capability_bundle.json"),
+            "--db-env-prefix",
+            "UNIT",
+        ]
+    )
+    assert result == 0
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    assert request["schema_version"] == subject.RL1_REQUEST_SCHEMA_VERSION
+    assert request["source"]["source_end"] == "2026-03-31"
+    assert request["expected_producer_commit"] == "a" * 40
+    assert request["outputs"]["acceptance_core_path"].endswith("acceptance.core.json")
+
+
+def test_c012_rl1_source_authority_accepts_only_verified_canonical_pit_v2_profile(tmp_path: Path) -> None:
+    config = cli.ROOT / "configs/datasets/qe_backtest_monthly_v2.yaml"
+    receipt = {
+        "schema_version": "pit_v2_source_freeze_receipt_v2",
+        "profiles": {
+            "canonical_v2": {
+                "path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+                "file_sha256": hashlib.sha256(config.read_bytes()).hexdigest(),
+                "universe_key": "aistock_equity_pit_canonical_v2",
+                "rule_version": "shsz_a_252td_st_delist_asof_v2",
+                "declared_target_authority_status": "ACTIVE_CANONICAL",
+            }
+        },
+    }
+    path = tmp_path / "pit-v2-source.json"
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    source = cli._source_authority(path)
+    assert source["universe_key"] == "aistock_equity_pit_canonical_v2"
+    assert source["universe_rule_version"] == "shsz_a_252td_st_delist_asof_v2"
+    assert source["source_end"] == "2026-03-31"
+    assert source["security_identity_manifest_sha256"] == subject.canonical_sha256(
+        json.loads((cli.ROOT / source["security_identity_manifest_path"]).read_text(encoding="utf-8"))
+    )
+
+    drifted = json.loads(path.read_text(encoding="utf-8"))
+    drifted["profiles"]["canonical_v2"]["universe_key"] = "latest"
+    path.write_text(json.dumps(drifted), encoding="utf-8")
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        cli._source_authority(path)
+    assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+
+def test_c012_rl1_request_preflight_persists_safe_source_error_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = cli.ROOT / "configs/datasets/qe_backtest_monthly_v2.yaml"
+    receipt = {
+        "schema_version": "pit_v2_source_freeze_receipt_v2",
+        "profiles": {
+            "canonical_v2": {
+                "path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+                "file_sha256": hashlib.sha256(config.read_bytes()).hexdigest(),
+                "universe_key": "aistock_equity_pit_canonical_v2",
+                "rule_version": "shsz_a_252td_st_delist_asof_v2",
+                "declared_target_authority_status": "ACTIVE_CANONICAL",
+            }
+        },
+    }
+    source_path = tmp_path / "pit-v2-source.json"
+    source_path.write_text(json.dumps(receipt), encoding="utf-8")
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+    monkeypatch.setattr(
+        cli,
+        "_load_l1_source_inputs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            cli.StateModelSetError("requested PIT universe state is missing")
+        ),
+    )
+    result = cli.main(
+        [
+            "--candidate-mode",
+            "c012-rl1",
+            "--prepare-request",
+            "--source-authority",
+            str(source_path),
+            "--request",
+            str(tmp_path / "request.json"),
+            "--output",
+            str(tmp_path / "acceptance.json"),
+            "--child-dir",
+            str(tmp_path / "children"),
+            "--acceptance-core-output",
+            str(tmp_path / "acceptance.core.json"),
+            "--model-output",
+            str(tmp_path / "rotation_l1.component.json"),
+            "--bundle-output",
+            str(tmp_path / "capability_bundle.json"),
+            "--db-env-prefix",
+            "UNIT",
+        ]
+    )
+    assert result == 1
+    failure = json.loads((tmp_path / "acceptance.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_stage"] == "source_preflight"
+    assert failure["failure_evidence"] == {
+        "exception_type": "StateModelSetError",
+        "error_message": "requested PIT universe state is missing",
+    }
+    assert failure["completed_fit_count"] == 0
+    assert failure["database_write"] is False
+    assert failure["runtime_action"] is False
+
+
+def test_c012_rl1_cli_finalization_failure_records_partial_artifact_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request_value = _rl1_request(artifact_root=tmp_path)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request_value), encoding="utf-8")
+    producer = "a" * 40
+    payload = _rl1_child_payload(request_value, producer)
+    child_dir = Path(str(request_value["outputs"]["child_dir"]))
+    monkeypatch.setattr(cli, "_producer_commit", lambda: producer)
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        index = int(command[command.index("--child-index") + 1])
+        body = {
+            "schema_version": subject.RL1_REPORT_SCHEMA_VERSION,
+            "record_type": "fresh_process_child",
+            "status": "child_complete",
+            "process_index": index,
+            "producer_commit": producer,
+            "reproducibility_payload": payload,
+            "reproducibility_payload_sha256": subject.canonical_sha256(payload),
+        }
+        report = {**body, "report_sha256": subject.canonical_sha256(body)}
+        subject.write_report(
+            cli._child_path(child_dir, index),
+            report,
+            repository_root=Path(__file__).resolve().parents[3],
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    original_write = cli.write_report
+    bundle_path = Path(str(request_value["outputs"]["capability_bundle_path"]))
+
+    def fail_bundle_write(path: Path, report: object, *, repository_root: Path) -> Path:
+        if path.resolve() == bundle_path.resolve():
+            raise OSError("injected bundle write failure")
+        return original_write(path, report, repository_root=repository_root)
+
+    monkeypatch.setattr(cli, "write_report", fail_bundle_write)
+    result = cli.main(
+        [
+            "--candidate-mode",
+            "c012-rl1",
+            "--request",
+            str(request_path),
+            "--output",
+            str(request_value["outputs"]["acceptance_path"]),
+            "--child-dir",
+            str(child_dir),
+            "--acceptance-core-output",
+            str(request_value["outputs"]["acceptance_core_path"]),
+            "--model-output",
+            str(request_value["outputs"]["component_model_path"]),
+            "--bundle-output",
+            str(bundle_path),
+            "--db-env-prefix",
+            "UNIT",
+        ]
+    )
+    assert result == 1
+    failure = json.loads(Path(str(request_value["outputs"]["failure_path"])).read_text(encoding="utf-8"))
+    assert failure["candidate_receipt_write"] is True
+    assert failure["model_write"] is True
+    assert failure["bundle_write"] is False
+    assert failure["failure_evidence"]["partial_artifact_writes"] == {
+        "acceptance_core_write": True,
+        "model_write": True,
+        "bundle_write": False,
+    }
+    assert not Path(str(request_value["outputs"]["acceptance_path"])).exists()
 
 
 def test_c012_rl1_closure_rejects_self_hashed_extra_child_or_payload_authority() -> None:
@@ -1504,6 +1922,50 @@ def test_c012_rl1_closure_rejects_self_hashed_extra_child_or_payload_authority()
             child(1, extra_payload), child(2, extra_payload), request=request, producer_commit=producer
         )
     assert payload_error.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
+
+
+def test_c012_rl1_replay_artifacts_close_core_component_bundle_and_final_acceptance() -> None:
+    request = _rl1_request()
+    producer = "a" * 40
+    payload = _rl1_child_payload(request, producer)
+
+    def child(index: int) -> dict[str, object]:
+        body = {
+            "schema_version": subject.RL1_REPORT_SCHEMA_VERSION,
+            "record_type": "fresh_process_child",
+            "status": "child_complete",
+            "process_index": index,
+            "producer_commit": producer,
+            "reproducibility_payload": payload,
+            "reproducibility_payload_sha256": subject.canonical_sha256(payload),
+        }
+        return {**body, "report_sha256": subject.canonical_sha256(body)}
+
+    core = subject.close_c012_rl1_candidate_children(child(1), child(2), request=request, producer_commit=producer)
+    component = subject.build_c012_rl1_component_model(core)
+    bundle = subject.build_c012_rl1_capability_bundle(core, component)
+    final = subject.finalize_c012_rl1_replay_acceptance(core, component, bundle)
+    subject.validate_c012_rl1_replay_artifacts(core, component, bundle, final)
+
+    assert final["status"] == "CAPABILITY_AVAILABLE"
+    assert final["ready"] is False
+    assert bundle["forward_confirmation_status"] == "PENDING"
+    assert bundle["daily_prediction_status"] == "RESEARCH_ONLY_PENDING_FORWARD"
+    assert bundle["capabilities"] == {
+        "rotation_L1": "AVAILABLE",
+        "rotation_L2": "NOT_AVAILABLE",
+        "risk_L1": "NOT_AVAILABLE",
+        "risk_L2": "NOT_AVAILABLE",
+    }
+
+    drifted_bundle = dict(bundle)
+    drifted_bundle["ready"] = True
+    drifted_bundle["bundle_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in drifted_bundle.items() if key != "bundle_sha256"}
+    )
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject.validate_c012_rl1_replay_artifacts(core, component, drifted_bundle, final)
+    assert captured.value.reason_code == subject.REASON_RL1_READBACK
 
 
 def test_c012_rl1_request_loader_rejects_non_finite_json(tmp_path: Path) -> None:
@@ -1568,6 +2030,12 @@ def test_c012_rl1_cli_output_drift_writes_only_request_authorized_failure(
             str(unauthorized_output),
             "--child-dir",
             str(tmp_path / "other" / "children"),
+            "--acceptance-core-output",
+            str(tmp_path / "other" / "acceptance.core.json"),
+            "--model-output",
+            str(tmp_path / "other" / "rotation_l1.component.json"),
+            "--bundle-output",
+            str(tmp_path / "other" / "capability_bundle.json"),
             "--db-env-prefix",
             "UNUSED",
         ]
@@ -1576,7 +2044,7 @@ def test_c012_rl1_cli_output_drift_writes_only_request_authorized_failure(
     assert result == 1
     assert not unauthorized_output.exists()
     assert not unauthorized_output.with_name("candidate.failure.json").exists()
-    failure_path = Path(str(request["artifact_outputs"]["candidate_failure_output"]))
+    failure_path = Path(str(request["outputs"]["failure_path"]))
     failure = json.loads(failure_path.read_text(encoding="utf-8"))
     assert failure["failure_reason_code"] == subject.REASON_RL1_INPUT
 

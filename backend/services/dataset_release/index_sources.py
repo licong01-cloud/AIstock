@@ -16,10 +16,10 @@ class IndexProviderUnavailable(DatasetReleaseError):
 
 
 class IndexProviderRateLimitTerminal(DatasetReleaseError):
-    """Tushare 40203 is terminal for the current provider window."""
+    """Tushare 40203 pauses the durable run until the provider window resets."""
 
-    code = "BLOCKED_PROVIDER_TERMINAL_40203"
-    retryable = False
+    code = "WAITING_PROVIDER_RATE_LIMIT_40203"
+    retryable = True
 
 
 class TushareIndexApi(Protocol):

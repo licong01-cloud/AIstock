@@ -23,7 +23,7 @@ Trading 或 MiniQMT 执行层的静默 fallback。
 - 建立唯一、纯函数、版本化的沪深 A 股涨跌停规则计算器。
 - 支持沪深主板、创业板、科创板、PIT ST 状态及 2026-07-06 主板 ST 规则切换。
 - 使用 `Decimal` 和 0.01 元最小价格单位进行交易所式四舍五入。
-- 将缺失 `stk_limit` 键生成 candidate-local immutable overlay；数据库行优先且禁止覆盖。
+- 将缺失或字段不完整的 `stk_limit` 键生成 candidate-local immutable overlay；完整数据库行优先且禁止覆盖。
 - daily/minute 使用同一有效 `stk_limit` 流和同一规则版本。
 - 只对 canonical PIT 预期股票日计算；输入不足时继续 fail closed。
 - 保持分区流式扫描和有界状态，不累积全市场多年月度 DataFrame。
@@ -45,7 +45,8 @@ Trading 或 MiniQMT 执行层的静默 fallback。
 - F-004：IPO 前五个交易日、重新上市首日、退市整理首日等无涨跌幅限制情形不得伪造价格。
 - F-005：价格计算使用 `Decimal`、`ROUND_HALF_UP`、0.01 元 tick，并执行最小一 tick 保护。
 - F-006：参考价使用上一有效未复权收盘价乘以 `adj_prev / adj_current`；缺少任一输入即阻断。
-- F-007：规则派生只补数据库缺失键；数据库与 overlay 重叠、重复或覆盖必须阻断。
+- F-007：规则派生只补数据库缺失键或不完整键；不完整行的全部既有非空值必须与派生值分币一致，
+  完整数据库行重叠、任一非空值冲突或重复键必须阻断。
 - F-008：overlay 只进入 candidate-local CAS，绑定规则版本、PIT digest、分区和内容 digest。
 - F-009：daily/minute 组件共享同一 overlay，转换器仍只接收完整正数价格行。
 - F-010：canonical PIT v2 预期日代表非 ST 可交易资格；中央计算器独立覆盖 ST 规则，构建器不得用当前名称反推历史状态。
@@ -58,8 +59,11 @@ Trading 或 MiniQMT 执行层的静默 fallback。
   `csv_overrides`，不得把稀疏修复扩大为全市场或全量数据集重导。
 - F-017：月度 Skill、增量复用参考和 operator runbook 必须统一写明 `stk_limit` 缺失处理、
   fail-closed 条件和精确选择性重建语义，后续月更不得依赖聊天记录。
-- F-018：changed-file runtime contract 必须把本功能的七个 artifact/planner 模块精确登记为
+- F-018：changed-file runtime contract 必须把本功能的十个 Worker 闭包模块精确登记为
   `worker-scheduler`，不得要求无关 backend-main 重启，也不得把整个 dataset_release 目录宽泛改类。
+- F-019：source audit 使用三层状态：合法空值/候选内可修复自动继续，provider 暂时不可用进入可重试，
+  只有权威冲突、PIT/身份损坏、必要推导输入缺失或安全越界才硬阻断。新增硬阻断前必须先分析触发条件、
+  发生概率、误阻代价和替代方案，并获得用户批准。
 
 ## 4. Architecture / 架构
 
@@ -68,7 +72,7 @@ sealed DB stk_limit ────────────────────
                                                   │ database wins
 sealed kline_daily_raw + sealed adj_factor        │
             │                                     ▼
-            └─ rule-derived missing-only overlay ─ merge ─ effective stk_limit
+            └─ rule-derived missing/incomplete overlay ─ merge ─ effective stk_limit
                                                         ├─ daily canonical rows
                                                         └─ minute canonical rows
 ```
@@ -77,7 +81,10 @@ sealed kline_daily_raw + sealed adj_factor        │
 
 - `ArtifactReadySourceBuilder.build(...)`：生成 candidate-local 派生 CAS 和 component manifest。
 - `ArtifactReadyBuildSource.ordered_partitions(...)`：向 build stage 暴露已验证的有效源流。
-- `_merge_missing_only(...)`：数据库优先、重复/冲突 fail closed 的流式合并模式。
+- `_merge_stk_limit_completion(...)`：完整数据库行优先；只允许经过逐字段一致性验证的不完整行补全。
+- `SourceQuerySpec.audit_non_null_value_columns`：物理 audit 继续识别三列不完整行；raw source CAS 允许这些
+  已登记 repair columns 为 NULL，使其能够到达 artifact-ready overlay，最终 build source 只向 Qlib
+  暴露完整的 canonical PIT 股票日。
 - `FrozenPitSnapshot.spans`：唯一候选股票日范围，不使用当前 universe 或当前 ST 名称。
 - `CanonicalStockTransformer.transform_daily/transform_minute`：继续消费完整 `stk_limit`，不承载推导策略。
 
@@ -117,7 +124,7 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 
 ## 5. Data Contract / 数据合同
 
-只有确有缺失键并成功推导的分区才生成 `dataset_release_stk_limit_rule_overlay_v1` receipt；完整
+只有确有缺失/不完整键并成功推导的分区才生成 `dataset_release_stk_limit_rule_overlay_v2` receipt；完整
 分区继续只使用原始 `stk_limit` 身份，不生成空 overlay：
 
 - `raw_partition_identity`
@@ -128,6 +135,7 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 - `database_rows`
 - `expected_pit_keys`
 - `rule_derived_rows`
+- `database_completion_rows`
 - `unresolved_keys=0`
 - `database_override_rows=0`
 - `effective_content_root`
@@ -141,6 +149,8 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 - 每个代码仅保留最新 `close/adj_factor/date` 状态。
 - overlay 行数受固定硬上限约束，超过即阻断，不扩大内存上限；完整分区不新增派生身份。
 - 禁止 pandas 全市场面板、跨分区 `frames`、整体 concat 或完整静态矩阵预分配。
+- 退市日线缺口先一次性按代码分组，再按 `partition_for_day` O(1) 路由 provider 行；禁止“每个代码重新扫描
+  全部分区缺口”的 O(code × missing_keys) 循环。
 - overlay 身份携带排序后的 `affected_instruments`；首次出现历史缺口或既有 overlay 内容变化时，
   mixed planner 只为这些代码生成 full-history CSV override，并精确替换其 daily/minute bin。
 - 上游原始 `stk_limit` 的无证明历史修订、或既有 overlay 消失时仍 fail closed；在没有逐代码原始源
@@ -149,7 +159,7 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 ## 7. Implementation Plan / 实施方案
 
 1. 新增纯规则模块及交易所时间版本矩阵测试。
-2. 在 artifact-ready 阶段生成分区化 missing-only limit overlay。
+2. 在 artifact-ready 阶段生成分区化 missing-or-incomplete limit overlay。
 3. 在 build source 中将 raw `stk_limit` 与 overlay 流式合并。
 4. 将规则/overlay summary、受影响代码权威加入 daily/minute component manifest 和 effective root。
 5. 扩展 mixed planner，使首次历史稀疏 overlay 只重建精确代码，不退化为全市场全量导出。
@@ -160,7 +170,7 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 
 - 规则单测：主板、创业板、科创板、ST、2026-07-06 切换、分币取整、低价最小 tick。
 - 负向单测：未知板块、无涨跌幅限制、缺少前收/复权、naive/float 非法输入。
-- overlay 单测：只补 missing、数据库重叠不覆盖、跨分区 reference state、有界行数。
+- overlay 单测：补 missing、精确补全 incomplete、非空值冲突阻断、完整数据库行不覆盖、跨分区 reference state、有界行数。
 - build-source 单测：daily/minute 读取相同有效 `stk_limit`；tamper/schema/digest 拒绝。
 - transformer 小样本：规则派生行与真实行生成相同 12 字段语义。
 - planner 小样本：两代码 PIT 中仅一个代码有缺口时，只生成该代码 override，另一个代码不得进入重建目标。
@@ -193,7 +203,28 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 | 上游补回原始行导致 overlay 消失但无法证明精确 diff | fail closed，不猜测、不静默退化 |
 | 模拟盘误用历史派生值 | 实时模块零改动；设计与 changed-file gate 双重审核 |
 
-## 11. Production Gates / 生产门禁
+## 11. 缺失处理与阻断治理
+
+| 分类 | 当前场景 | 动作 |
+|---|---|---|
+| 自动继续 | `bak_basic` 合法空日 | 标记 `empty_valid`，下游保留 NaN/missing mask |
+| 自动继续 | 精确指数代码/日期缺失 | 标记 `candidate_repairable`，由 Tushare 只补候选 CAS 精确键 |
+| 自动继续 | PIT 内 `stk_limit` 缺失或不完整 | 规则派生；不完整行先校验全部既有非空字段 |
+| 自动继续 | D/P 证券最后权威日线后的严格连续尾段 | 作为 terminal non-trading coverage；不伪造 OHLCV |
+| 可重试 | provider 限流、网络错误、T+1 尚未发布 | 保留原 intent/checkpoint，等待重试；不升级为永久合同失败 |
+| 硬阻断 | DB/provider、DB/派生已有非空值冲突 | 禁止选择来源或静默覆盖 |
+| 硬阻断 | 活跃证券缺口、退市证券内部断点或尾段后又出现权威 bar | 证券生命周期或源数据不一致 |
+| 硬阻断 | PIT 重叠/重复/日期倒置/identity 漂移 | 权威股票池损坏 |
+| 硬阻断 | 缺少 previous close、adj factor、板块或 PIT 状态 | 无法确定性推导 |
+| 硬阻断 | 越权覆盖、生产 pointer、全量扩大、资源/安全合同违反 | 停止并请求独立授权或修复 |
+
+不得仅因 DEV 不具备八年生产数据镜像而阻断生产计划。DEV 只用单行事务内 upsert/readback 验证 DML
+机制并回滚；生产仍必须先完成自身全范围只读 plan，再以独立生产 DML 授权 apply。
+
+本表是已批准的硬阻断全集。未来新增或扩大硬阻断时，设计/BUG 必须先列出触发条件、估计发生概率、
+误阻成本、准确性风险和至少一个替代方案，获得用户明确批准后才能编码；测试不得反向创造未批准门禁。
+
+## 12. Production Gates / 生产门禁
 
 | 项目 | 本轮状态 |
 |---|---|
@@ -204,7 +235,7 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 | Backend/Worker restart | `noop` |
 | 既有 2026-07-31 数据集修改 | `forbidden` |
 
-## 12. Design Acceptance Matrix / 设计验收矩阵
+## 13. Design Acceptance Matrix / 设计验收矩阵
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -214,7 +245,7 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 | F-004 | typed `no_daily_limit` decision | `backend/tests/dataset_release/test_a_share_limit_rule.py` | verified | none |
 | F-005 | `derive_limit_prices` Decimal/tick 实现 | `backend/tests/dataset_release/test_a_share_limit_rule.py` | verified | none |
 | F-006 | `backend/services/dataset_release/stk_limit_overlay.py` reference state | `backend/tests/dataset_release/test_stk_limit_overlay.py` | verified | none |
-| F-007 | missing-only overlay 与合并冲突门禁 | `backend/tests/dataset_release/test_stk_limit_overlay.py`; `backend/tests/dataset_release/test_artifact_ready_build_source.py` | verified | none |
+| F-007 | raw nullable repair contract、missing/incomplete overlay 与合并冲突门禁 | `backend/tests/dataset_release/test_source_authority.py`; `backend/tests/dataset_release/test_stk_limit_overlay.py`; `backend/tests/dataset_release/test_artifact_ready_build_source.py` | verified | none |
 | F-008 | artifact-ready CAS receipt/identity | `backend/tests/dataset_release/test_artifact_ready_source.py` | verified | none |
 | F-009 | `ArtifactReadyBuildSource._effective_limit_rows` | `backend/tests/dataset_release/test_artifact_ready_build_source.py`; `backend/tests/dataset_release/test_canonical_stock_transformer.py` | verified | none |
 | F-010 | canonical PIT span 内明确 `is_st=False`；独立计算器覆盖 ST | `backend/tests/dataset_release/test_a_share_limit_rule.py`; `backend/tests/dataset_release/test_stk_limit_overlay.py` | verified | none |
@@ -225,16 +256,17 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 | F-015 | 零写入 safety、无真实导出 | `backend/tests/dataset_release/test_artifact_ready_source.py`; `python -m pytest backend/tests/dataset_release -q -p no:cacheprovider` | verified | none |
 | F-016 | overlay 携带受影响代码，首次历史缺口只生成精确代码 override | `backend/services/dataset_release/component_artifact_manifest.py`; `backend/services/dataset_release/mixed_planner.py`; `backend/tests/dataset_release/test_component_artifact_manifest.py` | verified | none |
 | F-017 | Skill/reference/runbook 固化统一缺失处理流程 | `.codex/skills/update-backtest-dataset/SKILL.md`; `.codex/skills/update-backtest-dataset/references/fingerprint-and-reuse.md`; `.codex/skills/update-backtest-dataset/references/monthly-workflow.md`; `docs/operations/qe_backtest_dataset_monthly_update_runbook.md`; `python -m nox -s l0` | verified | none |
-| F-018 | 七个精确源文件登记为 dataset Worker runtime | `docs/standards/aistock_runtime_targets_v1.yaml`; `backend/tests/scripts/test_aistock_issue_workflow.py::test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker` | verified | none |
+| F-018 | 十个精确源文件登记为 dataset Worker runtime | `docs/standards/aistock_runtime_targets_v1.yaml`; `backend/tests/scripts/test_aistock_issue_workflow.py::test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker` | verified | none |
+| F-019 | 三层缺失/重试/硬阻断治理与先批准原则 | `scripts/seed_dataset_refresh_audit.py`; `.codex/skills/update-backtest-dataset/SKILL.md`; `backend/tests/test_dataset_refresh_audit.py` | verified | none |
 
-## 13. DESIGN-COMPLIANCE-001
+## 14. DESIGN-COMPLIANCE-001
 
 1. 禁止简化、子集、POC、占位或 partial：规则矩阵、overlay、daily/minute 共用、身份和负向路径均为必需项。
 2. 禁止静默错误或伪成功：输入不足、无涨跌幅异常键、重复、覆盖、未知板块全部 typed fail closed。
 3. 禁止未经确认的业务逻辑迁移：只修改候选数据集 artifact-ready 路径，实时模拟盘权威不变。
-4. 禁止新增未经确认的门禁或人工审批：沿用 candidate-only、PIT、source identity 和 production 独立授权边界。
+4. 禁止新增未经确认的门禁或人工审批：采用第 11 节已批准三层表；未来新增硬阻断先分析并取得用户批准。
 
-## 14. Review History / 审核记录
+## 15. Review History / 审核记录
 
 | revision | finding | resolution | status |
 |---|---|---|---|
@@ -245,5 +277,8 @@ candidate builder 对 span 内键使用 `is_st=False`。独立规则计算器仍
 | R5 | 用派生分区替换原始身份会让首次采用被误判为多年重建 | 始终保留 raw `stk_limit`；只为非空缺失月份增加 overlay 身份和月叶 | resolved |
 | R6 | mixed planner 会把首次历史 overlay 当普通 tail，既可能写错月份，也可能扩大到全 PIT 股票 | overlay 绑定精确代码；新增历史 sparse-addition 分类并只生成对应代码 override | resolved |
 | R7 | 仅修改代码会使下月 operator/Claude/Codex 仍按旧缺口说明执行 | 更新唯一 Codex Skill 主源、两个按需 reference 和正式 runbook；Claude wrapper 继续引用同一主源 | resolved |
-| R8 | 通用 backend fail-closed 分类会遗漏常驻 dataset Worker 的代码重载要求 | 只登记本功能实际进入 Worker 闭包的七个文件为 `worker-scheduler`；保留其他 backend/dataset_release 文件原分类 | resolved |
+| R8 | 通用 backend fail-closed 分类会遗漏常驻 dataset Worker 的代码重载要求 | 只登记本功能实际进入 Worker 闭包的十个文件为 `worker-scheduler`；保留其他 backend/dataset_release 文件原分类 | resolved |
 | R9 | 每月分区内保存全部股票的 limit 键虽有界但仍高于必要峰值 | limit/daily/adj 三路按代码流式归并；内存仅保留 PIT 滚动状态、单代码单月行及受硬上限约束的实际 overlay | resolved |
+| R10 | 全 DEV 历史镜像、合法空日和候选可补缺口被误当成永久阻断 | DEV 改为事务内单行 DML 回滚验证；生产全范围只读 plan；引入自动/可重试/硬阻断三层语义 | resolved |
+| R11 | source sealer 仍要求 raw `stk_limit` 三列非空，会在不完整行到达 overlay 前阻断；同时非 PIT 历史 partial 行可能进入最终 normalizer | 拆分 audit 非空契约与 raw CAS nullable repair contract；有效源流在 completion 后按 frozen PIT span 过滤，PIT 行仍必须完整 | resolved |
+| R12 | bounded provider payload 的 schema/row-limit 错误会被外层包装成可重试网络失败；canonical terminal reason 枚举遗漏 `delist_event/paused_listing` | 保留 invalid payload 的 hard typed error，仅将 40203/transport 标为 retryable；terminal suffix 与 canonical builder 的终止原因集合对齐 | resolved |
