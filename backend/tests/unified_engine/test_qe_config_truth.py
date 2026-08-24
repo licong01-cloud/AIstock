@@ -93,6 +93,33 @@ def test_backend_lifespan_has_one_qe_coordinator_and_no_legacy_poll_loops() -> N
     assert "_qe_long_trend_reconcile_loop" not in source
 
 
+def test_custom_evo_zombie_recovery_is_single_flight(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    scheduler._zombie_resume_tasks = {}
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def fake_recover(task_id: str) -> None:
+        calls.append(task_id)
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(scheduler, "_safe_submit_or_fail", fake_recover)
+
+    async def scenario() -> None:
+        assert scheduler._schedule_zombie_recovery("qe_restart_task") is True
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert scheduler._schedule_zombie_recovery("qe_restart_task") is False
+        assert calls == ["qe_restart_task"]
+        release.set()
+        await asyncio.gather(*tuple(scheduler._zombie_resume_tasks.values()))
+        await asyncio.sleep(0)
+        assert scheduler._zombie_resume_tasks == {}
+
+    asyncio.run(scenario())
+
+
 def _load_qrun_minute_module(monkeypatch):
     qlib = types.ModuleType("qlib")
     qlib_model = types.ModuleType("qlib.model")
