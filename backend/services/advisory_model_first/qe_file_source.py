@@ -203,6 +203,7 @@ def load_suspend_rows(
     start: str,
     end: str,
     instruments: Iterable[str] | None = None,
+    full_day_only: bool = False,
 ) -> pd.DataFrame:
     path = Path(suspend_root) / "suspend_d.parquet"
     if not path.is_file():
@@ -228,17 +229,20 @@ def load_suspend_rows(
             context={"path": str(path), "error_type": type(exc).__name__},
         ) from exc
     required = {"trade_date", "ts_code", "suspend_type"}
+    if full_day_only:
+        required.add("suspend_timing")
     if not required.issubset(frame.columns):
         raise AdvisoryModelFirstError(
             "suspend sidecar has an invalid schema",
             reason_code="ADVISORY_MODEL_QE_SCHEMA_MISMATCH",
             context={"missing_columns": sorted(required - set(frame.columns))},
         )
+    if full_day_only:
+        timing = frame["suspend_timing"].fillna("").astype(str).str.strip()
+        frame = frame.loc[timing.isin({"", "09:30-09:30"})].copy()
     frame["trade_date"] = pd.to_datetime(frame["trade_date"]).dt.normalize()
     frame["instrument"] = frame["ts_code"].astype(str).str.upper()
-    return frame[["trade_date", "instrument", "suspend_type"]].drop_duplicates(
-        ["trade_date", "instrument"]
-    )
+    return frame[["trade_date", "instrument", "suspend_type"]].drop_duplicates(["trade_date", "instrument"])
 
 
 def validate_factor_file_schemas(factor_root: str | Path, *, data_cutoff: str) -> QEFileSchemaReceipt:
@@ -270,9 +274,7 @@ def validate_factor_file_schemas(factor_root: str | Path, *, data_cutoff: str) -
                 reason_code="ADVISORY_MODEL_QE_SCHEMA_MISMATCH",
                 context={"path": str(path), "missing_columns": missing},
             )
-        hashes[filename] = canonical_json_sha256(
-            {"filename": filename, "columns": columns, "data_cutoff": data_cutoff}
-        )
+        hashes[filename] = canonical_json_sha256({"filename": filename, "columns": columns, "data_cutoff": data_cutoff})
     static_path = root / "static_factors.parquet"
     try:
         import pyarrow.parquet as pq
@@ -296,9 +298,7 @@ def validate_factor_file_schemas(factor_root: str | Path, *, data_cutoff: str) -
         factor_root=str(root),
         data_cutoff=data_cutoff,
         h5_schema_hashes=hashes,
-        static_factor_schema_hash=canonical_json_sha256(
-            {"columns": static_columns, "data_cutoff": data_cutoff}
-        ),
+        static_factor_schema_hash=canonical_json_sha256({"columns": static_columns, "data_cutoff": data_cutoff}),
     )
 
 

@@ -53,11 +53,11 @@
 | bar_state | 判定 | 自动处理 | 是否允许删除候选 |
 |---|---|---|---|
 | `TRADED` | 无停牌记录，OHLC 有限且存在可成交行情 | 使用真实行情 | 否 |
-| `SUSPENDED_VERIFIED` | immutable `suspend_d` 在该日标记 `S`，即使 provider 同时保留陈旧 OHLC | 生成显式停牌归一化行 | 否 |
+| `SUSPENDED_VERIFIED` | immutable `suspend_d` 在该日标记 `S`，且 `suspend_timing` 为空或为 provider 全日 sentinel `09:30-09:30`；即使 provider 同时保留陈旧 OHLC | 生成显式停牌归一化行 | 否 |
 | `MISSING_UNEXPLAINED` | 必需行情缺失且无停牌依据 | typed dataset failure | 否 |
 | `SOURCE_CONFLICT` | 有真实成交行情但 sidecar 同日报停牌，或身份/日期冲突 | typed dataset failure | 否 |
 
-状态判定优先使用 immutable suspend sidecar。停牌日存在 provider 陈旧 OHLC 不构成冲突；只有 sidecar 报停牌且 raw bar 同时声称正成交量/正成交额，或无停牌记录却缺少必需 raw identity，才是冲突/未知缺失。
+状态判定优先使用 immutable suspend sidecar，但必须先区分全日与日内停牌。具有非空、非 `09:30-09:30` timing 的 `S` 是日内停牌，继续使用真实日线行情并不得生成全日零量行。全日停牌日存在 provider 陈旧 OHLC 不构成冲突；只有已分类为全日停牌的 sidecar 行与 raw bar 同时声称正成交量/正成交额，或无全日停牌记录却缺少必需 raw identity，才是冲突/未知缺失。旧 v1 loader 默认行为保持不变，只有 schema v2 显式请求 `full_day_only`。
 
 `MISSING_UNEXPLAINED` 和 `SOURCE_CONFLICT` 必须在 candidate feature build 之前失败；不得通过删除一只股票让任务继续。它们是数据集错误，不是负面模型结果。
 
