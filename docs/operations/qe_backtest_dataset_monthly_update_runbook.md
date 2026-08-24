@@ -200,10 +200,10 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 s
 | `run_state=QUEUED|EXECUTING|VALIDATING|PREPARING_PUBLISH|PUBLISHING` | run 受 attempt/lease/fence/resource supervisor 管理 | 用 status/events 观察 |
 | `WAITING_RESOURCE` | OS 明确 LowMemory 信号、任务自身 hard cap 或按预测所需的 X 空间不足 | 不提高 cap；保留 durable task，条件恢复后继续；等待 deadline 只告警、不终止 |
 | 性能 warning | 可比 workload 吞吐退化 | 记录 telemetry；不暂停、不阻断、不改变 pressure rung |
-| `WAITING_SOURCE` | required source 尚未完成 | 等待 source；禁止补零/减范围 |
+| `WAITING_SOURCE` | required source 尚未完成，或 resolution source freeze 期间检测到 writer/snapshot drift | 保留同一 submission 等待自动重试；禁止重提、补零、减范围或放宽一致性检查 |
 | `WAITING_ORPHAN_QUIESCENCE` | 旧 owned process tree 仍 alive/unknown | 只观察；不得 kill/delete lock |
 | `BLOCKED_PROVIDER_TERMINAL` | 40203、overlap conflict、无完整 240 bars等 | 报告 code/date/pending scope，不循环重试 |
-| `BLOCKED_SOURCE_SNAPSHOT_DRIFT` | plan 与实际消费同行流不一致 | 新 source probe/intent；不得复用旧 staging |
+| `WAITING_SOURCE` + `BLOCKED_SOURCE_SNAPSHOT_DRIFT` | supervised resolution child 已用精确 schema/error/exception/hash/zero-safety 契约证明瞬时 source drift | 同一 durable submission 在 writer 稳定后重试，不计入 retry exhaustion；未知或伪造 child error 仍 terminal fail-closed |
 | `SUCCEEDED/NO_OP_VERIFIED` | fresh probe 证明无需重导 | 读取 no-op receipt并完成报告 |
 | `SUCCEEDED/REATTESTED` | 旧 candidate 未改，新增 attestation | 读取 attestation outcome |
 | `SUCCEEDED/CANDIDATE_VALIDATED` | candidate 已原子发布并签收 | 检查逐组件 action 和完整 receipt |
