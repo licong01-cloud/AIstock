@@ -6,6 +6,7 @@
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前置实验：P0-D binary meta-label、P0-E outcome-weighted binary meta-label
 > 本文档阶段：只冻结下一代模型实验和条件运行时范围，不代表模型训练、源码实现、激活或生产验收已完成
+> 2026-08-24 停牌覆盖修订：feature schema、reference parity、advancement 和 Stage B confidence 条款由 `docs/architecture/advisory_p0f_suspension_aware_feature_parity_f2_revision_20260824.md` 取代；其余条款继续有效。
 
 ## 1. Background / 背景与失败归因
 
