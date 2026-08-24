@@ -218,10 +218,13 @@ watermark，禁止默认 live/latest key。对每个交易日 `t`，eligible sym
 3. `market.sw_index_member.in_date <= t` 且 `out_date IS NULL OR out_date >= t`；
 4. mapping row 的 symbol、L1、L2、日期均非空，并且 symbol 只解析到一个 canonical `(L1,L2)` identity。
 
-历史 `sw_index_member.l1_code/l2_code` 允许保存 `industry_code` 或 `index_code` 表示；resolver 必须使用
-`market.sw_index_classify` 同 level 的唯一行，将二者规范化为 canonical `index_code`。同一 symbol/date 的多条源行
+历史 `sw_index_member.l1_code` 允许保存申万 `industry_code` 或 canonical `index_code` 表示；resolver 的唯一行业身份权威为
+`market.sw_index_member` 自身的完整成员闭包：每个 L2 code 必须同时且只指向一个 `801xxx.SI` canonical L1，同一非 canonical L1 alias
+跨全部共享 L2 必须只指向一个 canonical L1，canonical L1 与 L2 的权威名称必须非空且无冲突；numeric alias 行允许不重复保存 L1 名称，
+但不得以其空名称覆盖 canonical 名称。最终 catalog 必须严格闭合为 L1=31、L2=131。
+`market.sw_index_classify` 不再是该路径的前置 authority，也不得在其为空时把合法 member facts 误判为 catalog 缺失。同一 symbol/date 的多条源行
 只有在规范化后 L1/L2 完全相同才可合并为一个 identity，同时所有源行、有效期和 source-row hash 都必须进入
-mapping manifest；规范化后仍指向不同 L1/L2、classify 缺失或一对多时显式失败。禁止 `DISTINCT ON`、排序首行、
+mapping manifest；规范化后仍指向不同 L1/L2、member identity 缺失、名称冲突或一对多时显式失败。禁止 `DISTINCT ON`、排序首行、
 字符串前缀或当前 mapping 回填历史日。最终 canonical sector set 必须严格为 L1 31 个、L2 131 个，并冻结
 按 date/symbol/L1/L2/source interval 排序的 mapping hash。
 
@@ -1095,9 +1098,9 @@ moneyflow denominator；C-010-A3=逐 feature cross-section；C-010-A4=公式/政
    - `price_authority_present`：使用 C-009/C-010 stock-fact reader 同一 canonical security/date 对应的
      `market.kline_daily_raw` exact row identity。该 predicate 只表示 authoritative row 是否存在；价格字段 numeric completeness 继续由
      price-domain contract 独立判断。重复且非全字段等价、identity/date 不一致为 `invalid`，不得归类为普通 unavailable；
-   - `sw_l1_identity_valid/sw_l2_identity_valid`：必须复用 §4.3.1 A 与 mapping manifest 的同一 resolver：active
-     `sw_index_member` interval 经同 level `sw_index_classify` 规范化后形成唯一 canonical `(L1,L2)` pair。无 active source row 或任一 level
-     无 classify match 为 `unavailable`；重叠/冲突/一对多/非等价多行为空间 identity `invalid` 并使整个 partition fail closed，禁止把
+   - `sw_l1_identity_valid/sw_l2_identity_valid`：必须复用 §4.3.1 A 与 mapping manifest 的同一 member-closure resolver：active
+     `sw_index_member` interval 经共享 L2 的唯一 canonical L1 owner 与无冲突名称闭包规范化后形成唯一 canonical `(L1,L2)` pair。无 active source row或
+     member catalog 不完整为 `unavailable`；重叠/冲突/alias 一对多/名称冲突/非等价多行为空间 identity `invalid` 并使整个 partition fail closed，禁止把
      invalid 降级为合法 `P_out`；
    - 所有 predicate 在 join 前先应用 C-009-B 已批准的 source-specific effective-dated security identity resolver，并在 entry 中保存
      canonical/source/stable identity 与 resolver authority hash；禁止用 provider raw code、证券名称或当前代码直接关联历史事实。
@@ -3658,6 +3661,7 @@ replay request的`outputs`对象必须精确包含且只包含`acceptance_core_p
 六者必须互异并处于request声明的artifact root内。CLI在HR1模式增加`--acceptance-core-output|--model-output|--bundle-output`，现有`--output|--child-dir`继续使用；所有CLI实参必须与request逐项相等，
 failure path只由request派生且不得与成功输出重合。任一路径缺失、额外、自哈希改写、越界或CLI漂移均在fit前fail closed。
 父CLI以`--prepare-request --source-authority <path>`执行唯一正式request制备：只读取source authority中的`source`对象，由程序固定development end、计算calendar/fold、dataset/mapping/database、C-010 identity和全部输出authority后append-only写request；禁止人工拼装request或新增第二训练入口。
+当前正式制备允许`source-authority`为显式旧版`source`对象，或仓库跟踪的`pit_v2_source_freeze_receipt_v2`；后者必须逐项匹配canonical v2 profile路径及文件SHA、`aistock_equity_pit_canonical_v2`与`shsz_a_252td_st_delist_asof_v2`常量，并由当前tracked security/provider manifest计算canonical hash。禁止按数据库“最新一行”自动选universe，source preflight失败必须在0 fit回执中保留安全、可操作的底层reason message。
 正式写入顺序为replay acceptance core → component v2 → bundle v2 → final replay acceptance；core不含循环依赖的最终SHA，component/bundle绑定core，final再绑定实际component/bundle SHA。
 所有输出repo-external、绝对路径、append-only、collision-safe、canonical JSON duplicate-key/NaN拒绝，并从磁盘双向回读闭合。任何writer/readback失败保留已发生side effect，
 未闭合artifact不可消费；`database_write=false,runtime_action=false,ready_write=false`。
@@ -3731,10 +3735,10 @@ advisory-only产品路径，不改变F-012研究隔离。
 ### 5.3 PIT mapping snapshot
 
 mapping 使用 `in_date <= as_of_date AND (out_date IS NULL OR out_date >= as_of_date)`；按 4.3.1 A 节通过
-`sw_index_classify` 将历史 industry/index code 表示规范化后，冻结 source 与 canonical
+`sw_index_member` 完整闭包将历史 industry/index code 表示规范化后，冻结 source 与 canonical
 `symbol/l1_code/l1_name/l2_code/l2_name/in_date/out_date` 的排序 hash。只有规范化后 identity 完全相同的多条
 source row 才可保留全部 source evidence 后折叠；非等价多重 active mapping、L2 对应多个 canonical L1、
-缺 code/classify 或空 mapping 均显式失败。历史日不得读取当前成员关系。
+缺 code/name/member owner 或空 mapping 均显式失败。历史日不得读取当前成员关系。
 mapping 只从 `sw_index_member` 动态解析，不要求或读取 `sector_data.l1_code/l2_code/mapping_in_date`。
 
 ## 6. 唯一 State Generator 契约
@@ -5683,3 +5687,57 @@ immutable；producer `b474170f…` 已使用current authority创建append-only b
 5. **部分写入不静默**：finalization失败会在typed failure receipt中如实记录已写core/model/bundle；未形成final acceptance的partial artifact不可消费。
 6. **旧holdout不可重解释**：pre-HR1 holdout reader显式固定旧contract/report/component/payload authority；HR1新schema不会回写或重新解释已终结P2-4 artifact。
 7. **DESIGN-COMPLIANCE-001**：没有subset/POC、neutral/fallback、第二candidate、历史artifact迁移、通用registry、数据库写入、runtime动作或新增人工门禁。rotation_L1通过仍只形成`CAPABILITY_AVAILABLE`且`ready=false`，其余三能力保持`NOT_AVAILABLE`。
+
+### 23.32 BUG-1167：HR1 当前 PIT 与行业身份权威兼容性审核
+
+HR1 首次正式 request preflight 在 0 fits 处正确停止，但暴露两个源码缺陷：CLI 只接受已过时的 C-010 source envelope，且 typed failure receipt
+没有保存安全的底层错误消息。改为显式验证 tracked canonical PIT v2 source receipt 后，第二次 0-fit smoke 又证明 DEV
+`market.sw_index_classify` 为空，而完整 `market.sw_index_member` 已包含可闭合的 31 个 canonical L1、131 个 L2 与历史成员区间。
+
+1. **权威没有降级或 fallback**：HMM mapping 的明确权威改为 `sw_index_member` member closure；不是“classify 为空才换表”，也不自动读取 latest。
+   canonical L1 必须匹配 `801xxx.SI`，每个 L2 必须恰有一个 canonical L1 owner，历史 industry alias 跨共享 L2 必须唯一指向同一 owner。
+2. **完整性继续 fail closed**：L1/L2 必须严格 31/131，canonical code/name 非空且无冲突；alias 一对多、L2 多 owner、名称冲突、空 catalog 或 active mapping
+   多 identity 均失败。不得使用字符串截断、首行、`DISTINCT ON`、neutral 或当前成员关系回填历史日。
+3. **所有正式读取路径一致**：mapping manifest、L1/L2 stock fact、missing-price 与 separated/alias-aware 路径复用同一 member-derived SQL closure，
+   不允许 request preflight 与实际训练读取使用不同 identity authority。
+4. **实验边界不变**：BUG 修复不修改 HR1 estimator、特征、fold、阈值、seed、24-fit、selection 或 capability 语义；不执行数据库写入、模型/READY
+   写入或 runtime 动作。修复后的 request preflight 必须先闭合当前 PIT receipt 与 member catalog，才允许用户已授权的正式 24-fit replay 启动。
+5. **审核结论**：`PASS_BUG_1167_MEMBER_CLASSIFICATION_AUTHORITY_FAIL_CLOSED_SOURCE_VALIDATED`。DEV只读核验得到218条 distinct member catalog rows、
+   31个canonical L1、131个canonical L2、190个canonical/alias lookup entries，并成功读取首条2022-01-04 PIT mapping。该结论只说明源码合同正确，不能推导
+   replay、模型或产品能力成功。
+
+### 23.33 BUG-1169：canonical PIT v2 provider-absence 权威闭合
+
+HR1 在生产只读历史源与 `aistock_equity_pit_canonical_v2` 上执行 request preflight 时，于 0 fits 处对
+`002366.SZ/2021-09-23` 正确返回 `hmm_risk_stock_fact_provider_absence_unverified`。根因不是本地价格、PIT 身份或
+moneyflow 写入缺失，而是 active `hmm_risk_provider_absence_manifest_v1` 仍冻结在旧的 502 个 exact key，未覆盖
+canonical PIT v2 当前完整候选集。
+
+1. **精确权威闭合**：生产只读候选集为 563 个 exact key；旧权威 502 个，新增 61 个，分布于 40 个交易日。新增 key
+   已逐日按 Tushare `moneyflow` full-market authority 核验为 61/61 provider absent、0 present；manifest v2 保存旧 receipt
+   hash、supplement key hash、计数与 `db_writes=false`，每行继续绑定同一新 receipt hash 和 row hash。
+2. **fail-closed 语义不变**：只有 manifest 中 `(canonical_ts_code, source_dataset, source_ts_code, trade_date)` 完全匹配的
+   key 才可形成 provider-absence NA evidence；未知 key、identity 漂移、receipt/hash/count/order 漂移仍失败。不得填 0、前值、
+   neutral、行业代理或 synthetic row。
+3. **业务与实验合同不变**：本修复只更新 active 输入权威，不修改 HR1 estimator、特征、fold、阈值、seed、24-fit、selection、
+   capability 或 READY 语义；不执行 DDL/DML、依赖安装、runtime activation 或服务启停。
+4. **完成边界**：manifest/parser/定向测试通过只证明 source preflight 可继续；不推导 24-fit replay、模型验收或板块轮动产品能力成功。
+
+### 23.34 BUG-1170：C-010 contributor ledger 与 stock-fact 行业权威统一
+
+BUG-1169 修复后的 HR1 生产只读 request preflight 已越过全部 563 个 provider-absence exact key，但在 0 fits 处对
+`002505.SZ/2022-01-04` 返回 `hmm_risk_c010_contributor_receipt_mismatch`。该日证券仍在 canonical PIT universe 与
+SW member authority 中但没有 raw price，因此由 missing-price 路径进入完整 stock-fact denominator；C-010 所谓 full-universe
+expected-opportunity ledger 却从 `market.kline_daily_raw` 起表，并另行 join `market.sw_index_classify`，同时漏掉无价格机会和偏离
+BUG-1167 后统一的 `market.sw_index_member` canonical 31-L1/131-L2 owner closure。
+
+1. **真正 full-universe ledger**：C-010 opportunity query 必须从 trading calendar × canonical PIT spans 构造全部预期
+   symbol/date，不得依赖 raw price 存在；missing-price 行必须能在 ledger 中闭合，而不是被误判为未知 contributor。
+2. **单一行业权威**：opportunity query 与 provider-absence domain partition 必须复用 `stock_fact_repository` 的
+   member-classification CTE，按 L2 的唯一 canonical L1 owner 解析 `l1_code/l2_code`；不得继续读取
+   `sw_index_classify`、字符串截断、首行或 latest mapping。
+3. **完整性不放宽**：canonical L1=31、L2=131、L2 owner 唯一、成员区间覆盖和单日 mapping 唯一仍 fail closed；修复只消除
+   authority 分叉，不允许缺 contributor、重复 mapping 或非法 identity 被视为可用。
+4. **实验合同不变**：不修改 HR1 estimator、特征、fold、阈值、seed、24-fit、selection、capability 或 READY 语义；不执行
+   DDL/DML、依赖安装、runtime activation 或服务启停。修复后必须重新执行完整 request preparation，且只有 0-fit request
+   成功生成后才可启动正式 24-fit replay。
