@@ -44,6 +44,46 @@ def _dates(count: int, *, start: date = date(2024, 1, 2)) -> list[date]:
     return [start + timedelta(days=index) for index in range(count)]
 
 
+def test_calendar_slice_accepts_non_trading_inclusive_boundary() -> None:
+    trading_dates = (date(2025, 10, 9), date(2025, 10, 10))
+
+    result = subject._calendar_slice(
+        trading_dates,
+        start=date(2025, 10, 1),
+        end=date(2025, 10, 10),
+        expected=2,
+    )
+
+    assert result == trading_dates
+
+
+def test_calendar_slice_count_drift_preserves_observed_boundary_evidence() -> None:
+    trading_dates = (date(2025, 10, 9), date(2025, 10, 10))
+
+    with pytest.raises(subject.JumpSpikeError) as captured:
+        subject._calendar_slice(
+            trading_dates,
+            start=date(2025, 10, 1),
+            end=date(2025, 10, 10),
+            expected=3,
+        )
+
+    error = captured.value
+    assert error.reason_code == subject.REASON_FOLD_BOUNDARY
+    assert error.stage == "fold_boundary"
+    assert error.evidence == {
+        "start": "2025-10-01",
+        "end": "2025-10-10",
+        "actual_count": 2,
+        "calendar_start": "2025-10-01",
+        "calendar_end": "2025-10-10",
+        "expected_trading_day_count": 3,
+        "observed_trading_day_count": 2,
+        "observed_trading_start": "2025-10-09",
+        "observed_trading_end": "2025-10-10",
+    }
+
+
 def test_preprocess_is_level_global_and_na_invalidates_the_whole_row() -> None:
     calendar = _dates(8)
     panel = _panel(["S1", "S2", "S3"], calendar, subject.RELATIVE_FEATURES)
