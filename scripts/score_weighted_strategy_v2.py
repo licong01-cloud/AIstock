@@ -52,6 +52,19 @@ def _rank_scores_canonically(scores):
     )
 
 
+def _order_scored_holdings_canonically(final_holdings, scores):
+    """Return scored holdings in a deterministic instrument order.
+
+    ``rank`` weighting assigns ordinal weights, including to exact score ties.
+    The incoming holding order can differ across restored recorders, so it must
+    not be allowed to decide which tied instrument receives which weight.
+    """
+    return sorted(
+        (instrument for instrument in final_holdings if instrument in scores.index),
+        key=str,
+    )
+
+
 def _ordered_topk_candidates(ranked, topk, current_holdings):
     """Return Top-K membership and buy candidates in canonical rank order.
 
@@ -276,7 +289,10 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
         # 6. 计算最终持仓列表和权重
         # 此时 final_holdings 中所有股票都在 scores.index 中，无需再过滤
         final_holdings = [s for s in current_holdings if s not in all_sells_set] + actual_buys
-        scored_final_holdings = [s for s in final_holdings if s in scores.index]
+        scored_final_holdings = _order_scored_holdings_canonically(
+            final_holdings,
+            scores,
+        )
         final_scores = np.array([float(scores[s]) for s in scored_final_holdings])
         weights = self._compute_weights(final_scores) if len(scored_final_holdings) else np.array([])
 

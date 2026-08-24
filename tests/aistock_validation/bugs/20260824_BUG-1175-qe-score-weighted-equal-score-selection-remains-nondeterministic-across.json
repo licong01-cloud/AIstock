@@ -76,7 +76,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "backend/tests/unified_engine/test_score_weighted_strategy_determinism.py launches fresh Python subprocesses that import tracked scripts/score_weighted_strategy_v2.py and verifies hash-seed stability, input-order permutation stability, sell-boundary stability, and unchanged distinct-score ordering -> 4 passed on final HEAD"
+      "backend/tests/unified_engine/test_score_weighted_strategy_determinism.py launches fresh Python subprocesses that import tracked scripts/score_weighted_strategy_v2.py and verifies hash-seed stability, input-order permutation stability, sell-boundary stability, unchanged distinct-score ordering, and deterministic rank-weight mapping for exact ties -> 5 passed on final HEAD"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -103,9 +103,9 @@
     "source_event_id": "FE-20260824-7e0c09f48788"
   },
   "validation_evidence": [
-    "python -m pytest backend/tests/unified_engine/test_score_weighted_strategy_determinism.py -q -> 4 passed on final HEAD",
+    "python -m pytest backend/tests/unified_engine/test_score_weighted_strategy_determinism.py -q -> 5 passed on final HEAD",
     "python -m nox -s validation_module_registry_l0 -> 8 passed",
-    "python -m nox -s qe_sector_risk_overlay_backend -> 78 passed",
+    "python -m nox -s qe_sector_risk_overlay_backend -> 79 passed",
     "python -m ruff check scripts/score_weighted_strategy_v2.py backend/tests/unified_engine/test_score_weighted_strategy_determinism.py; python -m py_compile scripts/score_weighted_strategy_v2.py backend/tests/unified_engine/test_score_weighted_strategy_determinism.py; git diff --check -> passed"
   ],
   "verification_budget": {
