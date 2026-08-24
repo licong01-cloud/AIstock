@@ -899,6 +899,12 @@ class DailyTradingSymbolFactV1(BaseModel):
     symbol: str
     trade_date: date
     pre_close: float
+    pre_close_source: Literal[
+        "market.stk_limit.pre_close",
+        "TDX_REALTIME.batch_quote.pre_close",
+        "MINIQMT_REALTIME.broker_quote.pre_close",
+    ] = "market.stk_limit.pre_close"
+    pre_close_evidence_hash: str | None = None
     up_limit: float
     down_limit: float
     price_basis: Literal["raw"] = "raw"
@@ -913,7 +919,15 @@ class DailyTradingSymbolFactV1(BaseModel):
     board: str
     lot_rule: dict[str, int]
 
-    @field_validator("symbol", "stk_limit_row_hash", "st_source", "st_evidence_hash", "suspend_source", "board")
+    @field_validator(
+        "symbol",
+        "pre_close_source",
+        "stk_limit_row_hash",
+        "st_source",
+        "st_evidence_hash",
+        "suspend_source",
+        "board",
+    )
     @classmethod
     def _daily_fact_required_text(cls, value: str) -> str:
         value = str(value or "").strip()
@@ -937,7 +951,7 @@ class DailyTradingSymbolFactV1(BaseModel):
             raise ValueError("daily trading fact lot_rule has invalid fields")
         if any(type(value) is not int or value <= 0 for value in self.lot_rule.values()):
             raise ValueError("daily trading fact lot_rule values must be positive exact integers")
-        row_payload = {
+        row_payload: dict[str, Any] = {
             "source": "market.stk_limit",
             "symbol": self.symbol,
             "trade_date": self.trade_date.isoformat(),
@@ -946,12 +960,24 @@ class DailyTradingSymbolFactV1(BaseModel):
             "down_limit": self.down_limit,
             "price_basis": self.price_basis,
         }
+        if self.pre_close_source == "market.stk_limit.pre_close":
+            if self.pre_close_evidence_hash is not None:
+                raise ValueError("raw stk_limit pre_close must not carry quote evidence")
+        else:
+            if not self.pre_close_evidence_hash:
+                raise ValueError("broker quote pre_close requires evidence hash")
+            row_payload["pre_close_source"] = self.pre_close_source
+            row_payload["pre_close_evidence_hash"] = self.pre_close_evidence_hash
         if self.stk_limit_row_hash != canonical_json_sha256(row_payload):
             raise ValueError("daily trading fact stk_limit_row_hash mismatch")
         return self
 
     def canonical_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
+        payload = self.model_dump(mode="json")
+        if self.pre_close_source == "market.stk_limit.pre_close":
+            payload.pop("pre_close_source", None)
+            payload.pop("pre_close_evidence_hash", None)
+        return payload
 
 
 class DailyTradingContextV1(BaseModel):

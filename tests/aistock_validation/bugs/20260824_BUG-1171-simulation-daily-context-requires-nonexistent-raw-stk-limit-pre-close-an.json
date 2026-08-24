@@ -27,6 +27,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260824-f4d27b49c4d4",
       "timestamp": "2026-08-24T03:24:13.274165Z"
+    },
+    {
+      "action": "runtime_contract_refs_completed",
+      "actor": "codex",
+      "note": "Bound backend-main to the existing authoritative restart runbook, runtime identity endpoint, and simulation scheduler status business smoke; no new runtime gate or process control.",
+      "timestamp": "2026-08-24T04:25:12.0174156Z"
     }
   ],
   "evidence_uris": [
@@ -182,9 +188,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -m nox -s paper_v2_backend -> fresh process loaded persistent source; 1129 passed, 3 skipped, 2 xfailed",
+      "python -m nox -s simulation_core_l2 -> fresh process loaded persistent source; 653 passed, 2 skipped"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
