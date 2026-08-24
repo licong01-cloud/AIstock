@@ -35,6 +35,7 @@ def build_meta_label_feature_matrix(
     trading_calendar: Sequence[pd.Timestamp],
     hmm_history_start: str,
     runtime_cutoff: str,
+    feature_schema_version: str = "advisory_feature_schema_v1",
 ) -> MetaLabelFeatureResult:
     candidates = rankings.loc[rankings["is_candidate_decision"]].copy()
     candidates = candidates[candidates["selection_effective_rank"] <= 20].copy()
@@ -54,9 +55,7 @@ def build_meta_label_feature_matrix(
     blocks: dict[int, pd.DatetimeIndex] = {}
     for raw_date, block in block_by_date.items():
         blocks.setdefault(int(block), []).append(pd.Timestamp(raw_date).normalize())
-    block_dates = {
-        block: pd.DatetimeIndex(sorted(values)) for block, values in sorted(blocks.items())
-    }
+    block_dates = {block: pd.DatetimeIndex(sorted(values)) for block, values in sorted(blocks.items())}
     if set(block_dates) != set(range(8)):
         raise AdvisoryModelFirstError(
             "meta-label feature builder requires the exact eight CPCV blocks",
@@ -113,9 +112,7 @@ def build_meta_label_feature_matrix(
             reason_code="ADVISORY_META_LABEL_HMM_NOT_AVAILABLE",
         )
     walk_forward_states = pd.concat(hmm_states, ignore_index=True)
-    runtime_train_dates = hmm_calendar[
-        hmm_calendar <= pd.Timestamp(runtime_cutoff).normalize()
-    ]
+    runtime_train_dates = hmm_calendar[hmm_calendar <= pd.Timestamp(runtime_cutoff).normalize()]
     runtime_result = fit_fresh_sector_hmm(
         static_all=static_all,
         market_daily=market_daily,
@@ -125,6 +122,7 @@ def build_meta_label_feature_matrix(
         continuation_cutoff=runtime_cutoff,
         precomputed_observations=observations,
     )
+    v2 = feature_schema_version == "advisory_feature_schema_v2_suspension_aware"
     built = build_advisory_feature_matrix(
         candidates=candidates,
         candidate_daily=candidate_daily,
@@ -133,7 +131,9 @@ def build_meta_label_feature_matrix(
         benchmark_daily=benchmark_daily,
         suspend_rows=suspend_rows,
         hmm_states=walk_forward_states,
-        incomplete_candidate_policy="drop_candidate",
+        incomplete_candidate_policy="preserve_exact" if v2 else "drop_candidate",
+        feature_schema_version=feature_schema_version,
+        trading_calendar=calendar if v2 else None,
     )
     return MetaLabelFeatureResult(
         features=built.features,
