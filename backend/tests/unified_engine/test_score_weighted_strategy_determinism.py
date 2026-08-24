@@ -65,9 +65,13 @@ _CHILD_PROGRAM = textwrap.dedent(
 
     from score_weighted_strategy_v2 import ScoreWeightedTopkStrategyV2
 
+    import os
+
+    score_by_instrument = json.loads(os.environ["SCORE_BY_INSTRUMENT"])
+    instrument_order = json.loads(os.environ["SCORE_INSTRUMENT_ORDER"])
     ranked = pd.Series(
-        [0.8, 0.8, 0.7, 0.6],
-        index=["603190.SH", "301133.SZ", "000001.SZ", "000002.SZ"],
+        [score_by_instrument[instrument] for instrument in instrument_order],
+        index=instrument_order,
         dtype=float,
     )
     class Signal:
@@ -86,13 +90,13 @@ _CHILD_PROGRAM = textwrap.dedent(
 
     class Position:
         def get_stock_list(self):
-            return ["000001.SZ"]
+            return json.loads(os.environ["CURRENT_HOLDINGS"])
 
         def get_cash(self):
             return 10_000_000.0
 
         def get_stock_amount(self, stock_id):
-            return 100_000.0 if stock_id == "000001.SZ" else 0.0
+            return 100_000.0 if stock_id in self.get_stock_list() else 0.0
 
     class Exchange:
         trade_w_adj_price = False
@@ -109,7 +113,7 @@ _CHILD_PROGRAM = textwrap.dedent(
 
     strategy = ScoreWeightedTopkStrategyV2(
         signal=Signal(),
-        topk=3,
+        topk=int(os.environ["TOPK"]),
         n_drop=1,
         max_n_drop=1,
         weight_method="equal",
@@ -123,9 +127,31 @@ _CHILD_PROGRAM = textwrap.dedent(
 )
 
 
-def _run_with_hash_seed(seed: int) -> dict[str, object]:
+def _run_with_hash_seed(
+    seed: int,
+    *,
+    instrument_order: list[str] | None = None,
+    current_holdings: list[str] | None = None,
+    topk: int = 3,
+    score_by_instrument: dict[str, float] | None = None,
+) -> dict[str, object]:
     env = os.environ.copy()
     env["PYTHONHASHSEED"] = str(seed)
+    env["SCORE_INSTRUMENT_ORDER"] = json.dumps(
+        instrument_order
+        or ["603190.SH", "301133.SZ", "000001.SZ", "000002.SZ"]
+    )
+    env["CURRENT_HOLDINGS"] = json.dumps(current_holdings or ["000001.SZ"])
+    env["TOPK"] = str(topk)
+    env["SCORE_BY_INSTRUMENT"] = json.dumps(
+        score_by_instrument
+        or {
+            "603190.SH": 0.8,
+            "301133.SZ": 0.8,
+            "000001.SZ": 0.7,
+            "000002.SZ": 0.6,
+        }
+    )
     scripts_path = str(PROJECT_ROOT / "scripts")
     env["PYTHONPATH"] = scripts_path + os.pathsep + env.get("PYTHONPATH", "")
     completed = subprocess.run(
@@ -144,4 +170,72 @@ def test_equal_score_topk_buy_order_is_stable_across_fresh_processes() -> None:
     receipts = [_run_with_hash_seed(seed) for seed in (1, 2, 17, 101)]
 
     assert receipts == [receipts[0]] * len(receipts)
-    assert receipts[0] == ["603190.SH", "301133.SZ"]
+    assert receipts[0] == ["301133.SZ", "603190.SH"]
+
+
+def test_equal_score_topk_boundary_is_stable_across_input_order_permutations() -> None:
+    permutations = [
+        ["603190.SH", "301133.SZ", "000001.SZ", "000002.SZ"],
+        ["301133.SZ", "603190.SH", "000001.SZ", "000002.SZ"],
+        ["000002.SZ", "603190.SH", "000001.SZ", "301133.SZ"],
+        ["000001.SZ", "301133.SZ", "000002.SZ", "603190.SH"],
+    ]
+
+    receipts = [
+        _run_with_hash_seed(
+            seed,
+            instrument_order=instrument_order,
+            current_holdings=["000001.SZ"],
+            topk=1,
+        )
+        for seed, instrument_order in zip((1, 2, 17, 101), permutations)
+    ]
+
+    assert receipts == [receipts[0]] * len(receipts)
+    assert receipts[0] == ["000001.SZ", "301133.SZ"]
+
+
+def test_equal_score_sell_boundary_is_stable_across_holding_order() -> None:
+    scores = {
+        "603190.SH": 0.8,
+        "301133.SZ": 0.8,
+        "000001.SZ": 0.7,
+        "000002.SZ": 0.7,
+    }
+    receipts = [
+        _run_with_hash_seed(
+            seed,
+            current_holdings=holdings,
+            topk=2,
+            score_by_instrument=scores,
+        )
+        for seed, holdings in (
+            (1, ["000001.SZ", "000002.SZ"]),
+            (2, ["000002.SZ", "000001.SZ"]),
+        )
+    ]
+
+    assert receipts == [receipts[0]] * len(receipts)
+    assert receipts[0] == ["000001.SZ", "301133.SZ"]
+
+
+def test_canonical_tie_break_does_not_change_distinct_score_order() -> None:
+    scores = {
+        "603190.SH": 0.9,
+        "301133.SZ": 0.8,
+        "000001.SZ": 0.7,
+        "000002.SZ": 0.6,
+    }
+    receipts = [
+        _run_with_hash_seed(
+            seed,
+            instrument_order=instrument_order,
+            score_by_instrument=scores,
+        )
+        for seed, instrument_order in (
+            (1, ["000002.SZ", "000001.SZ", "301133.SZ", "603190.SH"]),
+            (2, ["603190.SH", "301133.SZ", "000001.SZ", "000002.SZ"]),
+        )
+    ]
+
+    assert receipts == [["603190.SH", "301133.SZ"]] * len(receipts)
