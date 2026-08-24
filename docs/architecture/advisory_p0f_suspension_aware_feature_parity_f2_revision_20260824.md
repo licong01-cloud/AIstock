@@ -57,7 +57,9 @@
 | `MISSING_UNEXPLAINED` | 必需行情缺失且无停牌依据 | typed dataset failure | 否 |
 | `SOURCE_CONFLICT` | 有真实成交行情但 sidecar 同日报停牌，或身份/日期冲突 | typed dataset failure | 否 |
 
-状态判定优先使用 immutable suspend sidecar，但必须先区分全日与日内停牌。具有非空、非 `09:30-09:30` timing 的 `S` 是日内停牌，继续使用真实日线行情并不得生成全日零量行。全日停牌日存在 provider 陈旧 OHLC 不构成冲突；只有已分类为全日停牌的 sidecar 行与 raw bar 同时声称正成交量/正成交额，或无全日停牌记录却缺少必需 raw identity，才是冲突/未知缺失。旧 v1 loader 默认行为保持不变，只有 schema v2 显式请求 `full_day_only`。
+状态判定优先使用 immutable suspend sidecar，但必须先区分全日与日内停牌。具有非空、非 `09:30-09:30` timing 的 `S` 是日内停牌，继续使用真实日线行情并不得生成全日零量行。全日停牌日存在 provider 陈旧 OHLC 不构成冲突；只有已分类为全日停牌的 sidecar 行与 raw bar 同时声称正成交量/正成交额，或无全日停牌记录且不存在可因果延续的全日 `S` 状态却缺少必需 raw identity，才是冲突/未知缺失。旧 v1 loader 默认行为保持不变，只有 schema v2 显式请求 `full_day_only`。
+
+Tushare `suspend_d` 可能只保留连续停牌区间的全日 `S` 边界，而不在每个无行情交易日重复一行。`SuspensionAwareBarPolicyV2` 因此按 instrument 顺序执行因果状态机：已可见的权威全日 `S` 开启停牌状态；其后的零量或缺行情 session 延续为 `SUSPENDED_VERIFIED`；首个正成交量/正成交额 raw bar 立即清除状态并按真实复牌行情处理。该状态机不得读取未来复牌日或复牌价格，不得由日内 `S` 开启，不得隐藏负成交量等源错误；没有任何较早全日 `S` 权威的缺行情仍为 `MISSING_UNEXPLAINED`。
 
 `MISSING_UNEXPLAINED` 和 `SOURCE_CONFLICT` 必须在 candidate feature build 之前失败；不得通过删除一只股票让任务继续。它们是数据集错误，不是负面模型结果。
 
@@ -108,7 +110,7 @@ bar_state          = SUSPENDED_VERIFIED
 - 复牌成交量相对包含停牌零量的窗口可能放大，这是可解释的复牌流动性信号；
 - `TRADED` 输入下分母为0、无任何历史可执行收盘或上市年龄身份不符均 typed fail closed。
 
-上条仅对非停牌输入错误适用。若 ratio、盘口距离或类似派生量仅因完整窗口均为 `SUSPENDED_VERIFIED` 而数学上无定义，则保留 NaN 并设置对应 `__missing=1` 和停牌统计，不得阻断或删除。无任何历史 executable close 则视为 source/identity 异常，因为上市满一年股票不应在 immutable 数据集中完全没有可见成交锚点。
+上条仅对非停牌输入错误适用。若 ratio、盘口距离或类似派生量仅因完整窗口均为 `SUSPENDED_VERIFIED` 而数学上无定义，则保留 NaN 并设置对应 `__missing=1` 和停牌统计，不得阻断或删除。若绑定历史窗口开始时股票已经停牌或尚未上市，则该 instrument 的面板从窗口内首个真实 executable bar 开始，禁止用未来复牌价反填前导 session；这不删除锚点后的候选。若整个绑定窗口均无 executable close，或候选决策发生在首个锚点之前，则视为 source/identity 或 exact-coverage 异常并 fail closed。
 
 ### 4.3 明示停牌特征
 
@@ -134,7 +136,7 @@ zero_liquidity_window_20
 
 ```text
 schema_version = advisory_feature_schema_v2_suspension_aware
-bar_policy_schema_version = suspension_aware_bar_policy_v1
+bar_policy_schema_version = suspension_aware_bar_policy_v2
 candidate_coverage_policy = PRESERVE_EXACT_SELECTION_TOP20_V1
 verified_suspension_price_mode = LAST_EXECUTABLE_CLOSE_MARKET_SESSION_V1
 verified_suspension_liquidity_mode = ZERO_MARKET_SESSION_V1
@@ -154,7 +156,7 @@ schema hash 必须覆盖：
 
 - 保留 `advisory_feature_schema_v1` hash 但改变 rolling/fill 数值；
 - 使用 `drop_candidate`、`drop_date` 或 Selection-rank fallback 达成 exact Top20；
-- 将 verified suspension 与 unexplained provider gap 合并处理；
+- 在没有较早权威全日 `S` 状态时，将 unexplained provider gap 合并为停牌；
 - 训练时扫描 latest sidecar、latest Qlib root 或数据库现态。
 
 ## 6. 三实验臂同覆盖合同
@@ -292,7 +294,7 @@ utility score 仍是 bps，不伪装概率；take/skip 概率只来自 P0-D v2 b
 | `ADVISORY_SUSPENSION_BAR_POLICY_INVALID` | bar policy/hash/固定模式漂移 |
 | `ADVISORY_SUSPENSION_SOURCE_CONFLICT` | raw bar 与 suspend sidecar 冲突 |
 | `ADVISORY_SUSPENSION_UNEXPLAINED_MISSING` | 非停牌必需行情缺失 |
-| `ADVISORY_SUSPENSION_LAST_CLOSE_UNAVAILABLE` | 已上市满一年但停牌日前无 PIT executable close |
+| `ADVISORY_SUSPENSION_LAST_CLOSE_UNAVAILABLE` | instrument 在整个绑定窗口无 PIT executable close |
 | `ADVISORY_FEATURE_V2_COVERAGE_INVALID` | 非 7720/386/20 或存在 candidate/date drop |
 | `ADVISORY_POLICY_UTILITY_ARM_ROSTER_INVALID` | 三臂/family/seed/path 不完整或重复 |
 | `ADVISORY_POLICY_UTILITY_REFERENCE_NOT_PARITY` | advancement 错用 legacy reference |
@@ -344,6 +346,8 @@ backend/tests/advisory_model_first/test_shared_feature_builder.py
 
 - 60-session 窗口内含 1、10、59 个 verified suspension 时，required price/volume features 均可计算。
 - 停牌日 normalized OHLC 等于前一 executable close，volume/amount 为0；复牌 gap 使用真实复牌价。
+- provider 只给出一次全日 `S`、其后连续多个 session 无行情时，全部因果延续为停牌；首个正成交 raw bar 当日恢复 `TRADED`，且修改该未来复牌价不得改变更早停牌行。
+- 窗口起点处已经停牌时，不生成无锚点合成价格；面板从首个真实 executable bar 开始，整个窗口无锚点则 typed fail。
 - 将复牌后未来价格改为极端值，停牌期和更早 decision features 不变。
 - 相同 NaN 无 suspend record 时必须 typed fail，不得归一化。
 - raw traded bar 与 suspend record 同日冲突必须 fail。
@@ -395,7 +399,7 @@ Rollback：设计 PR 可由普通 revert 回退；无 DB/runtime/artifact mutati
 | 停牌 carry 被误认为真实成交 | 显式 `bar_state/current_bar_synthetic`，只用于特征估值，不写回 raw data |
 | 复牌跳空被抹平 | 复牌日使用真实 OHLC，相对最后 executable close 计算 gap/ATR |
 | 停牌零量放大 volume ratio | 作为真实流动性变化保留，并同时提供 suspend fraction |
-| provider gap 被误判停牌 | 只有 immutable sidecar `S` 可归一化；否则 dataset failure |
+| provider gap 被误判停牌 | 只有 immutable sidecar 的较早全日 `S` 可开启因果延续；无该权威时仍为 dataset failure |
 | v2 改值却复用 v1 hash | 新 schema/bar policy hash，v1 回归 bytes 不变 |
 | 只修 P0-F 导致比较偏差 | P0-D/E/F 三臂同覆盖重训，legacy 仅 lineage |
 | 504 trials 增加耗时 | feature matrix/HMM 只构建一次；三臂共享只读输入，仍受8GB约束 |

@@ -15,10 +15,11 @@ BAR_STATE_MISSING_UNEXPLAINED: Final = "MISSING_UNEXPLAINED"
 BAR_STATE_SOURCE_CONFLICT: Final = "SOURCE_CONFLICT"
 
 BAR_POLICY_PAYLOAD: Final = {
-    "schema_version": "suspension_aware_bar_policy_v1",
+    "schema_version": "suspension_aware_bar_policy_v2",
     "candidate_coverage_policy": "PRESERVE_EXACT_SELECTION_TOP20_V1",
     "verified_suspension_price_mode": "LAST_EXECUTABLE_CLOSE_MARKET_SESSION_V1",
     "verified_suspension_liquidity_mode": "ZERO_MARKET_SESSION_V1",
+    "full_day_suspension_state_mode": "CAUSAL_S_UNTIL_POSITIVE_LIQUIDITY_V1",
     "unexplained_missing_mode": "FAIL_DATASET_NO_CANDIDATE_DROP_V1",
     "price_domain": "REQUEST_BOUND_CANONICAL_ADJUSTED_PRICE_V1",
 }
@@ -72,19 +73,24 @@ def build_suspension_aware_bar_panel(
             instruments=unexpected_suspend_instruments[:10],
         )
 
-    raw_dates = raw.index.get_level_values("datetime")
-    raw_instruments = raw.index.get_level_values("instrument")
-    first_visible = pd.Series(raw_dates, index=raw_instruments).groupby(level=0).min()
+    first_visible = _first_executable_dates(raw)
+    missing_executable = sorted(set(raw.index.get_level_values("instrument")) - set(first_visible.index))
+    if missing_executable:
+        raise _error(
+            "daily panel contains instruments without an executable close",
+            reason_code="ADVISORY_SUSPENSION_LAST_CLOSE_UNAVAILABLE",
+            instruments=missing_executable[:10],
+        )
     candidate_index = pd.MultiIndex.from_product([calendar, instruments], names=["datetime", "instrument"])
     candidate_dates = candidate_index.get_level_values("datetime")
     candidate_first_visible = candidate_index.get_level_values("instrument").map(first_visible)
     full_index = candidate_index[candidate_dates >= candidate_first_visible]
     panel = raw.reindex(full_index).copy()
-    suspended_mask = panel.index.isin(suspended.index)
+    explicit_suspended_mask = panel.index.isin(suspended.index)
     positive_liquidity = pd.to_numeric(panel["volume"], errors="coerce").fillna(0).gt(0) | pd.to_numeric(
         panel["amount"], errors="coerce"
     ).fillna(0).gt(0)
-    conflict = suspended_mask & positive_liquidity.to_numpy()
+    conflict = explicit_suspended_mask & positive_liquidity.to_numpy()
     if conflict.any():
         raise _row_error(
             "verified suspension conflicts with positive raw liquidity",
@@ -92,6 +98,23 @@ def build_suspension_aware_bar_panel(
             index=panel.index[conflict],
             bar_state=BAR_STATE_SOURCE_CONFLICT,
         )
+
+    # Tushare may emit only the authoritative full-day S boundary while the
+    # following suspended market sessions remain sparse.  Continue that state
+    # forward per instrument until the first positive-liquidity bar.  This is
+    # causal: neither a later resume date nor a later price is consulted when
+    # classifying an earlier session.  Negative liquidity is never hidden by
+    # the continuation and remains a source conflict below.
+    negative_liquidity_raw = pd.to_numeric(panel["volume"], errors="coerce").lt(0) | pd.to_numeric(
+        panel["amount"], errors="coerce"
+    ).lt(0)
+    continued_suspended_mask = _causal_suspension_continuation(
+        panel.index,
+        explicit_suspended_mask=explicit_suspended_mask,
+        positive_liquidity=positive_liquidity.to_numpy(),
+        negative_liquidity=negative_liquidity_raw.to_numpy(),
+    )
+    suspended_mask = explicit_suspended_mask | continued_suspended_mask
 
     finite_required = pd.DataFrame(
         {column: np.isfinite(pd.to_numeric(panel[column], errors="coerce")) for column in _REQUIRED_RAW_COLUMNS},
@@ -164,8 +187,51 @@ def build_suspension_aware_bar_panel(
             "panel_row_count": int(len(panel)),
             "traded_row_count": int((~suspended_mask).sum()),
             "suspended_verified_row_count": int(suspended_mask.sum()),
+            "explicit_suspended_row_count": int(explicit_suspended_mask.sum()),
+            "continued_suspended_row_count": int(continued_suspended_mask.sum()),
         },
     )
+
+
+def _causal_suspension_continuation(
+    index: pd.MultiIndex,
+    *,
+    explicit_suspended_mask: np.ndarray,
+    positive_liquidity: np.ndarray,
+    negative_liquidity: np.ndarray,
+) -> np.ndarray:
+    continued = np.zeros(len(index), dtype=bool)
+    instruments = index.get_level_values("instrument")
+    for instrument in instruments.unique():
+        active = False
+        positions = np.flatnonzero(instruments == instrument)
+        for position in positions:
+            if explicit_suspended_mask[position]:
+                active = True
+                continue
+            if positive_liquidity[position] or negative_liquidity[position]:
+                active = False
+                continue
+            if active:
+                continued[position] = True
+    return continued
+
+
+def _first_executable_dates(raw: pd.DataFrame) -> pd.Series:
+    finite_required = pd.DataFrame(
+        {column: np.isfinite(pd.to_numeric(raw[column], errors="coerce")) for column in _REQUIRED_RAW_COLUMNS},
+        index=raw.index,
+    ).all(axis=1)
+    positive_price_and_factor = raw[[*_PRICE_COLUMNS, "factor"]].apply(pd.to_numeric, errors="coerce").gt(0).all(axis=1)
+    volume = pd.to_numeric(raw["volume"], errors="coerce")
+    amount = pd.to_numeric(raw["amount"], errors="coerce")
+    executable = (
+        finite_required & positive_price_and_factor & (volume.ge(0) & amount.ge(0)) & (volume.gt(0) | amount.gt(0))
+    )
+    executable_index = raw.index[executable]
+    dates = executable_index.get_level_values("datetime")
+    instruments = executable_index.get_level_values("instrument")
+    return pd.Series(dates, index=instruments).groupby(level=0).min()
 
 
 def _normalize_daily(frame: pd.DataFrame) -> pd.DataFrame:
