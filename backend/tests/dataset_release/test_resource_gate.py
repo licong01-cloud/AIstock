@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -82,9 +83,10 @@ def test_gate_receipt_discloses_effective_sample_admission_thresholds(dataset_pr
     assert receipt["admission_class"] == "sample"
     assert receipt["effective_host_start_available_bytes"] == 12 * GIB
     assert receipt["effective_host_start_commit_headroom_bytes"] == 12 * GIB
+    assert receipt["system_admission_thresholds_blocking"] is False
 
 
-def test_disk_guard_uses_floor_or_one_point_two_five_times_remaining_bytes(tmp_path, dataset_profile) -> None:
+def test_disk_guard_uses_only_one_point_two_five_times_remaining_bytes(tmp_path, dataset_profile) -> None:
     control = tmp_path / "control"
     candidate = tmp_path / "candidate"
     control.mkdir()
@@ -100,14 +102,38 @@ def test_disk_guard_uses_floor_or_one_point_two_five_times_remaining_bytes(tmp_p
         volume_probe=lambda _path: "fixture-volume",
     )
 
+    unknown = guard.sample()
+    small = guard.checkpoint(1 * GIB)
     ready = guard.checkpoint(40 * GIB)
 
+    assert unknown.required_free_bytes == 0
+    assert small.required_free_bytes == math.ceil(1.25 * GIB)
     assert ready.required_free_bytes == 50 * GIB
     with pytest.raises(ResourceCheckpointRequested) as exc:
         guard.checkpoint(60 * GIB)
     assert exc.value.context["reason_code"] == "RESOURCE_DISK_RESERVE"
     assert exc.value.context["disk_required_free_bytes"] == 75 * GIB
     assert exc.value.context["data_scope_changed"] is False
+
+
+def test_system_pressure_is_receipt_warning_not_admission_block(dataset_profile) -> None:
+    gate = ResourceGate(
+        dataset_profile,
+        host_probe=lambda: _host(available=4 * GIB, headroom=4 * GIB),
+        disk_probe=_disk,
+        sleep=lambda _seconds: None,
+    )
+
+    admitted = gate.admit("monthly-release", wsl_required=False, pressure_rung=0)
+    receipt = gate.receipt()
+
+    assert admitted.decision.status == "READY"
+    assert receipt["checkpoint_requested"] is False
+    assert receipt["system_warning_codes"] == [
+        "SYSTEM_AVAILABLE_MEMORY_LOW",
+        "SYSTEM_COMMIT_HEADROOM_LOW",
+    ]
+    assert receipt["fixed_disk_floor_blocking"] is False
 
 
 def test_parent_disk_pressure_is_waiting_before_child_admission(dataset_profile) -> None:

@@ -69,7 +69,7 @@ DiskProbe = Callable[[int | None], DiskSpaceSnapshot]
 
 
 class DiskSpaceGuard:
-    """Same-volume X-root reserve gate shared by parent and chunk children."""
+    """Same-volume capacity gate based on predicted candidate growth."""
 
     def __init__(
         self,
@@ -97,12 +97,11 @@ class DiskSpaceGuard:
             type(predicted_remaining_new_bytes) is not int or predicted_remaining_new_bytes < 0
         ):
             raise ResourceGateError("predicted remaining bytes are invalid")
-        required = int(self.policy.candidate_free_space_floor_bytes)
-        if predicted_remaining_new_bytes is not None:
-            required = max(
-                required,
-                math.ceil(predicted_remaining_new_bytes * self.policy.predicted_new_bytes_multiplier),
-            )
+        required = (
+            math.ceil(predicted_remaining_new_bytes * self.policy.predicted_new_bytes_multiplier)
+            if predicted_remaining_new_bytes is not None
+            else 0
+        )
         try:
             control_usage = self._disk_usage(self.control_root)
             candidate_usage = self._disk_usage(self.candidate_root)
@@ -340,12 +339,14 @@ class ResourceGate:
                 "BLOCKED_STORAGE_VOLUME_MISMATCH",
                 pressure_rung,
                 hard_failure=True,
+                warning_codes=decision.warning_codes,
             )
         elif disk.effective_free_bytes < disk.required_free_bytes:
             decision = ResourceDecision(
                 "WAITING_RESOURCE",
                 "RESOURCE_DISK_RESERVE",
                 pressure_rung,
+                warning_codes=decision.warning_codes,
             )
         sample = ResourceGateSample(
             decision=decision,
@@ -378,6 +379,13 @@ class ResourceGate:
         headrooms = [value for value in heads if value is not None]
         final = self._samples[-1]
         next_pressure_rung = max(item.decision.pressure_rung for item in self._samples)
+        warning_codes = sorted(
+            {
+                warning
+                for item in self._samples
+                for warning in item.decision.warning_codes
+            }
+        )
         return {
             "schema_version": RESOURCE_GATE_RECEIPT_SCHEMA,
             "sample_count": self._sample_count,
@@ -391,6 +399,8 @@ class ResourceGate:
             "effective_host_start_commit_headroom_bytes": (
                 self._budget.admission_thresholds.host_start_commit_headroom_bytes
             ),
+            "system_admission_thresholds_blocking": False,
+            "system_warning_codes": warning_codes,
             "checkpoint_requested": any(item.decision.status not in {"READY"} for item in self._samples),
             "pressure_rung": final.decision.pressure_rung,
             "next_pressure_rung": next_pressure_rung,
@@ -410,6 +420,8 @@ class ResourceGate:
             "pagefile_limit_bytes": min(item.host.pagefile_limit_bytes for item in snapshots),
             "disk_min_effective_free_bytes": min(item.disk.effective_free_bytes for item in self._samples),
             "disk_max_required_free_bytes": max(item.disk.required_free_bytes for item in self._samples),
+            "fixed_disk_floor_blocking": False,
+            "configured_disk_floor_telemetry_bytes": self.policy.candidate_free_space_floor_bytes,
             "disk_same_volume": all(item.disk.same_volume for item in self._samples),
             "predicted_new_bytes": self._predicted_new_bytes,
             "windows_job_peak_commit_bytes": max(

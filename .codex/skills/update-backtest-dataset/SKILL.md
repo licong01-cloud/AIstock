@@ -69,7 +69,7 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 - v2 PIT 仅接受 `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`：252 个交易所交易日 IPO 暖机、历史退市股生命周期、公告 as-of 终止风险与 ST snapshot gap 闭环必须同时满足；rolling 与 frozen snapshot 必须同 rule/digest。
 - DB 外 moneyflow 固定 `tushare_moneyflow_shares_yuan_v1`：量=股、额=元；`mf_total_net_*` 来自 canonical `net_mf_*`。
 - static 固定 121 数据列、`l2_code_id int16`、unknown=`-1`。12 指数和 HMM `000300.SH` benchmark 不得运行时扩张或替换。
-- 不降低 resource reserve、不提高 hard cap、不扩大并发。资源压力只能走 profile pressure ladder；不能减少股票、日期、字段、指数或验证。
+- 不提高任务自身 hard cap、不扩大并发。全局 available/commit headroom、paging/pagefile、WSL host available 与性能退化只写 warning，不阻断月更；pressure ladder 只能由本任务 aggregate owned commit 触发，且不能减少股票、日期、字段、指数或验证。
 - mixed/COW 只承诺候选物化按失效范围重写。在没有可信 DB revision ledger 时，初次 source freeze 与
   publish 前 DB-only recheck 仍可能各做一次 cutoff 内全值扫描；不得把它表述为整条链只读新增月。
 - MVCC/provenance watermark 不作为内容复用证明。未来 revision ledger 需要独立 F2、DEV 验证和明确的

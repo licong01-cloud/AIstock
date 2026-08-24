@@ -198,8 +198,8 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 s
 | `submission_state=QUEUED_RESOLUTION` + `worker_health.state=unavailable|stale|blocked` | durable request 已保存，兼容 Worker 不可用 | 不重提、不代跑；通知 runtime owner |
 | `submission_state=RESOLVING_SOURCE` | 冻结 source/PIT/provider content | 等待；不启动 exporter |
 | `run_state=QUEUED|EXECUTING|VALIDATING|PREPARING_PUBLISH|PUBLISHING` | run 受 attempt/lease/fence/resource supervisor 管理 | 用 status/events 观察 |
-| `WAITING_RESOURCE` | host/WSL commit、memory 或 X 空间不足 | 不提高 cap；等待或由新 attempt 走 pressure ladder |
-| `WAITING_PERFORMANCE_REGRESSION` | 可比 workload 持续越过冻结性能门限 | 不缩业务范围；保留 checkpoint，按 pressure ladder/typed deadline 处理 |
+| `WAITING_RESOURCE` | OS 明确 LowMemory 信号、任务自身 hard cap 或按预测所需的 X 空间不足 | 不提高 cap；保留 durable task，条件恢复后继续；等待 deadline 只告警、不终止 |
+| 性能 warning | 可比 workload 吞吐退化 | 记录 telemetry；不暂停、不阻断、不改变 pressure rung |
 | `WAITING_SOURCE` | required source 尚未完成 | 等待 source；禁止补零/减范围 |
 | `WAITING_ORPHAN_QUIESCENCE` | 旧 owned process tree 仍 alive/unknown | 只观察；不得 kill/delete lock |
 | `BLOCKED_PROVIDER_TERMINAL` | 40203、overlap conflict、无完整 240 bars等 | 报告 code/date/pending scope，不循环重试 |
@@ -280,18 +280,17 @@ backend 重启不应丢任务；control catalog 和 Worker heartbeat 是 authori
 - aggregate owned private commit≤12 GiB；
 - Windows-only Job≤8 GiB，hybrid Windows side≤4 GiB；
 - WSL memory high/max/swap=6/8/0 GiB；
-- host emergency available 和 commit headroom=8 GiB，适用于所有 workload；启动余量按已批准 workload 分级：
-  `resolution_light=10 GiB`、`sample=12 GiB`、`full=16 GiB`；
+- host available、system commit headroom、paging/pagefile 与 WSL host available 继续采集并写 receipt，但所有数值阈值仅为 warning telemetry，不参与 admission、checkpoint 或 terminal 判定；OS 明确 `LowMemoryResourceNotification` 仍可安全暂停；
 - DB pool=4、row-producing query=1、provider request=1；
 - minute batch/date chunk=20 stocks/3 months；factor H5/static 由单日切片与 Parquet row-group 控制；profile 中 `h5_batch=100` 仅为 v1 兼容遥测，不是生效的降压旋钮；
 - Parquet row group/validation chunk≤100,000 rows；
-- start free space=max(32 GiB, 1.25×predicted new bytes)。
+- start free space=1.25×predicted remaining new bytes；没有预测值时不应用固定 32 GiB 保留，实际写盘失败仍 typed fail/wait。
 
 允许的降压只有 profile pressure ladder：batch/chunk/row-group/workers逐级降低。不得通过减少股票、日期、字段、PIT、指数、H5 或验证范围换性能。
-workload 分级只由已校验的 durable scope 决定：sample 的只读来源解析使用 `resolution_light`，sample 构建使用
-`sample`，所有 full resolution/build 和未知情况使用 `full`。CLI、环境变量和操作者不能覆盖该分类。分级只调整
-开始执行所需的 host available/commit headroom；12 GiB aggregate、Job/cgroup、WSL zero-swap、低内存信号、持续换页、
-8 GiB emergency 和磁盘保留均保持原标准。resource receipt 必须披露 workload class 和实际生效的启动阈值。
+workload 分级仍由已校验的 durable scope 决定并写入 receipt，但历史 start reserve 字段只作兼容遥测。12 GiB
+aggregate、Job/cgroup、WSL zero-swap、DB/provider 并发和 bounded batch 仍是任务自身 hard contract。全局持续换页、
+available/commit/WSL host available、固定磁盘 floor 和性能退化不得阻断；receipt 必须披露 warning 与
+`system_admission_thresholds_blocking=false`。
 
 性能边界必须如实区分：
 
