@@ -164,7 +164,13 @@ def run_policy_utility_pipeline(request_path: str | Path) -> dict[str, Any]:
         start=file_history_start,
         end=data_end,
     )
-    suspend = load_suspend_rows(request.suspend_data_root, start=file_history_start, end=data_end, instruments=symbols)
+    suspend = load_suspend_rows(
+        request.suspend_data_root,
+        start=file_history_start,
+        end=data_end,
+        instruments=symbols,
+        full_day_only=True,
+    )
     _verify_bound_data_identities(request, calendar)
     schema_receipt = validate_factor_file_schemas(request.factor_data_root, data_cutoff=request.factor_data_cutoff)
     feature_result = build_meta_label_feature_matrix(
