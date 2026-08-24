@@ -1,6 +1,8 @@
 {
   "actual": "C-012-RL1-HR1 request preparation accepts inclusive calendar windows and freezes exact trading-day counts/hashes, but execution additionally requires each observed first/last trading date to equal the raw calendar boundary. Fold-5 starts on the non-trading date 2025-10-01, so fresh process 1 fails before any fit with hmm_risk_rotation_l1_development_fold_invalid. The failure occurs before the enriched exception scope and writes empty failure_evidence. Preserve the approved model, folds, 24-fit count, metrics and selection semantics; align preparation/execution on exact trading-date hash authority and persist typed boundary evidence. No production DB or runtime action.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+    "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py",
     "tests/aistock_validation/bugs/20260824_BUG-1174-hmm-rl1-fold-execution-rejects-non-trading-calendar-boundary-and-omits-f.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,13 +22,22 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260824-ae74d09b98bb",
       "timestamp": "2026-08-24T03:37:04.235231Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added the direct RL1 implementation and fix-point test after CodeGraph returned no relevant source symbol; no design, runtime, database, or model-contract scope was added.",
+      "timestamp": "2026-08-24T03:41:58.477602Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +47,10 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py"
+    ]
   },
   "first_seen_at": "2026-08-24T03:37:04.235254Z",
   "fix_branch": null,
