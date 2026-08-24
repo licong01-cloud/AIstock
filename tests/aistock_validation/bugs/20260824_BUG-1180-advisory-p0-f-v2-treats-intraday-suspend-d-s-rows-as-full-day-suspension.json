@@ -1,6 +1,11 @@
 {
   "actual": "Formal request advutilityreq_ac0bfa1dea77b1c2f7272093 on merge 73b1e6bd failed before feature completion with ADVISORY_SUSPENSION_SOURCE_CONFLICT for 001378.SZ/2023-10-30, 001326.SZ/2023-11-10, 601096.SH/2023-12-22, and 301392.SZ/2024-06-05. Immutable suspend_d shows explicit intraday suspend_timing values while Qlib correctly contains positive daily liquidity. The v2 path must distinguish authoritative full-day suspension (blank timing or provider sentinel 09:30-09:30) from intraday suspension, preserve existing loader defaults/v1 bytes, keep positive-liquidity conflicts fail-closed for rows classified full-day, update the cited F2 design semantics, and add direct regression tests. No DB, runtime, restart, activation, or artifact overwrite.",
   "allowed_write_scope": [
+    "backend/services/advisory_model_first/qe_file_source.py",
+    "backend/services/advisory_model_first/policy_utility_pipeline.py",
+    "backend/tests/advisory_model_first/test_qe_file_source.py",
+    "backend/tests/advisory_model_first/test_policy_utility_pipeline.py",
+    "docs/architecture/advisory_p0f_suspension_aware_feature_parity_f2_revision_20260824.md",
     "tests/aistock_validation/bugs/20260824_BUG-1180-advisory-p0-f-v2-treats-intraday-suspend-d-s-rows-as-full-day-suspension.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -26,7 +31,13 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/qe_file_source.py",
+      "backend/services/advisory_model_first/policy_utility_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_file_source.py",
+      "backend/tests/advisory_model_first/test_policy_utility_pipeline.py",
+      "docs/architecture/advisory_p0f_suspension_aware_feature_parity_f2_revision_20260824.md"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +47,13 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/advisory_model_first/qe_file_source.py",
+      "backend/services/advisory_model_first/policy_utility_pipeline.py",
+      "backend/tests/advisory_model_first/test_qe_file_source.py",
+      "backend/tests/advisory_model_first/test_policy_utility_pipeline.py",
+      "docs/architecture/advisory_p0f_suspension_aware_feature_parity_f2_revision_20260824.md"
+    ]
   },
   "first_seen_at": "2026-08-24T12:46:24.154200Z",
   "fix_branch": null,
@@ -59,13 +76,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh WSL rdagent-gpu Python process loaded the immutable suspend_d candidate with full_day_only=True and returned full_day_rows=0 and intraday_conflicts_remaining=[] for the four observed intraday suspension rows."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
