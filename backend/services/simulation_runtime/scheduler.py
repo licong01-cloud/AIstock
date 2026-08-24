@@ -446,6 +446,7 @@ class ProductionSimulationRunContextProvider:
         runtime_repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
         pre_trade_tradability_provider: PreTradeTradabilityProvider | Any | None = None,
         daily_trading_context_provider: DailyTradingContextProvider | Any | None = None,
+        localsim_daily_pre_close_quote_fetcher: Callable[[list[str]], dict[str, dict[str, Any]]] | None = None,
         enable_localsim_broker: bool | None = None,
         enable_miniqmt_submit: bool | None = None,
     ) -> None:
@@ -468,6 +469,9 @@ class ProductionSimulationRunContextProvider:
             realtime_quote_source="TDX_REALTIME.batch_quote",
         )
         self._daily_trading_context_provider = daily_trading_context_provider or DailyTradingContextProvider()
+        self._localsim_daily_pre_close_quote_fetcher = (
+            localsim_daily_pre_close_quote_fetcher or fetch_tdx_realtime_quotes
+        )
         self._enable_localsim_broker = (
             _env_flag("SIMULATION_RUNTIME_ENABLE_LOCALSIM_BROKER", default=True)
             if enable_localsim_broker is None
@@ -1098,7 +1102,35 @@ class ProductionSimulationRunContextProvider:
         as_of_time: datetime,
         calendar_service_snapshot: Mapping[str, Any],
     ) -> dict[str, dict[str, Any]]:
-        context = self._daily_trading_context_provider.load(
+        loader = self._daily_trading_context_provider.load
+        signature = inspect.signature(loader)
+        accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
+        )
+        optional_kwargs: dict[str, Any] = {}
+        if binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
+            optional_kwargs = {
+                "pre_close_quote_fetcher": self._localsim_daily_pre_close_quote_fetcher,
+                "pre_close_quote_source": "TDX_REALTIME.batch_quote.pre_close",
+            }
+        elif binding.broker_backend is SimulationBrokerBackend.MINIQMT_SIM:
+            def fetch_miniqmt_pre_close_quotes(symbols_to_fetch: list[str]) -> dict[str, dict[str, Any]]:
+                fetcher = self._build_miniqmt_quote_fetcher(
+                    qmt_client=self._qmt_client_factory(),
+                    binding=binding,
+                    trade_date=trade_date,
+                )
+                return fetcher(symbols_to_fetch)
+
+            optional_kwargs = {
+                "pre_close_quote_fetcher": fetch_miniqmt_pre_close_quotes,
+                "pre_close_quote_source": f"{MINIQMT_REALTIME_QUOTE_SOURCE}.pre_close",
+            }
+        if not accepts_kwargs:
+            optional_kwargs = {
+                key: value for key, value in optional_kwargs.items() if key in signature.parameters
+            }
+        context = loader(
             symbols=symbols,
             trade_date=trade_date,
             as_of_time=scheduler_time(as_of_time),
@@ -1106,6 +1138,7 @@ class ProductionSimulationRunContextProvider:
             binding_identity=f"{binding.binding_id}:{binding.binding_hash}",
             package_identity=f"{runtime_release.package_id}:{runtime_release.manifest_sha256}",
             release_identity=f"{runtime_release.release_id}:{runtime_release.release_hash}",
+            **optional_kwargs,
         )
         return self._daily_trading_context_provider.to_pre_trade_statuses(context)
 
