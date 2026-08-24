@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,6 +40,7 @@ from backend.services.dataset_release.resolution_processor import (
     MonthlyResolutionProcessor,
     ResolutionProcessorError,
     ResolutionRequestInvalid,
+    ResolutionSourceDriftWaiting,
     SupervisedResolutionSourceStage,
 )
 from backend.services.dataset_release.source_authority import (
@@ -46,7 +48,10 @@ from backend.services.dataset_release.source_authority import (
     SOURCE_REUSE_MANIFEST_SCHEMA,
 )
 from backend.services.dataset_release.resource_budget import ResourceAdmissionClass
-from backend.services.dataset_release.worker import WORKER_ERROR_RECEIPT_SCHEMA
+from backend.services.dataset_release.worker import (
+    WORKER_ERROR_RECEIPT_SCHEMA,
+    ProcessorDisposition,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -205,6 +210,156 @@ def test_supervised_source_stage_uses_versioned_timeout_and_rung(
         "000001.SZ",
         "600462.SH",
     ]
+
+
+def test_supervised_source_stage_preserves_typed_drift_as_waitable(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    store = ControlStore.initialize(tmp_path / "control")
+    stage = SupervisedResolutionSourceStage(dataset_profile, store, CASStore(store.root))
+
+    class Context:
+        claim = SimpleNamespace(attempt_id="attempt-1", attempt_fence=7)
+
+        def run_supervised(self, command, **_kwargs):
+            result = Path(command[command.index("--result-path") + 1])
+            result.parent.mkdir(parents=True, exist_ok=True)
+            result.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "dataset_release_source_stage_error_v1",
+                        "error_code": "BLOCKED_SOURCE_SNAPSHOT_DRIFT",
+                        "exception_type": "SourceSnapshotDriftBlocked",
+                        "message_sha256": "a" * 64,
+                        "context_ref": None,
+                        "safety": {
+                            "database_writes": 0,
+                            "provider_database_writes": 0,
+                            "production_writes": 0,
+                            "production_deletes": 0,
+                            "production_pointer_changes": 0,
+                            "service_process_controls": 0,
+                            "candidate_writes": 0,
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=2, active_processes=0, runtime="windows")
+
+    with pytest.raises(ResolutionSourceDriftWaiting) as captured:
+        stage.freeze(
+            Context(),
+            cutoff=date(2026, 7, 31),
+            baseline_reuse_ref=None,
+            baseline_partitions=(),
+            predicted_new_bytes=1,
+            pressure_rung=2,
+            sample_instruments=("000001.SZ",),
+        )
+
+    assert captured.value.code == "BLOCKED_SOURCE_SNAPSHOT_DRIFT"
+    assert captured.value.context["source_stage_message_sha256"] == "a" * 64
+
+
+def test_supervised_source_stage_rejects_spoofed_drift_envelope(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    store = ControlStore.initialize(tmp_path / "control")
+    stage = SupervisedResolutionSourceStage(dataset_profile, store, CASStore(store.root))
+
+    class Context:
+        claim = SimpleNamespace(attempt_id="attempt-1", attempt_fence=7)
+
+        def run_supervised(self, command, **_kwargs):
+            result = Path(command[command.index("--result-path") + 1])
+            result.parent.mkdir(parents=True, exist_ok=True)
+            result.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "dataset_release_source_stage_error_v1",
+                        "error_code": "BLOCKED_SOURCE_SNAPSHOT_DRIFT",
+                        "exception_type": "RuntimeError",
+                        "message_sha256": "a" * 64,
+                        "context_ref": None,
+                        "safety": {
+                            "database_writes": 0,
+                            "provider_database_writes": 0,
+                            "production_writes": 0,
+                            "production_deletes": 0,
+                            "production_pointer_changes": 0,
+                            "service_process_controls": 0,
+                            "candidate_writes": 0,
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=2, active_processes=0, runtime="windows")
+
+    with pytest.raises(ResolutionProcessorError, match="source stage failed"):
+        stage.freeze(
+            Context(),
+            cutoff=date(2026, 7, 31),
+            baseline_reuse_ref=None,
+            baseline_partitions=(),
+            predicted_new_bytes=1,
+            pressure_rung=0,
+            sample_instruments=("000001.SZ",),
+        )
+
+
+def test_resolution_processor_turns_typed_drift_into_waiting_without_scope_change(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    store = ControlStore.initialize(tmp_path / "control")
+
+    class DriftStage:
+        def freeze(self, _context, **_kwargs):
+            raise ResolutionSourceDriftWaiting(
+                "transient drift",
+                context={
+                    "source_stage_error_code": "BLOCKED_SOURCE_SNAPSHOT_DRIFT",
+                    "source_stage_exception_type": "SourceSnapshotDriftBlocked",
+                    "source_stage_message_sha256": "b" * 64,
+                },
+            )
+
+    processor = MonthlyResolutionProcessor(
+        dataset_profile,
+        store,
+        CASStore(store.root),
+        source_stage=DriftStage(),
+    )
+    processor._read_request = lambda _record: SimpleNamespace(
+        cutoff=date(2026, 7, 31),
+        sample_instruments=("000001.SZ",),
+        scope=Scope.SAMPLE,
+    )
+    processor._bounded_catalog = lambda _request: []
+    processor._select_candidate = lambda _request, _candidates: None
+    processor._candidate_source_evidence = lambda _candidate: None
+    processor._source_reuse_baseline = lambda _request: None
+    processor._predicted_new_bytes = lambda _record: 0
+    context = SimpleNamespace(
+        kind="resolution",
+        store=store,
+        record={},
+        pressure_rung=2,
+        checkpoint=lambda: None,
+    )
+
+    result = processor.process(context)
+
+    assert result.disposition is ProcessorDisposition.WAITING
+    assert result.error_code == "BLOCKED_SOURCE_SNAPSHOT_DRIFT"
+    assert result.context["pressure_rung"] == 2
+    assert result.context["data_scope_changed"] is False
 
 
 def test_resolution_reader_revalidates_fixed_initial_plan_and_sample_scope(tmp_path) -> None:

@@ -1,0 +1,283 @@
+{
+  "actual": "W7 submission dss_3454f0729786868dae8e48727e212b12 encountered a relevant suspend_d writer during its source freeze; child emitted BLOCKED_SOURCE_SNAPSHOT_DRIFT but parent persisted generic DATASET_RELEASE_RESOLUTION_PROCESSOR_ERROR and terminal BLOCKED_CONTRACT.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/resolution_processor.py",
+    "scripts/dataset_release_source_stage.py",
+    "backend/tests/dataset_release/test_resolution_processor.py",
+    "backend/tests/scripts/test_dataset_release_source_stage.py",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "tests/aistock_validation/bugs/20260824_BUG-1186-dataset-release-source-drift-is-collapsed-into-terminal-resolution-failu.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1186",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-24T19:59:42.072071Z",
+  "description": "W7 submission dss_3454f0729786868dae8e48727e212b12 encountered a relevant suspend_d writer during its source freeze; child emitted BLOCKED_SOURCE_SNAPSHOT_DRIFT but parent persisted generic DATASET_RELEASE_RESOLUTION_PROCESSOR_ERROR and terminal BLOCKED_CONTRACT.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260824-69580be3de2d",
+      "timestamp": "2026-08-24T19:59:42.072051Z"
+    }
+  ],
+  "evidence_uris": [
+    "dataset-release submission dss_3454f0729786868dae8e48727e212b12 receipt 1c6e115c4aa2f95a496108801c5e72e9a36e827574246fecad697077a46f4820"
+  ],
+  "expected": "Preserve the fail-closed source drift check, propagate its sanitized typed identity across the supervised boundary, release the attempt as WAITING_SOURCE, and retry the same durable submission without consuming retry attempts or changing data scope.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/resolution_processor.py",
+      "scripts/dataset_release_source_stage.py",
+      "backend/tests/dataset_release/test_resolution_processor.py",
+      "backend/tests/scripts/test_dataset_release_source_stage.py",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/resolution_processor.py",
+        "scripts/dataset_release_source_stage.py",
+        "backend/tests/dataset_release/test_resolution_processor.py",
+        "backend/tests/scripts/test_dataset_release_source_stage.py",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "docs.operations"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/resolution_processor.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/dataset_release_source_stage.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_resolution_processor.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/scripts/test_dataset_release_source_stage.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/resolution_processor.py",
+        "scripts/dataset_release_source_stage.py",
+        "backend/tests/dataset_release/test_resolution_processor.py",
+        "backend/tests/scripts/test_dataset_release_source_stage.py",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/resolution_processor.py",
+      "scripts/dataset_release_source_stage.py",
+      "backend/tests/dataset_release/test_resolution_processor.py",
+      "backend/tests/scripts/test_dataset_release_source_stage.py",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
+    ]
+  },
+  "first_seen_at": "2026-08-24T19:59:42.072071Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3780,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3780",
+  "last_seen_at": "2026-08-24T19:59:42.072071Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "fresh Python process imported ResolutionSourceDriftWaiting and dataset_release_source_stage.py --help exited 0 from the task worktree"
+    ],
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Dataset release source drift is collapsed into terminal resolution failure",
+  "trigger_condition": {
+    "fingerprint": "69580be3de2d1dcd3fff1ffa",
+    "source_event_id": "FE-20260824-69580be3de2d"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
