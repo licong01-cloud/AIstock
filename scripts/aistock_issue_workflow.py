@@ -104,6 +104,7 @@ COMMITTABLE_BUG_REGISTRY_PATHS = (
 )
 FAST_PATH_TIER_ORDER = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
 VALIDATION_RECEIPT_SCHEMA = "aistock_validation_receipt_v1"
+SOURCE_MERGE_RECEIPT_SCHEMA = "aistock_source_merge_receipt_v1"
 RUNTIME_CONTRACT_SCHEMA = "aistock_bug_runtime_contract_v1"
 RUNTIME_VERIFY_RECEIPT_SCHEMA = "aistock_post_restart_verify_receipt_v1"
 RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA = "aistock_post_restart_verify_receipt_summary_v1"
@@ -5735,6 +5736,7 @@ def _deferred_cleanup_from_safe_cwd_plan(
     worktree: str | None,
     pr_url: str | None,
     sync_root: bool,
+    source_receipt_path: str | None = None,
     root: Path | None = None,
 ) -> dict[str, Any]:
     canonical_root = root or _canonical_root()
@@ -5746,6 +5748,8 @@ def _deferred_cleanup_from_safe_cwd_plan(
         command += f'--worktree "{worktree}" '
     if pr_url:
         command += f'--pr-url "{pr_url}" '
+    if source_receipt_path:
+        command += f'--source-receipt-path "{source_receipt_path}" '
     if sync_root:
         command += "--sync-root "
     command += "--apply"
@@ -13573,6 +13577,118 @@ def _merged_pr_validation_receipt_profile(pr_url: str) -> dict[str, Any]:
     return profile
 
 
+def _build_source_merge_receipt(
+    *,
+    bug_id: str,
+    source_pr_url: str,
+    source_pr_check: dict[str, Any] | None,
+    merge_commit: str,
+    validation_evidence: list[str],
+    runtime_contract: dict[str, Any] | None,
+    production_gates: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Create a compact receipt that authorizes source-worktree cleanup.
+
+    This receipt deliberately does not claim runtime verification.  It binds
+    only the merged source identity, validation summary, runtime contract and
+    production-gate state, so a pending user restart remains pending while
+    source cleanup can proceed independently.
+    """
+    source_pr = (source_pr_check or {}).get("pr") if isinstance(source_pr_check, dict) else {}
+    if not isinstance(source_pr, dict):
+        source_pr = {}
+    source_head = str(
+        source_pr.get("headRefOid")
+        or source_pr.get("head_sha")
+        or (source_pr_check or {}).get("head_sha")
+        or ""
+    ).strip()
+    evidence = flow._unique_strings([item for item in validation_evidence if str(item).strip()])
+    evidence_digest = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    contract = runtime_contract if isinstance(runtime_contract, dict) else {}
+    runtime_pending = bool(contract.get("backend_restart_required"))
+    gates = {
+        key: str((production_gates or {}).get(key) or "noop")
+        for key in _CLOSE_SYNC_PRODUCTION_GATE_KEYS
+    }
+    receipt_identity = {
+        "bug_id": bug_id.upper(),
+        "source_pr_url": source_pr_url,
+        "source_head_oid": source_head,
+        "source_merge_commit": merge_commit,
+        "validation_evidence_digest": evidence_digest,
+        "runtime_contract_digest": _runtime_contract_digest(contract) if contract else None,
+        "production_gates": gates,
+        "runtime_verification": "pending_user_restart" if runtime_pending else "not_required",
+    }
+    receipt_id = hashlib.sha256(
+        json.dumps(receipt_identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "schema_version": SOURCE_MERGE_RECEIPT_SCHEMA,
+        "receipt_id": receipt_id,
+        "bug_id": bug_id.upper(),
+        "source_pr_url": source_pr_url,
+        "source_head_oid": source_head or None,
+        "source_merge_commit": merge_commit,
+        "validation_evidence": evidence,
+        "validation_evidence_digest": evidence_digest,
+        "runtime_contract_digest": receipt_identity["runtime_contract_digest"],
+        "runtime_verification": receipt_identity["runtime_verification"],
+        "runtime_identity_match": "pending" if runtime_pending else "not_required",
+        "production_gates": gates,
+        "recorded_at": _utc_now(),
+    }
+
+
+def _source_merge_receipt_profile(
+    receipt: Any,
+    *,
+    bug_id: str | None,
+    source_pr_url: str | None,
+    merge_commit: str | None,
+) -> dict[str, Any]:
+    """Validate a source receipt without treating runtime pending as failure."""
+    blocking: list[str] = []
+    if not isinstance(receipt, dict) or receipt.get("schema_version") != SOURCE_MERGE_RECEIPT_SCHEMA:
+        blocking.append("source merge receipt schema is missing or invalid")
+        return {"schema_version": "aistock_source_merge_receipt_profile_v1", "status": "invalid", "blocking": blocking}
+    if not re.fullmatch(r"[0-9a-f]{16}", str(receipt.get("receipt_id") or "").lower()):
+        blocking.append("source merge receipt id is missing or invalid")
+    if not str(receipt.get("source_pr_url") or "").strip():
+        blocking.append("source merge receipt source PR is missing")
+    if not str(receipt.get("source_head_oid") or "").strip():
+        blocking.append("source merge receipt source head is missing")
+    if bug_id and str(receipt.get("bug_id") or "").upper() != str(bug_id).upper():
+        blocking.append("source merge receipt BUG id mismatch")
+    if source_pr_url and str(receipt.get("source_pr_url") or "") != source_pr_url:
+        blocking.append("source merge receipt source PR mismatch")
+    if merge_commit and str(receipt.get("source_merge_commit") or "") != merge_commit:
+        blocking.append("source merge receipt merge commit mismatch")
+    evidence = flow._as_list(receipt.get("validation_evidence"))
+    if not evidence:
+        blocking.append("source merge receipt validation evidence is empty")
+    evidence_digest = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if evidence_digest != str(receipt.get("validation_evidence_digest") or ""):
+        blocking.append("source merge receipt validation evidence digest mismatch")
+    if not str(receipt.get("source_merge_commit") or "").strip():
+        blocking.append("source merge receipt merge commit is missing")
+    if receipt.get("runtime_verification") not in {"not_required", "pending_user_restart"}:
+        blocking.append("source merge receipt runtime verification state is invalid")
+    return {
+        "schema_version": "aistock_source_merge_receipt_profile_v1",
+        "status": "valid" if not blocking else "invalid",
+        "durable_receipt_present": not blocking,
+        "receipt_id": receipt.get("receipt_id"),
+        "runtime_verification": receipt.get("runtime_verification"),
+        "blocking": blocking,
+    }
+
+
 def _merge_commit_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
     pr = (pr_check or {}).get("pr") or {}
     merge_commit = pr.get("mergeCommit") if isinstance(pr, dict) else None
@@ -14955,10 +15071,26 @@ def _maybe_commit_and_pr_close_sync(
         "",
         "## Validation",
         *[f"- {item}" for item in validation_evidence or close_sync.get("validation_evidence") or ["n/a"]],
-        "",
-        "## Production gates",
-        *[f"- {key}: `{value}`" for key, value in sorted((close_sync.get("production_gates") or {}).items())],
     ]
+    source_receipt = close_sync.get("source_merge_receipt")
+    if isinstance(source_receipt, dict):
+        body_lines.extend(
+            [
+                "",
+                "## Source merge receipt",
+                f"- schema: `{source_receipt.get('schema_version') or 'unknown'}`",
+                f"- receipt_id: `{source_receipt.get('receipt_id') or 'unknown'}`",
+                f"- source_merge_commit: `{source_receipt.get('source_merge_commit') or 'unknown'}`",
+                f"- runtime_verification: `{source_receipt.get('runtime_verification') or 'unknown'}`",
+            ]
+        )
+    body_lines.extend(
+        [
+            "",
+            "## Production gates",
+            *[f"- {key}: `{value}`" for key, value in sorted((close_sync.get("production_gates") or {}).items())],
+        ]
+    )
     _write_text(body_path, "\n".join(body_lines) + "\n")
     pr = _run_command(
         [
@@ -15030,6 +15162,135 @@ def _maybe_commit_and_pr_close_sync(
         evidence={"branch": branch, "commit": result["commit"], "pr_url": pr_url, "changed_files": changed_files},
     )
     return result
+
+
+def _attach_source_merge_receipts_to_close_sync(
+    close_sync: dict[str, Any],
+    *,
+    source_pr_check: dict[str, Any] | None,
+    merge_commit: str,
+    validation_evidence: list[str],
+    production_gates: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Persist source receipts in the tracked close-sync BUG JSON(s)."""
+    root = Path(str(close_sync.get("registry_root") or ""))
+    if not root.exists():
+        raise WorkflowError("close-sync registry root is unavailable for source receipt persistence")
+    records: list[tuple[str, Path, dict[str, Any]]] = []
+    if close_sync.get("updated_bug_json"):
+        bug_id = str(close_sync.get("bug_id") or "").upper()
+        target = root / str(close_sync["updated_bug_json"])
+        records.append((bug_id, target, close_sync))
+    else:
+        for item in close_sync.get("per_issue") or []:
+            if not isinstance(item, dict):
+                continue
+            bug_id = str(item.get("bug_id") or "").upper()
+            source_bug_json = str(item.get("source_bug_json") or "")
+            if bug_id and source_bug_json:
+                records.append((bug_id, root / source_bug_json, item))
+    receipts: dict[str, dict[str, Any]] = {}
+    for bug_id, target, metadata in records:
+        if not target.is_file():
+            raise WorkflowError(f"close-sync BUG JSON is missing for source receipt: {target}")
+        record = _load_json(target)
+        runtime_contract = metadata.get("runtime_contract") if isinstance(metadata, dict) else None
+        if not isinstance(runtime_contract, dict):
+            runtime_contract = close_sync.get("runtime_contract") if isinstance(close_sync.get("runtime_contract"), dict) else {}
+        receipt = _build_source_merge_receipt(
+            bug_id=bug_id or str(record.get("bug_id") or ""),
+            source_pr_url=str(close_sync.get("merged_pr") or ""),
+            source_pr_check=source_pr_check,
+            merge_commit=merge_commit,
+            validation_evidence=validation_evidence or flow._as_list(close_sync.get("validation_evidence")),
+            runtime_contract=runtime_contract,
+            production_gates=production_gates or close_sync.get("production_gates"),
+        )
+        record["source_merge_receipt"] = receipt
+        _write_json(target, record)
+        receipts[receipt["bug_id"]] = receipt
+    close_sync["source_merge_receipts"] = receipts
+    if len(receipts) == 1:
+        close_sync["source_merge_receipt"] = next(iter(receipts.values()))
+    return close_sync
+
+
+def _source_merge_receipt_path_from_close_sync(close_sync: dict[str, Any] | None, *, bug_id: str) -> str | None:
+    if not isinstance(close_sync, dict):
+        return None
+    root = str(close_sync.get("registry_root") or "").strip()
+    relative = str(close_sync.get("updated_bug_json") or "").strip()
+    if root and relative:
+        return str(Path(root) / relative)
+    for item in close_sync.get("per_issue") or []:
+        if isinstance(item, dict) and str(item.get("bug_id") or "").upper() == bug_id.upper():
+            source = str(item.get("source_bug_json") or "").strip()
+            if root and source:
+                return str(Path(root) / source)
+    return None
+
+
+def _source_merge_receipt_from_close_sync(
+    close_sync: dict[str, Any] | None,
+    *,
+    bug_id: str,
+) -> dict[str, Any] | None:
+    if not isinstance(close_sync, dict):
+        return None
+    direct = close_sync.get("source_merge_receipt")
+    if isinstance(direct, dict):
+        return direct
+    receipts = close_sync.get("source_merge_receipts")
+    if isinstance(receipts, dict) and isinstance(receipts.get(bug_id.upper()), dict):
+        return receipts[bug_id.upper()]
+    receipt_path = _source_merge_receipt_path_from_close_sync(close_sync, bug_id=bug_id)
+    if not receipt_path:
+        return None
+    path = Path(receipt_path)
+    if not path.is_file():
+        return None
+    with contextlib.suppress(OSError, UnicodeError, json.JSONDecodeError, WorkflowError):
+        candidate = _load_json(path)
+        receipt = candidate.get("source_merge_receipt") if isinstance(candidate, dict) else None
+        if isinstance(receipt, dict):
+            return receipt
+    return None
+
+
+def _persist_source_merge_receipt_for_close_sync(
+    close_sync: dict[str, Any],
+    *,
+    source_pr_check: dict[str, Any] | None,
+    merge_commit: str,
+    validation_evidence: list[str],
+    production_gates: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Persist the receipt only for real close-sync payloads.
+
+    Lightweight test doubles and historical markers do not own a writable
+    close-sync worktree; they remain untouched and therefore cannot authorize
+    source cleanup without an actual durable receipt.
+    """
+    schema = str(close_sync.get("schema_version") or "")
+    if not schema.startswith("aistock_issue_workflow_close_sync"):
+        return close_sync
+    registry_root = Path(str(close_sync.get("registry_root") or ""))
+    if not registry_root.exists():
+        close_sync.setdefault(
+            "source_merge_receipt_persistence",
+            {
+                "status": "blocked",
+                "reason": "close-sync registry root is unavailable for source receipt persistence",
+            },
+        )
+        return close_sync
+    return _attach_source_merge_receipts_to_close_sync(
+        close_sync,
+        source_pr_check=source_pr_check,
+        merge_commit=merge_commit,
+        validation_evidence=validation_evidence,
+        production_gates=production_gates,
+    )
 
 
 def _pr_url_from_create_output(result: dict[str, Any]) -> str | None:
@@ -15468,38 +15729,35 @@ def _build_cleanup_after_merge_plan_with_root_sync_deferral(
     pr_url: str | None,
     apply: bool,
     sync_root: bool,
+    source_merge_receipt: dict[str, Any] | None = None,
+    source_receipt_path: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    cleanup_kwargs: dict[str, Any] = {
+        "branch": branch,
+        "bug_id": bug_id,
+        "worktree": worktree,
+        "pr_url": pr_url,
+        "apply": apply,
+        "sync_root": sync_root,
+    }
+    if source_merge_receipt is not None:
+        cleanup_kwargs["source_merge_receipt"] = source_merge_receipt
+    if source_receipt_path:
+        cleanup_kwargs["source_receipt_path"] = source_receipt_path
     try:
-        plan = build_cleanup_after_merge_plan(
-            branch=branch,
-            bug_id=bug_id,
-            worktree=worktree,
-            pr_url=pr_url,
-            apply=apply,
-            sync_root=sync_root,
-        )
+        plan = build_cleanup_after_merge_plan(**cleanup_kwargs)
     except WorkflowError as exc:
         if not (apply and sync_root and "canonical root is dirty and not synced to origin/main" in str(exc)):
             raise
-        plan = build_cleanup_after_merge_plan(
-            branch=branch,
-            bug_id=bug_id,
-            worktree=worktree,
-            pr_url=pr_url,
-            apply=False,
-            sync_root=sync_root,
-        )
+        retry_kwargs = dict(cleanup_kwargs)
+        retry_kwargs["apply"] = False
+        plan = build_cleanup_after_merge_plan(**retry_kwargs)
     deferred = _cleanup_root_sync_deferred_payload(plan, phase=phase) if sync_root else None
     if not deferred:
         return plan, None
-    retry = build_cleanup_after_merge_plan(
-        branch=branch,
-        bug_id=bug_id,
-        worktree=worktree,
-        pr_url=pr_url,
-        apply=apply,
-        sync_root=False,
-    )
+    retry_kwargs = dict(cleanup_kwargs)
+    retry_kwargs["sync_root"] = False
+    retry = build_cleanup_after_merge_plan(**retry_kwargs)
     retry.setdefault("warnings", []).append(
         "canonical root sync deferred; cleanup retried without --sync-root to avoid blocking safe aftercare"
     )
@@ -15726,6 +15984,13 @@ def build_merge_finalizer_plan(
                 production_gates=production_gates or _production_gates_payload(),
                 create_registry_worktree=True,
             )
+            close_sync = _persist_source_merge_receipt_for_close_sync(
+                close_sync,
+                source_pr_check=source_pr_check,
+                merge_commit=merge_commit,
+                validation_evidence=evidence,
+                production_gates=production_gates or _production_gates_payload(),
+            )
             close_sync_commit = _maybe_commit_and_pr_close_sync(
                 bug_id=canonical_bug_id,
                 close_sync=close_sync,
@@ -15785,15 +16050,24 @@ def build_merge_finalizer_plan(
                 production_gates=production_gates or _production_gates_payload(),
                 create_registry_worktree=True,
             )
+            close_sync = _persist_source_merge_receipt_for_close_sync(
+                close_sync,
+                source_pr_check=source_pr_check,
+                merge_commit=merge_commit,
+                validation_evidence=evidence,
+                production_gates=production_gates or _production_gates_payload(),
+            )
             if close_sync.get("workflow_gate") == "fixed_source_pending_user_restart":
-                close_sync_commit = {
-                    "workflow_gate": "deferred_runtime_verification",
-                    "reason": "persist pending state in workflow/GitHub evidence and create only the final verified close-sync PR",
-                }
+                close_sync_commit = _maybe_commit_and_pr_close_sync(
+                    bug_id=canonical_bug_id,
+                    close_sync=close_sync,
+                    validation_evidence=evidence,
+                )
                 close_sync_pr_merge = {
-                    "workflow_gate": "deferred_runtime_verification",
+                    "workflow_gate": "ready_for_merge" if close_sync_commit.get("pr_url") else "skipped",
                     "auto_merge": False,
-                    "reason": "runtime verification receipt is not available yet",
+                    "pr_url": close_sync_commit.get("pr_url"),
+                    "reason": "runtime verification receipt is pending; keep source receipt close-sync PR open",
                 }
             else:
                 close_sync_commit = _maybe_commit_and_pr_close_sync(
@@ -15807,25 +16081,46 @@ def build_merge_finalizer_plan(
                     auto_merge=merge_close_sync_pr,
                 )
 
+    source_merge_receipt = _source_merge_receipt_from_close_sync(
+        close_sync,
+        bug_id=canonical_bug_id,
+    )
+    source_receipt_path = (
+        _source_merge_receipt_path_from_close_sync(close_sync, bug_id=canonical_bug_id)
+        if source_merge_receipt
+        else None
+    )
     cleanup_plan = None
     if cleanup and source_branch:
         if source_cleanup_deferred:
+            deferred_cleanup_kwargs: dict[str, Any] = {
+                "branch": source_branch,
+                "bug_id": canonical_bug_id,
+                "worktree": source_worktree,
+                "pr_url": source_pr_url,
+                "sync_root": sync_root,
+            }
+            if source_receipt_path:
+                deferred_cleanup_kwargs["source_receipt_path"] = source_receipt_path
             cleanup_plan = _deferred_cleanup_from_safe_cwd_plan(
-                branch=source_branch,
-                bug_id=canonical_bug_id,
-                worktree=source_worktree,
-                pr_url=source_pr_url,
-                sync_root=sync_root,
+                **deferred_cleanup_kwargs,
             )
         else:
+            cleanup_kwargs: dict[str, Any] = {
+                "phase": "source_cleanup",
+                "branch": source_branch,
+                "bug_id": canonical_bug_id,
+                "worktree": source_worktree,
+                "pr_url": source_pr_url,
+                "apply": apply,
+                "sync_root": sync_root,
+            }
+            if source_merge_receipt:
+                cleanup_kwargs["source_merge_receipt"] = source_merge_receipt
+            if source_receipt_path:
+                cleanup_kwargs["source_receipt_path"] = source_receipt_path
             cleanup_plan, cleanup_root_sync_deferred = _build_cleanup_after_merge_plan_with_root_sync_deferral(
-                phase="source_cleanup",
-                branch=source_branch,
-                bug_id=canonical_bug_id,
-                worktree=source_worktree,
-                pr_url=source_pr_url,
-                apply=apply,
-                sync_root=sync_root,
+                **cleanup_kwargs,
             )
             if cleanup_root_sync_deferred:
                 root_sync_deferrals.append(cleanup_root_sync_deferred)
@@ -15885,6 +16180,8 @@ def build_merge_finalizer_plan(
             "blocking": final_blocking,
             "source_pr_check": source_pr_check,
             "source_merge_commit": merge_commit,
+            "source_merge_receipt": source_merge_receipt,
+            "source_receipt_path": source_receipt_path,
             "close_sync": close_sync,
             "close_sync_commit": close_sync_commit,
             "close_sync_pr_merge": close_sync_pr_merge,
@@ -16390,6 +16687,7 @@ def build_close_sync_plan(
         "post_restart_receipt": post_restart_receipt,
         "post_restart_receipt_errors": runtime_receipt_errors,
         "runtime_contract_errors": runtime_contract_errors,
+        "runtime_contract": runtime_contract,
         "dry_run": not apply,
         "workflow_gate": workflow_gate,
         "required_checks": [
@@ -16752,6 +17050,8 @@ def build_cleanup_after_merge_plan(
     apply: bool = False,
     sync_root: bool = False,
     canonical_root: str | None = None,
+    source_merge_receipt: dict[str, Any] | None = None,
+    source_receipt_path: str | None = None,
 ) -> dict[str, Any]:
     root = Path(canonical_root) if canonical_root else _canonical_root()
     branch_bug_match = BUG_ID_RE.search(branch)
@@ -16797,6 +17097,15 @@ def build_cleanup_after_merge_plan(
     merged_pr_receipt_profile: dict[str, Any] | None = None
     protected_receipt_paths = _cleanup_protected_receipt_paths(evidence_bug_id)
     evidence_finalization = _cleanup_evidence_finalization(evidence_bug_id)
+    loaded_source_receipt = source_merge_receipt
+    if loaded_source_receipt is None and source_receipt_path:
+        receipt_path = Path(source_receipt_path)
+        if not receipt_path.is_absolute():
+            receipt_path = root / receipt_path
+        if receipt_path.is_file():
+            with contextlib.suppress(OSError, UnicodeError, json.JSONDecodeError, WorkflowError):
+                candidate = _load_json(receipt_path)
+                loaded_source_receipt = candidate.get("source_merge_receipt") or candidate
     if worktree_path and worktree_path.exists():
         try:
             current_cwd = Path.cwd().resolve()
@@ -16833,6 +17142,27 @@ def build_cleanup_after_merge_plan(
                     "references": [],
                 }
             )
+    if (
+        worktree_ignored_artifacts
+        and worktree_ignored_artifacts.get("transient_count")
+        and not evidence_finalization.get("durable_receipt_present")
+        and loaded_source_receipt is not None
+    ):
+        source_receipt_profile = _source_merge_receipt_profile(
+            loaded_source_receipt,
+            bug_id=evidence_bug_id,
+            source_pr_url=pr_url,
+            merge_commit=_merge_commit_from_pr_check(pr_check),
+        )
+        if source_receipt_profile.get("durable_receipt_present"):
+            evidence_finalization = {
+                **evidence_finalization,
+                "status": "finalized_source_merge_receipt",
+                "durable_receipt_present": True,
+                "source_merge_receipt_present": True,
+                "source_merge_receipt_id": source_receipt_profile.get("receipt_id"),
+                "runtime_verification": source_receipt_profile.get("runtime_verification"),
+            }
     if (
         worktree_ignored_artifacts
         and worktree_ignored_artifacts.get("transient_count")
@@ -17566,6 +17896,7 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
         apply=args.apply,
         sync_root=args.sync_root,
         canonical_root=args.canonical_root,
+        source_receipt_path=args.source_receipt_path,
     )
     if payload.get("workflow_gate") == "cleanup_done" and args.bug_id:
         bug_id = args.bug_id.strip().upper()
@@ -18029,6 +18360,10 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--pr-url", help="Merged PR URL used to verify squash-merged branch cleanup.")
     cleanup.add_argument("--sync-root", action="store_true")
     cleanup.add_argument("--canonical-root")
+    cleanup.add_argument(
+        "--source-receipt-path",
+        help="BUG JSON or compact source_merge_receipt_v1 path used to authorize source cleanup.",
+    )
     cleanup.add_argument("--apply", action="store_true")
     add_output_options(cleanup)
     cleanup.set_defaults(func=cmd_cleanup_after_merge)
