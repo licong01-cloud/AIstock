@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from backend.services.advisory_model_first.shared_feature_builder import build_advisory_feature_matrix
 from backend.services.advisory_model_first.target_binding import FUND_LEG_ID, LSTM_LEG_ID
 
 
-def test_feature_builder_produces_fixed_schema_and_explicit_optional_missing() -> None:
+def _feature_inputs() -> dict[str, object]:
     dates = pd.bdate_range("2024-03-01", periods=90)
     symbols = ["000001.SZ", "000002.SZ"]
     candidate_index = pd.MultiIndex.from_product([dates, symbols], names=["datetime", "instrument"])
@@ -53,9 +54,9 @@ def test_feature_builder_produces_fixed_schema_and_explicit_optional_missing() -
     market_symbols = [f"{index:06d}.SZ" for index in range(100, 205)]
     market_index = pd.MultiIndex.from_product([dates, market_symbols], names=["datetime", "instrument"])
     market = pd.DataFrame(index=market_index)
-    market["close"] = np.tile(np.linspace(10.0, 11.0, len(dates)), len(market_symbols)).reshape(
-        len(market_symbols), -1
-    ).T.ravel()
+    market["close"] = (
+        np.tile(np.linspace(10.0, 11.0, len(dates)), len(market_symbols)).reshape(len(market_symbols), -1).T.ravel()
+    )
     market["limit_up"] = 0.0
     benchmark = pd.DataFrame(
         {"open": np.linspace(100.0, 110.0, len(dates)), "close": np.linspace(100.0, 111.0, len(dates))},
@@ -87,16 +88,81 @@ def test_feature_builder_produces_fixed_schema_and_explicit_optional_missing() -
             f"weight__{FUND_LEG_ID}": [0.3, 0.3],
         }
     )
-    result = build_advisory_feature_matrix(
-        candidates=candidates,
-        candidate_daily=daily,
-        candidate_static=static,
-        market_daily=market,
-        benchmark_daily=benchmark,
-        suspend_rows=pd.DataFrame(columns=["trade_date", "instrument", "suspend_type"]),
-        hmm_states=pd.DataFrame(),
-    )
+    return {
+        "candidates": candidates,
+        "candidate_daily": daily,
+        "candidate_static": static,
+        "market_daily": market,
+        "benchmark_daily": benchmark,
+        "suspend_rows": pd.DataFrame(columns=["trade_date", "instrument", "suspend_type"]),
+        "hmm_states": pd.DataFrame(),
+    }
+
+
+def test_feature_builder_produces_fixed_schema_and_explicit_optional_missing() -> None:
+    result = build_advisory_feature_matrix(**_feature_inputs())
     assert len(result.features) == 2
     assert result.coverage["status"].tolist() == ["available"]
     assert result.features["hmm_bull_posterior__missing"].tolist() == [1, 1]
     assert result.features["leg_direction_agreement"].tolist() == [1, 1]
+
+
+@pytest.mark.parametrize("suspend_count", [1, 10, 59])
+def test_feature_builder_v2_preserves_candidate_after_historical_suspension(
+    suspend_count: int,
+) -> None:
+    inputs = _feature_inputs()
+    daily = inputs["candidate_daily"].copy()
+    all_dates = daily.index.get_level_values("datetime").unique()
+    suspended_dates = all_dates[-(suspend_count + 1) : -1]
+    suspended_keys = [(date, "000001.SZ") for date in suspended_dates]
+    daily = daily.drop(index=suspended_keys)
+    inputs["candidate_daily"] = daily
+    inputs["suspend_rows"] = pd.DataFrame(
+        {
+            "trade_date": suspended_dates,
+            "instrument": ["000001.SZ"] * suspend_count,
+            "suspend_type": ["S"] * suspend_count,
+        }
+    )
+    inputs["feature_schema_version"] = "advisory_feature_schema_v2_suspension_aware"
+    inputs["trading_calendar"] = daily.index.get_level_values("datetime").unique()
+    inputs["incomplete_candidate_policy"] = "preserve_exact"
+
+    result = build_advisory_feature_matrix(**inputs)
+
+    assert len(result.features) == 2
+    assert result.coverage["required_missing_row_count"].tolist() == [0]
+    recovered = result.features.loc[result.features["instrument"] == "000001.SZ"].iloc[0]
+    assert recovered["suspend_session_count_60"] == float(suspend_count)
+    assert recovered["current_bar_synthetic"] == 0
+
+
+def test_feature_builder_v2_keeps_current_suspension_but_nulls_execution_quote() -> None:
+    inputs = _feature_inputs()
+    daily = inputs["candidate_daily"].copy()
+    decision = daily.index.get_level_values("datetime").unique()[-1]
+    suspended_key = (decision, "000001.SZ")
+    daily.loc[suspended_key, ["volume", "amount"]] = 0.0
+    inputs["candidate_daily"] = daily
+    inputs["suspend_rows"] = pd.DataFrame(
+        {
+            "trade_date": [decision],
+            "instrument": ["000001.SZ"],
+            "suspend_type": ["S"],
+        }
+    )
+    inputs["feature_schema_version"] = "advisory_feature_schema_v2_suspension_aware"
+    inputs["trading_calendar"] = daily.index.get_level_values("datetime").unique()
+    inputs["incomplete_candidate_policy"] = "preserve_exact"
+
+    result = build_advisory_feature_matrix(**inputs)
+
+    assert len(result.features) == 2
+    suspended = result.features.loc[result.features["instrument"] == "000001.SZ"].iloc[0]
+    assert suspended["current_bar_synthetic"] == 1
+    assert suspended["decision_is_suspended"] == 1
+    assert pd.isna(suspended["decision_limit_up"])
+    assert suspended["decision_limit_up__missing"] == 1
+    assert pd.isna(suspended["distance_to_limit_up"])
+    assert suspended["distance_to_limit_up__missing"] == 1
