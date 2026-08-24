@@ -109,6 +109,13 @@ RUNTIME_VERIFY_RECEIPT_SCHEMA = "aistock_post_restart_verify_receipt_v1"
 RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA = "aistock_post_restart_verify_receipt_summary_v1"
 RUNTIME_TARGET_CATALOG = REPO_ROOT / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
 RUNTIME_IMPACTS = {"none", "frontend", "client", "database", "backend", "worker_scheduler", "unknown"}
+_DATASET_RELEASE_WORKER_HEARTBEAT_MODE = "dataset_release_worker_heartbeat"
+_DATASET_RELEASE_WORKER_HEARTBEAT_REFS = {
+    "health_ref": "worker_heartbeat.health",
+    "identity_ref": "worker_heartbeat.identity",
+    "business_smoke_ref": "worker_heartbeat.business",
+    "database_readback_ref": "not_required",
+}
 VALIDATION_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
 VALIDATION_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
 VALIDATION_RECEIPT_COMMIT_RE = re.compile(
@@ -1692,13 +1699,75 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
     targets = payload.get("targets")
     if not isinstance(targets, dict) or not targets:
         raise WorkflowError("runtime target catalog targets must be a non-empty mapping")
+    def validate_worker_local_probe(owner: str, local_probe: Any) -> None:
+        if not isinstance(local_probe, dict):
+            raise WorkflowError(f"{owner} local_probe must be a mapping")
+        profile_path = str(local_probe.get("profile_path") or "").strip()
+        profile_candidate = Path(profile_path)
+        if (
+            not profile_path
+            or profile_candidate.is_absolute()
+            or "\\" in profile_path
+            or ".." in profile_candidate.parts
+            or not profile_path.startswith("configs/datasets/")
+            or not (root / profile_candidate).is_file()
+        ):
+            raise WorkflowError(
+                f"{owner} local_probe profile_path must be an existing repository-relative configs/datasets file"
+            )
+        max_files = local_probe.get("max_files", 200)
+        if type(max_files) is not int or not 0 < max_files <= 200:
+            raise WorkflowError(f"{owner} local_probe max_files must be in 1..200")
+
     seen_ports: dict[int, str] = {}
     for target_id, target in targets.items():
         if not isinstance(target, dict):
             raise WorkflowError(f"runtime target {target_id} must be a mapping")
-        for field in ("runtime_kind", "source_globs", "operator_runbook_ref", "expected_identity_ref", "probe_origins", "probes"):
+        for field in ("runtime_kind", "source_globs", "operator_runbook_ref", "expected_identity_ref", "probes"):
             if not target.get(field):
                 raise WorkflowError(f"runtime target {target_id} is missing {field}")
+        probe_mode = str(target.get("probe_mode") or "http").strip()
+        if probe_mode == "http":
+            if not target.get("probe_origins"):
+                raise WorkflowError(f"runtime target {target_id} is missing probe_origins")
+        elif probe_mode == _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+            if target.get("runtime_kind") != "worker_scheduler":
+                raise WorkflowError(
+                    f"runtime target {target_id} dataset-release heartbeat mode requires worker_scheduler"
+                )
+            validate_worker_local_probe(f"runtime target {target_id}", target.get("local_probe"))
+        else:
+            raise WorkflowError(f"runtime target {target_id} has unsupported probe_mode: {probe_mode}")
+        probe_routes = target.get("probe_routes", [])
+        if not isinstance(probe_routes, list):
+            raise WorkflowError(f"runtime target {target_id} probe_routes must be a list")
+        route_ids: set[str] = set()
+        for route in probe_routes:
+            if not isinstance(route, dict):
+                raise WorkflowError(f"runtime target {target_id} probe route must be a mapping")
+            route_id = str(route.get("route_id") or "").strip()
+            route_globs = route.get("source_globs")
+            if not route_id or route_id in route_ids:
+                raise WorkflowError(f"runtime target {target_id} probe route_id is missing or duplicated")
+            route_ids.add(route_id)
+            if not isinstance(route_globs, list) or not route_globs or any(
+                not isinstance(item, str) or not item.strip() for item in route_globs
+            ):
+                raise WorkflowError(f"runtime target {target_id} probe route {route_id} source_globs are invalid")
+            if not set(route_globs).issubset(set(flow._as_list(target.get("source_globs")))):
+                raise WorkflowError(
+                    f"runtime target {target_id} probe route {route_id} contains sources outside its target"
+                )
+            if route.get("probe_mode") != _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+                raise WorkflowError(f"runtime target {target_id} probe route {route_id} mode is unsupported")
+            if route.get("probes") != _DATASET_RELEASE_WORKER_HEARTBEAT_REFS:
+                raise WorkflowError(
+                    f"runtime target {target_id} probe route {route_id} does not use canonical heartbeat probes"
+                )
+            validate_worker_local_probe(
+                f"runtime target {target_id} probe route {route_id}",
+                route.get("local_probe"),
+            )
         port = target.get("production_port")
         if port is not None:
             port = int(port)
@@ -2004,11 +2073,56 @@ def _runtime_contract_digest(contract: dict[str, Any]) -> str:
         "operator_runbook_ref": contract.get("operator_runbook_ref"),
         "expected_identity_ref": contract.get("expected_identity_ref"),
         "expected_terminal_outcome": contract.get("expected_terminal_outcome"),
+        "probe_route_id": target.get("probe_route_id"),
+        "probe_mode": target.get("probe_mode") or "http",
         "probe_origins": target.get("probe_origins") or [],
+        "local_probe": target.get("local_probe") or None,
         "probes": target.get("probes") or {},
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _select_runtime_probe_route(
+    target: dict[str, Any],
+    *,
+    runtime_files: Iterable[str],
+) -> tuple[dict[str, Any], str | None]:
+    selected = {key: value for key, value in target.items() if key != "probe_routes"}
+    routes = target.get("probe_routes") if isinstance(target.get("probe_routes"), list) else []
+    files = flow._unique_strings(runtime_files)
+    fully_matched: list[dict[str, Any]] = []
+    partially_matched: list[str] = []
+    for route in routes:
+        if not isinstance(route, dict):
+            continue
+        patterns = flow._as_list(route.get("source_globs"))
+        matches = [any(_runtime_glob_matches(path, str(pattern)) for pattern in patterns) for path in files]
+        if matches and all(matches):
+            fully_matched.append(route)
+        elif any(matches):
+            partially_matched.append(str(route.get("route_id") or "unknown"))
+    if len(fully_matched) > 1:
+        return selected, "runtime files match multiple probe routes"
+    if not fully_matched:
+        if partially_matched:
+            return (
+                selected,
+                "runtime files mix routed and non-routed Worker sources: "
+                + json.dumps(partially_matched, ensure_ascii=False),
+            )
+        return selected, None
+    route = fully_matched[0]
+    selected.update(
+        {
+            "probe_route_id": str(route.get("route_id")),
+            "probe_mode": route.get("probe_mode"),
+            "local_probe": route.get("local_probe"),
+            "probes": route.get("probes"),
+        }
+    )
+    selected.pop("probe_origins", None)
+    return selected, None
 
 
 def _runtime_catalog_sha256(*, root: Path) -> str:
@@ -2074,6 +2188,12 @@ def build_runtime_contract(
             if not isinstance(raw_target, dict):
                 blocking.append(f"runtime target is missing or ambiguous: {target_id or target_ids or 'none'}")
             else:
+                raw_target, probe_route_error = _select_runtime_probe_route(
+                    raw_target,
+                    runtime_files=inferred.get("runtime_files") or [],
+                )
+                if probe_route_error:
+                    blocking.append(f"runtime target {target_id} {probe_route_error}")
                 probes = raw_target.get("probes") if isinstance(raw_target.get("probes"), dict) else {}
                 target = {
                     **raw_target,
@@ -2087,26 +2207,34 @@ def build_runtime_contract(
                     runbook_error = _validate_operator_runbook_ref(target.get("operator_runbook_ref"), root=root)
                     if runbook_error:
                         blocking.append(f"runtime target {target_id} {runbook_error}")
-                for field in ("health_ref", "identity_ref", "business_smoke_ref"):
-                    if not target["probes"].get(field):
-                        blocking.append(f"runtime target {target_id} probe is incomplete: {field}")
-                    else:
+                probe_mode = str(target.get("probe_mode") or "http")
+                if probe_mode == _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+                    if target["probes"] != _DATASET_RELEASE_WORKER_HEARTBEAT_REFS:
+                        blocking.append(
+                            f"runtime target {target_id} dataset-release heartbeat probes must match "
+                            "the canonical local probe set"
+                        )
+                else:
+                    for field in ("health_ref", "identity_ref", "business_smoke_ref"):
+                        if not target["probes"].get(field):
+                            blocking.append(f"runtime target {target_id} probe is incomplete: {field}")
+                        else:
+                            probe_error = _validate_runtime_probe_ref(
+                                field,
+                                target["probes"].get(field),
+                                allowed_origins=flow._as_list(target.get("probe_origins")),
+                            )
+                            if probe_error:
+                                blocking.append(f"runtime target {target_id} {probe_error}")
+                    database_ref = target["probes"].get("database_readback_ref")
+                    if database_ref:
                         probe_error = _validate_runtime_probe_ref(
-                            field,
-                            target["probes"].get(field),
+                            "database_readback_ref",
+                            database_ref,
                             allowed_origins=flow._as_list(target.get("probe_origins")),
                         )
                         if probe_error:
                             blocking.append(f"runtime target {target_id} {probe_error}")
-                database_ref = target["probes"].get("database_readback_ref")
-                if database_ref:
-                    probe_error = _validate_runtime_probe_ref(
-                        "database_readback_ref",
-                        database_ref,
-                        allowed_origins=flow._as_list(target.get("probe_origins")),
-                    )
-                    if probe_error:
-                        blocking.append(f"runtime target {target_id} {probe_error}")
         except WorkflowError as exc:
             blocking.append(str(exc))
         if not explicit:
@@ -2356,6 +2484,140 @@ def _read_only_http_probe(
         "response_bytes": len(body),
         "_response_body": body.decode("utf-8", errors="replace"),
     }
+
+
+def _load_dataset_release_worker_heartbeat_snapshot(target: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    local_probe = target.get("local_probe") if isinstance(target.get("local_probe"), dict) else {}
+    profile_ref = str(local_probe.get("profile_path") or "").strip()
+    profile_path = (REPO_ROOT / profile_ref).resolve()
+    try:
+        profile_path.relative_to(REPO_ROOT.resolve())
+    except ValueError as exc:
+        raise WorkflowError("dataset-release Worker heartbeat profile escapes repository root") from exc
+
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.profile import load_dataset_profile
+    from backend.services.dataset_release.worker_identity import WorkerHeartbeatStore
+
+    profile = load_dataset_profile(profile_path)
+    store = ControlStore(Path(str(profile.control_root)), read_only=True)
+    heartbeats = WorkerHeartbeatStore(store)
+    health = heartbeats.read_latest(
+        profile=profile.profile,
+        config_digest=profile.config_digest,
+        ttl_seconds=profile.worker_heartbeat_ttl_seconds,
+        max_files=int(local_probe.get("max_files", 200)),
+    ).as_dict()
+    instance_id = str(health.get("instance_id") or "")
+    payload = dict(heartbeats.read(instance_id)) if instance_id else {}
+    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+    if (
+        instance_id
+        and (
+            str(identity.get("instance_id") or "") != instance_id
+            or str(identity.get("capability_digest") or "") != str(health.get("capability_digest") or "")
+            or str(payload.get("last_poll_at") or "") != str(health.get("last_poll_at") or "")
+        )
+    ):
+        raise WorkflowError("dataset-release Worker heartbeat changed during verified read")
+    return health, payload
+
+
+def _read_dataset_release_worker_heartbeat_probes(
+    target: dict[str, Any],
+    timeout_seconds: float,
+) -> list[dict[str, Any]]:
+    if timeout_seconds <= 0:
+        raise WorkflowError("dataset-release Worker heartbeat probe timeout must be positive")
+    try:
+        health, payload = _load_dataset_release_worker_heartbeat_snapshot(target)
+        raw = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except Exception as exc:
+        reason = f"dataset-release Worker heartbeat probe failed: {type(exc).__name__}: {exc}"
+        return [
+            {
+                "name": name,
+                "url": f"worker-heartbeat://worker-scheduler/{name}",
+                "status": "failed",
+                "error": reason,
+                "transport": {"status_code": None, "ok": False, "error": reason, "kind": "local_file"},
+                "payload_schema": {"json": False, "kind": "none"},
+            }
+            for name in ("health_ref", "identity_ref", "business_smoke_ref")
+        ]
+
+    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+    code_sha = str(identity.get("code_sha") or "").strip().lower()
+    worker_status = str(payload.get("status") or "").strip().upper()
+    claim_kind = payload.get("claim_kind")
+    claim_id = payload.get("claim_id")
+    claim_consistent = (claim_kind is None) == (claim_id is None) and (
+        claim_kind is None or (bool(str(claim_kind).strip()) and bool(str(claim_id).strip()))
+    )
+    health_ok = health.get("state") == "healthy"
+    identity_ok = bool(_FULL_GIT_COMMIT_RE.fullmatch(code_sha))
+    business_ok = bool(
+        health_ok
+        and identity_ok
+        and payload.get("stop_requested") is False
+        and worker_status not in {"", "STARTED", "STOP_REQUESTED", "STOPPED"}
+        and claim_consistent
+    )
+    response_sha = hashlib.sha256(raw).hexdigest()
+    common = {
+        "url": "worker-heartbeat://worker-scheduler",
+        "status_code": None,
+        "transport": {"status_code": None, "ok": True, "error": None, "kind": "local_file"},
+        "payload_schema": {"json": True, "kind": "object"},
+        "response_sha256": response_sha,
+        "response_bytes": len(raw),
+    }
+    health_reason = None if health_ok else f"worker health is {health.get('state')}: {health.get('reason')}"
+    identity_reason = None if identity_ok else "worker heartbeat code_sha is not one full Git commit"
+    business_reason = None
+    if not business_ok:
+        business_reason = (
+            "worker heartbeat is not business-ready: "
+            f"health={health.get('state')} status={worker_status or 'missing'} "
+            f"stop_requested={payload.get('stop_requested')} claim_consistent={claim_consistent}"
+        )
+    semantic = {
+        "schema_version": BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+        "contract_id": "dataset_release_worker_heartbeat",
+        "verdict": "passed" if business_ok else "failed",
+        "reason": business_reason,
+        "facts": {
+            "state": health.get("state"),
+            "worker_status": worker_status or None,
+            "stop_requested": payload.get("stop_requested"),
+            "claim_present": claim_id is not None,
+        },
+        "expectation": None,
+        "expectation_digest": None,
+        "response_sha256": response_sha,
+    }
+    results: list[dict[str, Any]] = []
+    for name, passed, reason in (
+        ("health_ref", health_ok, health_reason),
+        ("identity_ref", identity_ok, identity_reason),
+        ("business_smoke_ref", business_ok, business_reason),
+    ):
+        result = {"name": name, **common, "status": "passed" if passed else "failed"}
+        result["url"] = f"worker-heartbeat://worker-scheduler/{name}"
+        if name == "identity_ref":
+            result["_response_body"] = json.dumps({"commit": code_sha}, sort_keys=True)
+        if reason:
+            result["error"] = reason
+        if name == "business_smoke_ref":
+            result["semantic"] = semantic
+        results.append(result)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -3238,40 +3500,47 @@ def build_post_restart_verify(
     if not expected:
         blocking.append("expected merged runtime identity is required")
     probes = ((contract.get("target") or {}).get("probes") or {}) if isinstance(contract.get("target"), dict) else {}
-    allowed_origins = flow._as_list((contract.get("target") or {}).get("probe_origins")) if isinstance(contract.get("target"), dict) else []
+    target = contract.get("target") if isinstance(contract.get("target"), dict) else {}
+    allowed_origins = flow._as_list(target.get("probe_origins"))
+    probe_mode = str(target.get("probe_mode") or "http")
     results: list[dict[str, Any]] = []
     if not blocking:
-        for name in ("health_ref", "identity_ref", "business_smoke_ref"):
-            results.append(
-                _read_only_http_probe(
-                    name,
-                    str(probes[name]),
-                    allowed_origins=allowed_origins,
-                    timeout_seconds=timeout_seconds,
+        if probe_mode == _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+            results = _read_dataset_release_worker_heartbeat_probes(target, timeout_seconds)
+        else:
+            for name in ("health_ref", "identity_ref", "business_smoke_ref"):
+                results.append(
+                    _read_only_http_probe(
+                        name,
+                        str(probes[name]),
+                        allowed_origins=allowed_origins,
+                        timeout_seconds=timeout_seconds,
+                    )
                 )
-            )
-        database_ref = probes.get("database_readback_ref")
-        if database_ref and str(database_ref).lower() != "not_required":
-            results.append(
-                _read_only_http_probe(
-                    "database_readback_ref",
-                    str(database_ref),
-                    allowed_origins=allowed_origins,
-                    timeout_seconds=timeout_seconds,
+            database_ref = probes.get("database_readback_ref")
+            if database_ref and str(database_ref).lower() != "not_required":
+                results.append(
+                    _read_only_http_probe(
+                        "database_readback_ref",
+                        str(database_ref),
+                        allowed_origins=allowed_origins,
+                        timeout_seconds=timeout_seconds,
+                    )
                 )
-            )
     smoke_result = next((item for item in results if item.get("name") == "business_smoke_ref"), None)
     expectation = contract.get("expected_terminal_outcome") if isinstance(contract.get("expected_terminal_outcome"), dict) else None
     business_smoke_semantic: dict[str, Any] | None = None
     if isinstance(smoke_result, dict) and smoke_result.get("status") == "passed":
-        schema_evidence, semantic = _evaluate_business_smoke_semantics(
-            str(smoke_result.get("url") or ""),
-            str(smoke_result.get("_response_body") or ""),
-            response_sha256=str(smoke_result.get("response_sha256") or ""),
-            expectation=expectation,
-        )
-        smoke_result["payload_schema"] = schema_evidence
-        smoke_result["semantic"] = semantic
+        semantic = smoke_result.get("semantic") if isinstance(smoke_result.get("semantic"), dict) else None
+        if semantic is None:
+            schema_evidence, semantic = _evaluate_business_smoke_semantics(
+                str(smoke_result.get("url") or ""),
+                str(smoke_result.get("_response_body") or ""),
+                response_sha256=str(smoke_result.get("response_sha256") or ""),
+                expectation=expectation,
+            )
+            smoke_result["payload_schema"] = schema_evidence
+            smoke_result["semantic"] = semantic
         business_smoke_semantic = semantic
         if semantic.get("verdict") != "passed":
             smoke_result["status"] = "failed"

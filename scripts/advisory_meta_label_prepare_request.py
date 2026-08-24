@@ -15,6 +15,10 @@ from backend.services.advisory_model_first.feature_schema_v1 import FEATURE_SCHE
 from backend.services.advisory_model_first.meta_label_contracts import (  # noqa: E402
     approved_meta_label_families,
     build_frozen_meta_label_request,
+    build_return_aware_meta_label_request,
+)
+from backend.services.advisory_model_first.meta_label_bundle import (  # noqa: E402
+    load_meta_label_bundle,
 )
 from backend.services.advisory_model_first.policy_dataset_bundle import (  # noqa: E402
     load_policy_dataset_bundle,
@@ -22,7 +26,7 @@ from backend.services.advisory_model_first.policy_dataset_bundle import (  # noq
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Prepare one exact Advisory P0-D meta-label request.")
+    parser = argparse.ArgumentParser(description="Prepare one exact Advisory P0-D/P0-E meta-label request.")
     parser.add_argument("--policy-dataset-bundle-root-windows", required=True)
     parser.add_argument("--policy-dataset-bundle-root-wsl", required=True)
     parser.add_argument("--qlib-daily-root-wsl", required=True)
@@ -33,11 +37,38 @@ def main() -> int:
     parser.add_argument("--repository-root-wsl", required=True)
     parser.add_argument("--output-root-wsl", required=True)
     parser.add_argument("--request-output", required=True)
+    parser.add_argument(
+        "--outcome-weighted",
+        action="store_true",
+        help="Prepare the fixed P0-E outcome-magnitude-weighted request v3.",
+    )
+    parser.add_argument("--reference-meta-label-bundle-root-windows")
+    parser.add_argument("--reference-meta-label-bundle-root-wsl")
     args = parser.parse_args()
     bundle_root = Path(args.policy_dataset_bundle_root_windows).resolve()
     manifest = load_policy_dataset_bundle(bundle_root, expected_bundle_id=bundle_root.name)
     source_request = json.loads((bundle_root / "request.json").read_text(encoding="utf-8"))
-    request = build_frozen_meta_label_request(
+    request_builder = build_frozen_meta_label_request
+    reference_values: dict[str, str] = {}
+    if args.outcome_weighted:
+        if not args.reference_meta_label_bundle_root_windows or not args.reference_meta_label_bundle_root_wsl:
+            parser.error("--outcome-weighted requires both reference meta-label bundle roots")
+        reference_root = Path(args.reference_meta_label_bundle_root_windows).resolve()
+        reference_id = reference_root.name
+        load_meta_label_bundle(
+            reference_root,
+            expected_bundle_id=reference_id,
+            load_booster=False,
+        )
+        reference_values = {
+            "reference_meta_label_bundle_root": args.reference_meta_label_bundle_root_wsl,
+            "reference_meta_label_bundle_id": reference_id,
+            "reference_meta_label_manifest_file_sha256": _sha256(reference_root / "manifest.json"),
+        }
+        request_builder = build_return_aware_meta_label_request
+    elif args.reference_meta_label_bundle_root_windows or args.reference_meta_label_bundle_root_wsl:
+        parser.error("reference bundle roots require --outcome-weighted")
+    request = request_builder(
         policy_dataset_bundle_root=args.policy_dataset_bundle_root_wsl,
         policy_dataset_bundle_id=manifest["policy_dataset_bundle_id"],
         policy_dataset_manifest_file_sha256=_sha256(bundle_root / "manifest.json"),
@@ -60,9 +91,20 @@ def main() -> int:
         output_root=args.output_root_wsl,
         feature_schema_hash=FEATURE_SCHEMA_HASH,
         family_specs=approved_meta_label_families(),
+        **reference_values,
     )
     request.write_json(args.request_output)
-    print(json.dumps({"status": "READY", "request_id": request.request_id, "request_sha256": request.request_sha256, "request_output": str(Path(args.request_output).resolve())}, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "status": "READY",
+                "request_id": request.request_id,
+                "request_sha256": request.request_sha256,
+                "request_output": str(Path(args.request_output).resolve()),
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -72,7 +114,11 @@ def _sha256(path: Path) -> str:
 
 
 def _git_commit(root: Path) -> str:
-    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip().lower()
+    return (
+        subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True)
+        .stdout.strip()
+        .lower()
+    )
 
 
 if __name__ == "__main__":
