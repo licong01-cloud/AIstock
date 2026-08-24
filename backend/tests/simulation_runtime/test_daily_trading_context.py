@@ -6,7 +6,7 @@ import psycopg2
 import pytest
 
 from backend.services.data_refresh_audit import DatasetRefreshStatus
-from backend.services.paper_trading_v2.market_data import DailyTradingContextProvider
+from backend.services.paper_trading_v2.market_data import DailyTradingContextProvider, PaperV2MinuteMarketDataProvider
 from backend.services.simulation_runtime.models import DailyTradingContextV1
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.tests.paper_trading_v2.fixtures_dev_db import DevDbTargetMisconfigured, _dev_dsn
@@ -127,6 +127,152 @@ def test_0910_materializes_exact_raw_authority_with_constant_query_count() -> No
     statuses = DailyTradingContextProvider.to_pre_trade_statuses(context)
     assert statuses["000001.SZ"]["daily_trading_context"]["context_hash"] == context.context_hash
     assert statuses["600000.SH"]["reason_code"] == "SUSPENDED_BY_SUSPEND_D"
+
+
+def test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch() -> None:
+    conn = FakeConn()
+    audit = FakeAuditRepository()
+
+    class NullPreCloseCursor(FakeCursor):
+        def execute(self, sql: str, params: tuple) -> None:
+            super().execute(sql, params)
+            if "FROM market.stk_limit" in sql:
+                self.rows = [(row[0], row[1], None, row[3], row[4]) for row in self.rows]
+
+    conn.cursor = lambda: NullPreCloseCursor(conn)  # type: ignore[method-assign]
+    quote_calls: list[list[str]] = []
+
+    def fetch_quotes(symbols: list[str]) -> dict[str, dict]:
+        quote_calls.append(list(symbols))
+        return {
+            "000001.SZ": {"pre_close": 10.0, "time": "20260821091000"},
+            "600000.SH": {"pre_close": 8.0, "time": "20260821091000"},
+        }
+
+    context = _provider(conn, audit).load(
+        symbols=list(reversed(SYMBOLS)),
+        trade_date=TRADE_DATE,
+        as_of_time=datetime(2026, 8, 21, 9, 10),
+        calendar_service_snapshot={"is_trading_day": True},
+        binding_identity="binding:hash",
+        package_identity="package:manifest",
+        release_identity="release:hash",
+        pre_close_quote_fetcher=fetch_quotes,
+        pre_close_quote_source="TDX_REALTIME.batch_quote.pre_close",
+    )
+
+    assert quote_calls == [SYMBOLS]
+    assert len(conn.queries) == 3
+    assert context.symbols["000001.SZ"].pre_close == 10.0
+    assert context.symbols["000001.SZ"].pre_close_source == "TDX_REALTIME.batch_quote.pre_close"
+    assert context.symbols["000001.SZ"].pre_close_evidence_hash
+    assert context.sources["stk_limit"]["pre_close_authority"] == {
+        "policy": "raw_stk_limit_else_broker_bound_plan_quote",
+        "sources": ["TDX_REALTIME.batch_quote.pre_close"],
+    }
+    DailyTradingContextV1.model_validate(context.carrier_payload())
+    reference = DailyTradingContextProvider.to_pre_trade_statuses(context)["000001.SZ"]["daily_trading_context"]
+    _, _, _, frozen_pre_close_source = PaperV2MinuteMarketDataProvider._frozen_realtime_daily_inputs(
+        symbol="000001.SZ",
+        trade_date=TRADE_DATE,
+        frozen_daily_fact=reference,
+    )
+    assert frozen_pre_close_source == "TDX_REALTIME.batch_quote.pre_close:frozen_daily_trading_context_v1"
+
+
+def test_missing_raw_pre_close_fails_closed_without_quote_authority() -> None:
+    conn = FakeConn()
+    audit = FakeAuditRepository()
+
+    class NullPreCloseCursor(FakeCursor):
+        def execute(self, sql: str, params: tuple) -> None:
+            super().execute(sql, params)
+            if "FROM market.stk_limit" in sql:
+                self.rows = [(row[0], row[1], None, row[3], row[4]) for row in self.rows]
+
+    conn.cursor = lambda: NullPreCloseCursor(conn)  # type: ignore[method-assign]
+
+    with pytest.raises(DataUnavailableError) as error:
+        _provider(conn, audit).load(
+            symbols=SYMBOLS,
+            trade_date=TRADE_DATE,
+            as_of_time=datetime(2026, 8, 21, 9, 10),
+            calendar_service_snapshot={"is_trading_day": True},
+            binding_identity="binding:hash",
+            package_identity="package:manifest",
+            release_identity="release:hash",
+        )
+
+    assert error.value.context["reason_code"] == "DAILY_TRADING_CONTEXT_PRE_CLOSE_QUOTE_REQUIRED"
+
+
+def test_missing_raw_pre_close_rejects_unapproved_quote_source_before_fetch() -> None:
+    conn = FakeConn()
+    audit = FakeAuditRepository()
+
+    class NullPreCloseCursor(FakeCursor):
+        def execute(self, sql: str, params: tuple) -> None:
+            super().execute(sql, params)
+            if "FROM market.stk_limit" in sql:
+                self.rows = [(row[0], row[1], None, row[3], row[4]) for row in self.rows]
+
+    conn.cursor = lambda: NullPreCloseCursor(conn)  # type: ignore[method-assign]
+    quote_calls: list[list[str]] = []
+
+    with pytest.raises(DataUnavailableError) as error:
+        _provider(conn, audit).load(
+            symbols=SYMBOLS,
+            trade_date=TRADE_DATE,
+            as_of_time=datetime(2026, 8, 21, 9, 10),
+            calendar_service_snapshot={"is_trading_day": True},
+            binding_identity="binding:hash",
+            package_identity="package:manifest",
+            release_identity="release:hash",
+            pre_close_quote_fetcher=lambda symbols: quote_calls.append(symbols) or {},
+            pre_close_quote_source="DB_HISTORICAL.previous_close",
+        )
+
+    assert error.value.context["reason_code"] == "DAILY_TRADING_CONTEXT_PRE_CLOSE_QUOTE_SOURCE_INVALID"
+    assert quote_calls == []
+
+
+@pytest.mark.parametrize(
+    ("quote", "reason_code"),
+    [
+        ({"pre_close": 10.0, "time": "20260821090000"}, "REALTIME_QUOTE_STALE"),
+        ({"pre_close": 99.0, "time": "20260821091000"}, "DAILY_TRADING_CONTEXT_PRE_CLOSE_QUOTE_INVALID"),
+    ],
+)
+def test_missing_raw_pre_close_rejects_stale_or_out_of_bounds_quote(
+    quote: dict,
+    reason_code: str,
+) -> None:
+    conn = FakeConn()
+    audit = FakeAuditRepository()
+
+    class OneNullPreCloseCursor(FakeCursor):
+        def execute(self, sql: str, params: tuple) -> None:
+            super().execute(sql, params)
+            if "FROM market.stk_limit" in sql:
+                first = self.rows[0]
+                self.rows[0] = (first[0], first[1], None, first[3], first[4])
+
+    conn.cursor = lambda: OneNullPreCloseCursor(conn)  # type: ignore[method-assign]
+
+    with pytest.raises(DataUnavailableError) as error:
+        _provider(conn, audit).load(
+            symbols=SYMBOLS,
+            trade_date=TRADE_DATE,
+            as_of_time=datetime(2026, 8, 21, 9, 10),
+            calendar_service_snapshot={"is_trading_day": True},
+            binding_identity="binding:hash",
+            package_identity="package:manifest",
+            release_identity="release:hash",
+            pre_close_quote_fetcher=lambda symbols: {"000001.SZ": quote},
+            pre_close_quote_source="TDX_REALTIME.batch_quote.pre_close",
+        )
+
+    assert error.value.context["reason_code"] == reason_code
 
 
 def test_stk_limit_missing_symbol_fails_without_derived_fallback() -> None:
