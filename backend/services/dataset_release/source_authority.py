@@ -77,6 +77,8 @@ MVCC_PARTITION_REUSE_PRODUCTION_VALIDATED = False
 MAX_SOURCE_STAGE_ARTIFACT_BYTES = 64 * 1024 * 1024
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 _STOCK_CODE = re.compile(r"^[0-9]{6}\.(?:SH|SZ)$")
+POSTGRES_NUMERIC_NON_FINITE_MARKERS = ("NaN", "Infinity", "-Infinity")
+STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS = frozenset({"pre_close", "up_limit", "down_limit"})
 
 
 class SourceAuthorityError(DatasetReleaseError):
@@ -389,6 +391,7 @@ def _query(
             f"{query_id}_canonical_row_code_major_v3"
             + (":derived_l2_v1" if derived_values else "")
             + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
+            + (":nonfinite_numeric_to_null_v1" if query_id == "stk_limit" else "")
         ),
         audit_dataset=audit_dataset,
         audit_eligible_sources=tuple(audit_eligible_sources),
@@ -3918,7 +3921,8 @@ def _validate_query_row(
             raise SourceManifestError(f"source query key/payload identity differs: {spec.identity}:{column}")
     non_null = set(query.non_null_value_columns)
     for column in query.value_columns:
-        value = payload[column]
+        value = _normalize_repairable_source_value(query, column, payload[column])
+        payload[column] = value
         if column in non_null and value is None:
             raise SourceManifestError(f"source query required value is NULL: {spec.identity}:{column}")
         if value is not None:
@@ -3955,6 +3959,19 @@ def _validate_query_row(
         "row_key": canonical_json_bytes(row_key).decode("utf-8"),
         "row_payload": canonical_json_bytes(payload).decode("utf-8"),
     }
+
+
+def _normalize_repairable_source_value(query: SourceQuerySpec, column: str, value: Any) -> Any:
+    """Expose exact PostgreSQL numeric non-finite markers as missing overlay inputs."""
+
+    if (
+        query.query_id == "stk_limit"
+        and column in STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS
+        and isinstance(value, str)
+        and value in POSTGRES_NUMERIC_NON_FINITE_MARKERS
+    ):
+        return None
+    return value
 
 
 def _load_json_value(value: Any, *, field: str, partition: str) -> Any:
@@ -4104,6 +4121,7 @@ __all__ = [
     "FrozenSourceAuthoritySnapshot",
     "MonthlySourceAuthority",
     "OfficialCutoffMismatch",
+    "POSTGRES_NUMERIC_NON_FINITE_MARKERS",
     "PRODUCTION_QUERY_SPECS",
     "PostgresSourceSnapshotSession",
     "SOURCE_AUTHORITY_POLICY_VERSION",
@@ -4122,6 +4140,7 @@ __all__ = [
     "SourceSnapshotSession",
     "SourceSnapshotRevised",
     "SourceTableSchema",
+    "STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS",
     "build_source_authority",
     "production_source_session_factory",
 ]
