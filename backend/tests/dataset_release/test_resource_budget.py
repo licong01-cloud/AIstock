@@ -87,8 +87,16 @@ def test_strict_host_sampler_fails_closed_when_commit_telemetry_is_missing() -> 
         sampler()
 
 
-def test_aggregate_private_commit_is_a_hard_failure(dataset_profile: DatasetProfile) -> None:
-    budget = ResourceBudget(dataset_profile, lambda _stage, _wsl: _snapshot())
+@pytest.mark.parametrize("admission_class", tuple(ResourceAdmissionClass))
+def test_aggregate_private_commit_is_a_hard_failure(
+    dataset_profile: DatasetProfile,
+    admission_class: ResourceAdmissionClass,
+) -> None:
+    budget = ResourceBudget(
+        dataset_profile,
+        lambda _stage, _wsl: _snapshot(),
+        admission_class=admission_class,
+    )
     decision = budget.classify(_snapshot(windows_commit=8 * GIB, wsl_commit=5 * GIB))
     assert decision.status == "FAILED"
     assert decision.reason_code == "FAILED_RESOURCE_HARD_LIMIT"
@@ -139,8 +147,32 @@ def test_lighter_admission_class_never_weakens_emergency_reserve(
     )
 
     decision = budget.classify(_snapshot(available=7 * GIB, commit_headroom=7 * GIB))
+    low_memory = budget.classify(_snapshot(low_memory=True))
 
     assert decision.reason_code == "RESOURCE_EMERGENCY"
+    assert low_memory.reason_code == "RESOURCE_EMERGENCY"
+
+
+def test_resolution_light_keeps_the_full_wsl_start_reserve(
+    dataset_profile: DatasetProfile,
+) -> None:
+    budget = ResourceBudget(
+        dataset_profile,
+        lambda _stage, _wsl: _snapshot(),
+        admission_class=ResourceAdmissionClass.RESOLUTION_LIGHT,
+    )
+
+    decision = budget.classify(
+        _snapshot(
+            available=20 * GIB,
+            commit_headroom=20 * GIB,
+            wsl_required=True,
+            wsl_available=11 * GIB,
+        )
+    )
+
+    assert decision.reason_code == "RESOURCE_ADMISSION_WAIT"
+    assert budget.admission_thresholds.wsl_start_available_bytes == 12 * GIB
 
 
 def test_sustained_page_reads_require_three_samples_and_low_headroom(

@@ -263,7 +263,7 @@ class ProductionBuildProcessor:
             predicted_new_bytes=int(build_inputs["predicted_new_bytes"]),
             admission_class=(
                 ResourceAdmissionClass.SAMPLE
-                if str(build_inputs["scope"]) == Scope.SAMPLE.value
+                if release.scope is Scope.SAMPLE
                 else ResourceAdmissionClass.FULL
             ),
         )
