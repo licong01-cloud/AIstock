@@ -1,18 +1,18 @@
 # AIstock 模拟盘每日交易事实冻结与盘中行情热路径 F2 详细设计
 
 > 文档类型：F2 跨模块实施级详细设计
-> 文档状态：`implementation_merged_runtime_gate_passed_normal_trading_day_receipt_pending`
+> 文档状态：`bug_1171_source_implementation_in_progress`
 > 日期：2026-08-21
-> 状态更新：2026-08-22
+> 状态更新：2026-08-24
 > 上位权威：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)
 > 适用范围：LocalSIM、MiniQMT SIM、Paper Trading v2、Simulation Runtime、Trading Core
-> 当前事实：设计 PR #3651、BUG-1143 PR #3657 与 BUG-1144 PR #3662 已合入，用户重启后的 runtime identity/business-smoke gate 已通过；不代表正常交易日验收已完成，且本切片无生产 DDL/DML、依赖、配置或 broker 变更
+> 当前事实：设计 PR #3651、BUG-1143 PR #3657 与 BUG-1144 PR #3662 已合入；2026-08-24 正常交易日暴露 `market.stk_limit.pre_close` 全量为空而旧契约错误要求非空，LocalSIM/MiniQMT 均以 `DAILY_TRADING_CONTEXT_STK_LIMIT_INVALID` 阻断。BUG-1171 修订并修复该权威边界；source merge、用户重启与正常交易日验收仍分别 pending，且本切片无生产 DDL/DML、依赖或配置变更
 
 ## 1. Background / 背景、结论与不可变约束
 
 本切片把“每日静态交易事实”和“盘中实时行情”拆成两个生命周期，禁止再由同一个逐股票 provider 在每个 scheduler cadence 混合加载：
 
-1. `market.stk_limit` 每个交易日 09:10 更新，是当日 `pre_close/up_limit/down_limit` 的最权威来源。LocalSIM 和 MiniQMT 的计划确认必须在 09:10 之后、`stk_limit` 当日 refresh evidence 成功后，对计划精确 symbol 集合执行一次批量读取并冻结原始不复权价格。
+1. `market.stk_limit` 每个交易日 09:10 更新，是当日 `up_limit/down_limit` 的唯一权威来源；生产源中的 `pre_close` 允许为空。若原始 `pre_close` 为空，只允许同一计划确认 owner 按 broker 绑定一次性批量读取当日实时 quote 的 `pre_close`：LocalSIM 使用 TDX，MiniQMT 使用 B0/MiniQMT broker quote；校验后与原始涨跌停价共同冻结，不得在盘中重取。
 2. `market.stock_st` 与 `market.suspend_d` 是独立交易事实，只能在同一计划确认阶段按精确 symbol 集合批量读取一次并冻结。它们不得替代或重新推导 `stk_limit` 已给出的涨跌停价。
 3. 交易日与交易时段只消费全局 Trading Calendar Service，不允许 LocalSIM/MiniQMT 直接查询 `market.trading_calendar`。
 4. 当日盘中 LocalSIM 分钟线只来自 `TDX_REALTIME_CAUSAL_MINUTE`。不得查询 `market.kline_minute_raw`，不得查询历史分钟线，不得用数据库 close、旧 bar、计划价或默认价回退。
@@ -47,7 +47,7 @@
 - 不修改 StrategyPackage alpha、Selection 排名、target、side、quantity 或 TWAP 算法。
 - 不恢复或迁移 V25；LocalSIM 仍为 TWAP-only，MiniQMT 仍拒绝 V25 execution policy。
 - 不改变 TDX 分钟线同步、历史行情入库或独立数据维护任务；这些任务不属于模拟盘 runtime。
-- 不把 `stock_st + previous close` 计算值作为 `stk_limit` 的正常替代。
+- 不把 `stock_st + previous close`、历史日线、数据库 close、默认百分比或 quote 推导值作为 `stk_limit.up_limit/down_limit` 的替代；broker-bound quote 只补齐 nullable `pre_close`，不得改写涨跌停价。
 - 不新增人工审批、acknowledge、手工恢复或“数据不全仍继续”的开关。
 - 本设计不执行 DDL/DML、服务启停、重启、broker 调用或生产配置变更。
 
@@ -56,7 +56,8 @@
 | 事实 | 计划确认权威 | 最早可消费时间 | 读取频率 | 盘中 authority |
 | --- | --- | --- | --- | --- |
 | 交易日/交易时段 | 全局 Trading Calendar Service | 服务声明当日 session 后 | service snapshot/read-through cache | 同一全局 service snapshot |
-| `pre_close/up_limit/down_limit` | `market.stk_limit` 当日原始行 | 09:10 之后且 refresh evidence 成功 | 每个 plan identity 一次批量读取 | frozen `DailyTradingContextV1` |
+| `up_limit/down_limit` | `market.stk_limit` 当日原始行 | 09:10 之后且 refresh evidence 成功 | 每个 plan identity 一次批量读取 | frozen `DailyTradingContextV1` |
+| `pre_close` | 非空时用同一 `market.stk_limit` 原始行；为空时用 broker-bound 当日 quote（LocalSIM=TDX，MiniQMT=B0） | 同一 plan confirmation；quote 必须当日且 freshness 有界 | 仅对缺失 symbol 一次精确 batch | frozen `DailyTradingContextV1`，盘中不重取 |
 | ST 状态 | `market.stock_st` 的当日有效 PIT 状态 | plan confirm | 每个 plan identity 一次批量读取 | frozen `DailyTradingContextV1` |
 | 盘前停牌 | `market.suspend_d` 当日事实 | 其 refresh evidence 成功后 | 每个 plan identity 一次批量读取 | frozen `DailyTradingContextV1` |
 | 板块/手数 | code-owned Trading Core authority | plan compile | 每个 symbol 确定性计算 | frozen `TradingRuleDecision` |
@@ -73,20 +74,21 @@
 3. 09:10 后对 `stk_limit` 的 `trade_date` 执行一次 dataset-level readiness readback。成功证据必须绑定 dataset、trade_date、status、completed/available time 和 refresh identity；不得对每个 symbol 查询 refresh audit。
 4. readiness 未成功时返回 `DAILY_TRADING_CONTEXT_WAITING_STK_LIMIT_REFRESH`，按 scheduler durable backoff 自动重试。每次 attempt 只允许一个 dataset-level probe，不允许并发逐 symbol probe。
 5. readiness 成功后，用一个 set-based SQL（例如单一 array parameter）读取精确 symbol 集合的 `ts_code, trade_date, pre_close, up_limit, down_limit`。当前模拟盘 symbol 规模禁止拆成逐 symbol 或多 chunk 查询；查询必须生成一份原子、完整的 batch receipt。若未来数据库硬上限确实要求分块，必须先更新本设计与容量证据，不能由实现静默改变频率契约。
-6. 全部行校验通过后才创建冻结上下文并继续 plan compile。相同 plan identity 的后续调用只读回已冻结 context，不再次查询任何上述 market 表。
+6. `up_limit/down_limit` 或行身份不合法立即 typed fail loud。仅对 `pre_close IS NULL` 的 symbol 集合调用一次 broker-bound quote fetcher；LocalSIM 只用 `TDX_REALTIME.batch_quote.pre_close`，MiniQMT 只用 `MINIQMT_REALTIME.broker_quote.pre_close`。quote 必须 exact coverage、当日、fresh、finite、positive，并落在权威上下限之间；missing/stale/extra/out-of-range 均 fail closed。不得查询 `market.kline_daily_raw`、`market.trading_calendar` 或其它历史/日线表补齐。
+7. 全部价格证据校验通过后才创建冻结上下文并继续 plan compile。相同 plan identity 的后续调用只读回已冻结 context，不再次查询任何上述 market 表或 quote provider。
 
-数据库暂时不可用可按同一 retry fingerprint 自动退避；数据已经声明 ready 后出现缺行、重复行、跨日行或非法价格属于确定性数据完整性失败，不得用 previous close/ST 推导或 TDX/历史表回退。
+数据库暂时不可用可按同一 retry fingerprint 自动退避；数据已经声明 ready 后出现缺行、重复行、跨日行或非法 limit 属于确定性数据完整性失败，不得用 previous close/ST 推导或历史表回退。nullable `pre_close` 只走本节明示的 broker-bound 当日 quote authority，不是通用 fallback。
 
 ### 3.2 `stk_limit` 行级校验
 
 每个请求 symbol 必须且只能有一行，并满足：
 
 - `trade_date` 精确等于计划交易日；
-- `pre_close/up_limit/down_limit` 都是 finite、正数、原始不复权价格；
-- `down_limit < pre_close < up_limit`；
+- `up_limit/down_limit` 都是 finite、正数、原始不复权价格，且 `down_limit < up_limit`；
+- 原始 `pre_close` 非空时必须 finite、正数且满足 `down_limit < pre_close < up_limit`；为空时必须由 §3.1 的 broker-bound quote 契约补齐后满足同一价格区间；
 - symbol 规范化后与请求集合一一对应，无 missing、extra、duplicate 或 alias collision；
 - 行级 canonical hash 和 batch symbol-set hash 可重建；
-- source 必须明确为 `market.stk_limit`，不得写成 derived/default/TDX。
+- limit source 必须明确为 `market.stk_limit`；`pre_close_source` 只能为 `market.stk_limit.pre_close`、`TDX_REALTIME.batch_quote.pre_close` 或 `MINIQMT_REALTIME.broker_quote.pre_close`，quote-backed 值必须带独立 evidence hash，禁止 derived/default/history。
 
 任一失败都返回 `DAILY_TRADING_CONTEXT_STK_LIMIT_INVALID` 或更精确子 reason，并包含 plan identity、trade_date、有限的 missing/duplicate symbol 摘要、refresh identity 和安全错误路径。错误不得吞掉、转为空集合或被解释为“停牌/无成交”。
 
@@ -113,11 +115,12 @@ DailyTradingContextV1
   calendar_service_snapshot_id
   captured_at
   sources
-    stk_limit: dataset/trade_date/refresh_identity/available_at/batch_hash
+    stk_limit: dataset/trade_date/refresh_identity/available_at/batch_hash/pre_close_authority
     stock_st: source_version/batch_hash
     suspend_d: dataset/trade_date/refresh_identity/batch_hash
   symbols[symbol]
-    pre_close / up_limit / down_limit / price_basis=raw
+    pre_close / pre_close_source / pre_close_evidence_hash
+    up_limit / down_limit / price_basis=raw
     stk_limit_row_hash
     is_st / st_source / st_evidence_hash
     is_suspended / suspend_type / suspend_timing / suspend_source
@@ -235,7 +238,8 @@ MiniQMT quote ingress 的 raw、normalized、contextual projection、plugin eval
 
 - 09:09:59 不查询 `stk_limit`，返回 WAITING；09:10:00 后 exact readiness 成功才 batch materialize。
 - refresh audit 对 dataset/trade_date 只调用一次；380 个 symbol 不产生 380 次 audit。
-- `stk_limit` exact coverage、duplicate、extra、cross-date、NaN/Infinity、非正数、边界顺序和 alias collision 正反例。
+- `stk_limit` exact coverage、duplicate、extra、cross-date、NaN/Infinity、非正 limit、边界顺序和 alias collision 正反例。
+- raw `pre_close` 完整时零 quote 调用；为空时仅对缺失 symbol 一次 exact TDX/B0 batch，覆盖 valid、missing、extra、stale、跨日、非法与越过权威上下限；source/evidence/row/context hash 可重建。
 - 证明 live limit 使用 `market.stk_limit` 精确值，即使 previous close/ST 推导会得到不同值也不得覆盖。
 - `stock_st/suspend_d` batch 一次；合法无停牌零行与未刷新严格区分。
 - Trading Calendar Service fake 证明 LocalSIM 没有 calendar repository 调用。
@@ -258,7 +262,7 @@ MiniQMT quote ingress 的 raw、normalized、contextual projection、plugin eval
 
 源码合入、用户重启和 runtime identity 通过后，单独收集正常交易日 receipt：
 
-- 09:10 后 plan 的 `DailyTradingContextV1` source/hash/readback 完整；
+- 09:10 后 plan 的 `DailyTradingContextV1` source/hash/readback 完整；当 raw `pre_close` 为空时，冻结的 broker-bound source/evidence 与 quote 调用次数可核验；
 - LocalSIM 全交易日分钟线 source 仅为 TDX；
 - forbidden market SQL fingerprint 计数在 plan freeze 后不增长；
 - MiniQMT ordinary quote 和重复 sink error 不形成 DB 线性增长或日志风暴；
@@ -279,7 +283,7 @@ P0-A 与 P0-B 影响同一 plan/runtime contract，必须按顺序合入；P0-C 
 
 | ID | 设计验收条款 |
 | --- | --- |
-| `F-126` | calendar service、09:10 `stk_limit` readiness、每事实表一个 set-based SQL、ST/suspend 独立事实和禁止 derived/fallback 完整 |
+| `F-126` | calendar service、09:10 `stk_limit` readiness、每事实表一个 set-based SQL、nullable pre-close 的单次 broker-bound TDX/B0 补齐、ST/suspend 独立事实和禁止 derived/history fallback 完整 |
 | `F-127` | `DailyTradingContextV1 -> TradingRuleDecision -> ExecutionPlan` schema、identity、hash、persist/readback 与 old-plan fail-loud 完整 |
 | `F-128` | LocalSIM live TDX-only、盘中 market SQL 为零、historical capability 隔离、恢复与整日容量证据完整 |
 | `F-129` | MiniQMT contextual sink failure governor、有界日志、零 DB、自动恢复与 action failure 分离完整 |
@@ -289,21 +293,21 @@ P0-A 与 P0-B 影响同一 plan/runtime contract，必须按顺序合入；P0-C 
 | Control | 结论 | 设计证据 |
 | --- | --- | --- |
 | 禁止简化交付 | pass for design | 覆盖 readiness、batch authority、schema/hash、plan/recovery、TDX hot path、MiniQMT 异常、DEV 与正常交易日证据，不以“缓存一下”或降低 cadence 冒充修复 |
-| 禁止静默错误 | pass for design | 缺行/非法/hash drift/TDX invalid/经济事务失败均 typed fail loud；WAITING 仅用于明确暂态，不推导、不 fallback、不假成功 |
-| 禁止改变业务逻辑 | pass for approved design revision | 保持 Selection、target、side、quantity、TWAP、T+1、lot、broker authority；按用户确认将 `stk_limit` 设为最权威当日 limit source |
+| 禁止静默错误 | pass for design | 缺行/非法/hash drift/quote missing/stale/out-of-range/经济事务失败均 typed fail loud；WAITING 仅用于明确暂态，不推导 limit、不查历史表、不假成功 |
+| 禁止改变业务逻辑 | pass for approved design revision | 保持 Selection、target、side、quantity、TWAP、T+1、lot、broker authority；`stk_limit`仍唯一决定当日up/down limit，broker-bound quote只提供nullable pre-close |
 | 禁止私增门禁审批 | pass for design | 09:10/readiness 是数据可用性技术条件，自动重试；未新增 RBAC、人工确认、acknowledge 或手工恢复 |
-| 状态分离 | pass for design | 本 PR 只更新蓝图/详细设计；源码、DEV、生产 DDL/DML、重启和正常交易日验收均未冒充完成 |
+| 状态分离 | pass for BUG-1171 source | 本 BUG 同步更新蓝图/详细设计与源码；source/PR/merge、用户重启和正常交易日验收分别记录，生产 DDL/DML/依赖/config 均为 noop |
 
 ## 13. Design Acceptance Matrix / 设计验收矩阵
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| `F-126` | §3、§4；目标 planning/context service | `backend/tests/simulation_runtime/test_daily_trading_context.py`；`backend/tests/paper_trading_v2/test_trading_day_defaults.py` | design_ready | none |
-| `F-127` | §4；目标 models/decision/repository | `backend/tests/simulation_runtime/test_daily_trading_context.py`；`backend/tests/simulation_runtime/test_target_rebalance_shared.py` | design_ready | none |
+| `F-126` | §3、§4；BUG-1171；`DailyTradingContextProvider` 与 broker-bound scheduler wiring | `backend/tests/simulation_runtime/test_daily_trading_context.py` nullable pre-close 正反例；`backend/tests/simulation_runtime/test_lifecycle_scheduler.py` TDX/B0 source wiring | source_implemented_ready_for_review | none |
+| `F-127` | §4；BUG-1171；`DailyTradingSymbolFactV1/DailyTradingContextV1` | `backend/tests/simulation_runtime/test_daily_trading_context.py` quote source/evidence/row/context hash roundtrip 与 legacy raw-pre-close canonical compatibility | source_implemented_ready_for_review | none |
 | `F-128` | §5、§7–§9；目标 LocalSIM provider/scheduler | `backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py`；`backend/tests/simulation_runtime/test_lifecycle_scheduler.py` | design_ready | none |
 | `F-129` | §6、§9；目标 MiniQMT quote ingress governor | `backend/tests/miniqmt_execution_runtime/test_quote_ingress.py`；`backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py` | design_ready | none |
 
-矩阵中的 `design_ready` 只表示实施路径与可执行测试已经设计闭合，不表示目标测试文件已经存在、源码已经实现或生产 runtime 已生效。
+矩阵中的 `source_implemented_ready_for_review` 只表示 BUG-1171 工作树已有实现与直接测试，不表示 PR/CI/merge、用户重启或正常交易日 runtime 已生效。
 
 ## 14. Rollout / Rollback / 发布与回滚
 
@@ -331,14 +335,14 @@ P0-A 与 P0-B 影响同一 plan/runtime contract，必须按顺序合入；P0-C 
 
 | Gate | 本文状态 | 后续要求 |
 | --- | --- | --- |
-| source merge | merged | 设计 PR #3651、BUG-1143 PR #3657、BUG-1144 PR #3662 已合入；close-sync PR #3666/#3667 已合入 |
+| source merge | pending | 设计 PR #3651、BUG-1143 PR #3657、BUG-1144 PR #3662 已合入；BUG-1171 source 尚待审核、PR 与合入 |
 | backend dependency | noop | 当前文档不改依赖 |
 | frontend dependency | noop | 当前文档不改前端 |
 | production DDL | noop | 若源码证明需要 additive schema，必须 DEV-first 后另获授权 |
 | production DML | noop | 不修改历史 plan/run/行情数据 |
 | config/binding/broker | noop | 不改运行配置、策略 binding 或 broker |
-| backend restart | completed by user | runtime 已加载 BUG-1143/BUG-1144 source merge 的主线后继；本次状态文档合入无需再次重启 |
-| runtime verification | identity/business-smoke passed；normal-day pending | post-restart identity 与 scheduler business-smoke 已通过；按 §9.3 在下一正常交易日收集 query/log-rate、TDX-only 与订单/成交语义 receipt |
+| backend restart | pending after BUG-1171 merge, owner=user | 2026-08-24 已完成的重启只加载 BUG-1171 之前主线，不能证明本修复生效 |
+| runtime verification | current normal-day blocked；post-fix pending | 当前 LocalSIM/MiniQMT 均被 nullable pre-close 旧契约阻断；合入并由用户重启后按 §9.3 重跑精确 run 与 query/log-rate、TDX/B0 source receipt |
 
 ## 17. 合入条件
 

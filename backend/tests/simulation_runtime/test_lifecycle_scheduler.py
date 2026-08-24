@@ -18694,3 +18694,96 @@ def test_local_sim_snapshot_rejects_cross_plan_facts_instead_of_filtering_them()
             cash_entries=(),
         )
     assert exc_info.value.context["reason_code"] == "LOCALSIM_SNAPSHOT_PLAN_IDENTITY_CONFLICT"
+
+
+class _CapturingDailyTradingContextProvider:
+    def __init__(self) -> None:
+        self.kwargs: dict[str, Any] = {}
+
+    def load(self, **kwargs: Any) -> SimpleNamespace:
+        self.kwargs = dict(kwargs)
+        return SimpleNamespace(context_id="dtc_test")
+
+    @staticmethod
+    def to_pre_trade_statuses(context: SimpleNamespace) -> dict[str, dict[str, Any]]:
+        return {"context": {"context_id": context.context_id}}
+
+
+def test_daily_context_wires_tdx_pre_close_authority_for_localsim() -> None:
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    daily_provider = _CapturingDailyTradingContextProvider()
+
+    def quote_fetcher(symbols: list[str]) -> dict[str, dict[str, Any]]:
+        return {symbol: {} for symbol in symbols}
+
+    provider = ProductionSimulationRunContextProvider(
+        daily_trading_context_provider=daily_provider,
+        localsim_daily_pre_close_quote_fetcher=quote_fetcher,
+    )
+
+    result = provider.load_daily_trading_context(
+        symbols=["000001.SZ"],
+        trade_date=TRADE_DATE,
+        binding=SimpleNamespace(
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            binding_id="bind-local",
+            binding_hash="binding-hash",
+        ),
+        runtime_release=SimpleNamespace(
+            package_id="pkg-local",
+            manifest_sha256="manifest-hash",
+            release_id="release-local",
+            release_hash="release-hash",
+        ),
+        as_of_time=datetime(2026, 8, 21, 9, 10),
+        calendar_service_snapshot={"is_trading_day": True},
+    )
+
+    assert result == {"context": {"context_id": "dtc_test"}}
+    assert daily_provider.kwargs["pre_close_quote_fetcher"] is quote_fetcher
+    assert daily_provider.kwargs["pre_close_quote_source"] == "TDX_REALTIME.batch_quote.pre_close"
+
+
+def test_daily_context_wires_b0_pre_close_authority_for_miniqmt() -> None:
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    daily_provider = _CapturingDailyTradingContextProvider()
+    qmt_client = SimpleNamespace(query_quote=lambda symbol: {"symbol": symbol})
+    qmt_factory_calls: list[bool] = []
+
+    def qmt_client_factory() -> SimpleNamespace:
+        qmt_factory_calls.append(True)
+        return qmt_client
+
+    provider = ProductionSimulationRunContextProvider(
+        daily_trading_context_provider=daily_provider,
+        qmt_client_factory=qmt_client_factory,
+    )
+    binding = SimpleNamespace(
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        binding_id="bind-qmt",
+        binding_hash="binding-hash",
+        strategy_id="strategy-qmt",
+        broker_account_id="account-qmt",
+    )
+
+    provider.load_daily_trading_context(
+        symbols=["000001.SZ"],
+        trade_date=TRADE_DATE,
+        binding=binding,
+        runtime_release=SimpleNamespace(
+            package_id="pkg-qmt",
+            manifest_sha256="manifest-hash",
+            release_id="release-qmt",
+            release_hash="release-hash",
+        ),
+        as_of_time=datetime(2026, 8, 21, 9, 10),
+        calendar_service_snapshot={"is_trading_day": True},
+    )
+
+    quote_fetcher = daily_provider.kwargs["pre_close_quote_fetcher"]
+    assert qmt_factory_calls == []
+    assert quote_fetcher(["000001.SZ"]) == {"000001.SZ": {"symbol": "000001.SZ"}}
+    assert qmt_factory_calls == [True]
+    assert daily_provider.kwargs["pre_close_quote_source"] == "MINIQMT_REALTIME.broker_quote.pre_close"
