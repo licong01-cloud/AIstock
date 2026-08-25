@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+import heapq
 import json
 import os
 import re
 import shutil
 import uuid
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, BinaryIO, Iterable, Iterator, Mapping, Sequence
 
 from backend.services.dataset_release.canonical import canonical_json_bytes, digest_named_fields, sha256_hex
 
@@ -28,6 +31,26 @@ from .candidate_builder import TaxonomyCatalog, taxonomy_catalog_from_mapping
 
 
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{40}$")
+_FILE_HASH_CHUNK_BYTES = 1024 * 1024
+_JSONL_SORT_CHUNK_BYTES = 8 * 1024 * 1024
+_JSONL_SORT_CHUNK_ROWS = 2048
+_JSONL_MERGE_FAN_IN = 32
+
+
+@dataclass(frozen=True, slots=True)
+class _FileObservation:
+    sha256: str
+    size_bytes: int
+    row_count: int | None = None
+
+    def manifest_entry(self) -> Mapping[str, Any]:
+        payload: dict[str, Any] = {
+            "sha256": self.sha256,
+            "size_bytes": self.size_bytes,
+        }
+        if self.row_count is not None:
+            payload["row_count"] = self.row_count
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,27 +83,129 @@ def require_repo_external_root(path: Path, *, forbidden_roots: Sequence[Path]) -
     return resolved
 
 
-def _write_canonical_json(path: Path, payload: Any) -> None:
-    path.write_bytes(canonical_json_bytes(payload) + b"\n")
+def _write_canonical_json(path: Path, payload: Any) -> _FileObservation:
+    encoded = canonical_json_bytes(payload) + b"\n"
+    path.write_bytes(encoded)
+    return _FileObservation(sha256=sha256_hex(encoded), size_bytes=len(encoded))
 
 
-def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> tuple[int, str]:
-    encoded = sorted(canonical_json_bytes(dict(row)) for row in rows)
+def _write_sorted_chunk(path: Path, rows: list[bytes]) -> None:
+    rows.sort()
     with path.open("wb") as handle:
-        for row in encoded:
+        for row in rows:
             handle.write(row)
             handle.write(b"\n")
-    return len(encoded), sha256_hex(path.read_bytes())
 
 
-def _file_entry(path: Path, *, row_count: int | None = None) -> Mapping[str, Any]:
-    payload: dict[str, Any] = {
-        "sha256": sha256_hex(path.read_bytes()),
-        "size_bytes": path.stat().st_size,
-    }
-    if row_count is not None:
-        payload["row_count"] = row_count
-    return payload
+def _iter_merged_lines(paths: Sequence[Path]) -> Iterator[bytes]:
+    with ExitStack() as stack:
+        handles = [stack.enter_context(path.open("rb")) for path in paths]
+        yield from heapq.merge(*handles)
+
+
+def _merge_sorted_files(paths: Sequence[Path], output: BinaryIO) -> int:
+    row_count = 0
+    for line in _iter_merged_lines(paths):
+        output.write(line)
+        row_count += 1
+    return row_count
+
+
+def _collapse_sort_chunks(sort_root: Path, paths: list[Path]) -> list[Path]:
+    level = 0
+    while len(paths) > _JSONL_MERGE_FAN_IN:
+        next_paths: list[Path] = []
+        for offset in range(0, len(paths), _JSONL_MERGE_FAN_IN):
+            group = paths[offset : offset + _JSONL_MERGE_FAN_IN]
+            merged = sort_root / f"merge-{level:04d}-{len(next_paths):08d}.jsonl"
+            with merged.open("wb") as handle:
+                _merge_sorted_files(group, handle)
+            next_paths.append(merged)
+        for old_path in paths:
+            old_path.unlink()
+        paths = next_paths
+        level += 1
+    return paths
+
+
+def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> _FileObservation:
+    if (
+        _JSONL_SORT_CHUNK_BYTES <= 0
+        or _JSONL_SORT_CHUNK_ROWS <= 0
+        or _JSONL_MERGE_FAN_IN < 2
+    ):
+        raise RuntimeError("industry PIT JSONL sort resource bounds are invalid")
+    sort_root = path.parent / f".{path.name}.sort-{uuid.uuid4().hex}"
+    sort_root.mkdir(parents=False, exist_ok=False)
+    row_count = 0
+    chunk: list[bytes] = []
+    chunk_size_bytes = 0
+    chunk_paths: list[Path] = []
+    try:
+        for row in rows:
+            encoded = canonical_json_bytes(dict(row))
+            chunk.append(encoded)
+            chunk_size_bytes += len(encoded) + 1
+            row_count += 1
+            if (
+                len(chunk) >= _JSONL_SORT_CHUNK_ROWS
+                or chunk_size_bytes >= _JSONL_SORT_CHUNK_BYTES
+            ):
+                chunk_path = sort_root / f"chunk-{len(chunk_paths):08d}.jsonl"
+                _write_sorted_chunk(chunk_path, chunk)
+                chunk_paths.append(chunk_path)
+                chunk = []
+                chunk_size_bytes = 0
+        if chunk:
+            chunk_path = sort_root / f"chunk-{len(chunk_paths):08d}.jsonl"
+            _write_sorted_chunk(chunk_path, chunk)
+            chunk_paths.append(chunk_path)
+        chunk_paths = _collapse_sort_chunks(sort_root, chunk_paths)
+
+        digest = hashlib.sha256()
+        size_bytes = 0
+        observed_rows = 0
+        with path.open("wb") as handle:
+            for line in _iter_merged_lines(chunk_paths):
+                handle.write(line)
+                digest.update(line)
+                size_bytes += len(line)
+                observed_rows += 1
+        if observed_rows != row_count:
+            raise IndustryPitContractError(
+                "candidate JSONL external sort row count mismatch: "
+                f"expected={row_count} observed={observed_rows}"
+            )
+        observation = _FileObservation(
+            sha256=digest.hexdigest(),
+            size_bytes=size_bytes,
+            row_count=row_count,
+        )
+        return observation
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    finally:
+        if sort_root.exists():
+            try:
+                shutil.rmtree(sort_root)
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
+
+
+def _observe_file(path: Path, *, row_count: int | None = None) -> _FileObservation:
+    digest = hashlib.sha256()
+    size_bytes = 0
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(_FILE_HASH_CHUNK_BYTES), b""):
+            digest.update(block)
+            size_bytes += len(block)
+    return _FileObservation(
+        sha256=digest.hexdigest(),
+        size_bytes=size_bytes,
+        row_count=row_count,
+    )
 
 
 def _candidate_hash(
@@ -222,21 +347,24 @@ def write_candidate_bundle(
         classification_path = temporary / "classification_candidate.jsonl"
         index_path = temporary / "index_membership_candidate.jsonl"
         report_path = temporary / "full_denominator_preflight.json"
-        _write_canonical_json(catalog_path, catalog.as_dict())
-        _write_canonical_json(
+        catalog_observation = _write_canonical_json(catalog_path, catalog.as_dict())
+        classification_receipt_observation = _write_canonical_json(
             classification_receipt_path,
             {**classification_receipt.as_dict(), "receipt_hash": classification_receipt.receipt_hash},
         )
-        _write_canonical_json(
+        index_receipt_observation = _write_canonical_json(
             index_receipt_path,
             {**index_membership_receipt.as_dict(), "receipt_hash": index_membership_receipt.receipt_hash},
         )
-        classification_count, _ = _write_jsonl(
+        classification_observation = _write_jsonl(
             classification_path,
             (value.as_dict() for value in classification_intervals),
         )
-        index_count, _ = _write_jsonl(index_path, (value.as_dict() for value in index_membership_intervals))
-        _write_canonical_json(report_path, preflight_report)
+        index_observation = _write_jsonl(
+            index_path,
+            (value.as_dict() for value in index_membership_intervals),
+        )
+        report_observation = _write_canonical_json(report_path, preflight_report)
 
         classification_hash = _candidate_hash(
             authority_type=AuthorityType.CLASSIFICATION,
@@ -273,14 +401,16 @@ def write_candidate_bundle(
             "producer_commit": producer_commit,
             "producer_tree": producer_tree,
             "files": {
-                "taxonomy_catalog.json": _file_entry(catalog_path),
-                "classification_authority_receipt.json": _file_entry(classification_receipt_path),
-                "index_membership_authority_receipt.json": _file_entry(index_receipt_path),
-                "classification_candidate.jsonl": _file_entry(
-                    classification_path, row_count=classification_count
+                "taxonomy_catalog.json": catalog_observation.manifest_entry(),
+                "classification_authority_receipt.json": (
+                    classification_receipt_observation.manifest_entry()
                 ),
-                "index_membership_candidate.jsonl": _file_entry(index_path, row_count=index_count),
-                "full_denominator_preflight.json": _file_entry(report_path),
+                "index_membership_authority_receipt.json": (
+                    index_receipt_observation.manifest_entry()
+                ),
+                "classification_candidate.jsonl": classification_observation.manifest_entry(),
+                "index_membership_candidate.jsonl": index_observation.manifest_entry(),
+                "full_denominator_preflight.json": report_observation.manifest_entry(),
             },
         }
         _write_canonical_json(temporary / "candidate_bundle_manifest.json", manifest)
@@ -371,7 +501,8 @@ def read_candidate_bundle(
             raise IndustryPitContractError(f"candidate bundle file size is invalid: {name}")
         if "row_count" in entry and (type(entry.get("row_count")) is not int or entry["row_count"] < 0):
             raise IndustryPitContractError(f"candidate bundle row count is invalid: {name}")
-        if sha256_hex(path.read_bytes()) != entry.get("sha256") or path.stat().st_size != entry.get("size_bytes"):
+        observation = _observe_file(path)
+        if observation.sha256 != entry.get("sha256") or observation.size_bytes != entry.get("size_bytes"):
             raise IndustryPitContractError(
                 f"{UnavailableReason.WRITER_READBACK_HASH_MISMATCH.value}: {name}"
             )

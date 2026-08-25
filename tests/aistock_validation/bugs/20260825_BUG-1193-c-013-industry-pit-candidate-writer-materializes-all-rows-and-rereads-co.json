@@ -27,7 +27,7 @@
   "evidence_uris": [
     "backend/services/industry_pit/artifact_store.py:67"
   ],
-  "expected": "Candidate write/readback peak working memory is bounded by a fixed internal sort chunk plus merge cursors; file hashes stream from disk; canonical bytes and hashes remain identical for the same inputs.",
+  "expected": "Additional canonical-serialization memory is bounded by a fixed byte/row sort chunk plus bounded merge fan-in; file hashes stream from disk; canonical bytes and hashes remain identical for the same inputs. Existing caller-owned interval sequences and the public readback tuple remain unchanged.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -82,7 +82,9 @@
   "last_seen_at": "2026-08-25T19:01:22.857117Z",
   "module": "local_data",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not modify classification/index authority semantics, receipts, candidate hashes, consumers, Qlib export, HMM, Selection, Paper, or Advisory.",
+    "Do not overwrite an existing candidate artifact or activate production data."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",

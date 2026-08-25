@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.services.industry_pit import artifact_store
 from backend.services.industry_pit.artifact_store import (
     read_candidate_bundle,
     require_repo_external_root,
@@ -148,6 +149,94 @@ def test_writer_readback_uses_one_schema_and_preserves_separate_hashes(tmp_path:
     ]
     assert readback.classification_receipt.receipt_hash == classification_receipt.receipt_hash
     assert readback.index_membership_receipt.receipt_hash == index_receipt.receipt_hash
+
+
+def test_jsonl_writer_uses_bounded_multistage_sort_and_preserves_canonical_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(artifact_store, "_JSONL_SORT_CHUNK_BYTES", 1)
+    monkeypatch.setattr(artifact_store, "_JSONL_SORT_CHUNK_ROWS", 2)
+    monkeypatch.setattr(artifact_store, "_JSONL_MERGE_FAN_IN", 2)
+    rows = [
+        {"symbol": "300858.SZ", "rank": 4},
+        {"symbol": "300741.SZ", "rank": 2},
+        {"symbol": "603020.SH", "rank": 3},
+        {"symbol": "300741.SZ", "rank": 1},
+        {"symbol": "605077.SH", "rank": 5},
+        {"symbol": "300741.SZ", "rank": 1},
+    ]
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+
+    first_observation = artifact_store._write_jsonl(first, iter(rows))
+    second_observation = artifact_store._write_jsonl(second, iter(reversed(rows)))
+
+    expected = b"".join(
+        row + b"\n" for row in sorted(canonical_json_bytes(dict(value)) for value in rows)
+    )
+    assert first.read_bytes() == expected
+    assert second.read_bytes() == expected
+    assert first_observation == second_observation
+    assert first_observation.row_count == len(rows)
+    assert first_observation.size_bytes == len(expected)
+    assert first_observation.sha256 == sha256_hex(expected)
+
+
+def test_bundle_writer_and_readback_do_not_read_candidate_files_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "artifacts" / "candidate"
+    classification_receipt = _receipt(AuthorityType.CLASSIFICATION)
+    index_receipt = _receipt(AuthorityType.INDEX_MEMBERSHIP)
+    original_read_bytes = Path.read_bytes
+
+    def reject_candidate_read_bytes(path: Path) -> bytes:
+        inside_staging = any(
+            parent.name.startswith(f".{target.name}.tmp-") for parent in path.parents
+        )
+        if path.suffix in {".json", ".jsonl"} and (
+            path == target or target in path.parents or inside_staging
+        ):
+            raise AssertionError(f"candidate artifact used Path.read_bytes(): {path}")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_candidate_read_bytes)
+    readback = write_candidate_bundle(
+        artifact_root=target,
+        forbidden_roots=(tmp_path / "repo",),
+        taxonomy_catalog=_catalog(),
+        classification_receipt=classification_receipt,
+        index_membership_receipt=index_receipt,
+        classification_intervals=(_row(classification_receipt, resolved=True),),
+        index_membership_intervals=(_row(index_receipt, resolved=False),),
+        preflight_report=_report(),
+        producer_commit="1" * 40,
+        producer_tree="2" * 40,
+    )
+
+    assert readback.artifact_root == target.resolve()
+    assert readback.manifest["files"]["classification_candidate.jsonl"]["row_count"] == 1
+
+
+def test_jsonl_writer_cleans_private_sort_workspace_after_merge_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(artifact_store, "_JSONL_SORT_CHUNK_ROWS", 1)
+    monkeypatch.setattr(artifact_store, "_JSONL_MERGE_FAN_IN", 2)
+
+    def fail_merge(paths: object, output: object) -> int:
+        raise OSError("synthetic merge failure")
+
+    monkeypatch.setattr(artifact_store, "_merge_sorted_files", fail_merge)
+    target = tmp_path / "candidate.jsonl"
+    with pytest.raises(OSError, match="synthetic merge failure"):
+        artifact_store._write_jsonl(
+            target,
+            ({"rank": rank} for rank in (3, 2, 1)),
+        )
+
+    assert not target.exists()
+    assert list(tmp_path.glob(".candidate.jsonl.sort-*")) == []
 
 
 def test_tamper_is_typed_writer_readback_hash_mismatch(tmp_path: Path) -> None:
