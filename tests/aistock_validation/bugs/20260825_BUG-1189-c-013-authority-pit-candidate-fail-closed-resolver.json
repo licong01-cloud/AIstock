@@ -10,6 +10,7 @@
     "backend/tests/industry_pit/test_candidate_builder.py",
     "backend/tests/industry_pit/test_contracts_resolver.py",
     "backend/tests/scripts/test_build_industry_pit_candidates.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "noxfile.py",
     "scripts/build_industry_pit_candidates.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
@@ -52,6 +53,7 @@
       "scripts/build_industry_pit_candidates.py"
     ],
     "changed_files": [
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
@@ -74,6 +76,7 @@
       "backend/tests/industry_pit/test_candidate_builder.py",
       "backend/tests/industry_pit/test_contracts_resolver.py",
       "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
       "scripts/build_industry_pit_candidates.py",
       "tests/aistock_validation/catalog/file_ownership.yaml"
@@ -102,9 +105,13 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "fresh Python process imported backend.services.industry_pit and the candidate CLI without database, broker, scheduler, or process side effects"
+      "fresh Python process imported backend.services.industry_pit and the candidate CLI without database, broker, scheduler, or process side effects",
+      "python -c import backend.services.industry_pit -> passed in fresh process",
+      "python scripts/build_industry_pit_candidates.py --help -> passed with exit code 0"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",

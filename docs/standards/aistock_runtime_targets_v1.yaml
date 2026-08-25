@@ -6,6 +6,7 @@ policy:
   post_restart_verify_mode: read_only
   tracked_artifact_writes: forbidden
 non_runtime_source_paths:
+  - scripts/build_industry_pit_candidates.py
   - scripts/backfill_tushare_daily_basic_fields.py
   - scripts/cleanup_simulation_history.py
   - scripts/ingest_tushare_daily_basic.py
