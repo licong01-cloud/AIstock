@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from backend.qlib_exporter import authoritative_bin_exporter as authoritative
+from backend.qlib_exporter import router as qlib_router
 from scripts import qlib_authoritative_bin_export as authoritative_cli
 from backend.qlib_exporter.db_reader import DBReader
 
@@ -208,6 +209,7 @@ def test_rewrite_minute_all_txt_uses_physical_feature_bounds_instead_of_stale_me
         start=date(2026, 1, 5),
         end=date(2026, 6, 30),
         feature_frequency="1min",
+        allowed_bin_root=tmp_path.parent,
     )
 
     assert (instruments / "all.txt").read_text(encoding="utf-8") == (
@@ -249,6 +251,7 @@ def test_physical_feature_range_rejects_bounds_past_calendar(tmp_path) -> None:
             start=date(2026, 1, 5),
             end=date(2026, 1, 5),
             feature_frequency="1min",
+            allowed_bin_root=tmp_path.parent,
         )
 
 
@@ -266,6 +269,7 @@ def test_physical_feature_range_rejects_uncontrolled_frequency(tmp_path) -> None
             start=date(2026, 1, 5),
             end=date(2026, 1, 5),
             feature_frequency="../day",
+            allowed_bin_root=tmp_path.parent,
         )
 
 
@@ -313,3 +317,35 @@ def test_minute_cli_requests_physical_feature_authority_for_pit_rewrite(
     assert exit_code == 0
     assert len(calls) == 1
     assert calls[0]["feature_frequency"] == "1min"
+    assert calls[0]["allowed_bin_root"] == tmp_path / "bin"
+
+
+def test_backend_minute_finalize_passes_physical_range_root(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _DumpResult:
+        ok = True
+        stdout = "dumped"
+
+    monkeypatch.setattr(
+        qlib_router,
+        "rewrite_stock_all_txt_from_pit_spans",
+        lambda **kwargs: calls.append(kwargs) or {"mode": "pit_universe_spans"},
+    )
+
+    ok, _stdout, error, summary = qlib_router._finalize_stock_dump_result(
+        _DumpResult(),
+        tmp_path / "candidate",
+        stock_universe_mode="pit_spans",
+        universe_key=authoritative.DEFAULT_PIT_UNIVERSE_KEY,
+        start=date(2026, 1, 5),
+        end=date(2026, 6, 30),
+        feature_frequency="1min",
+        allowed_bin_root=tmp_path,
+    )
+
+    assert ok is True
+    assert error is None
+    assert summary == {"mode": "pit_universe_spans"}
+    assert calls[0]["feature_frequency"] == "1min"
+    assert calls[0]["allowed_bin_root"] == tmp_path

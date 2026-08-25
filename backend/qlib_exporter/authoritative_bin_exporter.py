@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
@@ -17,6 +18,7 @@ from .config import IPO_FILTER_DAYS
 PRICE_UNIT_DIVISOR = 1000.0
 MINUTE_FREQ_DB = "1m"
 MINUTE_FREQ_QLIB = "1min"
+SAFE_QLIB_CANDIDATE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 DAILY_REQUIRED_COLUMNS = [
     "date",
@@ -387,6 +389,7 @@ def _load_existing_instrument_ranges(all_txt: Path) -> dict[str, list[tuple[str,
 def _load_physical_feature_ranges(
     *,
     bin_dir: Path,
+    allowed_bin_root: Path,
     frequency: str,
     field: str = "close",
 ) -> tuple[dict[str, list[tuple[str, str, str, str]]], dict[str, Any]]:
@@ -396,9 +399,20 @@ def _load_physical_feature_ranges(
         raise ValueError(f"unsupported physical feature frequency: {frequency!r}")
     if field != "close":
         raise ValueError(f"unsupported physical feature authority field: {field!r}")
-    if bin_dir.is_symlink():
-        raise RuntimeError(f"candidate Bin root must not be a symlink: {bin_dir}")
-    candidate_root = bin_dir.resolve(strict=True)
+    candidate_name = bin_dir.name
+    if not SAFE_QLIB_CANDIDATE_NAME_RE.fullmatch(candidate_name):
+        raise ValueError(f"invalid Qlib candidate directory name: {candidate_name!r}")
+    if bin_dir != allowed_bin_root / candidate_name:
+        raise ValueError("candidate Bin directory must be a direct child of allowed_bin_root")
+    if allowed_bin_root.is_symlink():
+        raise RuntimeError(f"allowed Bin root must not be a symlink: {allowed_bin_root}")
+    trusted_root = allowed_bin_root.resolve(strict=True)
+    candidate_path = trusted_root / candidate_name
+    if candidate_path.is_symlink():
+        raise RuntimeError(f"candidate Bin root must not be a symlink: {candidate_path}")
+    candidate_root = candidate_path.resolve(strict=True)
+    if candidate_root.parent != trusted_root:
+        raise RuntimeError(f"candidate Bin root escaped allowed root: {candidate_root}")
     if not candidate_root.is_dir():
         raise RuntimeError(f"candidate Bin root must be a directory: {candidate_root}")
 
@@ -563,6 +577,7 @@ def rewrite_stock_all_txt_from_pit_spans(
     start: date,
     end: date,
     feature_frequency: str | None = None,
+    allowed_bin_root: Path | None = None,
 ) -> dict[str, Any]:
     """Rewrite Qlib instruments/all.txt using PIT stock-universe spans."""
 
@@ -577,8 +592,11 @@ def rewrite_stock_all_txt_from_pit_spans(
 
     physical_range_summary: dict[str, Any] | None = None
     if feature_frequency:
+        if allowed_bin_root is None:
+            raise ValueError("allowed_bin_root is required for physical feature range discovery")
         existing_ranges, physical_range_summary = _load_physical_feature_ranges(
             bin_dir=bin_dir,
+            allowed_bin_root=allowed_bin_root,
             frequency=feature_frequency,
         )
     else:

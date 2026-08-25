@@ -1458,6 +1458,8 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
             universe_key=pit_universe_key,
             start=body.start,
             end=body.end,
+            feature_frequency=(dump_freq if dump_freq == MINUTE_FREQ_QLIB else None),
+            allowed_bin_root=(bin_root_path if dump_freq == MINUTE_FREQ_QLIB else None),
         )
         if not step_ok:
             raise HTTPException(status_code=500, detail=step_error or "failed to rewrite stock instruments/all.txt")
@@ -3177,6 +3179,8 @@ def _finalize_stock_dump_result(
     universe_key: Optional[str],
     start: date,
     end: date,
+    feature_frequency: Optional[str] = None,
+    allowed_bin_root: Optional[Path] = None,
 ) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
     """Rewrite stock all.txt eligibility after dump_bin and return step status."""
 
@@ -3190,6 +3194,8 @@ def _finalize_stock_dump_result(
                 universe_key=key or DEFAULT_PIT_UNIVERSE_KEY,
                 start=start,
                 end=end,
+                feature_frequency=feature_frequency,
+                allowed_bin_root=allowed_bin_root,
             )
             label = "AIstock PIT all.txt rewrite"
         else:
@@ -3465,6 +3471,8 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                         universe_key=pit_universe_key,
                         start=stock_all_txt_start or inc_start,
                         end=body.end,
+                        feature_frequency=MINUTE_FREQ_QLIB,
+                        allowed_bin_root=Path(bin_root),
                     )
                     steps.append(BinDatasetStepResult(
                         dataset="stock_minute", ok=step_ok,
@@ -3500,6 +3508,8 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                     universe_key=pit_universe_key,
                     start=stock_all_txt_start or body.start,
                     end=body.end,
+                    feature_frequency=MINUTE_FREQ_QLIB,
+                    allowed_bin_root=Path(bin_root),
                 )
                 steps.append(BinDatasetStepResult(
                     dataset="stock_minute", ok=step_ok,

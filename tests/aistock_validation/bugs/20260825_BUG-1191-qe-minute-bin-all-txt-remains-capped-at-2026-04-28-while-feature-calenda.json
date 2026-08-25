@@ -2,6 +2,7 @@
   "actual": "Minute feature/calendar artifacts reach 2026-06-30 but all.txt remains capped at 2026-04-28; 228 completed minute execution loops across 32 tasks claim 2026-06-30 coverage and cannot be trusted at strategy-metric level.",
   "allowed_write_scope": [
     "backend/qlib_exporter/authoritative_bin_exporter.py",
+    "backend/qlib_exporter/router.py",
     "scripts/qlib_authoritative_bin_export.py",
     "backend/tests/test_qlib_export_stock_universe_filters.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
@@ -53,6 +54,12 @@
       "actor": "codex",
       "note": "Restricted physical range discovery to a non-symlink candidate root and fixed 1min/close child paths; uncontrolled frequency and symlink inputs fail closed.",
       "timestamp": "2026-08-25T07:20:00Z"
+    },
+    {
+      "action": "backend_export_path_wired",
+      "actor": "codex",
+      "note": "Formal review found the backend minute export finalizer did not yet request physical bounds; wired both API minute dump paths with the configured allowed root while daily exports retain legacy behavior.",
+      "timestamp": "2026-08-25T07:35:00Z"
     }
   ],
   "evidence_uris": [

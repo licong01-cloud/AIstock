@@ -308,6 +308,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 start=start,
                 end=end,
                 feature_frequency=(dump_freq if args.dataset == "stock_minute" else None),
+                allowed_bin_root=(bin_root if args.dataset == "stock_minute" else None),
             )
             result["pit_all_txt_rewrite"] = all_txt_summary
         else:
