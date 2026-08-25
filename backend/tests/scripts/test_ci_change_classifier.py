@@ -399,7 +399,10 @@ def test_minute_execution_changes_select_focused_paper_v2_session(tmp_path: Path
 
 def test_qlib_exporter_tests_select_qlib_data_backend(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
-        ["backend/tests/qlib_exporter/test_db_reader_minute_query.py"],
+        [
+            "backend/tests/qlib_exporter/test_db_reader_minute_query.py",
+            "backend/tests/test_qlib_export_stock_universe_filters.py",
+        ],
         repo_root=tmp_path,
     )
 
