@@ -140,8 +140,8 @@
   },
   "first_seen_at": "2026-08-25T07:47:45.121712Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "50dbe411f41eafbe0fe2fd4009b2b3338a3de5b4",
+  "fixed_at": "2026-08-25T17:19:23Z",
   "github_issue_number": 3797,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3797",
   "last_seen_at": "2026-08-25T07:47:45.121712Z",
@@ -149,6 +149,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3800",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -170,6 +171,8 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -179,7 +182,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1192",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "78279570cf433a33",
+    "recorded_at": "2026-08-25T17:25:22.112478Z",
+    "runtime_contract_digest": "490703dd300bfce507f1fe789d5d0a65737adf096c3647ba7e81e6655df679bd",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b9b90da3abf6e7484e82d0f767d5f9b387c014e2",
+    "source_merge_commit": "50dbe411f41eafbe0fe2fd4009b2b3338a3de5b4",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3800",
+    "validation_evidence": [
+      "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14",
+      "python -m nox -s simulation_core_l2 -> 658 passed, 2 skipped",
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed; guardrails blocking=0; ownership unmapped=0 ambiguous=0",
+      "python -m nox -s l0 -> passed; guardrails blocking=0",
+      "python -m pytest backend/tests/simulation_runtime/test_ops_api.py -k=scheduler_verification_status -q -p no:cacheprovider -> 4 passed, 58 deselected",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py::test_post_restart_verify_applies_scheduler_semantics_to_scoped_status_endpoint backend/tests/scripts/test_aistock_issue_workflow.py::test_post_restart_verify_rejects_scoped_scheduler_subject_response_mismatch backend/tests/scripts/test_aistock_issue_workflow.py::test_post_restart_verify_accepts_run_scoped_scheduler_subject_with_resolved_broker -q -p no:cacheprovider -> 4 passed"
+    ],
+    "validation_evidence_digest": "41bdd6661245aece856d0c43dfffe5482f8bef3e7f8f9c526928b21a96bd917c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -188,6 +217,14 @@
     "fingerprint": "e82e024eb721de4c4b0b8143",
     "source_event_id": "FE-20260825-e82e024eb721"
   },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14",
+    "python -m nox -s simulation_core_l2 -> 658 passed, 2 skipped",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed; guardrails blocking=0; ownership unmapped=0 ambiguous=0",
+    "python -m nox -s l0 -> passed; guardrails blocking=0",
+    "python -m pytest backend/tests/simulation_runtime/test_ops_api.py -k=scheduler_verification_status -q -p no:cacheprovider -> 4 passed, 58 deselected",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py::test_post_restart_verify_applies_scheduler_semantics_to_scoped_status_endpoint backend/tests/scripts/test_aistock_issue_workflow.py::test_post_restart_verify_rejects_scoped_scheduler_subject_response_mismatch backend/tests/scripts/test_aistock_issue_workflow.py::test_post_restart_verify_accepts_run_scoped_scheduler_subject_with_resolved_broker -q -p no:cacheprovider -> 4 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
