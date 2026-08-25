@@ -392,8 +392,18 @@ def _load_physical_feature_ranges(
 ) -> tuple[dict[str, list[tuple[str, str, str, str]]], dict[str, Any]]:
     """Read instrument bounds from physical Qlib feature files, not stale all.txt metadata."""
 
-    calendar_path = bin_dir / "calendars" / f"{frequency}.txt"
-    features_root = bin_dir / "features"
+    if frequency != MINUTE_FREQ_QLIB:
+        raise ValueError(f"unsupported physical feature frequency: {frequency!r}")
+    if field != "close":
+        raise ValueError(f"unsupported physical feature authority field: {field!r}")
+    if bin_dir.is_symlink():
+        raise RuntimeError(f"candidate Bin root must not be a symlink: {bin_dir}")
+    candidate_root = bin_dir.resolve(strict=True)
+    if not candidate_root.is_dir():
+        raise RuntimeError(f"candidate Bin root must be a directory: {candidate_root}")
+
+    calendar_path = candidate_root / "calendars" / "1min.txt"
+    features_root = candidate_root / "features"
     if not calendar_path.is_file():
         raise FileNotFoundError(calendar_path)
     if calendar_path.is_symlink():
@@ -408,15 +418,15 @@ def _load_physical_feature_ranges(
     parsed: dict[str, list[tuple[str, str, str, str]]] = {}
     feature_file_count = 0
     for feature_dir in sorted(features_root.iterdir(), key=lambda path: path.name.lower()):
-        if not feature_dir.is_dir():
-            continue
         if feature_dir.is_symlink():
             raise RuntimeError(f"feature directory must not be a symlink: {feature_dir}")
-        feature_path = feature_dir / f"{field}.{frequency}.bin"
-        if not feature_path.is_file():
+        if not feature_dir.is_dir():
             continue
+        feature_path = feature_dir / "close.1min.bin"
         if feature_path.is_symlink():
             raise RuntimeError(f"feature file must not be a symlink: {feature_path}")
+        if not feature_path.is_file():
+            continue
         size = feature_path.stat().st_size
         if size < 8 or size % np.dtype("<f4").itemsize:
             raise RuntimeError(f"invalid Qlib feature file size: {feature_path} size={size}")

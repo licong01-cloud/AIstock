@@ -252,6 +252,23 @@ def test_physical_feature_range_rejects_bounds_past_calendar(tmp_path) -> None:
         )
 
 
+def test_physical_feature_range_rejects_uncontrolled_frequency(tmp_path) -> None:
+    instruments = tmp_path / "instruments"
+    instruments.mkdir(parents=True)
+    (instruments / "all.txt").write_text(
+        "000001.SZ\t2026-01-05 09:31:00\t2026-01-05 15:00:00\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported physical feature frequency"):
+        authoritative.rewrite_stock_all_txt_from_pit_spans(
+            bin_dir=tmp_path,
+            start=date(2026, 1, 5),
+            end=date(2026, 1, 5),
+            feature_frequency="../day",
+        )
+
+
 def test_minute_cli_requests_physical_feature_authority_for_pit_rewrite(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -47,6 +47,12 @@
       "actor": "codex",
       "note": "PR classification exposed the existing root-level Qlib universe test as unmapped code; added its exact ownership mapping and focused classifier regression without broadening backend/tests/**.",
       "timestamp": "2026-08-25T06:55:00Z"
+    },
+    {
+      "action": "codeql_path_boundary_hardened",
+      "actor": "codex",
+      "note": "Restricted physical range discovery to a non-symlink candidate root and fixed 1min/close child paths; uncontrolled frequency and symlink inputs fail closed.",
+      "timestamp": "2026-08-25T07:20:00Z"
     }
   ],
   "evidence_uris": [
