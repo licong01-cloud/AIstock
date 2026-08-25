@@ -1,6 +1,9 @@
 {
   "actual": "Production read-only evidence on 2026-08-25: LocalSIM run simrun_a75b1c7f43167c32 repeatedly cycles SIGNAL_GENERATING -> PRE_RUN_FAILED with DAILY_TRADING_CONTEXT_PRE_CLOSE_QUOTE_INVALID and no broker side effect. market.stk_limit for 000019.SZ has pre_close=NULL, up_limit=7.06 and down_limit=5.78; TDX batch-quote returns K.Last=6420, whose documented raw-li price is 6.420 yuan. DailyTradingContextProvider compares the unscaled 6420 directly against yuan limits and rejects it. Each automatic scheduler retry re-enters selection inference during the execution window, causing avoidable DB/runtime churn instead of consuming one frozen daily plan. Preserve stk_limit as the sole up/down authority, normalize TDX raw-li exactly once at the source boundary, keep fail-closed freshness/coverage checks, and prove retry does not repeatedly execute selection/DB hot-path work after a successfully frozen context.",
   "allowed_write_scope": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/tests/simulation_runtime/test_daily_trading_context.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "tests/aistock_validation/bugs/20260825_BUG-1187-localsim-tdx-raw-li-pre-close-is-compared-as-yuan-and-retried-during-exe.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +26,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "TDX raw-li pre_close is normalized to unadjusted yuan exactly once before comparison with authoritative stk_limit up/down limits; the resulting daily context is frozen and subsequent execution consumes the existing plan without repeated market DB reads or selection inference.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +55,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Inspect run simrun_a75b1c7f43167c32 and compare TDX SZ000019 K.Last=6420 with market.stk_limit 5.78/7.06; then run backend/tests/simulation_runtime/test_daily_trading_context.py.",
   "required_verification": [
     "l0",
     "simulation_core_l2"
@@ -60,13 +63,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "fresh_process_evidence": [
+      "rtk pytest backend/tests/simulation_runtime/test_daily_trading_context.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_existing_localsim_plan_context_uses_frozen_tradability_and_causal_broker_without_market_db_reads -q -> 12 passed",
+      "fresh pytest process loaded backend source -> 12 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -79,6 +93,16 @@
     "fingerprint": "935a5224242e2e1b321ce277",
     "source_event_id": "FE-20260825-935a5224242e"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/simulation_runtime/test_daily_trading_context.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_existing_localsim_plan_context_uses_frozen_tradability_and_causal_broker_without_market_db_reads -q -> 12 passed",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14",
+    "rtk nox -s paper_v2_backend -> 1129 passed, 3 skipped, 2 xfailed",
+    "rtk nox -s simulation_core_l2 -> 654 passed, 2 skipped",
+    "rtk nox -s l0 -> blocking=0",
+    "rtk ruff check backend/services/paper_trading_v2/market_data.py backend/tests/simulation_runtime/test_daily_trading_context.py -> passed",
+    "python -m py_compile backend/services/paper_trading_v2/market_data.py backend/tests/simulation_runtime/test_daily_trading_context.py -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

@@ -1182,12 +1182,21 @@ class DailyTradingContextProvider:
                     },
                 )
             kline = quote.get("K") if isinstance(quote.get("K"), dict) else {}
-            pre_close = _first_number(kline, ("Last", "pre_close", "PreClose", "preClose", "preclose"))
-            if pre_close is None:
-                pre_close = _first_number(
+            source_pre_close = _first_number(
+                kline,
+                ("Last", "pre_close", "PreClose", "preClose", "preclose"),
+            )
+            if source_pre_close is None:
+                source_pre_close = _first_number(
                     quote,
                     ("pre_close", "preClose", "preclose", "lastClose", "last_close"),
                 )
+            source_price_basis = _quote_price_basis(quote, source=source)
+            pre_close = (
+                source_pre_close / PRICE_UNIT_DIVISOR
+                if source_pre_close is not None and source_price_basis == "raw_li"
+                else source_pre_close
+            )
             quote_timestamp = _require_tdx_quote_timestamp(
                 symbol=symbol,
                 quote=quote,
@@ -1219,6 +1228,8 @@ class DailyTradingContextProvider:
                 "source": source,
                 "quote_timestamp": quote_timestamp.isoformat(),
                 "pre_close": pre_close,
+                "source_pre_close": source_pre_close,
+                "source_price_basis": source_price_basis,
             }
             evidence_hash = _canonical_json_sha256(evidence_payload)
             row_payload = {
@@ -2095,11 +2106,16 @@ def _round_quote_price_tick(value: float, *, price_basis: str) -> float:
 
 
 def _quote_price_basis(quote: dict[str, Any], *, source: str) -> str:
-    if str(source or "").upper().startswith("MINIQMT_REALTIME"):
+    normalized_source = str(source or "").upper()
+    if normalized_source.startswith("MINIQMT_REALTIME"):
         # MiniQMT/xtdata L1 prices are yuan-denominated. Some broker payloads
         # have carried stale raw_li metadata; trusting it collapses A-share
         # limit prices to an integer tick and blocks unattended pre-run.
         return "yuan"
+    if normalized_source.startswith("TDX_REALTIME"):
+        # The TDX Go bridge exposes prices in li. Source identity, rather than
+        # optional payload metadata, owns this basis contract.
+        return "raw_li"
     raw_basis = str(quote.get("price_basis") or quote.get("quote_price_basis") or "").strip().lower()
     if raw_basis in {"yuan", "raw_li"}:
         return raw_basis
