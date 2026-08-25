@@ -1680,10 +1680,12 @@ def test_product_runtime_rejects_incomplete_components_hash_and_naive_time() -> 
         )
 
 
-def _plan_reader_facts():
+def _plan_reader_facts(*, algo_config: dict[str, object] | None = None):
     policy_json = {
         "algo_code": "SNIPER_MINIQMT",
-        "algo_config": {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
+        "algo_config": (
+            algo_config if algo_config is not None else {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
+        ),
     }
     policy_hash = compute_execution_policy_sha256(policy_json)
     binding_hash = "b" * 64
@@ -2140,6 +2142,95 @@ def test_plan_authority_reader_closes_plan_binding_session_account_and_policy() 
             binding_id=binding.binding_id,
             execution_plan_id=plan.plan_id,
         )
+
+
+def test_plan_authority_reader_projects_only_sniper_plugin_owned_config() -> None:
+    plan, binding, session, repository, accounts, runtime_id = _plan_reader_facts(
+        algo_config={
+            "price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE",
+            "timer_iterations": 1,
+            "tca": {
+                "benchmark_policy": {
+                    "policy_version": "miniqmt_execution_tca_benchmark_v1",
+                    "benchmark_max_age_ms": 10_000,
+                }
+            },
+        }
+    )
+    reader = SimulationK6DPlanAuthorityReader(
+        simulation_repository=repository,
+        account_repository=accounts,
+        gateway_catalog=build_k6d_gateway_catalog_v1(),
+        session_authority=session,
+        logical_time_utc=datetime(2026, 7, 27, 1, 30, tzinfo=UTC),
+    )
+
+    authority = reader.read_plan_authority_v1(
+        runtime_id=runtime_id,
+        binding_id=binding.binding_id,
+        execution_plan_id=plan.plan_id,
+    )
+    request = authority.ordered_creation_requests[0]
+
+    assert thaw_json_v1(request.plugin_config) == {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
+    assert request.policy_sha256 == plan.execution_policy_sha256
+    assert request.plugin_config_sha256 == hash_hex_v1(
+        "miniqmt_plugin_config_v2",
+        {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
+    )
+
+
+def test_plan_authority_reader_rejects_truly_unknown_algo_config_field() -> None:
+    plan, binding, session, repository, accounts, runtime_id = _plan_reader_facts(
+        algo_config={
+            "price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE",
+            "unknown_plugin_control": 1,
+        }
+    )
+    reader = SimulationK6DPlanAuthorityReader(
+        simulation_repository=repository,
+        account_repository=accounts,
+        gateway_catalog=build_k6d_gateway_catalog_v1(),
+        session_authority=session,
+        logical_time_utc=datetime(2026, 7, 27, 1, 30, tzinfo=UTC),
+    )
+
+    with pytest.raises(MiniQMTKernelProductCompositionError) as failure:
+        reader.read_plan_authority_v1(
+            runtime_id=runtime_id,
+            binding_id=binding.binding_id,
+            execution_plan_id=plan.plan_id,
+        )
+
+    assert failure.value.reason_code == "MINIQMT_K6_PRODUCT_PLUGIN_CONFIG_INVALID"
+    assert failure.value.context["unknown_fields"] == ["unknown_plugin_control"]
+
+
+def test_plan_authority_reader_rejects_invalid_policy_level_algo_config() -> None:
+    plan, binding, session, repository, accounts, runtime_id = _plan_reader_facts(
+        algo_config={
+            "price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE",
+            "timer_iterations": 0,
+            "tca": "not-an-object",
+        }
+    )
+    reader = SimulationK6DPlanAuthorityReader(
+        simulation_repository=repository,
+        account_repository=accounts,
+        gateway_catalog=build_k6d_gateway_catalog_v1(),
+        session_authority=session,
+        logical_time_utc=datetime(2026, 7, 27, 1, 30, tzinfo=UTC),
+    )
+
+    with pytest.raises(MiniQMTKernelProductCompositionError) as failure:
+        reader.read_plan_authority_v1(
+            runtime_id=runtime_id,
+            binding_id=binding.binding_id,
+            execution_plan_id=plan.plan_id,
+        )
+
+    assert failure.value.reason_code == "MINIQMT_K6_PRODUCT_PLUGIN_CONFIG_INVALID"
+    assert failure.value.context["invalid_policy_level_fields"] == ["tca", "timer_iterations"]
 
 
 def test_plan_authority_reader_rejects_policy_fallback_and_incomplete_plan_sets() -> None:
