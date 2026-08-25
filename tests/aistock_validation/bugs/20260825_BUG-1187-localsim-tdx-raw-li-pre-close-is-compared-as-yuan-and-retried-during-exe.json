@@ -94,7 +94,7 @@
       "production_frontend_dependency_gate": "noop"
     },
     "receipt_id": "eefc67fe11a0bf08",
-    "recorded_at": "2026-08-25T05:26:16.559095Z",
+    "recorded_at": "2026-08-25T05:30:41.417970Z",
     "runtime_contract_digest": "ec9214640de4ecfbe8b6841db28744885131a1f96b5247e37424fdf8ccaa1df2",
     "runtime_identity_match": "pending",
     "runtime_verification": "pending_user_restart",
