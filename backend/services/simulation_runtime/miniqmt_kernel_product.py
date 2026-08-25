@@ -14,8 +14,10 @@ from psycopg2.pool import PoolError
 
 from backend.execution_algos.adaptive_is.contracts import MarketCode, canonical_json_bytes
 from backend.execution_algos.vnpy_style.hot_best_limit_plugin import BestLimitHotTargetV4
+from backend.execution_algos.vnpy_style.hot_plugin_manifests import current_three_hot_manifests_v4
 from backend.execution_algos.vnpy_style.hot_sniper_plugin import SniperHotTargetV4
 from backend.execution_algos.vnpy_style.hot_twap_lite_plugin import TwapLiteHotTargetV4
+from backend.execution_algos.vnpy_compat.hot_facade_contracts import hot_facade_manifests_v4
 from backend.execution_algos.vnpy_compat.hot_facade_adapter import IcebergHotTargetV4, StopHotTargetV4
 from backend.services.miniqmt_execution_runtime.full_five_catalog_authority import (
     FULL_FIVE_ALGO_CODES_V1,
@@ -120,6 +122,33 @@ class MiniQMTKernelProductCompositionError(RuntimeError):
         self.reason_code = reason_code
         self.context = {**context, "broker_called": False}
         super().__init__(message)
+
+
+K6_POLICY_LEVEL_ALGO_CONFIG_FIELDS_V1 = frozenset({"tca", "timer_iterations"})
+
+
+def _plugin_config_contract_v1(algo_code: str) -> tuple[frozenset[str], frozenset[str]]:
+    matches = [
+        manifest
+        for manifest in (*current_three_hot_manifests_v4(), *hot_facade_manifests_v4())
+        if manifest.algo_code == algo_code
+    ]
+    if len(matches) != 1:
+        raise MiniQMTKernelProductCompositionError(
+            "MINIQMT_K6_PRODUCT_PLUGIN_CONFIG_INVALID",
+            "KERNEL_V2 plugin config authority is missing or ambiguous",
+            context={"algo_code": algo_code, "manifest_count": len(matches)},
+        )
+    schema = thaw_json_v1(matches[0].config_schema)
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    required = schema.get("required") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict) or not isinstance(required, list):
+        raise MiniQMTKernelProductCompositionError(
+            "MINIQMT_K6_PRODUCT_PLUGIN_CONFIG_INVALID",
+            "KERNEL_V2 plugin config schema is not an exact object contract",
+            context={"algo_code": algo_code},
+        )
+    return frozenset(str(field) for field in properties), frozenset(str(field) for field in required)
 
 
 class _BoundHotMarketEffectCommitterV1:
@@ -265,13 +294,53 @@ def _policy(plan: ExecutionPlan) -> tuple[str, str, str, dict[str, Any]]:
             "execution plan does not select one of the exact five product plugins",
             context={"plan_id": plan.plan_id, "algo_code": algo_code},
         )
-    config = policy_json.get("algo_config")
-    if not isinstance(config, dict):
+    raw_config = policy_json.get("algo_config")
+    if not isinstance(raw_config, dict):
         raise MiniQMTKernelProductCompositionError(
             "MINIQMT_K6_PRODUCT_PLUGIN_CONFIG_INVALID",
             "execution policy algo_config must be an exact object",
             context={"plan_id": plan.plan_id, "algo_code": algo_code},
         )
+    invalid_field_names = sorted(
+        repr(field)
+        for field in raw_config
+        if type(field) is not str or not field or field != field.strip()
+    )
+    if invalid_field_names:
+        raise MiniQMTKernelProductCompositionError(
+            "MINIQMT_K6_PRODUCT_PLUGIN_CONFIG_INVALID",
+            "execution policy algo_config field identities must be canonical strings",
+            context={
+                "plan_id": plan.plan_id,
+                "algo_code": algo_code,
+                "invalid_field_names": invalid_field_names,
+            },
+        )
+    plugin_fields, required_plugin_fields = _plugin_config_contract_v1(algo_code)
+    config_fields = frozenset(raw_config)
+    unknown_fields = sorted(config_fields - plugin_fields - K6_POLICY_LEVEL_ALGO_CONFIG_FIELDS_V1)
+    missing_fields = sorted(required_plugin_fields - config_fields)
+    invalid_policy_level_fields: list[str] = []
+    if "tca" in raw_config and not isinstance(raw_config["tca"], dict):
+        invalid_policy_level_fields.append("tca")
+    if "timer_iterations" in raw_config and (
+        type(raw_config["timer_iterations"]) is not int or raw_config["timer_iterations"] < 1
+    ):
+        invalid_policy_level_fields.append("timer_iterations")
+    if unknown_fields or missing_fields or invalid_policy_level_fields:
+        raise MiniQMTKernelProductCompositionError(
+            "MINIQMT_K6_PRODUCT_PLUGIN_CONFIG_INVALID",
+            "execution policy algo_config does not close over the plugin and policy-level contracts",
+            context={
+                "plan_id": plan.plan_id,
+                "algo_code": algo_code,
+                "unknown_fields": unknown_fields,
+                "missing_plugin_fields": missing_fields,
+                "invalid_policy_level_fields": invalid_policy_level_fields,
+                "policy_level_fields": sorted(config_fields & K6_POLICY_LEVEL_ALGO_CONFIG_FIELDS_V1),
+            },
+        )
+    plugin_config = {field: raw_config[field] for field in sorted(plugin_fields) if field in raw_config}
     policy_id = payload["policy_version_id"]
     policy_sha256 = payload["policy_sha256"]
     if (
@@ -290,7 +359,7 @@ def _policy(plan: ExecutionPlan) -> tuple[str, str, str, dict[str, Any]]:
             "execution policy identity/hash differs from the frozen plan",
             context={"plan_id": plan.plan_id, "policy_id": policy_id, "policy_sha256": policy_sha256},
         )
-    return algo_code, policy_id, policy_sha256, dict(config)
+    return algo_code, policy_id, policy_sha256, plugin_config
 
 
 def _price_limit_rule_authority_error_v1(
