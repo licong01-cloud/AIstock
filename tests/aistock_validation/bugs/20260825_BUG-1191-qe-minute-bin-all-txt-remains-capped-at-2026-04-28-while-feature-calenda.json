@@ -4,8 +4,10 @@
     "backend/qlib_exporter/authoritative_bin_exporter.py",
     "scripts/qlib_authoritative_bin_export.py",
     "backend/tests/test_qlib_export_stock_universe_filters.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
     "docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md",
     "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/bugs/20260825_BUG-1191-qe-minute-bin-all-txt-remains-capped-at-2026-04-28-while-feature-calenda.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -31,6 +33,12 @@
       "actor": "codex",
       "note": "Actual changed-file review confirms backend/qlib_exporter/authoritative_bin_exporter.py is imported by backend/qlib_exporter/router.py; classify source activation as backend while keeping dataset candidate activation and user process control separate.",
       "timestamp": "2026-08-25T06:15:00Z"
+    },
+    {
+      "action": "scope_expanded_for_exact_runtime_classification",
+      "actor": "codex",
+      "note": "Added the canonical runtime target catalog and its focused classifier test so the offline CLI is exact-none while the imported backend exporter remains backend; no prefix or neighboring script is downgraded.",
+      "timestamp": "2026-08-25T06:25:00Z"
     }
   ],
   "evidence_uris": [
@@ -153,7 +161,10 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "persistence_basis": "backend/qlib_exporter/authoritative_bin_exporter.py imported by backend/qlib_exporter/router.py",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/config",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",

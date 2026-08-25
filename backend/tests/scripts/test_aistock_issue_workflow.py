@@ -83,6 +83,7 @@ def _write_runtime_catalog(root: Path) -> Path:
     for script_name in (
         "scripts/backfill_tushare_daily_basic_fields.py",
         "scripts/ingest_tushare_daily_basic.py",
+        "scripts/qlib_authoritative_bin_export.py",
         "scripts/seed_dataset_refresh_audit.py",
     ):
         script_path = root / script_name
@@ -97,6 +98,7 @@ def _write_runtime_catalog(root: Path) -> Path:
                 "non_runtime_source_paths": [
                     "scripts/backfill_tushare_daily_basic_fields.py",
                     "scripts/ingest_tushare_daily_basic.py",
+                    "scripts/qlib_authoritative_bin_export.py",
                     "scripts/seed_dataset_refresh_audit.py",
                 ],
                 "targets": {
@@ -1379,6 +1381,17 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ],
         root=isolated_workflow_root,
     )
+    qlib_authoritative_export = workflow._classify_runtime_impact(
+        ["scripts/qlib_authoritative_bin_export.py"],
+        root=isolated_workflow_root,
+    )
+    qlib_authoritative_mixed = workflow._classify_runtime_impact(
+        [
+            "backend/qlib_exporter/authoritative_bin_exporter.py",
+            "scripts/qlib_authoritative_bin_export.py",
+        ],
+        root=isolated_workflow_root,
+    )
     dataset_audit_neighbor = workflow._classify_runtime_impact(
         ["scripts/seed_other_dataset_refresh_audit.py"],
         root=isolated_workflow_root,
@@ -1444,6 +1457,13 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_advisory_batch_b["runtime_files"] == []
     assert dataset_offline_tools["runtime_impact"] == "none"
     assert dataset_offline_tools["runtime_files"] == []
+    assert qlib_authoritative_export["runtime_impact"] == "none"
+    assert qlib_authoritative_export["runtime_files"] == []
+    assert qlib_authoritative_mixed["runtime_impact"] == "backend"
+    assert qlib_authoritative_mixed["runtime_files"] == [
+        "backend/qlib_exporter/authoritative_bin_exporter.py"
+    ]
+    assert qlib_authoritative_mixed["target_ids"] == ["backend-main"]
     assert dataset_audit_neighbor["runtime_impact"] == "unknown"
     assert dataset_audit_neighbor["runtime_files"] == []
     assert dataset_worker["runtime_impact"] == "worker_scheduler"
