@@ -12801,6 +12801,79 @@ def test_merged_pr_validation_receipt_rejects_stale_commit(
     assert profile["receipt_commit"] is None
 
 
+def test_source_merge_receipt_profile_is_commit_bound_and_runtime_pending() -> None:
+    receipt = workflow._build_source_merge_receipt(
+        bug_id="BUG-1183",
+        source_pr_url="https://github.example/pull/3766",
+        source_pr_check={
+            "pr": {
+                "headRefOid": "a" * 40,
+            }
+        },
+        merge_commit="b" * 40,
+        validation_evidence=["rtk pytest -q -> 12 passed"],
+        runtime_contract={"backend_restart_required": True},
+        production_gates={
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+    )
+
+    valid = workflow._source_merge_receipt_profile(
+        receipt,
+        bug_id="BUG-1183",
+        source_pr_url="https://github.example/pull/3766",
+        merge_commit="b" * 40,
+    )
+    assert valid["status"] == "valid"
+    assert valid["durable_receipt_present"] is True
+    assert valid["runtime_verification"] == "pending_user_restart"
+
+    stale = workflow._source_merge_receipt_profile(
+        receipt,
+        bug_id="BUG-1183",
+        source_pr_url="https://github.example/pull/3766",
+        merge_commit="c" * 40,
+    )
+    assert stale["status"] == "invalid"
+    assert stale["durable_receipt_present"] is False
+    assert "merge commit mismatch" in " ".join(stale["blocking"])
+
+
+def test_source_merge_receipt_is_persisted_in_close_sync_bug_json(
+    isolated_workflow_root: Path,
+) -> None:
+    target = isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug1183.json"
+    _write_json(target, _bug(bug_id="BUG-1183", status="fixed"))
+    close_sync = {
+        "schema_version": "aistock_issue_workflow_close_sync_v1",
+        "bug_id": "BUG-1183",
+        "merged_pr": "https://github.example/pull/3766",
+        "registry_root": str(isolated_workflow_root),
+        "updated_bug_json": "tests/aistock_validation/bugs/bug1183.json",
+        "runtime_contract": {"backend_restart_required": True},
+        "production_gates": {
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+    }
+
+    updated = workflow._attach_source_merge_receipts_to_close_sync(
+        close_sync,
+        source_pr_check={"pr": {"headRefOid": "a" * 40}},
+        merge_commit="b" * 40,
+        validation_evidence=["rtk pytest -q -> 12 passed"],
+        production_gates=close_sync["production_gates"],
+    )
+
+    persisted = json.loads(target.read_text(encoding="utf-8"))
+    assert updated["source_merge_receipt"]["receipt_id"]
+    assert persisted["source_merge_receipt"]["source_merge_commit"] == "b" * 40
+    assert persisted["source_merge_receipt"]["runtime_verification"] == "pending_user_restart"
+
+
 def test_cleanup_uses_merged_pr_receipt_before_close_sync(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
