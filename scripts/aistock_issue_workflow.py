@@ -2634,6 +2634,9 @@ def _read_dataset_release_worker_heartbeat_probes(
 # ---------------------------------------------------------------------------
 
 BUSINESS_SMOKE_SEMANTIC_SCHEMA = "aistock_business_smoke_semantic_verdict_v1"
+SCHEDULER_VERIFICATION_STATUS_SCHEMA = "simulation_scheduler_verification_status_v1"
+SCHEDULER_VERIFICATION_SCOPE_SCHEMA = "simulation_scheduler_verification_scope_v1"
+_SCHEDULER_VERIFICATION_RUN_ID_RE = re.compile(r"^simrun_[0-9a-f]{16}$")
 EXPECTED_TERMINAL_OUTCOME_SCHEMA = "aistock_expected_terminal_outcome_v1"
 SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA = "simulation_run_terminal_evidence_v1"
 _EXPECTATION_CAPABLE_CONTRACT_IDS = frozenset({"run_terminal_evidence"})
@@ -3041,6 +3044,66 @@ def _validate_scheduler_status(payload: Any) -> tuple[str, str | None, dict[str,
     return "passed", None, {}
 
 
+def _validate_scheduler_verification_status(
+    payload: Any,
+    *,
+    url: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Bind a scoped scheduler verdict to the exact broker/run subject in the probe URL."""
+
+    verdict, reason, facts = _validate_scheduler_status(payload)
+    if verdict != "passed":
+        return verdict, reason, facts
+    scheduler = payload.get("scheduler") if isinstance(payload, dict) else None
+    if not isinstance(scheduler, dict):
+        return "failed", "scheduler verification payload is missing scheduler object", {}
+    if scheduler.get("schema_version") != SCHEDULER_VERIFICATION_STATUS_SCHEMA:
+        return "failed", "scheduler verification payload schema_version is invalid", {}
+    if scheduler.get("read_only") is not True:
+        return "failed", "scheduler verification payload is not read-only", {}
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    unknown_query = sorted(set(query) - {"broker_backend", "run_id"})
+    if unknown_query:
+        return "failed", f"scheduler verification probe has unknown subject query fields: {unknown_query}", {}
+    if not query or any(len(values) != 1 for values in query.values()):
+        return "failed", "scheduler verification probe must declare one value per broker/run subject field", {}
+    broker_backend = query.get("broker_backend", [None])[0]
+    run_id = query.get("run_id", [None])[0]
+    if broker_backend not in {None, "local_sim", "minqmt_sim"}:
+        return "failed", "scheduler verification probe broker_backend is invalid", {}
+    if run_id is not None and _SCHEDULER_VERIFICATION_RUN_ID_RE.fullmatch(run_id) is None:
+        return "failed", "scheduler verification probe run_id is invalid", {}
+    if broker_backend is None and run_id is None:
+        return "failed", "scheduler verification probe subject is missing", {}
+    scope = scheduler.get("verification_scope")
+    blockers = scheduler.get("current_trade_date_blockers")
+    blocker_scope = blockers.get("verification_scope") if isinstance(blockers, dict) else None
+    if not isinstance(scope, dict) or scope.get("schema_version") != SCHEDULER_VERIFICATION_SCOPE_SCHEMA:
+        return "failed", "scheduler verification response scope schema is invalid", {}
+    if scope.get("active") is not True:
+        return "failed", "scheduler verification response scope is not active", {}
+    observed_scope = {
+        "broker_backend": scope.get("broker_backend"),
+        "run_id": scope.get("run_id"),
+    }
+    if broker_backend is None and observed_scope["broker_backend"] not in {"local_sim", "minqmt_sim"}:
+        return "failed", "scheduler verification response resolved broker_backend is invalid", {}
+    expected_scope = {
+        "broker_backend": broker_backend or observed_scope["broker_backend"],
+        "run_id": run_id,
+    }
+    if observed_scope != expected_scope:
+        return (
+            "failed",
+            "scheduler verification response scope does not match probe subject: "
+            f"observed={observed_scope} expected={expected_scope}",
+            {"verification_scope": observed_scope},
+        )
+    if blocker_scope != scope:
+        return "failed", "scheduler verification blocker scope does not match response scope", {}
+    return "passed", None, {"verification_scope": observed_scope}
+
+
 def _validate_health_ok(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """Health endpoints must report ok=true or an explicitly healthy status."""
     if not isinstance(payload, dict):
@@ -3142,6 +3205,11 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/simulation-runtime/scheduler/status$"), "scheduler_status", _validate_scheduler_status),
+    (
+        re.compile(r"^/api/v1/simulation-runtime/scheduler/verification-status$"),
+        "scheduler_verification_status",
+        _validate_scheduler_verification_status,
+    ),
     (re.compile(r"^/api/v1/simulation-runtime/platform-diagnostics$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
@@ -3263,6 +3331,8 @@ def _evaluate_business_smoke_semantics(
             }
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
+    elif contract_id == "scheduler_verification_status":
+        verdict, reason, facts = validator(payload, url=url)
     else:
         verdict, reason, facts = validator(payload)
     semantic = {

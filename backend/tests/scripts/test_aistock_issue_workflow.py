@@ -2590,6 +2590,9 @@ def test_post_restart_verify_rejects_unproven_deployed_commit(
 
 _BUSINESS_SMOKE_RUN_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055"
 _BUSINESS_SMOKE_SCHEDULER_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
+_BUSINESS_SMOKE_SCOPED_SCHEDULER_URL = (
+    "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim"
+)
 _BUG992_RECORD_REF = (
     "tests/aistock_validation/bugs/"
     "20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json"
@@ -2811,6 +2814,196 @@ def test_post_restart_verify_accepts_structured_clear_current_trade_date_blocker
     assert smoke["status"] == "passed"
     assert smoke["semantic"]["contract_id"] == "scheduler_status"
     assert smoke["semantic"]["verdict"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("blockers", "expected_gate"),
+    [
+        (
+            {
+                "status": "CLEAR",
+                "blocker_count": 0,
+                "blockers": [],
+                "observed_blocker_count": 0,
+                "truncated": False,
+                "execution_gate": False,
+            },
+            "verified",
+        ),
+        (
+            {
+                "status": "BLOCKED",
+                "blocker_count": 1,
+                "blockers": [
+                    {
+                        "run_id": "simrun_0123456789abcdef",
+                        "broker_backend": "local_sim",
+                        "status": "FAILED_RETRYABLE",
+                    }
+                ],
+                "observed_blocker_count": 1,
+                "truncated": False,
+                "execution_gate": False,
+            },
+            "blocked",
+        ),
+    ],
+)
+def test_post_restart_verify_applies_scheduler_semantics_to_scoped_status_endpoint(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    blockers: dict[str, object],
+    expected_gate: str,
+) -> None:
+    scope = {
+        "schema_version": "simulation_scheduler_verification_scope_v1",
+        "active": True,
+        "broker_backend": "local_sim",
+        "run_id": None,
+    }
+    blockers = {**blockers, "verification_scope": scope}
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_SCOPED_SCHEDULER_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "schema_version": "simulation_scheduler_verification_status_v1",
+                    "scheduler_loop_health": {"status": "HEALTHY"},
+                    "current_trade_date_blockers": blockers,
+                    "verification_scope": scope,
+                    "read_only": True,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    smoke = _smoke_probe(payload)
+    assert payload["workflow_gate"] == expected_gate
+    assert smoke["semantic"]["contract_id"] == "scheduler_verification_status"
+    assert smoke["semantic"]["verdict"] == ("passed" if expected_gate == "verified" else "failed")
+
+
+def test_post_restart_verify_rejects_scoped_scheduler_subject_response_mismatch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_SCOPED_SCHEDULER_URL,
+    )
+    scope = {
+        "schema_version": "simulation_scheduler_verification_scope_v1",
+        "active": True,
+        "broker_backend": "minqmt_sim",
+        "run_id": None,
+    }
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "schema_version": "simulation_scheduler_verification_status_v1",
+                    "scheduler_loop_health": {"status": "HEALTHY"},
+                    "current_trade_date_blockers": {
+                        "status": "CLEAR",
+                        "blocker_count": 0,
+                        "blockers": [],
+                        "observed_blocker_count": 0,
+                        "truncated": False,
+                        "execution_gate": False,
+                        "verification_scope": scope,
+                    },
+                    "verification_scope": scope,
+                    "read_only": True,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "scheduler_verification_status"
+    assert "does not match probe subject" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_accepts_run_scoped_scheduler_subject_with_resolved_broker(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "simrun_0123456789abcdef"
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=(
+            "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status"
+            f"?run_id={run_id}"
+        ),
+    )
+    scope = {
+        "schema_version": "simulation_scheduler_verification_scope_v1",
+        "active": True,
+        "broker_backend": "minqmt_sim",
+        "run_id": run_id,
+    }
+    blockers = {
+        "status": "CLEAR",
+        "blocker_count": 0,
+        "blockers": [],
+        "observed_blocker_count": 0,
+        "truncated": False,
+        "execution_gate": False,
+        "verification_scope": scope,
+    }
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "schema_version": "simulation_scheduler_verification_status_v1",
+                    "scheduler_loop_health": {"status": "HEALTHY"},
+                    "current_trade_date_blockers": blockers,
+                    "verification_scope": scope,
+                    "read_only": True,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert _smoke_probe(payload)["semantic"]["facts"]["verification_scope"] == {
+        "broker_backend": "minqmt_sim",
+        "run_id": run_id,
+    }
 
 
 @pytest.mark.parametrize(
