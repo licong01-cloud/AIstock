@@ -1031,7 +1031,8 @@ def _load_h5_snapshot_meta(snapshot_id: str) -> Dict[str, Any]:
         return {}
     try:
         return json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
+        # The snapshot may be removed between exists() and read_text(); malformed metadata remains loud.
         return {}
 
 
@@ -1154,7 +1155,7 @@ def _finalize_h5_incremental_pit_metadata(
     stock_universe_mode: StockUniverseMode,
     universe_key: Optional[str],
     pit_ensure: Optional[Dict[str, Any]],
-    fallback_start: date,
+    baseline_start: date,
     end: date,
 ) -> None:
     if not universe_key:
@@ -1162,7 +1163,7 @@ def _finalize_h5_incremental_pit_metadata(
     all_txt_summary = _rewrite_h5_all_txt_from_pit_if_present(
         snapshot_id=snapshot_id,
         universe_key=universe_key,
-        start=_h5_meta_start(snapshot_id, fallback_start),
+        start=_h5_meta_start(snapshot_id, baseline_start),
         end=end,
     )
     _update_h5_pit_meta(
@@ -2432,7 +2433,7 @@ async def create_minute_snapshot_incremental(body: IncrementalExportRequest) -> 
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2565,7 +2566,7 @@ async def create_sector_data_incremental(body: IncrementalExportRequest) -> Incr
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2606,7 +2607,7 @@ async def create_daily_incremental(body: IncrementalExportRequest) -> Incrementa
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2642,7 +2643,7 @@ async def create_moneyflow_incremental(body: IncrementalExportRequest) -> Increm
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         _record_moneyflow_unit_contract(body.snapshot_id)
@@ -2679,7 +2680,7 @@ async def create_daily_basic_incremental(body: IncrementalExportRequest) -> Incr
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2715,7 +2716,7 @@ async def create_bak_basic_incremental(body: IncrementalExportRequest) -> Increm
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2751,7 +2752,7 @@ async def create_margin_detail_incremental(body: IncrementalExportRequest) -> In
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2787,7 +2788,7 @@ async def create_cyq_perf_incremental(body: IncrementalExportRequest) -> Increme
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -3772,7 +3773,7 @@ async def incremental_all(snapshot_id: str, body: IncrementalExportRequest) -> I
         stock_universe_mode=body.stock_universe_mode,
         universe_key=pit_key,
         pit_ensure=pit_ensure,
-        fallback_start=DEFAULT_ST_PIT_START_DATE,
+        baseline_start=DEFAULT_ST_PIT_START_DATE,
         end=body.end,
     )
 

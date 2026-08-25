@@ -60,6 +60,12 @@
       "actor": "codex",
       "note": "Formal review found the backend minute export finalizer did not yet request physical bounds; wired both API minute dump paths with the configured allowed root while daily exports retain legacy behavior.",
       "timestamp": "2026-08-25T07:35:00Z"
+    },
+    {
+      "action": "changed_file_guardrail_debt_repaired",
+      "actor": "codex",
+      "note": "Static gate review of the newly changed backend router exposed two pre-existing HIGH findings: malformed H5 snapshot metadata was silently swallowed and a metadata baseline parameter used forbidden fallback terminology. Narrowed the race handler to FileNotFoundError and renamed the metadata-only parameter without changing export semantics; focused guardrail scan now reports zero findings.",
+      "timestamp": "2026-08-25T09:16:24Z"
     }
   ],
   "evidence_uris": [
