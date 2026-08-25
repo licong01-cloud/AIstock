@@ -10,7 +10,12 @@ from decimal import Decimal
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
-from backend.services.dataset_release.canonical import canonical_json_bytes, digest_named_fields, sha256_hex
+from backend.services.dataset_release.canonical import (
+    canonical_json_bytes,
+    digest_named_fields,
+    ensure_sha256,
+    sha256_hex,
+)
 
 from .contracts import (
     PREFLIGHT_REPORT_SCHEMA,
@@ -140,15 +145,65 @@ class TaxonomyCatalog:
     identities: Mapping[str, TaxonomyIdentity]
     catalog_hash: str
 
-    def as_dict(self) -> dict[str, Any]:
-        return {
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "contract_id", str(self.contract_id or "").strip())
+        object.__setattr__(self, "version", str(self.version or "").strip())
+        if not self.contract_id or not self.version:
+            raise IndustryPitContractError("taxonomy catalog contract/version is missing")
+        object.__setattr__(self, "source_sha256", ensure_sha256(self.source_sha256, field="source_sha256"))
+        normalized: dict[str, TaxonomyIdentity] = {}
+        for code, identity in self.identities.items():
+            key = str(code or "").strip()
+            if key != identity.leaf_code or key in normalized:
+                raise IndustryPitContractError("taxonomy catalog identity key is invalid")
+            normalized[key] = identity
+        if not normalized:
+            raise IndustryPitContractError("taxonomy catalog contains no identities")
+        object.__setattr__(self, "identities", {key: normalized[key] for key in sorted(normalized)})
+        expected_hash = sha256_hex(canonical_json_bytes(self.as_dict(include_catalog_hash=False)))
+        object.__setattr__(self, "catalog_hash", ensure_sha256(self.catalog_hash, field="catalog_hash"))
+        if self.catalog_hash != expected_hash:
+            raise IndustryPitContractError("taxonomy catalog hash mismatch")
+
+    def as_dict(self, *, include_catalog_hash: bool = True) -> dict[str, Any]:
+        payload = {
             "schema_version": TAXONOMY_CATALOG_SCHEMA,
             "contract_id": self.contract_id,
             "version": self.version,
             "source_sha256": self.source_sha256,
             "identities": {code: self.identities[code].as_dict() for code in sorted(self.identities)},
-            "catalog_hash": self.catalog_hash,
         }
+        if include_catalog_hash:
+            payload["catalog_hash"] = self.catalog_hash
+        return payload
+
+
+def taxonomy_catalog_from_mapping(value: Mapping[str, Any]) -> TaxonomyCatalog:
+    expected = {"schema_version", "contract_id", "version", "source_sha256", "identities", "catalog_hash"}
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise IndustryPitContractError("taxonomy catalog payload keys differ from schema")
+    if value.get("schema_version") != TAXONOMY_CATALOG_SCHEMA:
+        raise IndustryPitContractError("taxonomy catalog schema is invalid")
+    raw_identities = value.get("identities")
+    if not isinstance(raw_identities, Mapping):
+        raise IndustryPitContractError("taxonomy catalog identities are invalid")
+    try:
+        identities = {
+            str(code): TaxonomyIdentity(**dict(identity))
+            for code, identity in raw_identities.items()
+            if isinstance(identity, Mapping)
+        }
+        if len(identities) != len(raw_identities):
+            raise IndustryPitContractError("taxonomy catalog identity payload is invalid")
+        return TaxonomyCatalog(
+            contract_id=str(value["contract_id"]),
+            version=str(value["version"]),
+            source_sha256=str(value["source_sha256"]),
+            identities=identities,
+            catalog_hash=str(value["catalog_hash"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise IndustryPitContractError(f"taxonomy catalog payload is invalid: {exc}") from exc
 
 
 def build_taxonomy_catalog(
@@ -204,9 +259,10 @@ def _parse_date(value: Any, *, field: str) -> date:
         return value
     text = str(value or "").strip()
     try:
-        return date.fromisoformat(text[:10])
+        parsed = date.fromisoformat(text)
     except ValueError as exc:
         raise IndustryPitContractError(f"{field} is invalid: {value!r}") from exc
+    return parsed
 
 
 def _lineage_datetime(value: Any) -> str | None:
@@ -266,13 +322,17 @@ def build_classification_intervals(
     spans_by_symbol = _spans_by_symbol(denominator)
     normalized: dict[str, list[dict[str, Any]]] = defaultdict(list)
     unmapped_source_symbols: set[str] = set()
+    input_source_row_count = 0
+    unmapped_source_row_count = 0
     exact_seen: set[bytes] = set()
     exact_duplicate_count = 0
     for raw in history_rows:
+        input_source_row_count += 1
         numeric = str(raw.get("stock_code") or "").strip().split(".")[0].zfill(6)
         symbol = registry.get(numeric)
         if symbol is None:
             unmapped_source_symbols.add(numeric)
+            unmapped_source_row_count += 1
             continue
         row = {
             "stock_code": numeric,
@@ -302,6 +362,28 @@ def build_classification_intervals(
             next_valid = boundaries[index + 1] if index + 1 < len(boundaries) else None
             rows = by_date[valid_from]
             identities = {row["industry_code"] for row in rows}
+            evidence_candidates = []
+            for row in rows:
+                evidence_identity = catalog.identities.get(row["industry_code"])
+                evidence_candidates.append(
+                    {
+                        "industry_code": row["industry_code"],
+                        "identity": evidence_identity.as_dict() if evidence_identity else None,
+                        "identity_hash": evidence_identity.identity_hash if evidence_identity else None,
+                        "authority_identity": (
+                            {
+                                "classification_l1_code": evidence_identity.l1_code,
+                                "classification_l2_code": evidence_identity.l2_code,
+                                "classification_l3_code": evidence_identity.l3_code,
+                            }
+                            if evidence_identity
+                            else {}
+                        ),
+                        "lineage_hash": row["lineage_hash"],
+                        "source_ids": list(receipt.source_ids),
+                        "source_hashes": list(receipt.source_hashes),
+                    }
+                )
             known_from = _known_from(valid_from, next_valid_from=next_valid)
             if next_valid is None:
                 causal_end = None
@@ -313,13 +395,7 @@ def build_classification_intervals(
                 same_boundary_conflicts += 1
                 reason = UnavailableReason.SAME_BOUNDARY_IDENTITY_CONFLICT
                 identity = None
-                conflicts = [
-                    {
-                        "industry_code": row["industry_code"],
-                        "lineage_hash": row["lineage_hash"],
-                    }
-                    for row in rows
-                ]
+                conflicts = evidence_candidates
                 causal_start = valid_from
             else:
                 code = next(iter(identities))
@@ -329,10 +405,12 @@ def build_classification_intervals(
                     invalid_catalog_rows += 1
                     reason = UnavailableReason.CATALOG_IDENTITY_INVALID
                     causal_start = valid_from
+                    conflicts = evidence_candidates
                 elif known_from is None:
                     reason = UnavailableReason.CLASSIFICATION_KNOWLEDGE_TIME_UNVERIFIED
                     causal_start = valid_from
                     identity = None
+                    conflicts = evidence_candidates
                 else:
                     reason = None
                     causal_start = known_from
@@ -385,7 +463,10 @@ def build_classification_intervals(
                     )
                 )
     diagnostics = {
-        "source_row_count": len(exact_seen) + exact_duplicate_count,
+        "source_row_count": input_source_row_count,
+        "mapped_source_row_count": len(exact_seen) + exact_duplicate_count,
+        "unique_mapped_source_row_count": len(exact_seen),
+        "source_unmapped_row_count": unmapped_source_row_count,
         "exact_duplicate_collapsed": exact_duplicate_count,
         "same_boundary_identity_conflict": same_boundary_conflicts,
         "catalog_identity_invalid": invalid_catalog_rows,
@@ -651,5 +732,6 @@ __all__ = [
     "build_classification_intervals",
     "build_index_membership_intervals",
     "build_taxonomy_catalog",
+    "taxonomy_catalog_from_mapping",
     "full_denominator_preflight",
 ]

@@ -171,6 +171,10 @@ class AuthorityReceipt:
             "denominator_digest",
             ensure_sha256(self.denominator_digest, field="denominator_digest"),
         )
+        causal_basis = self.research_basis is ResearchBasis.AS_PUBLISHED_PIT
+        causal_policy = self.knowledge_time_policy is KnowledgeTimePolicy.CAUSAL_DAILY_NEXT_TRADE
+        if causal_basis != causal_policy:
+            raise IndustryPitContractError("research basis and knowledge-time policy are inconsistent")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -304,8 +308,26 @@ class CandidateInterval:
             )
             for key, value in self.authority_identity.items()
         }
-        if self.identity is not None and not normalized_authority_identity:
-            raise IndustryPitContractError("resolved interval requires an authority-specific identity")
+        expected_authority_keys = (
+            {"classification_l1_code", "classification_l2_code", "classification_l3_code"}
+            if self.authority_type is AuthorityType.CLASSIFICATION
+            else {"index_l1_code", "index_l2_code", "index_l3_code"}
+        )
+        if self.identity is not None and set(normalized_authority_identity) != expected_authority_keys:
+            raise IndustryPitContractError("resolved interval authority-specific identity keys are invalid")
+        if self.identity is None and normalized_authority_identity:
+            raise IndustryPitContractError("unavailable interval cannot carry an authority-specific identity")
+        for key, code in normalized_authority_identity.items():
+            if not _CODE_RE.fullmatch(code):
+                raise IndustryPitContractError(f"authority-specific identity code is invalid: {key}")
+        if self.identity is not None and self.authority_type is AuthorityType.CLASSIFICATION:
+            expected_classification = {
+                "classification_l1_code": self.identity.l1_code,
+                "classification_l2_code": self.identity.l2_code,
+                "classification_l3_code": self.identity.l3_code,
+            }
+            if normalized_authority_identity != expected_classification:
+                raise IndustryPitContractError("classification authority identity differs from taxonomy identity")
         object.__setattr__(
             self,
             "authority_identity",
@@ -313,6 +335,13 @@ class CandidateInterval:
         )
         if self.identity is not None and self.conflict_candidates:
             raise IndustryPitContractError("resolved interval cannot carry conflict candidates")
+        if self.causal_use_from is not None and self.causal_use_from < self.valid_from:
+            raise IndustryPitContractError("causal_use_from cannot precede valid_from")
+        if self.identity is not None and self.research_basis is ResearchBasis.AS_PUBLISHED_PIT:
+            if self.known_from is None or self.causal_use_from is None:
+                raise IndustryPitContractError("as-published resolved interval requires known and causal time")
+            if self.known_from > self.causal_use_from:
+                raise IndustryPitContractError("causal_use_from cannot precede known_from")
         normalized_ids = tuple(sorted({require_nonempty(value, field="source_id") for value in self.source_ids}))
         normalized_sources = tuple(sorted({ensure_sha256(value, field="source_hash") for value in self.source_hashes}))
         normalized_lineage = tuple(sorted({ensure_sha256(value, field="lineage_hash") for value in self.lineage_hashes}))
@@ -597,6 +626,7 @@ class ResolvedIndustryIdentity:
     non_as_known_taxonomy: bool
     alignment_state: AlignmentState
     exact_duplicate_collapsed: bool
+    sequential_interval_resolved: bool
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -605,6 +635,7 @@ class ResolvedIndustryIdentity:
             "trade_date": self.trade_date.isoformat(),
             "authority_type": self.authority_type.value,
             "identity": self.identity.as_dict(),
+            "identity_hash": self.identity.identity_hash,
             "authority_identity": dict(self.authority_identity),
             "valid_from": self.valid_from.isoformat(),
             "valid_to_exclusive": self.valid_to_exclusive.isoformat() if self.valid_to_exclusive else None,
@@ -618,6 +649,7 @@ class ResolvedIndustryIdentity:
             "non_as_known_taxonomy": self.non_as_known_taxonomy,
             "alignment_state": self.alignment_state.value,
             "exact_duplicate_collapsed": self.exact_duplicate_collapsed,
+            "sequential_interval_resolved": self.sequential_interval_resolved,
         }
 
 

@@ -61,6 +61,12 @@ EXPECTED_CONFLICT_SYMBOLS = 23
 EXPECTED_CONFLICT_OPPORTUNITIES = 23_326
 DEFAULT_UNIVERSE_KEY = "aistock_equity_pit_canonical_v2"
 DEFAULT_RULE_VERSION = "shsz_a_252td_st_delist_asof_v2"
+MANDATORY_REGRESSION_SYMBOLS = (
+    "300741.SZ",
+    "300858.SZ",
+    "603020.SH",
+    "605077.SH",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -302,6 +308,10 @@ def _read_frozen_inputs(
             state = state_rows[0]
             if state[1] != rule_version or state[5] != "ready" or bool(state[6]):
                 raise IndustryPitContractError("frozen universe state is not ready/clean for the requested rule")
+            requested_start = pd.Timestamp(window_start).date()
+            requested_end = pd.Timestamp(window_end).date()
+            if requested_start < state[3] or requested_end > state[4]:
+                raise IndustryPitContractError("requested window escapes frozen universe state coverage")
             cur.execute(
                 """
                 SELECT cal_date::date FROM market.trading_calendar
@@ -440,13 +450,22 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         source_ids=tuple(
             sorted(
                 ({
+                    "local:SwClassCode_2021.xls",
                     "local:SwClassStd2021.pdf",
                     *( ["task:index_membership_evidence_v1"] if index_evidence else [] ),
                     *(str(row.get("source_url") or "") for row in index_evidence),
                 } - {""})
             )
         ),
-        source_hashes=tuple(sorted({source_hashes["taxonomy_standard"], *index_evidence_hashes})),
+        source_hashes=tuple(
+            sorted(
+                {
+                    source_hashes["catalog"],
+                    source_hashes["taxonomy_standard"],
+                    *index_evidence_hashes,
+                }
+            )
+        ),
         frozen_denominator=denominator.total_opportunities,
         denominator_digest=denominator.digest,
     )
@@ -572,6 +591,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args.classification_history = args.classification_history or args.source_root / "StockClassifyUse_stock.xls"
     args.latest_snapshot = args.latest_snapshot or args.source_root / "最新个股申万行业分类(完整版-截至7月末).xlsx"
     args.taxonomy_standard = args.taxonomy_standard or args.source_root / "SwClassStd2021.pdf"
+    args.mandatory_symbol = list(
+        dict.fromkeys([*MANDATORY_REGRESSION_SYMBOLS, *args.mandatory_symbol])
+    )
     return args
 
 

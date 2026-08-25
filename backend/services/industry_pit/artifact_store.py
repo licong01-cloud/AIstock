@@ -15,6 +15,7 @@ from backend.services.dataset_release.canonical import canonical_json_bytes, dig
 
 from .contracts import (
     CANDIDATE_BUNDLE_SCHEMA,
+    PREFLIGHT_REPORT_SCHEMA,
     AuthorityReceipt,
     AuthorityType,
     CandidateInterval,
@@ -23,6 +24,7 @@ from .contracts import (
     authority_receipt_from_mapping,
     candidate_interval_from_mapping,
 )
+from .candidate_builder import TaxonomyCatalog, taxonomy_catalog_from_mapping
 
 
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -103,6 +105,86 @@ def _candidate_hash(
     )
 
 
+def _validate_preflight_report(report: Mapping[str, Any]) -> None:
+    if report.get("schema_version") != PREFLIGHT_REPORT_SCHEMA:
+        raise IndustryPitContractError("preflight report schema is invalid")
+    payload = dict(report)
+    observed_hash = str(payload.pop("canonical_hash", ""))
+    expected_hash = digest_named_fields(PREFLIGHT_REPORT_SCHEMA, payload)
+    if observed_hash != expected_hash:
+        raise IndustryPitContractError("preflight canonical hash mismatch")
+    total = report.get("total_opportunities")
+    if type(total) is not int or total <= 0:
+        raise IndustryPitContractError("preflight denominator is invalid")
+    classification = report.get("classification")
+    index_membership = report.get("index_membership")
+    closure = report.get("closure")
+    if not all(isinstance(value, Mapping) for value in (classification, index_membership, closure)):
+        raise IndustryPitContractError("preflight closure payload is invalid")
+    count_values = (
+        classification.get("resolved", 0),
+        classification.get("unavailable", 0),
+        index_membership.get("resolved", 0),
+        index_membership.get("unavailable", 0),
+    )
+    if any(type(value) is not int or value < 0 for value in count_values):
+        raise IndustryPitContractError("preflight outcome counts are invalid")
+    classification_total = count_values[0] + count_values[1]
+    index_total = count_values[2] + count_values[3]
+    if (
+        classification_total != total
+        or index_total != total
+        or closure.get("classification_resolved_plus_unavailable") != total
+        or closure.get("index_resolved_plus_unavailable") != total
+        or closure.get("expected_denominator") != total
+        or closure.get("passed") is not True
+    ):
+        raise IndustryPitContractError("preflight denominator closure mismatch")
+
+
+def _validate_authority_bundle(
+    *,
+    catalog: TaxonomyCatalog,
+    classification_receipt: AuthorityReceipt,
+    index_membership_receipt: AuthorityReceipt,
+    classification_intervals: Sequence[CandidateInterval],
+    index_membership_intervals: Sequence[CandidateInterval],
+    preflight_report: Mapping[str, Any],
+) -> None:
+    _validate_preflight_report(preflight_report)
+    if classification_receipt.authority_type is not AuthorityType.CLASSIFICATION:
+        raise IndustryPitContractError("classification receipt authority mismatch")
+    if index_membership_receipt.authority_type is not AuthorityType.INDEX_MEMBERSHIP:
+        raise IndustryPitContractError("index membership receipt authority mismatch")
+    receipts = (classification_receipt, index_membership_receipt)
+    if any(
+        receipt.taxonomy_contract_id != catalog.contract_id
+        or receipt.taxonomy_version != catalog.version
+        or catalog.source_sha256 not in receipt.source_hashes
+        for receipt in receipts
+    ):
+        raise IndustryPitContractError("authority receipt and taxonomy catalog mismatch")
+    if (
+        classification_receipt.frozen_denominator != index_membership_receipt.frozen_denominator
+        or classification_receipt.denominator_digest != index_membership_receipt.denominator_digest
+        or classification_receipt.frozen_denominator != preflight_report.get("total_opportunities")
+        or classification_receipt.denominator_digest != preflight_report.get("denominator_digest")
+    ):
+        raise IndustryPitContractError("authority receipt denominator mismatch")
+    for authority, receipt, intervals in (
+        (AuthorityType.CLASSIFICATION, classification_receipt, classification_intervals),
+        (AuthorityType.INDEX_MEMBERSHIP, index_membership_receipt, index_membership_intervals),
+    ):
+        for interval in intervals:
+            if (
+                interval.authority_type is not authority
+                or interval.authority_receipt_hash != receipt.receipt_hash
+                or interval.taxonomy_contract_id != catalog.contract_id
+                or interval.taxonomy_version != catalog.version
+            ):
+                raise IndustryPitContractError("candidate row authority/readback mismatch")
+
+
 def write_candidate_bundle(
     *,
     artifact_root: Path,
@@ -121,6 +203,15 @@ def write_candidate_bundle(
         raise IndustryPitContractError(f"refusing to overwrite candidate artifact root: {target}")
     if not _GIT_OBJECT_RE.fullmatch(str(producer_commit)) or not _GIT_OBJECT_RE.fullmatch(str(producer_tree)):
         raise IndustryPitContractError("candidate producer commit/tree identity is invalid")
+    catalog = taxonomy_catalog_from_mapping(taxonomy_catalog)
+    _validate_authority_bundle(
+        catalog=catalog,
+        classification_receipt=classification_receipt,
+        index_membership_receipt=index_membership_receipt,
+        classification_intervals=classification_intervals,
+        index_membership_intervals=index_membership_intervals,
+        preflight_report=preflight_report,
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.parent / f".{target.name}.tmp-{uuid.uuid4().hex}"
     temporary.mkdir(parents=False, exist_ok=False)
@@ -131,7 +222,7 @@ def write_candidate_bundle(
         classification_path = temporary / "classification_candidate.jsonl"
         index_path = temporary / "index_membership_candidate.jsonl"
         report_path = temporary / "full_denominator_preflight.json"
-        _write_canonical_json(catalog_path, taxonomy_catalog)
+        _write_canonical_json(catalog_path, catalog.as_dict())
         _write_canonical_json(
             classification_receipt_path,
             {**classification_receipt.as_dict(), "receipt_hash": classification_receipt.receipt_hash},
@@ -164,7 +255,7 @@ def write_candidate_bundle(
         bundle_hash = digest_named_fields(
             CANDIDATE_BUNDLE_SCHEMA,
             {
-                "taxonomy_catalog_hash": taxonomy_catalog.get("catalog_hash"),
+                "taxonomy_catalog_hash": catalog.catalog_hash,
                 "classification_candidate_hash": classification_hash,
                 "index_membership_candidate_hash": index_hash,
                 "preflight_canonical_hash": preflight_report.get("canonical_hash"),
@@ -232,6 +323,24 @@ def read_candidate_bundle(
     manifest = _read_json(root / "candidate_bundle_manifest.json")
     if manifest.get("schema_version") != CANDIDATE_BUNDLE_SCHEMA:
         raise IndustryPitContractError("candidate bundle schema is invalid")
+    expected_manifest_keys = {
+        "schema_version",
+        "classification_authority_type",
+        "index_membership_authority_type",
+        "classification_candidate_hash",
+        "index_membership_candidate_hash",
+        "bundle_hash",
+        "producer_commit",
+        "producer_tree",
+        "files",
+    }
+    if set(manifest) != expected_manifest_keys:
+        raise IndustryPitContractError("candidate bundle manifest keys differ from schema")
+    if (
+        manifest.get("classification_authority_type") != AuthorityType.CLASSIFICATION.value
+        or manifest.get("index_membership_authority_type") != AuthorityType.INDEX_MEMBERSHIP.value
+    ):
+        raise IndustryPitContractError("candidate bundle authority types are invalid")
     files = manifest.get("files")
     if not isinstance(files, Mapping):
         raise IndustryPitContractError("candidate bundle file manifest is missing")
@@ -245,16 +354,29 @@ def read_candidate_bundle(
     }
     if set(files) != expected_names:
         raise IndustryPitContractError("candidate bundle file set is invalid")
+    actual_names = {path.name for path in root.iterdir() if path.is_file()}
+    if actual_names != {*expected_names, "candidate_bundle_manifest.json"}:
+        raise IndustryPitContractError("candidate bundle directory file set is invalid")
     for name in sorted(expected_names):
         path = root / name
         entry = files[name]
         if not path.is_file() or not isinstance(entry, Mapping):
             raise IndustryPitContractError(f"candidate bundle file is missing: {name}")
+        expected_entry_keys = {"sha256", "size_bytes"}
+        if name.endswith("_candidate.jsonl"):
+            expected_entry_keys.add("row_count")
+        if set(entry) != expected_entry_keys:
+            raise IndustryPitContractError(f"candidate bundle file entry differs from schema: {name}")
+        if type(entry.get("size_bytes")) is not int or entry["size_bytes"] < 0:
+            raise IndustryPitContractError(f"candidate bundle file size is invalid: {name}")
+        if "row_count" in entry and (type(entry.get("row_count")) is not int or entry["row_count"] < 0):
+            raise IndustryPitContractError(f"candidate bundle row count is invalid: {name}")
         if sha256_hex(path.read_bytes()) != entry.get("sha256") or path.stat().st_size != entry.get("size_bytes"):
             raise IndustryPitContractError(
                 f"{UnavailableReason.WRITER_READBACK_HASH_MISMATCH.value}: {name}"
             )
-    catalog = _read_json(root / "taxonomy_catalog.json")
+    catalog_payload = _read_json(root / "taxonomy_catalog.json")
+    catalog = taxonomy_catalog_from_mapping(catalog_payload)
     classification_receipt = authority_receipt_from_mapping(
         _read_json(root / "classification_authority_receipt.json")
     )
@@ -266,6 +388,14 @@ def read_candidate_bundle(
     if len(index_membership) != files["index_membership_candidate.jsonl"].get("row_count"):
         raise IndustryPitContractError("index membership candidate row count mismatch")
     report = _read_json(root / "full_denominator_preflight.json")
+    _validate_authority_bundle(
+        catalog=catalog,
+        classification_receipt=classification_receipt,
+        index_membership_receipt=index_receipt,
+        classification_intervals=classification,
+        index_membership_intervals=index_membership,
+        preflight_report=report,
+    )
     classification_hash = _candidate_hash(
         authority_type=AuthorityType.CLASSIFICATION,
         receipt=classification_receipt,
@@ -281,7 +411,7 @@ def read_candidate_bundle(
     bundle_hash = digest_named_fields(
         CANDIDATE_BUNDLE_SCHEMA,
         {
-            "taxonomy_catalog_hash": catalog.get("catalog_hash"),
+            "taxonomy_catalog_hash": catalog.catalog_hash,
             "classification_candidate_hash": classification_hash,
             "index_membership_candidate_hash": index_hash,
             "preflight_canonical_hash": report.get("canonical_hash"),

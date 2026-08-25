@@ -36,6 +36,7 @@ class _IndexedInterval:
 
 def _semantic_duplicate_key(value: CandidateInterval) -> bytes:
     payload = value.as_dict(include_row_hash=False)
+    payload.pop("source_ids", None)
     payload.pop("source_hashes", None)
     payload.pop("lineage_hashes", None)
     return canonical_json_bytes(payload)
@@ -50,6 +51,7 @@ def _conflict_identity(value: _IndexedInterval) -> Mapping[str, Any]:
         "valid_to_exclusive": row.valid_to_exclusive.isoformat() if row.valid_to_exclusive else None,
         "known_from": row.known_from.isoformat() if row.known_from else None,
         "identity": row.identity.as_dict() if row.identity else None,
+        "identity_hash": row.identity.identity_hash if row.identity else None,
         "authority_identity": dict(row.authority_identity),
         "unavailable_reason": row.unavailable_reason.value if row.unavailable_reason else None,
         "row_hashes": list(value.original_row_hashes),
@@ -180,6 +182,7 @@ class IndustryPitResolver:
                     ),
                     "known_from": row.known_from.isoformat() if row.known_from else None,
                     "identity": row.identity.as_dict() if row.identity else None,
+                    "identity_hash": row.identity.identity_hash if row.identity else None,
                     "authority_identity": dict(row.authority_identity),
                     "unavailable_reason": row.unavailable_reason.value if row.unavailable_reason else None,
                     "row_hashes": list(item.original_row_hashes),
@@ -255,6 +258,14 @@ class IndustryPitResolver:
                 else UnavailableReason.MEMBERSHIP_BOUNDARY_UNAVAILABLE
             )
             return self._unavailable(request, reason, conflicts=(_conflict_identity(item),))
+        position = values.index(item)
+        sequential = (
+            position > 0
+            and values[position - 1].value.valid_to_exclusive == row.valid_from
+        ) or (
+            position + 1 < len(values)
+            and row.valid_to_exclusive == values[position + 1].value.valid_from
+        )
         return ResolvedIndustryIdentity(
             status="resolved",
             canonical_symbol=request.canonical_symbol,
@@ -274,6 +285,7 @@ class IndustryPitResolver:
             non_as_known_taxonomy=row.non_as_known_taxonomy,
             alignment_state=AlignmentState.UNAVAILABLE,
             exact_duplicate_collapsed=item.exact_duplicate_collapsed,
+            sequential_interval_resolved=sequential,
         )
 
     @staticmethod

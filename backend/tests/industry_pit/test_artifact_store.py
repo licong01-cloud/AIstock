@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from backend.services.industry_pit.contracts import (
     UnavailableReason,
     make_candidate_interval,
 )
+from backend.services.dataset_release.canonical import canonical_json_bytes, digest_named_fields, sha256_hex
 
 
 SOURCE = "a" * 64
@@ -87,25 +89,38 @@ def _row(receipt: AuthorityReceipt, *, resolved: bool):
 
 
 def _catalog():
-    return {
+    payload = {
         "schema_version": "sw2021_taxonomy_catalog_v1",
         "contract_id": "sw2021_classification_catalog_v1",
         "version": "SW2021",
         "source_sha256": SOURCE,
         "identities": {"220315": IDENTITY.as_dict()},
-        "catalog_hash": "c" * 64,
     }
+    return {**payload, "catalog_hash": sha256_hex(canonical_json_bytes(payload))}
 
 
 def _report():
-    return {
+    payload = {
         "schema_version": "industry_pit_full_denominator_preflight_v1",
+        "denominator_digest": DENOMINATOR,
+        "total_opportunities": 1,
         "classification": {"resolved": 1, "unavailable": 0},
         "index_membership": {"resolved": 0, "unavailable": 1},
         "unavailable_by_reason": {
             "sw_industry_index_membership_pit:membership_boundary_unavailable": 1
         },
-        "canonical_hash": "e" * 64,
+        "closure": {
+            "classification_resolved_plus_unavailable": 1,
+            "index_resolved_plus_unavailable": 1,
+            "expected_denominator": 1,
+            "passed": True,
+        },
+    }
+    return {
+        **payload,
+        "canonical_hash": digest_named_fields(
+            "industry_pit_full_denominator_preflight_v1", payload
+        ),
     }
 
 
@@ -155,6 +170,62 @@ def test_tamper_is_typed_writer_readback_hash_mismatch(tmp_path: Path) -> None:
         handle.write(b" ")
     with pytest.raises(IndustryPitContractError, match="writer_readback_hash_mismatch"):
         read_candidate_bundle(artifact_root=target, forbidden_roots=(tmp_path / "repo",))
+
+
+def test_readback_rejects_rehashed_internal_catalog_and_preflight_tamper(tmp_path: Path) -> None:
+    target = tmp_path / "artifacts" / "candidate"
+    classification_receipt = _receipt(AuthorityType.CLASSIFICATION)
+    index_receipt = _receipt(AuthorityType.INDEX_MEMBERSHIP)
+    write_candidate_bundle(
+        artifact_root=target,
+        forbidden_roots=(tmp_path / "repo",),
+        taxonomy_catalog=_catalog(),
+        classification_receipt=classification_receipt,
+        index_membership_receipt=index_receipt,
+        classification_intervals=(_row(classification_receipt, resolved=True),),
+        index_membership_intervals=(_row(index_receipt, resolved=False),),
+        preflight_report=_report(),
+        producer_commit="1" * 40,
+        producer_tree="2" * 40,
+    )
+    catalog_path = target / "taxonomy_catalog.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    catalog["version"] = "TAMPERED"
+    catalog_path.write_bytes(canonical_json_bytes(catalog) + b"\n")
+    manifest_path = target / "candidate_bundle_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["taxonomy_catalog.json"]["sha256"] = sha256_hex(catalog_path.read_bytes())
+    manifest["files"]["taxonomy_catalog.json"]["size_bytes"] = catalog_path.stat().st_size
+    manifest_path.write_bytes(canonical_json_bytes(manifest) + b"\n")
+    with pytest.raises(IndustryPitContractError, match="taxonomy catalog hash mismatch"):
+        read_candidate_bundle(artifact_root=target, forbidden_roots=(tmp_path / "repo",))
+
+
+def test_writer_rejects_cross_authority_receipt_and_preflight_mismatch(tmp_path: Path) -> None:
+    classification_receipt = _receipt(AuthorityType.CLASSIFICATION)
+    index_receipt = _receipt(AuthorityType.INDEX_MEMBERSHIP)
+    report = dict(_report())
+    report_payload = {key: value for key, value in report.items() if key != "canonical_hash"}
+    report_payload["denominator_digest"] = "f" * 64
+    report = {
+        **report_payload,
+        "canonical_hash": digest_named_fields(
+            "industry_pit_full_denominator_preflight_v1", report_payload
+        ),
+    }
+    with pytest.raises(IndustryPitContractError, match="receipt denominator mismatch"):
+        write_candidate_bundle(
+            artifact_root=tmp_path / "artifacts" / "candidate",
+            forbidden_roots=(tmp_path / "repo",),
+            taxonomy_catalog=_catalog(),
+            classification_receipt=classification_receipt,
+            index_membership_receipt=index_receipt,
+            classification_intervals=(_row(classification_receipt, resolved=True),),
+            index_membership_intervals=(_row(index_receipt, resolved=False),),
+            preflight_report=report,
+            producer_commit="1" * 40,
+            producer_tree="2" * 40,
+        )
 
 
 def test_writer_refuses_repo_root_overwrite_and_non_finite_json(tmp_path: Path) -> None:

@@ -350,12 +350,18 @@ def test_same_boundary_history_conflict_and_unknown_knowledge_time_are_typed() -
     )
     assert isinstance(result, UnavailableIndustryIdentity)
     assert result.reason is UnavailableReason.SAME_BOUNDARY_IDENTITY_CONFLICT
+    assert len(result.conflict_candidates) == 2
+    assert {candidate["identity_hash"] for candidate in result.conflict_candidates} == {
+        catalog.identities["340404"].identity_hash,
+        catalog.identities["220315"].identity_hash,
+    }
+    assert all(candidate["source_hashes"] == [SOURCE] for candidate in result.conflict_candidates)
     assert diagnostics["same_boundary_identity_conflict"] == 1
 
     later_rows = [
         {
             "stock_code": "300741",
-            "classification_valid_from": date(2022, 1, 4),
+            "classification_valid_from": date(2021, 12, 13),
             "industry_code": "220315",
             "source_last_updated_at": datetime(2022, 2, 1, 12, 0),
         }
@@ -375,7 +381,7 @@ def test_same_boundary_history_conflict_and_unknown_knowledge_time_are_typed() -
     historical = later_resolver.resolve(
         ResolutionRequest(
             "300741.SZ",
-            date(2021, 12, 13),
+            date(2021, 12, 10),
             AuthorityType.CLASSIFICATION,
             catalog.contract_id,
             catalog.version,
@@ -386,6 +392,42 @@ def test_same_boundary_history_conflict_and_unknown_knowledge_time_are_typed() -
     )
     assert isinstance(historical, UnavailableIndustryIdentity)
     assert historical.reason is UnavailableReason.CLASSIFICATION_AUTHORITY_UNAVAILABLE
+    unknown_time = later_resolver.resolve(
+        ResolutionRequest(
+            "300741.SZ",
+            date(2021, 12, 13),
+            AuthorityType.CLASSIFICATION,
+            catalog.contract_id,
+            catalog.version,
+            classification_receipt.receipt_hash,
+            classification_receipt.knowledge_time_policy,
+            classification_receipt.research_basis,
+        )
+    )
+    assert isinstance(unknown_time, UnavailableIndustryIdentity)
+    assert unknown_time.reason is UnavailableReason.CLASSIFICATION_KNOWLEDGE_TIME_UNVERIFIED
+    assert unknown_time.conflict_candidates[0]["identity_hash"] == catalog.identities["220315"].identity_hash
+
+
+def test_builder_rejects_date_prefix_with_trailing_garbage() -> None:
+    denominator = _denominator(("300741.SZ",))
+    catalog = _catalog()
+    classification_receipt, _ = _receipts(denominator, catalog)
+    with pytest.raises(IndustryPitContractError, match="classification_valid_from is invalid"):
+        build_classification_intervals(
+            [
+                {
+                    "stock_code": "300741",
+                    "classification_valid_from": "2021-07-30garbage",
+                    "industry_code": "220315",
+                    "source_last_updated_at": "2021-07-31T16:18:00",
+                }
+            ],
+            catalog=catalog,
+            receipt=classification_receipt,
+            denominator=denominator,
+            classification_source_hash=SOURCE,
+        )
 
 
 def test_missing_index_evidence_is_unavailable_not_default_industry() -> None:

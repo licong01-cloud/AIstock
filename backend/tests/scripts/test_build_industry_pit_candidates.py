@@ -24,6 +24,20 @@ def test_help_is_fresh_process_and_has_no_database_or_artifact_side_effect(tmp_p
     assert list(tmp_path.iterdir()) == []
 
 
+def test_cli_always_includes_the_four_approved_mandatory_regressions(tmp_path: Path) -> None:
+    args = builder.parse_args(
+        [
+            "--source-root",
+            str(tmp_path),
+            "--db-env-file",
+            str(tmp_path / "db.env"),
+            "--artifact-root",
+            str(tmp_path / "candidate"),
+        ]
+    )
+    assert set(builder.MANDATORY_REGRESSION_SYMBOLS).issubset(args.mandatory_symbol)
+
+
 def test_snapshot_crosscheck_uses_20210730_classification_not_update_date() -> None:
     history = [
         {

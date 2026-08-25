@@ -71,6 +71,7 @@ def _interval(
     lineage_hash: str = SOURCE_A,
     reason: UnavailableReason | None = None,
     updated_at: str | None = None,
+    source_ids: tuple[str, ...] | None = None,
 ):
     return make_candidate_interval(
         canonical_symbol=symbol,
@@ -110,7 +111,7 @@ def _interval(
             else {}
         ),
         unavailable_reason=reason,
-        source_ids=receipt.source_ids,
+        source_ids=source_ids or receipt.source_ids,
         source_hashes=(source_hash,),
         lineage_hashes=(lineage_hash,),
     )
@@ -218,6 +219,8 @@ def test_four_mandatory_symbols_keep_classification_and_index_boundaries_separat
     assert july_30.classification.identity.leaf_code == "340404"
     assert isinstance(august_2.classification, ResolvedIndustryIdentity)
     assert august_2.classification.identity.as_dict() == NEW.as_dict()
+    assert august_2.classification.as_dict()["identity_hash"] == NEW.identity_hash
+    assert august_2.classification.sequential_interval_resolved is True
     assert august_2.classification.valid_from == date(2021, 7, 30)
     assert august_2.classification.known_from == date(2021, 8, 2)
     assert august_2.alignment_state is AlignmentState.UNALIGNED
@@ -249,6 +252,7 @@ def test_exact_duplicate_collapse_and_permutation_are_order_invariant() -> None:
         known_from=first.known_from,
         source_hash=SOURCE_B,
         lineage_hash=SOURCE_B,
+        source_ids=("test:independent-source",),
     )
     results = []
     for rows in itertools.permutations([first, duplicate]):
@@ -260,7 +264,53 @@ def test_exact_duplicate_collapse_and_permutation_are_order_invariant() -> None:
         results.append(resolver.resolve(_request(receipt, "300741.SZ", date(2021, 7, 29))).as_dict())
     assert results[0] == results[1]
     assert results[0]["exact_duplicate_collapsed"] is True
+    assert results[0]["sequential_interval_resolved"] is False
     assert results[0]["source_hashes"] == [SOURCE_A, SOURCE_B]
+    assert results[0]["source_ids"] == ["test:independent-source", "test:source"]
+
+
+def test_authority_identity_shape_and_receipt_basis_policy_fail_closed() -> None:
+    receipt = _receipt(AuthorityType.CLASSIFICATION)
+    with pytest.raises(IndustryPitContractError, match="authority-specific identity keys"):
+        make_candidate_interval(
+            canonical_symbol="300741.SZ",
+            authority_type=AuthorityType.CLASSIFICATION,
+            taxonomy_contract_id=receipt.taxonomy_contract_id,
+            taxonomy_version=receipt.taxonomy_version,
+            authority_receipt_hash=receipt.receipt_hash,
+            valid_from=date(2021, 7, 30),
+            valid_to_exclusive=None,
+            eligible_from=date(2021, 7, 30),
+            eligible_to_exclusive=None,
+            causal_use_from=date(2021, 8, 2),
+            causal_use_to_exclusive=None,
+            known_from=date(2021, 8, 2),
+            source_effective_field="计入日期",
+            source_last_updated_at=None,
+            research_basis=ResearchBasis.AS_PUBLISHED_PIT,
+            non_as_known_taxonomy=False,
+            identity=NEW,
+            authority_identity={"classification_l3_code": NEW.l3_code},
+            unavailable_reason=None,
+            source_ids=receipt.source_ids,
+            source_hashes=(SOURCE_A,),
+            lineage_hashes=(SOURCE_A,),
+        )
+
+    with pytest.raises(IndustryPitContractError, match="knowledge-time policy"):
+        AuthorityReceipt(
+            authority_type=AuthorityType.CLASSIFICATION,
+            authority_schema=CLASSIFICATION_CANDIDATE_SCHEMA,
+            authority_version="invalid_basis_policy_v1",
+            taxonomy_contract_id="sw2021_classification_catalog_v1",
+            taxonomy_version="SW2021",
+            knowledge_time_policy=KnowledgeTimePolicy.NON_AS_KNOWN_RESEARCH,
+            research_basis=ResearchBasis.AS_PUBLISHED_PIT,
+            source_ids=("test:source",),
+            source_hashes=(SOURCE_A,),
+            frozen_denominator=1,
+            denominator_digest=DENOMINATOR,
+        )
 
 
 def test_same_boundary_conflict_interval_overlap_and_authority_mismatch_fail_closed() -> None:
