@@ -1,14 +1,14 @@
 # AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.4
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-24
+> 修订日期：2026-08-25
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0F_POLICY_UTILITY_RANKER_F2_DESIGN_READY_IMPLEMENTATION_NOT_STARTED`
+> 当前状态：`P0G_STAGE_A_NEGATIVE_STOP_NEXT_MODEL_HYPOTHESIS_PENDING`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线 shadow 推理；自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
-> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity 修复、forward evaluation、历史虚拟前向和P0-E离线实验源码均已进入 `main`；P0-E PR #3726 merge commit为 `437405ce9e43f61426fce281507c3bc9be6c1549`，本修订开发基线为 `origin/main=755c8232de78ae9e331a594795156167dd5e2000`。生产descriptor仍指向P0-D exact bundle；P0-E未激活、不替换baseline
+> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity 修复、forward evaluation、历史虚拟前向、P0-E和P0-F Stage A源码均已进入 `main`；P0-F PR #3758 merge commit为 `73b1e6bd`，停牌语义修复PR #3760/#3763及BUG-1180/1181最终close-sync均已完成。生产descriptor仍指向P0-D exact bundle；P0-E/P0-F均未激活、不替换baseline
 > 当前生产前向状态：截至 2026-08-23，两个 ENABLED Program 各有7个 forward run；最新 `decision=2026-08-21 -> target=2026-08-24` 均为 `PUBLISHED/NOT_DUE`。该已持久化 run 冻结的是切换前 legacy quality-reranker；第一条自然 P0-D observation 只能在 2026-08-24 收盘后的下一目标交易日运行中形成，禁止回填
 > 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`。源码合入不等于 descriptor 接入或 bundle 激活
-> 演进方向：P0-D 历史虚拟前向已对24个成熟决策日完成同 policy 真实验证：胜率高于 matched Selection Top5 9.74pp，但累计净收益低2.54pp、最大回撤差5.63pp且换手更高，因此不激活。逐episode归因证明主要失败是二分类概率与收益幅度相关性仅约0.10并错失大盈利。P0-E固定收益幅度加权实验在已消费窗口改善累计收益/回撤/换手，但冻结CPCV比P0-D低0.4731bps、仅35.71%路径胜出且PBO恶化到0.8143，因此同样不激活且不继续调参。下一模型固定为P0-F：直接预测冻结policy下的连续净超额收益并排序Selection Top20；详细设计见 `advisory_p0f_policy_utility_ranker_f2_design_20260824.md`
+> 演进方向：P0-D历史虚拟前向已证明二分类概率不能稳定表达收益幅度；P0-E outcome weighting同样负向停止。P0-F v2相对exact P0-D提高`2.612087 bps`但换手增加`0.007419`。P0-G完整168 trial-path将换手差缩小到`+0.004096`，同时收益仍提高`2.191621 bps`、path win`53.57%`、回撤改善`0.002908`，但仍未满足换手门槛，故同样`NEGATIVE_STOP_NOT_ADVANCED`。P0-G相对P0-F换手改善`0.003323`但收益下降`0.420466 bps`，证明持有期负担方向部分有效、单一adjusted-label不足；下一模型必须先冻结新的独立假设，禁止围绕同一结果追加shadow-price roster、family、seed或rank guard。
 > 历史验证执行方向：44 日 A/B/C v6 golden 已冻结；P0-D 历史虚拟前向复用正式 scorer 与 shared policy kernel，24决策日+20日tail的权威 artifact 为 `fbf072f0d8c4a637a48aa8c2ed63c3b61c245abd08ac4e1417b2a0fcc8eb59a9`。该窗口现已被 P0-D 质量判断消费，不得在后续调模后继续标为新的 OOT
 > 当前双轨目标：模型线使用批量历史虚拟前向快速淘汰无效 challenger，并以自然 future OOS 作最终独立证据；H0 继续处理更广泛的实盘单日/历史批量同核执行优化，两者不互相阻断
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
@@ -26,10 +26,11 @@ M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。�
 3. P0-C 直接读取现有 QE H5/Parquet/Qlib Bin 和目标策略包预测 PKL，构造 Top5 shadow policy episode 标签与 purged rolling/CPCV 评价。
 4. P0-D 在 WSL Conda 训练真实 meta-label 模型并进入 challenger 前向发布；正式预测只读取数据库 decision-cutoff 输入。
 5. P0-E 复用P0-C连续净超额收益，在每条CPCV path内用train-only幅度统计训练收益感知meta-label；模型选择只用冻结validation，已消费历史窗口只作回放诊断。
-6. P0-F 复用P0-C连续净超额收益，使用train-only median/MAD和固定Huber regression直接学习policy utility；entry按utility排序，退出/policy/成本不变。只有冻结CPCV收益、回撤和换手合同全部通过才实现条件运行时和历史回放。
-7. 前向 residual 自然成熟后执行 P1-A，自有两个以上兼容包的独立 bundle 后执行 P1-B；长期趋势包就绪后执行 P2。
-8. H0 在当前已授权 44 日 A/B/C 回放结果完整冻结后，以该结果作为 golden baseline，实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复 raw 计算，不改变逐日业务逻辑。
-9. 上述真实功能和 H0 均不自动解禁历史补账、历史归档、ModelOps、旧任务清理或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
+6. P0-F 复用P0-C连续净超额收益，使用train-only median/MAD和固定Huber regression直接学习policy utility；真实Stage A因换手门禁失败已负向终止。
+7. P0-G只改变训练label并完成真实Stage A；相对P0-D仍因换手`+0.004096`负向停止，禁止Stage B、replay、runtime和结果后调参。
+8. 前向 residual 自然成熟后执行 P1-A，自有两个以上兼容包的独立 bundle 后执行 P1-B；长期趋势包就绪后执行 P2。
+9. H0 在当前已授权 44 日 A/B/C 回放结果完整冻结后，以该结果作为 golden baseline，实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复 raw 计算，不改变逐日业务逻辑。
+10. 上述真实功能和 H0 均不自动解禁历史补账、历史归档、ModelOps、旧任务清理或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
 
 以下内容不再是模型训练、模型推理、页面展示或模型启用的前置条件；H0 也不得借此恢复无界历史平台建设：
 
@@ -640,10 +641,13 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`；后续安全 des
 
 优先级：`P0_NOW_AFTER_P0E_NEGATIVE`。
 
-状态：`F2_DESIGN_READY_IMPLEMENTATION_NOT_STARTED`。
+状态：`STAGE_A_NEGATIVE_STOP_NOT_ADVANCED`。
 
 权威详细设计：
 `docs/architecture/advisory_p0f_policy_utility_ranker_f2_design_20260824.md`。
+
+Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成重启验证并关闭。真实v2训练bundle为
+`ff336eadb131cb6a3d431a846de4e9949ad984da1dcc4d9c231aa313886ebc10`：相对exact P0-D平均收益提高`2.612087 bps`、path win rate `53.57%`、相对Selection提高`5.578137 bps`、配对平均回撤改善`0.001286`，但配对平均换手增加`0.007419`。因此六项advancement只有换手失败，正式结论为`NEGATIVE_STOP_NOT_ADVANCED`；Stage B、runtime、descriptor和历史回放均禁止继续。
 
 任务列表：
 
@@ -657,6 +661,27 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`；后续安全 des
 8. 历史回放只能标为`HISTORICAL_REPLAY`且不改变winner；自然future OOS继续按交易日形成并由用户决定是否激活。
 
 完成判定：Stage A真实WSL 168 trial-path、不可变bundle、exact retry、PBO/paired comparison/advancement receipt齐全。若advancement通过，Stage B还需显式role、旧role兼容、isolated descriptor和历史回放；无论结果如何均不自动激活。
+
+### P0-G：SHORT_REBOUND turnover-constrained policy utility
+
+优先级：`P0_NOW_AFTER_P0F_TURNOVER_NEGATIVE`。
+
+状态：`STAGE_A_NEGATIVE_STOP_NOT_ADVANCED`。
+
+权威详细设计：
+`docs/architecture/advisory_p0g_turnover_constrained_utility_f2_design_20260825.md`。
+
+任务列表：
+
+1. 复用exact P0-C dataset、P0-F feature schema v2、28 READY CPCV paths和shared shadow policy；不修改candidate、exit、policy或成本。
+2. 用7716行成熟candidate episode的`holding_trading_days`构造与组合每日换手同单位的`2/(target_count*holding_days)`换手负担；3行涨停未入场和1行右删失不填默认label，其所在日期不参与constraint calibration；该未来字段只作label，禁止进入feature。
+3. 每条outer path只在train blocks计算utility/liability MAD、固定shadow-price候选和exact P0-D train turnover budget，选择第一个满足预算的最小影子价格；validation不参与。
+4. 用`net_excess_return_bps - shadow_price * turnover_liability`训练固定Huber CORE/CORE_HMM×3 seeds×28 paths，entry按预测adjusted utility排序，Selection Top40 exit保持不变。
+5. 使用shared policy评价原始组合净收益、回撤和换手；train constraint、candidate loss、PBO、winner和advancement分别报告。
+6. 复用P0-F六项advancement并要求每path constraint可行；任一失败完整负向停止，不追加price roster、family、seed、rank guard或blend。
+7. 只有Stage A通过后才允许另行批准Stage B；P0-D概率、P0-F和P0-G bps score不得混淆。
+
+完成判定：已完成真实WSL 168/168 trial-path、不可变bundle `433ff217...`、exact retry、资源/PBO/constraint/paired/advancement receipts；唯一失败门槛为相对P0-D换手`+0.004096`，已负向停止且未激活。
 
 ### H0：实盘单日与历史批量同核执行
 
@@ -779,6 +804,13 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`；后续安全 des
 | F-157 | P0-F conditional runtime使用显式role；utility只决定entry rank，take/skip/confidence继续来自exact P0-D binary model |
 | F-158 | P0-F历史回放只在advancement通过后运行并固定为HISTORICAL_REPLAY；自然future OOS不回填且独立确认 |
 | F-159 | P0-F Stage A/B均无DDL/DML和默认生产激活；descriptor、restart、activation和cleanup保持独立用户授权 |
+| F-160 | P0-F真实Stage A换手门禁失败后完整终止；P0-G不得修改P0-F参数、rank guard、blend或运行时来规避负向结论 |
+| F-161 | P0-G换手负担与shared evaluator同单位，holding/exit/future return只作label/evaluation；非成熟行不填默认值且只允许同日期集合的P0-G/P0-D约束校准 |
+| F-162 | P0-G影子价格候选固定，只在每条outer CPCV path的train blocks选择最小可行值；validation和历史回放不得参与 |
+| F-163 | P0-G不连续train block之间强制空仓重置，purge/embargo和label span不得跨validation继承portfolio state |
+| F-164 | P0-G固定Huber CORE/CORE_HMM×3 seeds×28 paths，entry只按adjusted utility变化，Selection Top40 exit、policy和成本保持不变 |
+| F-165 | P0-G沿用收益、path win、Selection、回撤、换手和完整性六项advancement；失败停止Stage B且不自动激活 |
+| F-166 | P0-G Stage A生成不可变request/bundle、constraint/PBO/paired/advancement/resource/exact-retry receipt，零DDL/DML和零运行时写入 |
 
 ## 11. Design Acceptance Matrix
 
