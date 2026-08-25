@@ -927,6 +927,18 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: The audited daily-basic ingestion and repair operators plus their direct tests form one local_data data-quality boundary and must select the focused data sync plan instead of remaining unmapped generic scripts.
+  - rule_id: local_data_industry_pit_authority
+    priority: 98
+    include:
+      - backend/services/industry_pit/**
+      - scripts/build_industry_pit_candidates.py
+      - backend/tests/industry_pit/**
+      - backend/tests/scripts/test_build_industry_pit_candidates.py
+    primary_module: local_data
+    impact_modules: []
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: C-013 classification and SW index-membership PIT candidates, their shared fail-closed resolver, and repo-external artifact writer form one consumer-neutral local_data authority boundary; HMM, QE, and business consumer adapters remain separately owned.
   - rule_id: local_data_stock_universe_pit
     priority: 96
     include:
