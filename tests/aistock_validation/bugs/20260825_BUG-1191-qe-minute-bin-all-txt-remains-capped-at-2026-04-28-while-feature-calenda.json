@@ -1,0 +1,274 @@
+{
+  "actual": "Minute feature/calendar artifacts reach 2026-06-30 but all.txt remains capped at 2026-04-28; 228 completed minute execution loops across 32 tasks claim 2026-06-30 coverage and cannot be trusted at strategy-metric level.",
+  "allowed_write_scope": [
+    "backend/qlib_exporter/authoritative_bin_exporter.py",
+    "scripts/qlib_authoritative_bin_export.py",
+    "backend/tests/test_qlib_export_stock_universe_filters.py",
+    "docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md",
+    "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+    "tests/aistock_validation/bugs/20260825_BUG-1191-qe-minute-bin-all-txt-remains-capped-at-2026-04-28-while-feature-calenda.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1191",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-25T05:19:57.292630Z",
+  "description": "Minute feature/calendar artifacts reach 2026-06-30 but all.txt remains capped at 2026-04-28; 228 completed minute execution loops across 32 tasks claim 2026-06-30 coverage and cannot be trusted at strategy-metric level.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260825-506cd3d93e75",
+      "timestamp": "2026-08-25T05:19:57.292604Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-1101; task qe_20260825_031740_2457 Loop10-12 QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH expected=5000 uncovered=4959"
+  ],
+  "expected": "A candidate minute Bin generated to cutoff 2026-06-30 has instruments/all.txt spans consistent with its physical minute feature/calendar coverage and frozen PIT universe; signoff rejects any cross-file cutoff mismatch; historical affected execution metrics are explicitly marked pending rerun while model/prediction/IC evidence remains separate.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "scripts/qlib_authoritative_bin_export.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md",
+      "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/qlib_exporter/authoritative_bin_exporter.py",
+        "scripts/qlib_authoritative_bin_export.py",
+        "backend/tests/test_qlib_export_stock_universe_filters.py",
+        "docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md",
+        "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "factor_library",
+        "paper_v2",
+        "tests.backend",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/qlib_exporter/authoritative_bin_exporter.py",
+          "impact_modules": [
+            "qe.core",
+            "factor_library",
+            "paper_v2"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_data_pipeline"
+        },
+        {
+          "file": "scripts/qlib_authoritative_bin_export.py",
+          "impact_modules": [
+            "qe.core",
+            "factor_library",
+            "paper_v2"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_qlib_export_stock_universe_filters.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        },
+        {
+          "file": "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/qlib_exporter/authoritative_bin_exporter.py",
+        "scripts/qlib_authoritative_bin_export.py",
+        "backend/tests/test_qlib_export_stock_universe_filters.py",
+        "docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md",
+        "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "scripts/qlib_authoritative_bin_export.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md",
+      "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+    ]
+  },
+  "first_seen_at": "2026-08-25T05:19:57.292630Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3793,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3793",
+  "last_seen_at": "2026-08-25T05:19:57.292630Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run file-only coverage audit against /home/lc999/data/qlib_minute_bin and compare calendars/1min.txt plus features/*/close.1min.bin with instruments/all.txt; then inspect completed QE loop configs where runtime_mode=minute and test_end=2026-06-30.",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_impact": "unknown",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE minute Bin all.txt remains capped at 2026-04-28 while feature/calendar reach 2026-06-30 and invalidates completed execution metrics",
+  "trigger_condition": {
+    "fingerprint": "506cd3d93e75f3d4050ba2a0",
+    "source_event_id": "FE-20260825-506cd3d93e75"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
