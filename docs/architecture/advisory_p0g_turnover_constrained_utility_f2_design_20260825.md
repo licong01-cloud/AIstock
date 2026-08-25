@@ -2,11 +2,11 @@
 
 > 日期：2026-08-25
 > Tier：F2
-> 状态：`LOCAL_IMPLEMENTATION_VALIDATED_STAGE_A_NOT_RUN`
+> 状态：`STAGE_A_NEGATIVE_STOP_NOT_ADVANCED`
 > 业务归属：Selection Center / Advisory
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前置实验：P0-D v2、P0-E v2、P0-F v2
-> 本文档阶段：冻结新一代 Stage A 模型实验；不代表代码、训练、运行时、激活或生产验收完成
+> 本文档阶段：Stage A 代码、真实训练和负向停止已完成；不代表运行时、激活或生产验收完成
 
 ## 1. Background / Feature Card / 目标与业务价值
 
@@ -337,20 +337,20 @@ Stage A没有生产rollout：只生成隔离的离线bundle，`runtime_eligible=
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-901 | 本设计 §§1,3；P0-F advancement receipt | `backend/tests/advisory_model_first/test_turnover_constrained_utility_contracts.py` | local_verified | none |
-| F-902 | 本设计 §§3,4；`shadow_portfolio_policy.py`既有动作语义 | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | local_verified | none |
-| F-903 | turnover constrained training label builder | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | local_verified | none |
-| F-904 | path-local shadow-price selector | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | local_verified | none |
-| F-905 | block policy evaluator + scale guards | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | local_verified | none |
-| F-906 | request/training/pipeline | `backend/tests/advisory_model_first/test_turnover_constrained_utility_contracts.py` | local_verified | none |
-| F-907 | deterministic priority formatter + shared evaluator | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | local_verified | none |
-| F-908 | pipeline receipts | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | local_verified | none |
-| F-909 | reference loader + advancement receipt | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | local_verified | none |
-| F-910 | stage guard | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | local_verified | none |
-| F-911 | WSL CLI + bundle publisher | `backend/tests/advisory_model_first/test_turnover_constrained_utility_bundle.py` | local_verified | none |
-| F-912 | prediction schema | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | local_verified | none |
-| F-913 | Stage A boundary | `backend/tests/advisory_model_first/test_turnover_constrained_utility_bundle.py` | local_verified | none |
-| F-914 | complete design diff | validation-receipt: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0g_turnover_constrained_utility_f2_design_20260825.md --tier F2` | local_verified | none |
+| F-901 | 本设计 §§1,3；P0-F advancement receipt | `backend/tests/advisory_model_first/test_turnover_constrained_utility_contracts.py` | stage_a_verified | none |
+| F-902 | 本设计 §§3,4；`shadow_portfolio_policy.py`既有动作语义 | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | stage_a_verified | none |
+| F-903 | turnover constrained training label builder | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | stage_a_verified | none |
+| F-904 | path-local shadow-price selector | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | stage_a_verified | none |
+| F-905 | block policy evaluator + scale guards | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | stage_a_verified | none |
+| F-906 | request/training/pipeline | `backend/tests/advisory_model_first/test_turnover_constrained_utility_contracts.py` | stage_a_verified | none |
+| F-907 | deterministic priority formatter + shared evaluator | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | stage_a_verified | none |
+| F-908 | pipeline receipts | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | stage_a_verified | none |
+| F-909 | reference loader + advancement receipt | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | stage_a_verified | none |
+| F-910 | stage guard | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | stage_a_verified | none |
+| F-911 | WSL CLI + bundle publisher | `backend/tests/advisory_model_first/test_turnover_constrained_utility_bundle.py` | stage_a_verified | none |
+| F-912 | prediction schema | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | stage_a_verified | none |
+| F-913 | Stage A boundary | `backend/tests/advisory_model_first/test_turnover_constrained_utility_bundle.py` | stage_a_verified | none |
+| F-914 | complete design diff | validation-receipt: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0g_turnover_constrained_utility_f2_design_20260825.md --tier F2` | stage_a_verified | none |
 
 ## 18. DESIGN-COMPLIANCE-001
 
@@ -366,10 +366,23 @@ Stage A没有生产rollout：只生成隔离的离线bundle，`runtime_eligible=
 - Round 3（实现边界/合规）：逐项检查DESIGN-COMPLIANCE-001；Stage A完整168 trial-path和真实bundle不可缩减，所有错误typed fail closed，唯一业务变量为train-only adjusted label，六项advancement不变，无DDL/DML/runtime/descriptor/激活或新增审批。F2 validator PASS、warnings=0，`git diff --check`通过。复审通过。
 - Round 4（代码/回归）：实现request、label/constraint训练、exact reference、168 trial-path pipeline、immutable bundle和两个CLI；首轮静态检查只发现并删除1个未使用import，聚焦测试首轮发现1个测试参数名漂移并修正。再次执行ruff、compile、36项新旧直接回归和完整`advisory_modeling_backend`，结果为420 passed、12 skipped；跳过项均为Windows缺LightGBM或既有可选环境，不以跳过替代真实WSL Stage A。逐项复审DESIGN-COMPLIANCE-001通过。
 - Round 5（真实输入合同）：用exact P0-C bundle `81e2c9...`和P0-F v2 bundle `ff336e...`成功生成冻结P0-G request，精确绑定P0-D/P0-F winner、7716/7720标签身份、28 paths和数据截止日。当前仍需在clean tracked commit执行WSL 168 trial-path，故状态仅为local implementation validated，不提前报告模型完成。
+- Round 6（真实Stage A/结果复核）：在clean commit `b363674e`、WSL `rdagent-gpu`执行完整168/168 trial-path，耗时514.702秒、峰值RSS 2.95GB，生成immutable bundle `433ff217...`；exact retry返回同一bundle。28条train constraint全部slack非负，其中21条path选择零影子价格、7条选择非零价格；candidate diagnostic无伪造零值或非有限落盘。winner为CORE/20260817，PBO 0.40。相对P0-D收益提高2.191621 bps、path win 53.57%、回撤改善0.002908，但平均换手仍增加0.004096，故唯一失败项为turnover，结论为`NEGATIVE_STOP_NOT_ADVANCED`。相对P0-F收益降低0.420466 bps、换手改善0.003323，说明方向部分生效但不足以越过P0-D预算；禁止Stage B、replay、runtime和结果后调参。复审通过。
 
 ## 20. Completion definition
 
 - F-901..F-914 每项有精确实现位置和直接 oracle，无未批准 gap。
 - F2 validator、`git diff --check`和三轮设计审核通过。
-- 本设计只完成 P0-G Stage A 输入；未训练前不得报告模型完成，advancement失败不得开发Stage B。
+- P0-G Stage A 已以完整负向结果结束；不得开发Stage B，不得把bundle用于runtime或激活。
 - 任何范围变化先更新本文和父蓝图，再从受影响审核轮次重审。
+
+## 21. Stage A authoritative result
+
+- request：`advturnutilityreq_369c2d23fb1d30e1ce801506`
+- bundle：`433ff2172295d4ccc0d0dc434dedc74a3bab6b0627ed67a2dc37f2b418df7e52`
+- winner：`FAMILY_TURNOVER_CONSTRAINED_CORE / seed=20260817`
+- 规模：28 paths、168 trial-path、386 decision dates、7716 matured / 7720 total labels
+- 资源：514.702秒，峰值RSS 2,948,481,024 bytes，小于8GB门槛
+- 对P0-D：收益`+2.191621 bps`，path win`53.57%`，MDD差`+0.002908`，turnover差`+0.004096`
+- 对P0-F：收益`-0.420466 bps`，turnover差`-0.003323`
+- PBO：`0.40`，仅诊断、不作advancement门槛
+- 决策：`NEGATIVE_STOP_NOT_ADVANCED`；`runtime_eligible=false`、`stage_b_eligible=false`、`activated=false`
