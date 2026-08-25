@@ -232,12 +232,9 @@ class FieldMapExportResponse(BaseModel):
 
 # NOTE: FastAPI builds request body TypeAdapters while registering routes.
 # Ensure models are rebuilt BEFORE route decorators below.
-try:
-    DailySnapshotRequest.model_rebuild(force=True)
-    MoneyflowSnapshotRequest.model_rebuild(force=True)
-    FieldMapExportRequest.model_rebuild(force=True)
-except Exception:
-    pass
+DailySnapshotRequest.model_rebuild(force=True)
+MoneyflowSnapshotRequest.model_rebuild(force=True)
+FieldMapExportRequest.model_rebuild(force=True)
 
 
 _daily_exporter = QlibDailyExporter()
@@ -2258,8 +2255,11 @@ async def list_snapshots() -> SnapshotListResponse:
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 created_at = meta.get("generated_at")
-            except Exception:
-                pass
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"snapshot {snapshot_id} meta.json is unreadable or malformed",
+                ) from exc
 
         snapshots.append(
             SnapshotInfo(
@@ -2493,10 +2493,7 @@ class SectorDataSnapshotResponse(BaseModel):
         )
 
 
-try:
-    SectorDataSnapshotRequest.model_rebuild()
-except Exception:
-    pass
+SectorDataSnapshotRequest.model_rebuild()
 
 
 @router.post("/api/v1/qlib/snapshots/sector_data", response_model=SectorDataSnapshotResponse)
@@ -3035,8 +3032,11 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
         (bin_dir / "meta_export.json").write_text(
             json.dumps(meta, ensure_ascii=False, default=str, indent=2), encoding="utf-8"
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to persist export metadata for snapshot {body.snapshot_id}",
+        ) from exc
 
     return UnifiedBinExportResponse(
         snapshot_id=body.snapshot_id, stock_ok=dump_res.ok,
@@ -3530,6 +3530,8 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
     index_datasets = [ds for ds in body.datasets if ds not in {"stock_daily", "stock_minute"}]
     for idx_code in index_datasets:
         dataset_key = f"index_{idx_code}"
+        all_backup: Optional[bytes] = None
+        backup_captured = False
         try:
             # 确定起止日期
             if body.mode == "incremental":
@@ -3551,6 +3553,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
 
             # BACKUP all.txt
             all_backup = _backup_file(all_txt)
+            backup_captured = True
 
             # 导出指数 CSV
             idx_csv_dir = _export_index_to_csv_for_dump_bin(
@@ -3593,10 +3596,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
             raise
         except Exception as exc:
             # 确保 all.txt 被恢复
-            try:
-                _restore_file(all_txt, all_backup)  # type: ignore[possibly-undefined]
-            except Exception:
-                pass
+            if backup_captured:
+                try:
+                    _restore_file(all_txt, all_backup)
+                except Exception as restore_exc:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"index export failed and instruments/all.txt restore failed for {idx_code}",
+                    ) from restore_exc
             steps.append(BinDatasetStepResult(
                 dataset=idx_code, ok=False, error=str(exc),
             ))

@@ -66,6 +66,12 @@
       "actor": "codex",
       "note": "Static gate review of the newly changed backend router exposed two pre-existing HIGH findings: malformed H5 snapshot metadata was silently swallowed and a metadata baseline parameter used forbidden fallback terminology. Narrowed the race handler to FileNotFoundError and renamed the metadata-only parameter without changing export semantics; focused guardrail scan now reports zero findings.",
       "timestamp": "2026-08-25T09:16:24Z"
+    },
+    {
+      "action": "changed_file_l0_exception_paths_repaired",
+      "actor": "codex",
+      "note": "Final full-file L0 review exposed five additional pre-existing silent exception paths in the changed Qlib router. Model schema rebuilds now fail import loudly, malformed snapshot metadata and export metadata persistence return explicit HTTP failures, and a failed instruments/all.txt restoration aborts instead of continuing with uncertain state; restoration runs only after a backup was actually captured. No guardrail baseline exemption was added.",
+      "timestamp": "2026-08-25T09:44:39Z"
     }
   ],
   "evidence_uris": [
