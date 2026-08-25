@@ -2,11 +2,11 @@
 
 > 日期：2026-08-25
 > Tier：F2
-> 状态：`LOCAL_IMPLEMENTATION_VALIDATED_STAGE_A_NOT_RUN`
+> 状态：`STAGE_A_NEGATIVE_STOP_NOT_ADVANCED`
 > 业务归属：Selection Center / Advisory
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前置实验：P0-D v2、P0-E v2、P0-F v2、P0-G v1
-> 本文档阶段：冻结新的 Stage A 模型实验；不代表代码、训练、运行时、激活或生产验收完成
+> 本文档阶段：Stage A代码、真实训练和负向停止已完成；不代表运行时、激活或生产验收完成
 
 ## 1. Background / Feature Card / 目标与业务价值
 
@@ -367,21 +367,21 @@ Stage A只发布外部immutable research bundle，不写runtime。失败即停�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-201 | 本设计 §§1,3；P0-G receipts | validation-receipt: `F:/Dev/AIstock_model_artifacts/advisory_p0g_turnover_constrained_utility_20260825/turnover_constrained_utility_bundles/433ff2172295d4ccc0d0dc434dedc74a3bab6b0627ed67a2dc37f2b418df7e52/advancement_receipt.json` | local_verified | none |
-| F-202 | `dual_head_output_constraint_training.py` | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | local_verified | none |
-| F-203 | inner split/OOF builder | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | local_verified | none |
-| F-204 | P0-D OOF budget builder | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py` | local_verified | none |
-| F-205 | OOF price selector | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | local_verified | none |
-| F-206 | inner rounds/refit | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | local_verified | none |
-| F-207 | frozen request roster | `backend/tests/advisory_model_first/test_dual_head_output_constraint_contracts.py` | local_verified | none |
-| F-208 | priority formatter/shared evaluator | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | local_verified | none |
-| F-209 | diagnostics/pipeline receipts | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py` | local_verified | none |
-| F-210 | exact reference loader | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py` | local_verified | none |
-| F-211 | advancement receipt/stage guard | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py` | local_verified | none |
-| F-212 | bundle publisher/WSL CLI | `backend/tests/advisory_model_first/test_dual_head_output_constraint_bundle.py` | local_verified | none |
-| F-213 | Stage A boundaries | `backend/tests/advisory_model_first/test_dual_head_output_constraint_bundle.py` | local_verified | none |
-| F-214 | typed errors | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | local_verified | none |
-| F-215 | complete design diff | validation-receipt: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0h_dual_head_output_constraint_f2_design_20260825.md --tier F2` | local_verified | none |
+| F-201 | 本设计 §§1,3；P0-G receipts | validation-receipt: `F:/Dev/AIstock_model_artifacts/advisory_p0g_turnover_constrained_utility_20260825/turnover_constrained_utility_bundles/433ff2172295d4ccc0d0dc434dedc74a3bab6b0627ed67a2dc37f2b418df7e52/advancement_receipt.json` | stage_a_verified | none |
+| F-202 | `dual_head_output_constraint_training.py` | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | stage_a_verified | none |
+| F-203 | inner split/OOF builder | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | stage_a_verified | none |
+| F-204 | P0-D OOF budget builder | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py` | stage_a_verified | none |
+| F-205 | OOF price selector | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | stage_a_verified | none |
+| F-206 | inner rounds/refit | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | stage_a_verified | none |
+| F-207 | frozen request roster | `backend/tests/advisory_model_first/test_dual_head_output_constraint_contracts.py` | stage_a_verified | none |
+| F-208 | priority formatter/shared evaluator | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | stage_a_verified | none |
+| F-209 | diagnostics/pipeline receipts | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py` | stage_a_verified | none |
+| F-210 | exact reference loader | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py` | stage_a_verified | none |
+| F-211 | advancement receipt/stage guard | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py` | stage_a_verified | none |
+| F-212 | bundle publisher/WSL CLI | `backend/tests/advisory_model_first/test_dual_head_output_constraint_bundle.py` | stage_a_verified | none |
+| F-213 | Stage A boundaries | `backend/tests/advisory_model_first/test_dual_head_output_constraint_bundle.py` | stage_a_verified | none |
+| F-214 | typed errors | `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | stage_a_verified | none |
+| F-215 | complete design diff | validation-receipt: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0h_dual_head_output_constraint_f2_design_20260825.md --tier F2` | stage_a_verified | none |
 
 ## 23. DESIGN-COMPLIANCE-001
 
@@ -403,3 +403,20 @@ Stage A只发布外部immutable research bundle，不写runtime。失败即停�
 - Round 2（泄漏/覆盖）：发现若继续沿用P0-G“20行全部成熟”条件，会无必要丢弃3个正常涨停未入场date。P0-H只用OOF预测做constraint，故保留这3天并让shared tradability自然拒绝，唯一右删失尾日因policy tail不完整排除；冻结385/386 date identity，P0-D/P0-H同集合。复审通过。
 - Round 3（模型/业务/资源/合规）：确认shadow price按family/seed/path自身OOF输出拟合，不扩充outer trial roster；两头rounds只取inner-fold median，outer validation不做early stopping；预计每个outer trial训练12个inner head model和2个outer refit model，另有P0-D OOF预算模型，全部串行且8GB fail closed。逐项检查DESIGN-COMPLIANCE-001：无简化、无默认price/liability、candidate/exit/policy/cost不变、六项advancement不增加审批。设计可进入实现。
 - Round 4（实现/直接回归）：完成frozen request、nested split、双头OOF/price/refit、P0-D OOF预算、shared-policy pipeline、双模型immutable bundle、CLI和ownership mapping。代码审核发现并修正categorical vocabulary若从全rows拟合会泄漏validation类别的问题，现只用inner train构造，unseen类别显式转missing并设置indicator。真实P0-C split smoke为28/28 paths、每path 6 folds、inner train 118..222 dates；reference loader精确读回P0-D/F/G winner。ruff/compile通过，41项新旧直接回归和完整`advisory_modeling_backend`通过（436 passed、13 skipped）。Stage A尚未运行，不提前报告模型完成。
+- Round 5（真实Stage A/结果复核）：在clean commit `8413f756`、WSL `rdagent-gpu`完成168/168 outer trial-path，耗时1462.145秒、峰值RSS 2.955GB，生成bundle `82afdb81...`并exact retry复用同一identity。168条trial constraint全部slack非负，6-fold OOF完整；82条trial选择零price、86条非零，final price为1030.502429。winner为CORE_HMM/20260823。相对P0-D换手降低0.022708、MDD改善0.010688、相对Selection收益提高2.639696 bps，证明output constraint有效；但相对P0-D收益低0.326353 bps、path win 46.43%，且PBO 0.90，故`NEGATIVE_STOP_NOT_ADVANCED`。liability日Spearman 0.256435而return仅0.041731，失败机制是收益头泛化不足而非换手约束失效。双booster均可加载且120 features一致，runtime/activation保持false。复审通过。
+
+## 26. Stage A authoritative result
+
+- request：`advdualheadreq_027b41bd7b996fd25eab7b54`
+- bundle：`82afdb81c3164c4a8aeed6d427bafe24c006385c8e87b3779c7dcd217dabc5bb`
+- winner：`FAMILY_DUAL_HEAD_CORE_HMM / seed=20260823`
+- 规模：28 paths、168 outer trial-path、6 inner folds/path、385 eligible constraint dates
+- 资源：1462.145秒，峰值RSS 2,955,366,400 bytes，小于8GB
+- 对P0-D：收益`-0.326353 bps`，path win`46.43%`，MDD差`+0.010688`，turnover差`-0.022708`
+- 对Selection：收益`+2.639696 bps`
+- 对P0-F：收益`-2.938440 bps`，turnover差`-0.030127`
+- 对P0-G：收益`-2.517974 bps`，turnover差`-0.026803`
+- head diagnostics：liability daily Spearman`0.256435`，return daily Spearman`0.041731`，无null correlation或clip边界堆积
+- PBO：`0.90`，只作诊断但显示winner稳定性差
+- constraint：168/168 feasible；82 zero-price、86 non-zero；final price`1030.502429`
+- 决策：`NEGATIVE_STOP_NOT_ADVANCED`；`runtime_eligible=false`、`stage_b_eligible=false`、`activated=false`
