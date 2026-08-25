@@ -1,7 +1,7 @@
 # Advisory P0-I Grouped-Rank Return Head with Output Constraint F2 详细设计
 
 > 日期：2026-08-26
-> 状态：`IMPLEMENTED_LOCAL_VERIFIED_STAGE_A_PENDING`
+> 状态：`STAGE_A_NEGATIVE_STOP_INCOMPLETE_CPCV`
 > 类型：F2 / Advisory离线模型Stage A
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前序权威结果：`docs/architecture/advisory_p0h_dual_head_output_constraint_f2_design_20260825.md`
@@ -279,21 +279,21 @@ Stage A不部署。源码合入只增加离线实验能力和权威结果，不�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-216 | 本文§1/§3；父蓝图P0-I | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py`; P0-H bundle `82afdb81c3164c4a8aeed6d427bafe24c006385c8e87b3779c7dcd217dabc5bb` | DESIGN_READY | none |
-| F-217 | `backend/services/advisory_model_first/grouped_rank_output_constraint_training.py`; pipeline | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py`; `test_grouped_rank_output_constraint_pipeline.py` | DESIGN_READY | none |
-| F-218 | grouped relevance builder | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py` relevance tie/status/group nodeids | DESIGN_READY | none |
-| F-219 | same-date percentile scorer | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py` no-label score/percentile nodeids | DESIGN_READY | none |
-| F-220 | nested fold + training | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py`; actual P0-C 28-path split smoke command | DESIGN_READY | none |
-| F-221 | liability trainer + shared policy | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py`; `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | DESIGN_READY | none |
-| F-222 | pipeline exact P0-D OOF | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py` matched-date/budget nodeids | DESIGN_READY | none |
-| F-223 | `backend/services/advisory_model_first/grouped_rank_output_constraint_contracts.py` | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_contracts.py` | DESIGN_READY | none |
-| F-224 | grouped-rank pipeline | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py` roster/outer-isolation nodeids | DESIGN_READY | none |
-| F-225 | diagnostics/winner pipeline | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py` winner/PBO/paired nodeids | DESIGN_READY | none |
-| F-226 | advancement receipt | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py` advanced/negative/incomplete nodeids | DESIGN_READY | none |
-| F-227 | `backend/services/advisory_model_first/grouped_rank_output_constraint_bundle.py` | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_bundle.py` | DESIGN_READY | none |
-| F-228 | request + manifest flags | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_contracts.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_bundle.py` | DESIGN_READY | none |
-| F-229 | progress/resource/error contracts | grouped-rank direct tests plus `python -m nox -s advisory_modeling_backend` | DESIGN_READY | none |
-| F-230 | workflow/design/CI evidence | `tests/aistock_validation/test_module_ownership_catalog.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py`; PR CI rollup and cleanup readback | DESIGN_READY | none |
+| F-216 | 本文§1/§3；父蓝图P0-I | `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py`; P0-H bundle `82afdb81c3164c4a8aeed6d427bafe24c006385c8e87b3779c7dcd217dabc5bb` | stage_a_incomplete_stop_verified | none |
+| F-217 | `backend/services/advisory_model_first/grouped_rank_output_constraint_training.py`; pipeline | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py`; `test_grouped_rank_output_constraint_pipeline.py` | stage_a_incomplete_stop_verified | none |
+| F-218 | grouped relevance builder | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py` relevance tie/status/group nodeids | stage_a_incomplete_stop_verified | none |
+| F-219 | same-date percentile scorer | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py` no-label score/percentile nodeids | stage_a_incomplete_stop_verified | none |
+| F-220 | nested fold + training | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py`; actual P0-C 28-path split smoke command | stage_a_incomplete_stop_verified | none |
+| F-221 | liability trainer + shared policy | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py`; `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py` | stage_a_incomplete_stop_verified | none |
+| F-222 | pipeline exact P0-D OOF | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py` matched-date/budget nodeids | stage_a_incomplete_stop_verified | none |
+| F-223 | `backend/services/advisory_model_first/grouped_rank_output_constraint_contracts.py` | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_contracts.py` | stage_a_incomplete_stop_verified | none |
+| F-224 | grouped-rank pipeline | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py`; evidence-only bundle `2378358cf7c57e7e87fb17ff902b00fdb94e697aefbc06690a61334ac041f4a0` | stage_a_incomplete_stop_verified | none |
+| F-225 | diagnostics/winner pipeline | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py`; bundle `inner_oof_constraint_receipt.json` | stage_a_incomplete_stop_verified | none |
+| F-226 | advancement receipt | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py`; bundle `advancement_receipt.json` | stage_a_incomplete_stop_verified | none |
+| F-227 | `backend/services/advisory_model_first/grouped_rank_output_constraint_bundle.py` | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_bundle.py`; exact retry readback | stage_a_incomplete_stop_verified | none |
+| F-228 | request + manifest flags | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_contracts.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_bundle.py` | stage_a_incomplete_stop_verified | none |
+| F-229 | progress/resource/error contracts | grouped-rank direct tests plus `python -m nox -s advisory_modeling_backend`; bundle `resource_report.json` | stage_a_incomplete_stop_verified | none |
+| F-230 | workflow/design/CI evidence | `backend/tests/test_validation_module_ownership.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py`; F2/guardrail/CI classifier receipts | stage_a_incomplete_stop_verified | none |
 
 ## 22. DESIGN-COMPLIANCE-001
 
@@ -313,7 +313,21 @@ Stage A不部署。源码合入只增加离线实验能力和权威结果，不�
 - Round 3（泄漏/业务/资源/合规）：逐项确认relevance只在matured train/inner-validation组内生成，score date百分位只消费同日20个raw predictions；NOT_ENTERED行只从fit label排除但不删除候选或日期。固定单一RankXENDCG、P0-H树参数/3 seeds/8 price multipliers、28 paths和8GB串行上限；outer validation不拟合任何状态。DESIGN-COMPLIANCE-001四项均无设计缺口，F2 validator PASS 15/15、warnings=0，可进入实现。
 - Round 4（实现结构复审）：实现骨架确认P0-I未导入P0-H私有helper，但与P0-H一样复用`policy_utility_pipeline`和turnover constraint的既有内部shared-policy kernel。为避免设计误写成复制交易逻辑，明确允许这组精确kernel复用并要求共同回归；P0-H模块和bundle仍未修改。该修订不改变模型、业务、门槛或写入范围。
 - Round 5（代码/直接回归/门禁）：完成versioned contracts、matured-only relevance、真实RankXENDCG group训练、same-date percentile、unchanged liability、nested OOF/P0-D budget/shared policy pipeline、P0-H diagnostic reference、immutable bundle、CLI、tests和ownership。首轮克隆测试8项失败全部因缺P0-H fixture或旧字段断言，针对性修复后18 passed/1 Windows LightGBM skip；WSL直接smoke真实训练300 rows/4 folds并读回P0-D/F/G/H四references，实际P0-C split为28 paths且每path 6 folds。Ruff/compile/F2 validator、guardrail 13 files 0 findings、ownership 8 passed、完整`advisory_modeling_backend` 454 passed/14 skipped。逐项检查DESIGN-COMPLIANCE-001无阻断；真实Stage A仍pending，不提前标记模型结果完成。
+- Round 6（真实Stage A/约束根因复核）：clean commit `fadffb74`、request `advgroupedrankreq_314c84d158a42be1b87e71d8`在WSL完成feature 386 dates/7720 rows并运行60个trial-path。前10条path的2 family×3 seeds全部完成且constraint slack均非负；第11条path `advpcpv_966c8a5c49c0e2a106c754e5`的CORE/20260813在冻结8个price上最小换手为`0.2013793103`，仍高于exact P0-D预算`0.2006872852`约`0.0006920251`，因此按§9/§12立即`NEGATIVE_STOP_INCOMPLETE_CPCV`。候选price及turnover完整写入typed failure，未选择最接近值、未扩展roster。completed 60项return daily Spearman均值`-0.002229`、NDCG@5`0.385322`，liability Spearman`0.236089`；证明失败来自grouped-rank收益信号/冻结约束可行性，不是liability单位、Top20覆盖、reference、hash或实现回退。总耗时810.577秒、峰值RSS2.956GB；evidence-only bundle `2378358...`无model/winner，exact retry返回同一bundle，runtime/stage_b/activated均false。复审通过，禁止调参续跑。
 
 ## 25. Stage A authoritative result
 
-状态：`NOT_RUN`。设计、实现和本地门禁完成前不得生成或引用P0-I模型结果。
+状态：`NEGATIVE_STOP_INCOMPLETE_CPCV`。
+
+- source commit：`fadffb74712b5e1c7f3f96c1ca47b3fcb7e117b2`
+- request：`advgroupedrankreq_314c84d158a42be1b87e71d8`
+- bundle：`2378358cf7c57e7e87fb17ff902b00fdb94e697aefbc06690a61334ac041f4a0`
+- 已完成规模：10/28 paths、60/168 trial-path；completed constraints 60/60 feasible
+- 终止点：path `advpcpv_966c8a5c49c0e2a106c754e5`、`FAMILY_GROUPED_RANK_CORE/20260813`
+- 冻结price turnover最优：`0.2013793103`；exact P0-D budget：`0.2006872852`；缺口：`+0.0006920251`
+- completed diagnostics：return daily Spearman `-0.002229`、NDCG@5 `0.385322`、liability daily Spearman `0.236089`
+- price：27 zero、33 non-zero；completed median `5.096259`、max `21.197901`
+- 资源：810.577秒、峰值RSS 2,955,878,400 bytes，小于8GB
+- exact retry：`EXISTING_BUNDLE`且identity相同
+- bundle readback：`model_available=false`、`runtime_eligible=false`、`stage_b_eligible=false`、`activated=false`
+- 决策：P0-I没有形成可完成CPCV的challenger，禁止扩展price roster、补跑剩余108 trials、生成winner/PBO、Stage B、replay或runtime激活。

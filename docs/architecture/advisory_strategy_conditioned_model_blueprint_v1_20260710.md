@@ -3,7 +3,7 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-08-26
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0I_GROUPED_RANK_RETURN_HEAD_DESIGN_IN_PROGRESS`
+> 当前状态：`P0I_STAGE_A_NEGATIVE_STOP_INCOMPLETE_NEXT_MODEL_HYPOTHESIS_PENDING`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线 shadow 推理；自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
 > 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity 修复、forward evaluation、历史虚拟前向、P0-E和P0-F Stage A源码均已进入 `main`；P0-F PR #3758 merge commit为 `73b1e6bd`，停牌语义修复PR #3760/#3763及BUG-1180/1181最终close-sync均已完成。生产descriptor仍指向P0-D exact bundle；P0-E/P0-F均未激活、不替换baseline
 > 当前生产前向状态：截至 2026-08-23，两个 ENABLED Program 各有7个 forward run；最新 `decision=2026-08-21 -> target=2026-08-24` 均为 `PUBLISHED/NOT_DUE`。该已持久化 run 冻结的是切换前 legacy quality-reranker；第一条自然 P0-D observation 只能在 2026-08-24 收盘后的下一目标交易日运行中形成，禁止回填
@@ -710,7 +710,7 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 
 优先级：`P0_NOW_AFTER_P0H_RETURN_HEAD_GENERALIZATION_FAILURE`。
 
-状态：`IMPLEMENTED_LOCAL_VERIFIED_STAGE_A_PENDING`。
+状态：`STAGE_A_NEGATIVE_STOP_INCOMPLETE_CPCV`。
 
 权威详细设计：
 `docs/architecture/advisory_p0i_grouped_rank_return_head_f2_design_20260826.md`。
@@ -725,7 +725,7 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 6. 沿用P0-H相对exact P0-D的六项advancement；P0-H paired、rank diagnostics和PBO只作诊断。
 7. Stage A仅生成immutable grouped-rank dual-head bundle和完整receipts，零DDL/DML、零runtime/descriptor/activation；完整负向结果也作为有效实验合入。
 
-完成判定：真实WSL 168/168 trial-path、不可变bundle、exact retry、资源/OOF constraint/rank diagnostics/PBO/paired/advancement receipts闭合；任一advancement失败即`NEGATIVE_STOP_NOT_ADVANCED`且禁止结果后调参。
+完成判定：真实WSL在完成前10条path的60个trial-path后，第11条path的CORE/20260813在冻结8档price上均不能满足exact P0-D OOF换手预算，按预登记规则立即`NEGATIVE_STOP_INCOMPLETE_CPCV`。不可变evidence-only bundle为`2378358...`，exact retry复用同一identity；无winner/model/PBO/advancement，不得扩展price roster或继续Stage B。已完成的60项return daily Spearman均值为`-0.002229`、NDCG@5为`0.385322`，说明该grouped-rank收益头未形成稳定收益排序信号；liability Spearman `0.236089`继续证明原liability机制有效。
 
 ### H0：实盘单日与历史批量同核执行
 
