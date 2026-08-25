@@ -772,6 +772,8 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "scripts/aistock_data_quality_smoke.py",
         "backend/services/validation/plan_catalog.py",
         "backend/services/validation/catalog_integrity.py",
+        "backend/services/industry_pit",
+        "scripts/build_industry_pit_candidates.py",
         "noxfile.py",
         external=True,
     )
@@ -786,6 +788,8 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_validation_center_api.py",
         "backend/tests/test_validation_execution_runner.py",
         "backend/tests/test_data_quality_smoke_env.py",
+        "backend/tests/industry_pit",
+        "backend/tests/scripts/test_build_industry_pit_candidates.py",
         "-q",
         "-p",
         "no:cacheprovider",
