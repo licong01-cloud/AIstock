@@ -549,27 +549,30 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    source_root = Path(
-        os.environ.get("AISTOCK_SWCLASS_SOURCE_ROOT", r"C:\Users\lc999\Downloads\SwClass")
-    )
-    parser.add_argument("--catalog", type=Path, default=source_root / "SwClassCode_2021.xls")
-    parser.add_argument(
-        "--classification-history", type=Path, default=source_root / "StockClassifyUse_stock.xls"
-    )
-    parser.add_argument(
-        "--latest-snapshot", type=Path, default=source_root / "最新个股申万行业分类(完整版-截至7月末).xlsx"
-    )
-    parser.add_argument("--taxonomy-standard", type=Path, default=source_root / "SwClassStd2021.pdf")
+    parser.add_argument("--source-root", type=Path, default=os.environ.get("AISTOCK_SWCLASS_SOURCE_ROOT"))
+    parser.add_argument("--catalog", type=Path)
+    parser.add_argument("--classification-history", type=Path)
+    parser.add_argument("--latest-snapshot", type=Path)
+    parser.add_argument("--taxonomy-standard", type=Path)
     parser.add_argument("--index-membership-evidence", type=Path)
     parser.add_argument("--artifact-root", type=Path, required=True)
-    parser.add_argument("--db-env-file", type=Path, default=Path(r"F:\Dev\AIstock\.env"))
+    parser.add_argument("--db-env-file", type=Path, default=os.environ.get("AISTOCK_DB_ENV_FILE"))
     parser.add_argument("--universe-key", default=DEFAULT_UNIVERSE_KEY)
     parser.add_argument("--rule-version", default=DEFAULT_RULE_VERSION)
     parser.add_argument("--window-start", default="2020-07-30")
     parser.add_argument("--window-end", default="2026-03-31")
     parser.add_argument("--mandatory-symbol", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.source_root is None:
+        parser.error("--source-root or AISTOCK_SWCLASS_SOURCE_ROOT is required")
+    if args.db_env_file is None:
+        parser.error("--db-env-file or AISTOCK_DB_ENV_FILE is required")
+    args.catalog = args.catalog or args.source_root / "SwClassCode_2021.xls"
+    args.classification_history = args.classification_history or args.source_root / "StockClassifyUse_stock.xls"
+    args.latest_snapshot = args.latest_snapshot or args.source_root / "最新个股申万行业分类(完整版-截至7月末).xlsx"
+    args.taxonomy_standard = args.taxonomy_standard or args.source_root / "SwClassStd2021.pdf"
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
