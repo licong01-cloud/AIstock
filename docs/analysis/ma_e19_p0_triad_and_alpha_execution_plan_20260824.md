@@ -1,18 +1,18 @@
 # MA-E19 / P0 三联诊断与新 Alpha 统一执行方案
 
 - 文档类型：F2 策略演进执行方案
-- 状态：`DESIGN_READY_NO_EXPERIMENT_SUBMITTED`
-- 版本：v1.0
-- 日期：2026-08-24
-- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.9
+- 状态：`MA_E19R_PARTIAL_9_OF_12_BLOCKED_BY_MINUTE_UNIVERSE_METADATA`
+- 版本：v1.1
+- 日期：2026-08-25
+- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.10
 - 概念板块从属设计：`docs/architecture/qe_concept_sector_data_factor_parallel_f2_design_20260813.md`
 - 唯一目标：形成更优、可复算、可实施的多 Alpha 长期趋势与板块轮动策略包
 
 ## Background / 背景
 
-父蓝图已经从“继续堆横截面腿”调整为先识别瓶颈：模型陈旧、板块选择、板块内排序、beta/主动收益、右尾召回、信号到组合转换分别需要独立证据。MA-E19 是 P0-D1 的首次真实分钟 TWAP canary，但当前只完成 9/12，并在 BUG-1133 修复前生成 portfolio 结果，不能据此裁决 fixed、expanding、rolling 的优劣。
+父蓝图已经从“继续堆横截面腿”调整为先识别瓶颈：模型陈旧、板块选择、板块内排序、beta/主动收益、右尾召回、信号到组合转换分别需要独立证据。MA-E19A/B 是 P0-D1 的首次真实分钟 TWAP canary，只完成 9/12，并在 BUG-1133 修复前生成 portfolio 结果，不能据此裁决 fixed、expanding、rolling 的优劣。修复后提交的 MA-E19R2 已完成 2024H2～2025H2 九臂，但 2026H1 三臂被分钟 Bin 的 `instruments/all.txt` 过期覆盖元数据正确地 fail closed；因此完整 D1 裁决仍未形成。
 
-截至 2026-08-24 的只读事实如下：
+以下保留截至 2026-08-24 的 MA-E19A/B 历史只读事实；当前状态见其后的 2026-08-25 MA-E19R2 修正：
 
 | 项目 | 当前事实 | 解释边界 |
 |---|---|---|
@@ -24,6 +24,20 @@
 | canonical PIT v2 | submission `dss_d41b1818feb7c81b0124b193b74b0349` 仍为 `BLOCKED_SOURCE_AUDIT_INCOMPLETE`；BUG-1157 source PR #3706 已合入，但 Issue/registry open，runtime/repair/signoff 未完成 | 源码合入不等于数据就绪；不得绕过，依赖 v2 的正式新实验暂缓 |
 | 概念板块 | F2 设计完成，预期 builder、因子和测试文件尚不存在 | `DESIGN_READY_NOT_STARTED` |
 | 分钟新信号 | 历史 1min candidate/覆盖证据未完成 | 暂缓；分钟 TWAP portfolio 合同不暂缓 |
+
+### 2026-08-25 MA-E19R2 运行与数据缺陷修正
+
+| 项目 | 当前事实 | 解释边界 |
+|---|---|---|
+| MA-E19R2 | `qe_20260825_031740_2457`，Loop1～9 completed、Loop10～12 failed | 2024H2～2025H2 三种 refit 已运行；2026H1 三臂没有形成有效 portfolio 结果 |
+| 直接阻断 | `QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH expected=5000 uncovered=4959` | runner 的 fail-closed 检查有效，不是模型退化或行情 feature 大面积缺失 |
+| 物理分钟数据 | 1min calendar 与 5,092 个 `close.1min.bin` 均覆盖到 2026-06-30 | 缺陷位于分钟 Bin 的 universe 元数据，不是分钟 feature 文件本体 |
+| universe 元数据 | `instruments/all.txt` 共 5,122 行，其中 4,922 行仍截止 2026-04-28 | 与同批导出、已覆盖到 2026-06-30 的物理 feature 不一致；BUG-1191 / Issue #3793 负责 candidate-only 修复 |
+| 当前裁决 | `INCOMPLETE_9_OF_12_BLOCKED_BY_MINUTE_UNIVERSE_METADATA` | 不比较 fixed/expanding/rolling 胜负，不把三臂失败解释为 Alpha 失败 |
+
+BUG-1191 的修复顺序固定为：源码使分钟 `all.txt` 从物理 Qlib feature/calendar 边界与 PIT spans 交集重建 -> 聚焦测试和候选验证 -> 经用户单独确认后合入 -> 构建不可变 candidate 并做 WSL/node1 哈希与覆盖签核 -> 经用户单独确认后激活 -> 只重新运行 MA-E19R2 Loop10～12 或等价新身份三臂。任何阶段均不得直接改写 active Bin、从数据库读取实验输入、静默回退日频或绕过 coverage guard。
+
+历史影响按证据层分开：只读控制面审计确认，自 2026-07-07 分钟 Bin 导出后，32 个 task 中至少 228 个已完成 V25/V25_1 loop 的显式 `test_end=2026-06-30`，其 CAGR/MDD/Calmar/Sharpe/IR/turnover/fill/position 统一标记为 `EXECUTION_METRICS_PENDING_MINUTE_UNIVERSE_RERUN`；这不自动否定其模型、prediction、label、IC 或 RankIC。另有 56 个旧 V25 loop 未在控制配置中显式保存 `test_end`，保持 `NOT_YET_CLASSIFIED`，不得在未回读实际窗口前批量判无效。19 个 `CLOSE_PRICE` 日频 loop 不受本次分钟 universe 元数据缺陷影响，但仍只按既有规则作为 `DAILY_EXECUTION_DIAGNOSTIC_ONLY`。本次只修正研究解释，不建设历史补账、Archive 或批量物化平台。
 
 ## Scope / 范围
 
@@ -446,7 +460,9 @@ D1R + D2 + D3 结果
 2. **Round 2 — 方法与因果边界**：逐项检查 signal/portfolio/execution、staleness/regime、absolute/active、sector/within-sector 分离；确认 oracle 永久不可部署、meta-label 不得生成召回、P1-F 只能由 D2+D3 结果触发，论文只提供机制先验。修订了 D1 部分完成与完整 D1R 的状态表达。
 3. **Round 3 — 跨文档一致性**：对父蓝图、本文和概念板块 F2 设计交叉核对当前任务、优先级、资源、TWAP、零数据库和生产边界；修订概念设计中的 MA-E16 旧当前态引用，并纠正新 Alpha 研发卡数量为六类。历史快照保留但不再充当当前权威。
 4. **Round 4 — 主线漂移复核**：审核期间 `origin/main` 合入 BUG-1157 source PR #3706；重新回读最新 durable dataset status、BUG registry/Issue 和 source diff，确认旧 submission 仍阻断、Issue open 且 runtime/repair/signoff 未完成。父蓝图和本文据此把 source merge 与数据就绪拆开，未改变 D1R 使用既有 v1 文件的边界。
-5. **统一门禁重跑**：三个 F2 validator、`git diff --check`、changed-file scope 与 `DESIGN-COMPLIANCE-001` 在所有修订完成后统一执行；receipt 必须绑定最终分支 HEAD。
+5. **Round 5 — MA-E19R2 与分钟文件覆盖**：回读 `qe_20260825_031740_2457` 的 9 completed/3 failed、三臂统一 coverage error、node1 calendar/feature/all.txt 行级截止与 mtime；确认 5,092 个物理 feature 已到 2026-06-30，根因是 `all.txt` 交叉文件元数据而非行情数据大面积缺失。修订状态为 `INCOMPLETE`，禁止解释为 Alpha 失败。
+6. **Round 6 — 历史影响分层**：按实际 loop 配置区分 228 个显式越过 2026-04-28 的 V25/V25_1 执行指标、56 个窗口未明的旧 V25 loop 与 19 个日频 loop；只标记 execution metrics，不扩大到模型、prediction、label、IC/RankIC，也不启动历史平台工程。
+7. **统一门禁重跑**：两个 F2 validator、BUG 聚焦测试、`validation_module_registry_l0`、`qlib_data_backend`、`git diff --check`、changed-file scope 与 `DESIGN-COMPLIANCE-001` 在所有修订完成后统一执行；receipt 必须绑定最终分支 HEAD。
 
 ## DESIGN-COMPLIANCE-001 Review / 设计符合性审核
 
@@ -459,9 +475,9 @@ D1R + D2 + D3 结果
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-101 | Background、父蓝图 2.5/17 | validation-receipt: `Invoke-RestMethod /api/v1/quantevolver/evolution/tasks`、dataset `status/events`、`20260818_BUG-1133-*.json`、Git tree | VERIFIED | 无 |
-| F-102 | Historical Synthesis、父蓝图 2.5.3 | validation-receipt: MA-E19A/B `detail=full` 的 12 行 loop 状态/指标；BUG-1133 registry 与 fix commit | VERIFIED | 无 |
-| F-103 | WP-D1R | validation-receipt: MA-E19A/B 实际 `config_json` 回读的 12 组 train/valid/test/refit 窗口、固定项、输出、停止条件和 end marker | DESIGN_READY | 无 |
+| F-101 | Background、父蓝图 2.5/17 | validation-receipt: MA-E19A/B、MA-E19R2 task detail、BUG-1133/BUG-1191、node1 冻结文件只读回读 | VERIFIED | 无 |
+| F-102 | Historical Synthesis、父蓝图 2.5.3 | validation-receipt: MA-E19R2 9/12、分钟 calendar/feature/all.txt 覆盖差异、228 个明确受影响 loop 与 56 个明确保持未分类的旧 loop 分层 | VERIFIED | 无 |
+| F-103 | WP-D1R | validation-receipt: MA-E19R2 九臂完成、三臂 metadata fail closed；BUG-1191 candidate/activation/三臂恢复顺序与 end marker；运行阻断在进度表独立记账 | DESIGN_READY | 无 |
 | F-104 | WP-D2 | validation-receipt: 本文 four-cell、hard/soft、oracle identity、输出与结果触发 | DESIGN_READY | 无 |
 | F-105 | WP-D3 | validation-receipt: 本文 absolute/active/Brinson 输入、输出、`NOT_COMPUTABLE` 和结果触发 | DESIGN_READY | 无 |
 | F-106 | Result Trigger Matrix | validation-receipt: 本文 10 行观测→最小工作包映射及禁止跳跃 | VERIFIED | 无 |
@@ -474,9 +490,9 @@ D1R + D2 + D3 结果
 
 ## Rollout / Rollback / 发布与回滚
 
-- 本 changeset 只包含父蓝图 v6.9、本文和概念板块 F2 设计的当前进度引用修订。
-- 文档合入不启动实验、不激活数据、不改变 runtime。
-- 回滚使用文档 PR revert；不得删除现有 task、prediction、receipt 或 dataset control evidence。
+- 本 changeset 包含 BUG-1191 的分钟 Bin `all.txt` candidate 重建源码/测试，以及父蓝图 v6.10 与本文 v1.1 的进度和解释修订；不修改 MA-E19 模型、因子或调度业务逻辑。
+- 源码合入不启动实验、不构建或激活数据、不改变 runtime；candidate 与 active activation 必须另立身份和授权。
+- 回滚使用 BUG PR revert；不得删除现有 task、prediction、receipt 或 dataset control evidence，也不得恢复使用过期 `all.txt` 作为物理 feature 覆盖权威。
 - 后续真实实验各自使用新 task identity；失败保留，不覆盖历史。
 - 正式 task 编号、合入、数据 candidate、node distribution、进程控制和生产动作均需按当时工作流单独处理。
 
@@ -499,7 +515,7 @@ D1R + D2 + D3 结果
 
 | 状态项 | 本文状态 |
 |---|---|
-| source/code change | noop |
+| source/code change | BUG-1191 in review / not merged |
 | experiment submission | noop |
 | dataset build/candidate signoff | noop |
 | production activation/symlink | noop |
@@ -516,7 +532,7 @@ D1R + D2 + D3 结果
 
 文档任务完成：
 
-`BLUEPRINT_V69_DOC_END=REVIEWED_F2_PASS_PR_READY`
+`BLUEPRINT_V610_BUG1191_END=SOURCE_AND_DOCS_REVIEWED_PR_READY`
 
 未来实验阶段结束：
 

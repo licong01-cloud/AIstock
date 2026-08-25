@@ -307,6 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 universe_key=args.universe_key,
                 start=start,
                 end=end,
+                feature_frequency=(dump_freq if args.dataset == "stock_minute" else None),
             )
             result["pit_all_txt_rewrite"] = all_txt_summary
         else:
