@@ -1,0 +1,271 @@
+{
+  "actual": "The only business smoke is unfiltered scheduler status. simrun_c26b6ab54aaa2cb9 is minqmt_sim FAILED_RETRYABLE from before restart with broker_called=false; its non-empty blocker object blocks both BUG-1188 and unrelated local_sim BUG-1187.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/ops.py",
+    "backend/routers/simulation_runtime.py",
+    "backend/tests/simulation_runtime/test_ops_api.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260825_BUG-1192-scheduler-business-smoke-cannot-isolate-broker-specific-current-day-bloc.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1192",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-25T07:47:45.121712Z",
+  "description": "The only business smoke is unfiltered scheduler status. simrun_c26b6ab54aaa2cb9 is minqmt_sim FAILED_RETRYABLE from before restart with broker_called=false; its non-empty blocker object blocks both BUG-1188 and unrelated local_sim BUG-1187.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260825-e82e024eb721",
+      "timestamp": "2026-08-25T07:47:45.121696Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime run simrun_c26b6ab54aaa2cb9; post-restart receipts in retained BUG-1187/BUG-1188 close-sync worktrees"
+  ],
+  "expected": "The unfiltered scheduler status remains globally fail-closed. A validated scoped read-only request recalculates current_trade_date_blockers only for the declared broker/run subject, exposes bounded audit counts, rejects invalid or empty filters, performs no scheduler/run/broker/database mutation, and allows post-restart verification to distinguish unrelated blockers while still rejecting BUG-1188's relevant MiniQMT failure.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/simulation_runtime/ops.py",
+      "backend/routers/simulation_runtime.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/ops.py",
+        "backend/routers/simulation_runtime.py",
+        "backend/tests/simulation_runtime/test_ops_api.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "tests.backend",
+        "validation.center",
+        "validation.runner",
+        "validation.coverage",
+        "validation.guardrails",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/ops.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/routers/simulation_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_ops_api.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/ops.py",
+        "backend/routers/simulation_runtime.py",
+        "backend/tests/simulation_runtime/test_ops_api.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/ops.py",
+      "backend/routers/simulation_runtime.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ]
+  },
+  "first_seen_at": "2026-08-25T07:47:45.121712Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3797,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3797",
+  "last_seen_at": "2026-08-25T07:47:45.121712Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1187 --target backend-main --expected-identity bd5e7f2896a41bb87e723e4a4303830487d6ab7d --output-format summary",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "Scheduler business smoke cannot isolate broker-specific current-day blockers",
+  "trigger_condition": {
+    "fingerprint": "e82e024eb721de4c4b0b8143",
+    "source_event_id": "FE-20260825-e82e024eb721"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
