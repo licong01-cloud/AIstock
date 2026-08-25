@@ -25,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260825-506cd3d93e75",
       "timestamp": "2026-08-25T05:19:57.292604Z"
+    },
+    {
+      "action": "runtime_contract_corrected",
+      "actor": "codex",
+      "note": "Actual changed-file review confirms backend/qlib_exporter/authoritative_bin_exporter.py is imported by backend/qlib_exporter/router.py; classify source activation as backend while keeping dataset candidate activation and user process control separate.",
+      "timestamp": "2026-08-25T06:15:00Z"
     }
   ],
   "evidence_uris": [
@@ -147,9 +153,9 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "unknown",
+    "persistence_basis": "backend/qlib_exporter/authoritative_bin_exporter.py imported by backend/qlib_exporter/router.py",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [

@@ -525,7 +525,7 @@ D1R + D2 + D3 结果
 | dependency install | noop |
 | client install | noop |
 | UI/Archive/history backfill | noop |
-| runtime activation | not applicable |
+| runtime activation | pending user backend restart after source merge; candidate activation remains separate |
 | merge | pending user confirmation after PR-ready |
 
 ## Long Task End Markers / 长任务结束标识

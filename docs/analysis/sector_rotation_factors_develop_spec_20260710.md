@@ -1677,7 +1677,7 @@ v6.9 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设�
 | QE experiment | MA_E19R2_PARTIAL_9_OF_12_THREE_ARMS_METADATA_BLOCKED | MA-E19R2 Loop1～9 completed；2026H1 Loop10～12 因 minute universe mismatch failed。三臂没有有效 portfolio，D1 synthesis 不得开始。 |
 | strategy evolution priority | BUG1191_CANDIDATE_THEN_MA_E19R2_THREE_ARMS_THEN_D1_D2_D3_RESULT_TRIGGERED_P1 | 唯一 P0 是最佳新策略包演进。当前只修真实 trial 阻断 BUG；修复/激活后完成三臂，再执行 D1、sector oracle 与 benchmark/Brinson。结果触发适应/门控、两层板块/lead-lag、右尾/退出、新横截面专家或受约束主动板块权重。 |
 | multi-alpha platform | P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY_RUNTIME_QUIETING | durable orchestration、控制/恢复、创建器、运行网格和重启 readback 已满足演进；BUG-1014/1023/1024/1026/1030/1031 只收口真实 trial 暴露的主机资源、空闲查询、重复日志连接与无界文件阻断，不恢复通用平台研发。 |
-| service/runtime restart | NOT_CHANGED_IN_V6_10_BUG_TASK_PROCESS_CONTROL_NOOP | BUG-1191 当前修改离线导出/候选逻辑，不产生后端或节点进程控制授权；本次未启动、停止或重启任何用户进程。 |
+| service/runtime restart | BUG1191_SOURCE_PENDING_USER_BACKEND_RESTART_AFTER_MERGE | 修改文件由 `backend/qlib_exporter/router.py` 导入，因此 source 合入后的 backend-main 激活需要用户重启并独立验证；本任务不产生进程控制授权。dataset candidate/active activation 与 backend restart 继续分开。 |
 | live log retention / cleanup | FIVE_BY_ONE_GIB_RUNTIME_VERIFIED_CLEANUP_SEPARATE | BUG-1031 已 `verified/closed`，五个 1 GiB 环形槽与零订阅者零上游/零写入合同生效。本文不删除旧日志；任何遗留文件清理仍须精确路径、size/mtime 回读与独立授权，且不得阻断实验。 |
 | F-014 CAS | R8B_6_OF_6_PUBLISHED_AND_HASH_VERIFIED | 根目录为 `F:\Dev\AIstock\rdagent_assets\long_trend_evaluation_store`，与 Prediction Store 分离且不在 `E:`；R8B 六个 manifest 及 required artifacts 已完成 hash/size/row-count 回读。 |
 | paper/live trading | NOT_ENABLED | 不属于本规格自动动作。 |
