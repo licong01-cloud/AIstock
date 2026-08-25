@@ -1,6 +1,8 @@
 {
   "actual": "A fresh qe_hmm_full_v2 monthly candidate submission dss_9c5977c4a22a98bd7039374401cd0cee terminates in source-freeze with SOURCE_STAGE_UNHANDLED_ERROR exception_type=DuplicateCursor. PostgresSourceSnapshotSession.stream names every server-side cursor only by query_id, while _iter_execution_rows opens multiple date/code chunk streams for the same query_id concurrently on one repeatable-read connection. The second stream collides with the first cursor name, so resolution stops before run creation. Safety receipt confirms candidate_writes=0, database_writes=0, production_writes=0 and service_process_controls=0. Fix must give each bounded stream a unique server-side cursor identity while preserving one snapshot, read-only semantics, fetch bounds, deterministic row merge, and fail-closed behavior.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/source_authority.py",
+    "backend/tests/dataset_release/test_source_authority.py",
     "tests/aistock_validation/bugs/20260825_BUG-1195-dataset-release-source-freeze-reuses-postgresql-named-cursor-across-conc.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,13 +22,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260825-981e07f97531",
       "timestamp": "2026-08-25T19:58:12.605661Z"
+    },
+    {
+      "action": "scope_and_runtime_contract_corrected",
+      "actor": "codex",
+      "note": "Live source-freeze evidence identifies backend/services/dataset_release/source_authority.py as the fix point and its direct source-authority test as the regression boundary. Actual changed-file classification is worker_scheduler/worker-scheduler; the persistent fix is tracked source and runtime restart remains user-owned.",
+      "timestamp": "2026-08-25T20:13:24Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "dataset-release submission dss_9c5977c4a22a98bd7039374401cd0cee; resolution attempt dsra_70cc63a73d344bffaf3c748ca5eefd32; SOURCE_STAGE_UNHANDLED_ERROR DuplicateCursor; all safety write/process counters zero"
+  ],
+  "expected": "Concurrent date/code chunk streams for the same allowlisted source query use distinct bounded server-side cursor identities within one read-only repeatable-read snapshot, preserving deterministic merge order and completing source resolution without DuplicateCursor.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +49,10 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ]
   },
   "first_seen_at": "2026-08-25T19:58:12.605677Z",
   "fix_branch": null,
@@ -52,7 +68,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Submit one qe_hmm_full_v2 monthly --candidate-only intent with date/code chunking; source-freeze opens concurrent streams for one query_id and the second PostgreSQL named cursor raises DuplicateCursor before run creation.",
   "required_verification": [
     "l0"
   ],
@@ -60,12 +76,16 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

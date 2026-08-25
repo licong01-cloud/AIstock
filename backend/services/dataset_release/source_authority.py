@@ -12,6 +12,7 @@ import json
 import heapq
 import math
 import re
+import uuid
 from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import date, datetime
@@ -1093,7 +1094,7 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
         sql = _stream_sql(query_id)
         connection = self._required_connection()
         try:
-            cursor = connection.cursor(name=f"dataset_release_source_{query_id}")
+            cursor = connection.cursor(name=f"dataset_release_{uuid.uuid4().hex}")
         except TypeError:
             cursor = connection.cursor()
         try:
