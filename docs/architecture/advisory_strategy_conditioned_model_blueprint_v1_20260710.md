@@ -3,12 +3,12 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-08-25
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0G_STAGE_A_NEGATIVE_STOP_NEXT_MODEL_HYPOTHESIS_PENDING`
+> 当前状态：`P0G_STAGE_A_NEGATIVE_STOP_P0H_LOCAL_IMPLEMENTATION_VALIDATED_STAGE_A_PENDING`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线 shadow 推理；自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
 > 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity 修复、forward evaluation、历史虚拟前向、P0-E和P0-F Stage A源码均已进入 `main`；P0-F PR #3758 merge commit为 `73b1e6bd`，停牌语义修复PR #3760/#3763及BUG-1180/1181最终close-sync均已完成。生产descriptor仍指向P0-D exact bundle；P0-E/P0-F均未激活、不替换baseline
 > 当前生产前向状态：截至 2026-08-23，两个 ENABLED Program 各有7个 forward run；最新 `decision=2026-08-21 -> target=2026-08-24` 均为 `PUBLISHED/NOT_DUE`。该已持久化 run 冻结的是切换前 legacy quality-reranker；第一条自然 P0-D observation 只能在 2026-08-24 收盘后的下一目标交易日运行中形成，禁止回填
 > 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`。源码合入不等于 descriptor 接入或 bundle 激活
-> 演进方向：P0-D历史虚拟前向已证明二分类概率不能稳定表达收益幅度；P0-E outcome weighting同样负向停止。P0-F v2相对exact P0-D提高`2.612087 bps`但换手增加`0.007419`。P0-G完整168 trial-path将换手差缩小到`+0.004096`，同时收益仍提高`2.191621 bps`、path win`53.57%`、回撤改善`0.002908`，但仍未满足换手门槛，故同样`NEGATIVE_STOP_NOT_ADVANCED`。P0-G相对P0-F换手改善`0.003323`但收益下降`0.420466 bps`，证明持有期负担方向部分有效、单一adjusted-label不足；下一模型必须先冻结新的独立假设，禁止围绕同一结果追加shadow-price roster、family、seed或rank guard。
+> 演进方向：P0-D历史虚拟前向已证明二分类概率不能稳定表达收益幅度；P0-E outcome weighting同样负向停止。P0-F v2相对exact P0-D提高`2.612087 bps`但换手增加`0.007419`。P0-G完整168 trial-path将换手差缩小到`+0.004096`，同时收益仍提高`2.191621 bps`、path win`53.57%`、回撤改善`0.002908`，但仍未满足换手门槛，故同样`NEGATIVE_STOP_NOT_ADVANCED`。P0-G相对P0-F换手改善`0.003323`但收益下降`0.420466 bps`，证明持有期负担方向部分有效、单一adjusted-label和oracle-level constraint不足。下一模型固定为P0-H：分离return/liability双头，并只在outer-train nested OOF模型输出上选择换手影子价格，详细设计见`advisory_p0h_dual_head_output_constraint_f2_design_20260825.md`。
 > 历史验证执行方向：44 日 A/B/C v6 golden 已冻结；P0-D 历史虚拟前向复用正式 scorer 与 shared policy kernel，24决策日+20日tail的权威 artifact 为 `fbf072f0d8c4a637a48aa8c2ed63c3b61c245abd08ac4e1417b2a0fcc8eb59a9`。该窗口现已被 P0-D 质量判断消费，不得在后续调模后继续标为新的 OOT
 > 当前双轨目标：模型线使用批量历史虚拟前向快速淘汰无效 challenger，并以自然 future OOS 作最终独立证据；H0 继续处理更广泛的实盘单日/历史批量同核执行优化，两者不互相阻断
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
@@ -28,9 +28,10 @@ M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。�
 5. P0-E 复用P0-C连续净超额收益，在每条CPCV path内用train-only幅度统计训练收益感知meta-label；模型选择只用冻结validation，已消费历史窗口只作回放诊断。
 6. P0-F 复用P0-C连续净超额收益，使用train-only median/MAD和固定Huber regression直接学习policy utility；真实Stage A因换手门禁失败已负向终止。
 7. P0-G只改变训练label并完成真实Stage A；相对P0-D仍因换手`+0.004096`负向停止，禁止Stage B、replay、runtime和结果后调参。
-8. 前向 residual 自然成熟后执行 P1-A，自有两个以上兼容包的独立 bundle 后执行 P1-B；长期趋势包就绪后执行 P2。
-9. H0 在当前已授权 44 日 A/B/C 回放结果完整冻结后，以该结果作为 golden baseline，实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复 raw 计算，不改变逐日业务逻辑。
-10. 上述真实功能和 H0 均不自动解禁历史补账、历史归档、ModelOps、旧任务清理或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
+8. P0-H把收益和换手负担分头学习，在outer-train nested OOF模型输出上约束实际entry priority；outer validation只评价，不参与price、rounds或transform拟合。
+9. 前向 residual 自然成熟后执行 P1-A，自有两个以上兼容包的独立 bundle 后执行 P1-B；长期趋势包就绪后执行 P2。
+10. H0 在当前已授权 44 日 A/B/C 回放结果完整冻结后，以该结果作为 golden baseline，实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复 raw 计算，不改变逐日业务逻辑。
+11. 上述真实功能和 H0 均不自动解禁历史补账、历史归档、ModelOps、旧任务清理或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
 
 以下内容不再是模型训练、模型推理、页面展示或模型启用的前置条件；H0 也不得借此恢复无界历史平台建设：
 
@@ -682,6 +683,27 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 7. 只有Stage A通过后才允许另行批准Stage B；P0-D概率、P0-F和P0-G bps score不得混淆。
 
 完成判定：已完成真实WSL 168/168 trial-path、不可变bundle `433ff217...`、exact retry、资源/PBO/constraint/paired/advancement receipts；唯一失败门槛为相对P0-D换手`+0.004096`，已负向停止且未激活。
+
+### P0-H：SHORT_REBOUND dual-head output-constrained utility
+
+优先级：`P0_NOW_AFTER_P0G_ORACLE_OUTPUT_MISMATCH`。
+
+状态：`LOCAL_IMPLEMENTATION_VALIDATED_STAGE_A_NOT_RUN`。
+
+权威详细设计：
+`docs/architecture/advisory_p0h_dual_head_output_constraint_f2_design_20260825.md`。
+
+任务列表：
+
+1. 复用exact P0-C、feature schema v2、28 outer CPCV paths和shared policy；不修改candidate、exit、policy或cost。
+2. 分别训练return bps与`2/(5*holding_days)` liability fraction/day两个Huber head，future holding只作label，预测按冻结policy物理边界clip。
+3. 每条outer path在保留train blocks内执行nested inner OOF、二次purge/embargo和block-reset shared evaluation；outer validation不参与拟合。
+4. exact P0-D预算也使用同一inner OOF dates和固定winner model spec重建；每个family/seed/path从固定8个multiplier选择第一个满足预算的最小price。
+5. 两头rounds取inner best-iteration中位数，在full outer train refit后只评价一次outer validation；固定CORE/CORE_HMM×3 seeds×28 paths。
+6. 沿用P0-F/P0-G六项advancement；P0-F/P0-G和head diagnostics/PBO只作诊断，失败禁止Stage B和结果后调参。
+7. Stage A只生成immutable dual-head bundle和完整receipts，零DDL/DML、零runtime/descriptor/activation。
+
+完成判定：F2设计与验收索引通过后，实现完整nested OOF双头Stage A、真实WSL 168 trial-path、不可变bundle、exact retry和资源/constraint/paired/advancement receipts；无论结果如何均不自动激活。
 
 ### H0：实盘单日与历史批量同核执行
 
