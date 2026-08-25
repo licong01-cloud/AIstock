@@ -42,8 +42,8 @@
   },
   "first_seen_at": "2026-08-25T03:01:24.702574Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b0c31a863414ab43918d38d54002530f942d4c21",
+  "fixed_at": "2026-08-25T04:53:43Z",
   "github_issue_number": 3787,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3787",
   "last_seen_at": "2026-08-25T03:01:24.702574Z",
@@ -51,6 +51,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3790",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -73,6 +74,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -83,7 +85,34 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1188",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "008806a516f0b5ea",
+    "recorded_at": "2026-08-25T05:00:30.175601Z",
+    "runtime_contract_digest": "ec9214640de4ecfbe8b6841db28744885131a1f96b5247e37424fdf8ccaa1df2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1127f6e6c3b1af03b29419a860363046301611bb",
+    "source_merge_commit": "b0c31a863414ab43918d38d54002530f942d4c21",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3790",
+    "validation_evidence": [
+      "validation-receipt: id=9e5742e00453c5fb commit=1127f6e6c3b1af03b29419a860363046301611bb kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14`",
+      "validation-receipt: id=663c248160b1638f commit=1127f6e6c3b1af03b29419a860363046301611bb kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`653 passed, 2 skipped`",
+      "validation-receipt: id=5f813ca9bfe52422 commit=1127f6e6c3b1af03b29419a860363046301611bb kind=nox plan=miniqmt_execution_runtime_l2 status=passed command=`rtk nox -s miniqmt_execution_runtime_l2` result=`1520 passed, 82 skipped`",
+      "validation-receipt: id=dfff88f6e8c53e3d commit=1127f6e6c3b1af03b29419a860363046301611bb kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -k plan_authority_reader -q` result=`10 passed`",
+      "validation-receipt: id=7d0e9dedf6e0ced9 commit=1127f6e6c3b1af03b29419a860363046301611bb kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`passed`",
+      "validation-receipt: id=1433cf6e44082464 commit=1127f6e6c3b1af03b29419a860363046301611bb kind=compile plan=direct status=passed command=`python -m py_compile backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`passed`",
+      "validation-receipt: id=7442ef39abe7e566 commit=1127f6e6c3b1af03b29419a860363046301611bb kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "ac6ef80c26a32887bbe65cddc8125ddec13d4dbd1b160a61888a3c7c9da1511e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -100,7 +129,14 @@
     "rtk nox -s l0 -> blocking=0",
     "rtk ruff check backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -> passed",
     "python -m py_compile backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -> passed",
-    "git diff --check -> passed"
+    "git diff --check -> passed",
+    "validation-receipt: id=9e5742e00453c5fb commit=1127f6e6c3b1af03b29419a860363046301611bb kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14`",
+    "validation-receipt: id=663c248160b1638f commit=1127f6e6c3b1af03b29419a860363046301611bb kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`653 passed, 2 skipped`",
+    "validation-receipt: id=5f813ca9bfe52422 commit=1127f6e6c3b1af03b29419a860363046301611bb kind=nox plan=miniqmt_execution_runtime_l2 status=passed command=`rtk nox -s miniqmt_execution_runtime_l2` result=`1520 passed, 82 skipped`",
+    "validation-receipt: id=dfff88f6e8c53e3d commit=1127f6e6c3b1af03b29419a860363046301611bb kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -k plan_authority_reader -q` result=`10 passed`",
+    "validation-receipt: id=7d0e9dedf6e0ced9 commit=1127f6e6c3b1af03b29419a860363046301611bb kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`passed`",
+    "validation-receipt: id=1433cf6e44082464 commit=1127f6e6c3b1af03b29419a860363046301611bb kind=compile plan=direct status=passed command=`python -m py_compile backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`passed`",
+    "validation-receipt: id=7442ef39abe7e566 commit=1127f6e6c3b1af03b29419a860363046301611bb kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
   ],
   "verification_budget": {
     "budget": "standard",
