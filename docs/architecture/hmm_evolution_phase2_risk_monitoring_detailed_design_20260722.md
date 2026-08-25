@@ -4517,7 +4517,7 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-012-RL1-HR1-D5 | replay acceptance/component v2/bundle v2 | `SOURCE_IMPLEMENTED_VERIFIED_PENDING_FORMAL_REPLAY` | repo-external append-only最小writer与双向hash closure；失败不写component/bundle/READY |
 | C-012-RL1-HR1-D6 | 非阻塞forward confirmation与停止 | `SOURCE_IMPLEMENTED_VERIFIED_PENDING_FORMAL_REPLAY` | future window只作一次0-fit确认；PENDING不阻断P2-5/P2-6，FAILED停止新日常预测但保留历史分析 |
 | C-013-PIT-ID-D1 | 行业成员如何形成order-invariant、可回放的版本化唯一身份 | `PROPOSED_PENDING_USER_APPROVAL` | 使用taxonomy version、成员有效区间、source/receipt hash；禁止首行、排序、LIMIT 1、字典覆盖或逐股硬编码 |
-| C-013-PIT-ID-D2 | 历史行业分类采用as-published PIT还是stable-taxonomy backcast | `PROPOSED_PENDING_DATA_AUTHORITY_AND_USER_APPROVAL` | 两种basis不得混写；backcast不得冒充as-known causal；当前无权威版本/crosswalk时保持blocked |
+| C-013-PIT-ID-D2 | 股票行业分类PIT与申万行业指数成员PIT如何分离，计入/更新/公告/指数切换日期如何解释 | `PROPOSED_REVISED_EVIDENCE_AVAILABLE_PENDING_USER_APPROVAL` | classification以计入日期构造区间、更新日期仅lineage；causal known-from独立；index使用真实进入/退出日。7/30、8/2、12/13不得压成一个日期 |
 | C-013-PIT-ID-D3 | 同start多identity与顺序成员变更如何解析 | `PROPOSED_PENDING_USER_APPROVAL` | 仅权威严格递增边界可构造半开区间；同边界冲突返回typed unavailable |
 | C-013-PIT-ID-D4 | 行业identity unavailable是否删除股票或阻断全局流程 | `PROPOSED_PENDING_USER_APPROVAL` | 价格/alpha/股票池资格保持独立；行业contributor显式不可用并由既有coverage合同验收，不补neutral/当前行业/前值 |
 | C-013-PIT-ID-D5 | HMM、sector data、QE/Qlib、Selection/Paper与Advisory如何迁移 | `PROPOSED_PENDING_MODULE_OWNERS` | shared resolver contract先批准，各业务窗口独立PR；文档通过不冒充跨模块源码已修复 |
@@ -5768,39 +5768,67 @@ fail closed。只读核验同时确认：canonical universe、交易日与价格
 5,999,301 个 canonical opportunity symbol-day 的 0.389%；其中 19 只能按不同 `in_date` 形成顺序候选，另有
 `300741.SZ`、`300858.SZ`、`603020.SH`、`605077.SH` 四只在同一源生效日仍有不同身份，不能用排序解决。
 
-公开资料只作为根因交叉证据，不成为运行时数据源：Tushare `index_member_all` 的字段与 `is_new` 语义见
+新增本地申万2021资料包只作为版本化数据candidate与设计证据，未经P1 writer/readback闭合不得直接成为运行时数据源：
+
+- `SwClassCode_2021.xls` SHA-256=`923492f4bcf3c7056904385a0769e4dda561904a29ecd9243f942680cef68c81`，
+  仅含511行申万2021行业代码目录，不含股票或日期；
+- `StockClassifyUse_stock.xls` SHA-256=`15979d9cf8a3b83ccc8dadc967de52f35e667b4f4da5e4e4e3dd5a8bb1f17402`，
+  含11,803行、5,161只股票的`股票代码/计入日期/行业代码/更新日期`历史；3,811只股票有多条顺序记录，
+  但exact duplicate、同股票同计入日期多identity和同股票/行业/计入日期重复均为0。因此“重复股票”表示历史分类变化，不是可直接删除的脏行；
+- `最新个股申万行业分类(完整版-截至7月末).xlsx`
+  SHA-256=`b242ab04e0f68357cf90772e3f15367644d3e74c08a767eb9c5edcf21467fcbb`，已在2021年7月末快照中把四只股票归入
+  `220315/基础化工-化学制品-食品及饲料添加剂`；
+- `SwClassStd2021.pdf` SHA-256=`18fb07fafda072dad39e274371660706e21678045ae8204931958db9906faa1a`，
+  明确申万2021分类于2021-07-30正式推出、2021-07-31在指数网站公告，配套行业指数调整时间另行确定。
+
+`StockClassifyUse_stock.xls` 中四只股票的新分类`计入日期`均为2021-07-30；`300741/300858/603020`的更新日期为
+2021-07-31，`605077`为2022-08-21。后者在2021年7月末快照中已经存在，直接证明`更新日期`不是首次可知日期或成员生效日。
+全表另有5,029行在2015-10-27统一更新但计入日期横跨1984-05-09至2015-10-26，且5行更新时间早于计入日；因此
+`更新日期`只能作为`source_last_updated_at` lineage，严禁用作`valid_from`、`valid_to`或`known_from`。
+
+公开资料继续只作独立交叉证据：Tushare `index_member_all` 的字段与 `is_new` 语义见
 <https://tushare.pro/document/2?doc_id=335>；新浪相关资料页对
 [`300741.SZ`](https://vip.stock.finance.sina.com.cn/corp/go.php/vCI_CorpXiangGuan/stockid/sz300741.phtml)、
 [`300858.SZ`](https://vip.stock.finance.sina.com.cn/corp/go.php/vCI_CorpXiangGuan/stockid/sz300858.phtml) 与
 [`603020.SH`](https://vip.stock.finance.sina.com.cn/corp/go.php/vCI_CorpXiangGuan/stockid/sh603020.phtml)
-明确显示旧食品分类在 2021-12-13 结束、随后转入基础化工；
+明确显示旧申万行业指数成员关系在2021-12-13结束、随后进入基础化工指数；研究资料亦明确自2021-12-13起行业指数采用申万2021版。
 `605077.SH` 的公开资料也同时证明旧申万“食品综合”和申万 2021“基础化工/化学制品/食品及饲料添加剂”两种口径，
 参见[新浪旧申万板块](https://money.finance.sina.com.cn/corp/go.php/vCI_CorpOtherInfo/stockid/605077/menu_num/0.phtml)及
 [公开发行材料中的申万2021分类](https://disc.static.szse.cn/disc/disk03/finalpage/2022-09-22/3c4e2c60-d5b5-4c36-b1e3-79ed711b89bb.PDF)；
-但本次未取得足以固化逐股精确切换日的权威历史记录。因此禁止猜测 `605077.SH` 的日期，也禁止把四只证券写成源码例外。
+本地分类历史足以确定其分类记录于2021-07-30变更，但仍不得把该日期冒充申万行业指数成员切换日，也禁止把四只证券写成源码例外。
 
 本设计不修改 HMM 模型、特征、fold、threshold、seed、hard semantic authority、24-fit 预算、selection、capability 或 READY
 语义；不回写旧实验、CAS、模型或历史 artifact；不执行 DDL/DML、依赖安装、部署、runtime activation 或进程控制。
 
 #### 23.35.2 唯一权威对象与解析合同（C-013-PIT-ID-D1～D3）
 
-1. **版本与成员区间必须分离**：每条候选至少包含 `taxonomy_version`、`taxonomy_effective_from`、
-   `source_ts_code`、canonical symbol、L1/L2/L3 code/name、`membership_valid_from`、`membership_valid_to_exclusive`、
-   source identity、source row hash 与 authority receipt hash。`is_new='Y'` 不是 PIT 版本，也不得推导
-   `membership_valid_to_exclusive=NULL`。
-2. **顺序区间只处理有序事实**：同一 canonical symbol、同一 taxonomy version 内，若多个不同 identity 具有严格递增且权威的
-   membership start，可构造 `[start_i,start_{i+1})`；相同 identity 的精确重复行可合并并保留全部 source hashes。
-   相同 start 指向不同 identity、来源版本未知、切换日期无权威证据或区间重叠时，返回
-   `industry_identity_ambiguous`，不得以 `MIN/MAX`、`DISTINCT ON`、`LIMIT 1`、输入顺序、字典覆盖或字符串前缀裁决。
-3. **分类口径必须预先冻结**：每次 dataset/request 明确携带 `industry_classification_basis` 与
-   `taxonomy_contract_id`。`as_published_pit` 使用交易日当时生效的分类版本；`stable_taxonomy_backcast` 只有在用户另行批准其
-   非 as-known 研究语义、版本化 crosswalk 与可使用日期后才允许。两者不得混写同一 artifact/hash，也不得把后者冒充 causal PIT。
-4. **当前 HMM 继续使用固定 31/131 denominator，但不得伪造成员关系**：resolver 只能输出唯一已证明 identity 或 typed
+1. **双 authority 必须分离**：`stock_industry_classification_pit` 表示股票被归入行业分类的历史；
+   `sw_industry_index_membership_pit` 表示股票进入/退出申万行业指数的历史。两者分别持久化
+   `authority_type/schema/version/source/receipt/hash`，不得以相同的`in_date/out_date`字段混存，也不得因L1/L2名称相同而互相替代。
+2. **分类 PIT 的日期合同**：`StockClassifyUse_stock.xls.计入日期`是候选`classification_valid_from`；同一canonical symbol按
+   严格递增计入日期排序，上一identity的`classification_valid_to_exclusive=next_distinct_valid_from`。实际可用于股票事实的区间必须再与
+   `stock_universe_pit_spans`相交，因此上市前已完成分类不会制造可交易股票。`更新日期`只写`source_last_updated_at`，不参与区间或因果选择。
+3. **知识时间必须独立**：`classification_valid_from`不等于`known_from`。申万2021批量分类于2021-07-30推出、2021-07-31公开；
+   在没有2021-07-30盘中可用时间证据时，日频causal reader只能从公告后的首个交易日2021-08-02消费新版分类。
+   对后续单股历史修订，当前汇总文件的`更新日期`不能证明首次公开时间；缺少append-only source snapshot/publication receipt时返回
+   `classification_knowledge_time_unverified`，或显式选择非as-known的revised-history研究basis，禁止冒充causal PIT。
+4. **行业指数 PIT 的日期合同**：published index constituent reader使用申万行业指数的真实进入/退出日期。2021版行业指数体系的
+   切换边界为2021-12-13；该日期不回写股票分类`classification_valid_from`。任何同时消费分类聚合与published sector/index序列的路径
+   必须保存`authority_alignment_status`；2021-08-02..2021-12-10两种体系未对齐时不得静默join、前填或共用一个identity hash。
+5. **顺序区间只处理有序事实**：同一 canonical symbol、同一 authority/version 内，若多个不同 identity 具有严格递增且权威的
+   valid-from，可构造半开区间；相同 identity 的精确重复行可合并并保留全部 source hashes。相同 start 指向不同 identity、
+   来源版本未知、切换日期无权威证据或区间重叠时，返回 `industry_identity_ambiguous`，不得以 `MIN/MAX`、`DISTINCT ON`、
+   `LIMIT 1`、输入顺序、字典覆盖或字符串前缀裁决。
+6. **研究basis必须预先冻结**：每次dataset/request明确携带`industry_authority_type`、`industry_classification_basis`、
+   `taxonomy_contract_id`与`knowledge_time_policy`。`as_published_pit`使用当时已公开事实；`stable_taxonomy_backcast`或
+   `revised_history`只有在用户另行批准其非as-known语义、versioned crosswalk与可使用日期后才允许。不同basis不得混写同一artifact/hash。
+7. **当前 HMM 继续使用固定 31/131 denominator，但不得伪造成员关系**：resolver 只能输出唯一已证明 identity 或 typed
    unavailable。若所选 taxonomy contract 无法把历史日期闭合到固定 31/131 catalog，request 保持 blocked，必须由数据准备窗口
    提交版本/crosswalk 决策，不得由 HMM 代码临时映射。
-5. **resolver 输出是共享数据合同而非 HMM 私有格式**：输入严格为 canonical symbol、trade date、taxonomy contract 与 authority
+8. **resolver 输出是共享数据合同而非 HMM 私有格式**：输入严格为 canonical symbol、trade date、authority type、taxonomy contract 与 authority
    receipt；输出严格为 `resolved` 或 `unavailable`。`resolved` 必须携带唯一 L1/L2/L3、有效半开区间、taxonomy/source/row/receipt
-   hashes；`unavailable` 必须携带稳定 reason、全部冲突候选 identity/hash 且不含伪造行业。HMM 只通过 adapter 消费该合同。
+   hashes、known-from与alignment状态；`unavailable` 必须携带稳定 reason、全部冲突候选 identity/hash 且不含伪造行业。
+   HMM 只通过 adapter 消费该合同。
 
 #### 23.35.3 不确定成员的业务语义（C-013-PIT-ID-D4）
 
@@ -5816,11 +5844,11 @@ fail closed。只读核验同时确认：canonical universe、交易日与价格
 
 | consumer | 当前风险 | 必须采用的目标语义 | owner |
 |---|---|---|---|
-| HMM `stock_fact_repository` / HR1 request | 多 identity 正确 fail closed，但会全局阻断 | 复用 shared resolver；typed unavailable 进入既有 contributor/coverage 合同；先完成 0-fit 601 日预检，再决定是否恢复 24 fits | 本 HMM 窗口 |
-| `sector_data_builder` | 当前四只同边界冲突使 preflight blocked | 只消费 versioned candidate；保留不可用 contributor 与 coverage，不写生产表 | 数据准备窗口 |
-| QE data service / Qlib exporter | `merge_asof` 或 `LATERAL ... LIMIT 1` 可静默选行 | 移除顺序依赖；candidate dataset 重建前显式 unavailable；只审计受行业字段影响的实验 | QE/数据导出窗口 |
-| Selection / Paper | provider 与字典覆盖可静默选择 | industry blacklist/overlay 要求身份时显式排除该候选并报告原因；不改变价格/选股 universe | 选股/模拟盘窗口 |
-| Advisory | 部分路径已 fail closed，部分路径需同权威 | 历史与实时都读取同一 resolver contract；不得把 unavailable 当“无行业限制” | 荐股业务窗口 |
+| HMM `stock_fact_repository` / HR1 request | 多 identity 正确 fail closed，但会全局阻断 | direct stock-fact aggregation只消费`stock_industry_classification_pit`；typed unavailable进入既有coverage；若再读取published sector序列必须独立验证authority alignment | 本 HMM 窗口 |
+| `sector_data_builder` | 当前四只同边界冲突使 preflight blocked | 股票contributor使用classification PIT；published申万指数事实使用index-membership PIT；两种identity/日期/hash分开，不写生产表 | 数据准备窗口 |
+| QE data service / Qlib exporter | `merge_asof` 或 `LATERAL ... LIMIT 1` 可静默选行 | 移除顺序依赖；按实际字段声明classification或index authority；candidate dataset重建前显式unavailable/unaligned | QE/数据导出窗口 |
+| Selection / Paper | provider 与字典覆盖可静默选择 | industry blacklist使用classification PIT；要求身份时显式排除候选并报告原因；不改变价格/选股 universe | 选股/模拟盘窗口 |
+| Advisory | 部分路径已 fail closed，部分路径需同权威 | 股票行业特征使用classification PIT；行业指数特征使用index PIT；不得把unavailable或unaligned当“无行业限制” | 荐股业务窗口 |
 
 执行与券商下单、分钟执行、普通 OHLC/volume-only QE、无行业特征的 alpha 训练不在本 BUG 源码范围内；只有实际读取
 行业/sector identity 的路径需要迁移。既有不可变实验不重写，只对决策仍有效且确实消费行业字段的 dataset/实验给出重建或重跑清单。
@@ -5830,7 +5858,7 @@ fail closed。只读核验同时确认：canonical universe、交易日与价格
 | phase | 内容 | 负责人 | 完成条件 / 停止条件 |
 |---|---|---|---|
 | P0 设计与影响闭合 | 冻结本节合同、23/4 冲突清单、消费者矩阵、reason codes 与非目标 | 本 HMM 窗口 | 文档 F2 与正式审核通过；不实施代码 |
-| P1 数据权威准备 | 获取可回放的申万历史成员/版本数据；对冻结universe/window构建完整versioned candidate，23只冲突股作为强制回归集；构建repo-external candidate与只读readback | 数据准备窗口 | 全分母`resolved+unavailable=expected`，23/23均唯一或显式unavailable；`605077.SH`无权威切换日则保持unavailable；不得猜测或生产DML |
+| P1 数据权威准备 | 以四个冻结本地文件及公开发布日期为输入，分别构建classification candidate与index-membership candidate；对冻结universe/window构建完整分母，23只冲突股作为强制回归集；构建repo-external writer/readback | 数据准备窗口 | classification与index authority分别满足`resolved+unavailable=expected`；四只classification历史闭合且不使用更新日期；index日期缺证据时单独unavailable；不得猜测或生产DML |
 | P2A shared resolver core | 在数据服务所属最小共享位置实现order-invariant resolver、schema/parser/readback与typed reason；补duplicate、顺序区间、同边界冲突和无未来数据测试 | 数据准备窗口 | 共享源码/数据合同多轮审核通过；不包含HMM、QE、Selection或Advisory业务判断；PR合入另行确认 |
 | P2B HMM adapter | 只在HMM边界接入共享resolver；把typed unavailable映射到既有contributor/coverage，不改变模型合同 | 本 HMM 窗口 | HMM定向测试与601日0-fit preflight无静默选择；源码PR合入另行确认 |
 | P3 数据构建与离线消费者 | 迁移 `sector_data_builder`、QE data service、Qlib exporter；产出 candidate-only dataset/readback 与受影响实验清单 | 数据准备窗口 + QE/数据导出窗口 | 同输入同 hash、完整分母闭合、四只无任意选择、无生产激活；跨模块 PR 分开合入 |
@@ -5844,16 +5872,20 @@ P3/P4只能在shared contract批准后各自实施，且不得跨窗口编辑同
 #### 23.35.6 定向验证与验收矩阵
 
 1. resolver 输入顺序完全置换时输出/错误 reason/hash不变；精确重复只折叠、不丢 source lineage。
-2. 至少覆盖一个已证明的旧食品→基础化工顺序区间、四个同边界冲突和一个无行业冲突对照；未经 P1 权威补齐的
-   `605077.SH` 必须保持 unavailable。
-3. 对任意 trade date，resolver 不读取 `>trade_date` 才可获知的 membership mutation；若选择 backcast basis，artifact 必须显式
+2. 四只股票的classification regression必须得到旧食品→新基础化工的两个半开区间，新区间候选起点为2021-07-30；
+   `605077.SH`的2022-08-21更新日期不得推迟或重写该分类起点。另覆盖一个无行业冲突对照和全部23只已知冲突股。
+3. 新版classification causal regression必须证明：无2021-07-30盘中发布证据时，2021-07-30仍使用旧classification，
+   2021-08-02才允许使用新版；published index membership则保持到2021-12-10旧版、2021-12-13切换新版。
+4. 对任意 trade date，resolver 不读取 `>trade_date` 才可获知的 membership mutation；若选择 backcast/revised-history basis，artifact 必须显式
    标识 `non_as_known_taxonomy=true`，且不得用于声称 as-known causal 验收。
-4. 数据 candidate 与 601 日 preflight 都必须以各自冻结的完整 universe/window 为分母，报告 total opportunity、resolved、unavailable、
+5. `更新日期`仅可进入lineage；使用它计算valid-from、valid-to或known-from的实现必须由负例测试拒绝。classification/index两个resolver的
+   schema、receipt与canonical hash不得相同，跨authority join必须显式输出aligned/unaligned/unavailable。
+6. 数据 candidate 与 601 日 preflight 都必须以各自冻结的完整 universe/window 为分母，报告 total opportunity、resolved、unavailable、
    按 reason/日期/sector 分布、coverage 与 canonical hash；23只冲突股只作强制回归集合，不能替代全量验收；
    `resolved + unavailable = denominator`，禁止 inner join 缩分母。
-5. 对 `qe_data_service`、Qlib exporter、Selection/Paper 与 Advisory 现存首行/覆盖路径建立独立 BUG/Feature 后再改；本 BUG 的文档通过
+7. 对 `qe_data_service`、Qlib exporter、Selection/Paper 与 Advisory 现存首行/覆盖路径建立独立 BUG/Feature 后再改；本 BUG 的文档通过
    不得冒充这些模块已修复。
-6. 历史 24-fit artifact 不迁移、不重签、不覆盖；新的 request 使用新的 authority revision。只有 0-fit preflight 与原 HR1
+8. 历史 24-fit artifact 不迁移、不重签、不覆盖；新的 request 使用新的 authority revision。只有 0-fit preflight 与原 HR1
    输入合同同时通过后，才可由用户另行授权训练。
 
 #### 23.35.7 决策与状态
@@ -5861,13 +5893,13 @@ P3/P4只能在shared contract批准后各自实施，且不得跨窗口编辑同
 | decision | status | consequence |
 |---|---|---|
 | C-013-PIT-ID-D1 versioned resolver / no arbitrary tie-break | `PROPOSED_PENDING_USER_APPROVAL` | 取代“当前 is_new rows 等同历史 PIT”的错误前提 |
-| C-013-PIT-ID-D2 classification basis / taxonomy version | `PROPOSED_PENDING_DATA_AUTHORITY_AND_USER_APPROVAL` | `as_published_pit` 与 `stable_taxonomy_backcast` 必须二选一并版本化，当前不得猜测 |
+| C-013-PIT-ID-D2 classification/index dual authority | `PROPOSED_REVISED_EVIDENCE_AVAILABLE_PENDING_USER_APPROVAL` | classification以计入日期构造区间、更新日期仅lineage；index采用真实进入/退出日；7/30、8/2、12/13分别表示分类有效、causal可用和指数切换，不得混写 |
 | C-013-PIT-ID-D3 interval and same-boundary semantics | `PROPOSED_PENDING_USER_APPROVAL` | 严格顺序可解析；同边界多 identity 显式 unavailable |
 | C-013-PIT-ID-D4 price/universe 与 industry unavailable 分离 | `PROPOSED_PENDING_USER_APPROVAL` | 少量行业缺失不删除股票；行业消费者按既有 coverage 合同验收 |
 | C-013-PIT-ID-D5 cross-consumer migration | `PROPOSED_PENDING_MODULE_OWNERS` | 各窗口独立 PR，不由 HMM 窗口跨模块实施 |
 | C-013-PIT-ID-D6 phased execution | `PROPOSED_PENDING_USER_APPROVAL` | P1 数据权威先于真实训练；任何生产 DML/部署/重启仍独立授权 |
 
-当前顶层状态为 `BUG_1184_DESIGN_REVIEWED_F2_PASS_USER_DECISIONS_REQUIRED_NO_SOURCE_IMPLEMENTATION`。HMM HR1 保持
+当前顶层状态为 `BUG_1184_DUAL_AUTHORITY_DESIGN_REVIEWED_F2_PASS_USER_DECISIONS_REQUIRED_NO_SOURCE_IMPLEMENTATION`。HMM HR1 保持
 `0/24 fits`，rotation_L1 capability 仍为 `NOT_AVAILABLE`；PR、merge、close-sync、production DDL/DML、依赖、runtime、服务进程、
 model/READY 均无变化。
 
@@ -5883,15 +5915,22 @@ model/READY 均无变化。
 3. **第三轮——F2验收语义**：发现自定义blocked状态与非可执行证据不符合矩阵schema。已在不伪造用户批准的前提下改为
    `VERIFIED_*`事实状态，绑定BUG JSON和真实failure artifact；待决业务合同继续只在Decision Index中保持
    `PROPOSED_PENDING_*`，没有把它们升级为active gate。
-4. **禁止简化交付：PASS**。设计覆盖完整universe/window、23只已知冲突、全部五类直接消费者和resolved/unavailable完整分母；
+4. **第四轮——本地申万资料与双authority复审**：发现原设计把2021-07-30分类计入与2021-12-13指数切换误当成竞争日期，且可能把
+   `更新日期`误用为knowledge time。已核验代码表、11,803行股票分类历史、7月末快照和官方说明的exact SHA；拆分
+   `stock_industry_classification_pit`与`sw_industry_index_membership_pit`，增加独立`known_from`、首个causal交易日及alignment状态。
+   `更新日期`仅保留lineage；四只股票通过一般化顺序区间合同闭合，不新增symbol hard-code。
+5. **第五轮——source fact assertions**：以只读解析对四个冻结文件执行断言，确认catalog=`511×4`、history=`11,803`、
+   canonical numeric stock=`5,161`、exact/same-stock-date duplicates=`0/0`；四只新identity均为`220315@2021-07-30`，7月末快照一致，
+   `605077`的`source_last_updated_at=2022-08-21`且全表存在5条update早于valid-from。所有断言通过，进一步否定“更新日期=调整生效日”。
+6. **禁止简化交付：PASS**。设计覆盖完整universe/window、23只已知冲突、全部五类直接消费者、双authority和resolved/unavailable完整分母；
    不以四只硬编码、仅HMM局部修复、latest映射或删除证券代替完整机制。
-5. **禁止静默错误：PASS**。同边界多identity、未知taxonomy、缺少成员边界、catalog非法分别typed fail closed；禁止首行、排序、
+7. **禁止静默错误：PASS**。同边界多identity、未知taxonomy、缺少成员边界、knowledge time未验证、authority未对齐和catalog非法分别typed fail closed；禁止首行、排序、
    `LIMIT 1`、字典覆盖、neutral、前值、当前行业或系数1.0 fallback。
-6. **禁止业务逻辑迁移：PASS_FOR_PROPOSED_DESIGN**。股票池、价格/alpha资格、HMM模型/seed/fold/threshold/hard semantic和
-   既有coverage合同均不变；“行业unavailable与证券资格分离”及classification basis仍明确等待用户批准，未进入源码。
-7. **禁止未经确认的门禁/审批：PASS**。新增项是确定性数据合同与typed状态，不是运行时人工审批；D1～D6均保持proposed，
+8. **禁止业务逻辑迁移：PASS_FOR_PROPOSED_DESIGN**。股票池、价格/alpha资格、HMM模型/seed/fold/threshold/hard semantic和
+   既有coverage合同均不变；classification/index双authority及“行业unavailable与证券资格分离”仍明确等待用户批准，未进入源码。
+9. **禁止未经确认的门禁/审批：PASS**。新增项是确定性数据合同与typed状态，不是运行时人工审批；D1～D6均保持proposed，
    production DDL/DML、依赖、部署、runtime、进程控制、训练和merge仍是独立授权。
-8. **可验证性：PASS**。F2 validator为`PASS / 16 matrix rows / warnings=0`；changed-files仅为BUG metadata与本权威设计，
+10. **可验证性：PASS**。F2 validator为`PASS / 16 matrix rows / warnings=0`；changed-files仅为BUG metadata与本权威设计，
    `validation_module_registry_l0=8 passed / 14 of 14 mapped`，L0 guardrail为0 finding，`git diff --check`通过。
 
 审核结论：`PASS_DOCUMENT_MERGE_READY_USER_DECISIONS_REQUIRED_NO_IMPLEMENTATION_AUTHORITY`。这里的merge-ready只表示文档内部一致、
