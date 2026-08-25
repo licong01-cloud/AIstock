@@ -9,6 +9,7 @@ committed atomically through :class:`ResolutionService`.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -83,6 +84,7 @@ MAX_ATTESTATION_ROWS = 100
 MAX_SOURCE_STAGE_RESULT_BYTES = 64 * 1024
 SAMPLE_POLICY = "on_contract_change"
 SOURCE_STAGE_RESULT_SCHEMA = "dataset_release_source_stage_result_v1"
+SOURCE_STAGE_ERROR_SCHEMA = "dataset_release_source_stage_error_v1"
 GIB = 1024**3
 # First-run admission is based on the versioned gzip-level1 sealed-source
 # envelope.  The former 640 GiB value assumed the full 512 GiB source estimate
@@ -180,6 +182,10 @@ _ZERO_SAFETY = {
 
 class ResolutionProcessorError(DatasetReleaseError):
     code = "DATASET_RELEASE_RESOLUTION_PROCESSOR_ERROR"
+
+
+class ResolutionSourceDriftWaiting(ResolutionProcessorError):
+    code = "BLOCKED_SOURCE_SNAPSHOT_DRIFT"
 
 
 class ResolutionRequestInvalid(ResolutionProcessorError):
@@ -421,7 +427,27 @@ class SupervisedResolutionSourceStage:
             timeout_seconds=float(self.profile.stage_timeouts_seconds["source_freeze"]),
             cooperative_grace_seconds=30.0,
         )
-        if receipt.returncode != 0 or receipt.active_processes != 0 or receipt.runtime != "windows":
+        if receipt.active_processes != 0 or receipt.runtime != "windows":
+            raise ResolutionProcessorError(
+                "supervised source stage failed",
+                context={
+                    "returncode": receipt.returncode,
+                    "active_processes": receipt.active_processes,
+                    "runtime": receipt.runtime,
+                },
+            )
+        if receipt.returncode != 0:
+            if result_path.is_file():
+                error = _read_bounded_source_stage_result(result_path, control_root=self.store.root)
+                if _is_waitable_source_drift(error):
+                    raise ResolutionSourceDriftWaiting(
+                        "supervised source stage observed transient source drift",
+                        context={
+                            "source_stage_error_code": error["error_code"],
+                            "source_stage_exception_type": error["exception_type"],
+                            "source_stage_message_sha256": error["message_sha256"],
+                        },
+                    )
             raise ResolutionProcessorError(
                 "supervised source stage failed",
                 context={
@@ -643,15 +669,25 @@ class MonthlyResolutionProcessor:
         )
         predicted_new_bytes = self._predicted_new_bytes(context.record)
         context.checkpoint()
-        frozen = self.source_stage.freeze(
-            context,
-            cutoff=request.cutoff,
-            baseline_reuse_ref=baseline_ref,
-            baseline_partitions=baseline_partitions,
-            predicted_new_bytes=predicted_new_bytes,
-            pressure_rung=context.pressure_rung,
-            sample_instruments=request.sample_instruments,
-        )
+        try:
+            frozen = self.source_stage.freeze(
+                context,
+                cutoff=request.cutoff,
+                baseline_reuse_ref=baseline_ref,
+                baseline_partitions=baseline_partitions,
+                predicted_new_bytes=predicted_new_bytes,
+                pressure_rung=context.pressure_rung,
+                sample_instruments=request.sample_instruments,
+            )
+        except ResolutionSourceDriftWaiting as exc:
+            return ProcessorResult.waiting(
+                exc.code,
+                context={
+                    **exc.context,
+                    "pressure_rung": context.pressure_rung,
+                    "data_scope_changed": False,
+                },
+            )
         context.checkpoint()
         probe = self._record_probe(context, request, frozen, candidate)
         catalog_spec = self._source_snapshot_catalog_spec(request, frozen, probe)
@@ -1800,6 +1836,28 @@ def _read_bounded_source_stage_result(
     if not isinstance(value, Mapping):
         raise ResolutionProcessorError("source-stage result is not a mapping")
     return value
+
+
+def _is_waitable_source_drift(value: Mapping[str, Any]) -> bool:
+    expected_fields = {
+        "schema_version",
+        "error_code",
+        "exception_type",
+        "message_sha256",
+        "context_ref",
+        "safety",
+    }
+    expected_safety = {**_ZERO_SAFETY, "provider_database_writes": 0, "candidate_writes": 0}
+    return bool(
+        set(value) == expected_fields
+        and value.get("schema_version") == SOURCE_STAGE_ERROR_SCHEMA
+        and value.get("error_code") == ResolutionSourceDriftWaiting.code
+        and value.get("exception_type") == "SourceSnapshotDriftBlocked"
+        and isinstance(value.get("message_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", str(value["message_sha256"]))
+        and value.get("context_ref") is None
+        and value.get("safety") == expected_safety
+    )
 
 
 def _partition_maps(

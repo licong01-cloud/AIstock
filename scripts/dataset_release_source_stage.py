@@ -158,13 +158,7 @@ def _sanitized_error_envelope(exc: BaseException) -> Mapping[str, Any]:
     }
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    profile = load_dataset_profile(args.profile)
-    control_root = Path(args.control_root).resolve(strict=True)
-    expected_control_root = Path(str(profile.control_root)).resolve(strict=True)
-    if control_root != expected_control_root:
-        raise ValueError("control root differs from versioned profile")
+def _execute_stage(args: argparse.Namespace, *, profile: Any, control_root: Path) -> int:
     cas = CASStore(control_root)
     cutoff = date.fromisoformat(args.cutoff)
     checkpoint = ChildResourceCheckpoint(
@@ -173,10 +167,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         execution_id=args.execution_id,
     )
     checkpoint.checkpoint()
-    if args.stage_timeout_seconds != profile.stage_timeouts_seconds["source_freeze"]:
-        raise ValueError("source-stage timeout differs from versioned profile")
-    if args.predicted_new_bytes < 0:
-        raise ValueError("predicted new bytes must be non-negative")
     disk_guard = DiskSpaceGuard(profile)
     baseline = _baseline_partitions(
         cas,
@@ -230,9 +220,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+def _write_error_result(
+    args: argparse.Namespace,
+    *,
+    control_root: Path,
+    error: BaseException,
+) -> None:
+    _write_result(
+        Path(args.result_path),
+        _sanitized_error_envelope(error),
+        control_root=control_root,
+        attempt_id=args.attempt_id,
+        attempt_fence=args.attempt_fence,
+        execution_id=args.execution_id,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    profile = load_dataset_profile(args.profile)
+    control_root = Path(args.control_root).resolve(strict=True)
+    expected_control_root = Path(str(profile.control_root)).resolve(strict=True)
+    if control_root != expected_control_root:
+        raise ValueError("control root differs from versioned profile")
+    if args.stage_timeout_seconds != profile.stage_timeouts_seconds["source_freeze"]:
+        raise ValueError("source-stage timeout differs from versioned profile")
+    if args.predicted_new_bytes < 0:
+        raise ValueError("predicted new bytes must be non-negative")
+    try:
+        return _execute_stage(args, profile=profile, control_root=control_root)
+    except BaseException as exc:
+        _write_error_result(args, control_root=control_root, error=exc)
+        raise
+
+
 if __name__ == "__main__":
     try:
         exit_code = main(sys.argv[1:])
+    except SystemExit:
+        raise
     except BaseException as exc:  # sanitized process boundary; no traceback/raw message
         sys.stderr.write(
             json.dumps(
