@@ -864,6 +864,7 @@ rules:
     include:
       - backend/qlib_exporter/**
       - backend/tests/qlib_exporter/**
+      - backend/tests/test_qlib_export_stock_universe_filters.py
       - scripts/qlib_*.py
       - qlib_minute_validation/**
     primary_module: qlib_data

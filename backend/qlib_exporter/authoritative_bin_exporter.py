@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
@@ -17,6 +18,7 @@ from .config import IPO_FILTER_DAYS
 PRICE_UNIT_DIVISOR = 1000.0
 MINUTE_FREQ_DB = "1m"
 MINUTE_FREQ_QLIB = "1min"
+SAFE_QLIB_CANDIDATE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 DAILY_REQUIRED_COLUMNS = [
     "date",
@@ -384,6 +386,98 @@ def _load_existing_instrument_ranges(all_txt: Path) -> dict[str, list[tuple[str,
     return parsed
 
 
+def _load_physical_feature_ranges(
+    *,
+    bin_dir: Path,
+    allowed_bin_root: Path,
+    frequency: str,
+    field: str = "close",
+) -> tuple[dict[str, list[tuple[str, str, str, str]]], dict[str, Any]]:
+    """Read instrument bounds from physical Qlib feature files, not stale all.txt metadata."""
+
+    if frequency != MINUTE_FREQ_QLIB:
+        raise ValueError(f"unsupported physical feature frequency: {frequency!r}")
+    if field != "close":
+        raise ValueError(f"unsupported physical feature authority field: {field!r}")
+    candidate_name = bin_dir.name
+    if not SAFE_QLIB_CANDIDATE_NAME_RE.fullmatch(candidate_name):
+        raise ValueError(f"invalid Qlib candidate directory name: {candidate_name!r}")
+    if bin_dir != allowed_bin_root / candidate_name:
+        raise ValueError("candidate Bin directory must be a direct child of allowed_bin_root")
+    if allowed_bin_root.is_symlink():
+        raise RuntimeError(f"allowed Bin root must not be a symlink: {allowed_bin_root}")
+    trusted_root = allowed_bin_root.resolve(strict=True)
+    candidate_path = trusted_root / candidate_name
+    if candidate_path.is_symlink():
+        raise RuntimeError(f"candidate Bin root must not be a symlink: {candidate_path}")
+    candidate_root = candidate_path.resolve(strict=True)
+    if candidate_root.parent != trusted_root:
+        raise RuntimeError(f"candidate Bin root escaped allowed root: {candidate_root}")
+    if not candidate_root.is_dir():
+        raise RuntimeError(f"candidate Bin root must be a directory: {candidate_root}")
+
+    calendar_path = candidate_root / "calendars" / "1min.txt"
+    features_root = candidate_root / "features"
+    if not calendar_path.is_file():
+        raise FileNotFoundError(calendar_path)
+    if calendar_path.is_symlink():
+        raise RuntimeError(f"calendar must be a regular file: {calendar_path}")
+    if not features_root.is_dir() or features_root.is_symlink():
+        raise RuntimeError(f"features must be a regular directory: {features_root}")
+
+    calendar = [line.strip() for line in calendar_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not calendar or calendar != sorted(set(calendar)):
+        raise RuntimeError(f"calendar is empty, duplicate, or unsorted: {calendar_path}")
+
+    parsed: dict[str, list[tuple[str, str, str, str]]] = {}
+    feature_file_count = 0
+    for feature_dir in sorted(features_root.iterdir(), key=lambda path: path.name.lower()):
+        if feature_dir.is_symlink():
+            raise RuntimeError(f"feature directory must not be a symlink: {feature_dir}")
+        if not feature_dir.is_dir():
+            continue
+        feature_path = feature_dir / "close.1min.bin"
+        if feature_path.is_symlink():
+            raise RuntimeError(f"feature file must not be a symlink: {feature_path}")
+        if not feature_path.is_file():
+            continue
+        size = feature_path.stat().st_size
+        if size < 8 or size % np.dtype("<f4").itemsize:
+            raise RuntimeError(f"invalid Qlib feature file size: {feature_path} size={size}")
+        header = np.fromfile(feature_path, dtype="<f4", count=1)
+        if header.size != 1 or not np.isfinite(header[0]) or float(header[0]) != int(header[0]):
+            raise RuntimeError(f"invalid Qlib feature start index: {feature_path}")
+        start_index = int(header[0])
+        value_count = size // np.dtype("<f4").itemsize - 1
+        end_index = start_index + value_count - 1
+        if start_index < 0 or end_index < start_index or end_index >= len(calendar):
+            raise RuntimeError(
+                f"Qlib feature bounds exceed calendar: {feature_path} "
+                f"start_index={start_index} end_index={end_index} calendar_size={len(calendar)}"
+            )
+        ts_code = _instrument_symbol_to_ts_code(feature_dir.name)
+        _reject_bj_ts_codes([ts_code])
+        parsed.setdefault(ts_code, []).append(
+            (ts_code, calendar[start_index], calendar[end_index], ts_code)
+        )
+        feature_file_count += 1
+
+    if not parsed:
+        raise RuntimeError(f"no {field}.{frequency}.bin feature files found under {features_root}")
+    starts = [_date_prefix(item[1]) for ranges in parsed.values() for item in ranges]
+    ends = [_date_prefix(item[2]) for ranges in parsed.values() for item in ranges]
+    return parsed, {
+        "range_authority": "physical_qlib_feature_bounds_v1",
+        "frequency": frequency,
+        "field": field,
+        "calendar_rows": len(calendar),
+        "feature_files": feature_file_count,
+        "feature_instruments": len(parsed),
+        "feature_start_min": min(starts).isoformat(),
+        "feature_end_max": max(ends).isoformat(),
+    }
+
+
 def _load_pit_spans_for_all_txt(
     *,
     universe_key: str,
@@ -482,6 +576,8 @@ def rewrite_stock_all_txt_from_pit_spans(
     universe_key: str = DEFAULT_PIT_UNIVERSE_KEY,
     start: date,
     end: date,
+    feature_frequency: str | None = None,
+    allowed_bin_root: Path | None = None,
 ) -> dict[str, Any]:
     """Rewrite Qlib instruments/all.txt using PIT stock-universe spans."""
 
@@ -494,7 +590,17 @@ def rewrite_stock_all_txt_from_pit_spans(
     if not all_txt.exists():
         raise FileNotFoundError(all_txt)
 
-    existing_ranges = _load_existing_instrument_ranges(all_txt)
+    physical_range_summary: dict[str, Any] | None = None
+    if feature_frequency:
+        if allowed_bin_root is None:
+            raise ValueError("allowed_bin_root is required for physical feature range discovery")
+        existing_ranges, physical_range_summary = _load_physical_feature_ranges(
+            bin_dir=bin_dir,
+            allowed_bin_root=allowed_bin_root,
+            frequency=feature_frequency,
+        )
+    else:
+        existing_ranges = _load_existing_instrument_ranges(all_txt)
     pit_spans = _load_pit_spans_for_all_txt(
         universe_key=universe_key,
         start=start,
@@ -534,6 +640,9 @@ def rewrite_stock_all_txt_from_pit_spans(
         "sample_skipped": skipped[:20],
         "generated_at": datetime.now().isoformat(timespec="seconds"),
     }
+    if physical_range_summary is not None:
+        summary["physical_range_summary"] = physical_range_summary
+        summary["range_authority"] = physical_range_summary["range_authority"]
     summary_path = all_txt.parent / "all_pit_universe_summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
