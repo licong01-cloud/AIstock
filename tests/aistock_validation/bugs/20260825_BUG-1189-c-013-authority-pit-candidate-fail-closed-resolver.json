@@ -1,6 +1,18 @@
 {
   "actual": "详细设计已合入，但 P1 candidate 与 P2A 共享数据层尚未实现，HMM/P3/P4 消费者必须保持阻断。",
   "allowed_write_scope": [
+    "backend/services/industry_pit/__init__.py",
+    "backend/services/industry_pit/artifact_store.py",
+    "backend/services/industry_pit/candidate_builder.py",
+    "backend/services/industry_pit/contracts.py",
+    "backend/services/industry_pit/resolver.py",
+    "backend/tests/industry_pit/test_artifact_store.py",
+    "backend/tests/industry_pit/test_candidate_builder.py",
+    "backend/tests/industry_pit/test_contracts_resolver.py",
+    "backend/tests/scripts/test_build_industry_pit_candidates.py",
+    "noxfile.py",
+    "scripts/build_industry_pit_candidates.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260825_BUG-1189-c-013-authority-pit-candidate-fail-closed-resolver.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -27,8 +39,22 @@
   ],
   "expected": "双 authority 分离构建并以冻结分母闭合；共享 resolver 仅 resolved 或 typed unavailable，order-invariant、fail-closed，无生产 DDL/DML 或运行时激活。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
+    "added_files": [
+      "backend/services/industry_pit/__init__.py",
+      "backend/services/industry_pit/artifact_store.py",
+      "backend/services/industry_pit/candidate_builder.py",
+      "backend/services/industry_pit/contracts.py",
+      "backend/services/industry_pit/resolver.py",
+      "backend/tests/industry_pit/test_artifact_store.py",
+      "backend/tests/industry_pit/test_candidate_builder.py",
+      "backend/tests/industry_pit/test_contracts_resolver.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "scripts/build_industry_pit_candidates.py"
+    ],
+    "changed_files": [
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -38,7 +64,20 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/industry_pit/__init__.py",
+      "backend/services/industry_pit/artifact_store.py",
+      "backend/services/industry_pit/candidate_builder.py",
+      "backend/services/industry_pit/contracts.py",
+      "backend/services/industry_pit/resolver.py",
+      "backend/tests/industry_pit/test_artifact_store.py",
+      "backend/tests/industry_pit/test_candidate_builder.py",
+      "backend/tests/industry_pit/test_contracts_resolver.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "noxfile.py",
+      "scripts/build_industry_pit_candidates.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ]
   },
   "first_seen_at": "2026-08-25T03:10:27.623566Z",
   "fix_branch": null,
@@ -47,7 +86,7 @@
   "github_issue_number": 3788,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3788",
   "last_seen_at": "2026-08-25T03:10:27.623566Z",
-  "module": "hmm.risk",
+  "module": "local_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
@@ -57,7 +96,7 @@
   "reproduce_command": "Design C-013 §23.35 implementation gap",
   "required_verification": [
     "l0",
-    "hmm_risk_backend"
+    "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -74,7 +113,7 @@
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "hmm.risk"
+    "local_data"
   ],
   "title": "C-013 双 authority 数据准备缺少 PIT candidate 与共享 fail-closed resolver",
   "trigger_condition": {
@@ -85,11 +124,10 @@
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
-        "hmm.risk",
-        "hmm_risk"
+        "local_data"
       ],
       "plans": [
-        "hmm_risk_backend"
+        "data_sync_autonomy_backend"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -143,11 +181,10 @@
       "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
-          "hmm.risk",
-          "hmm_risk"
+          "local_data"
         ],
         "plans": [
-          "hmm_risk_backend"
+          "data_sync_autonomy_backend"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
