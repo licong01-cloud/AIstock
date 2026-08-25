@@ -1,6 +1,8 @@
 {
   "actual": "Production read-only evidence on 2026-08-25: MiniQMT run simrun_c26b6ab54aaa2cb9 remains FAILED_RETRYABLE at MINIQMT_KERNEL_V2_PLAN_START_FAILED with AlgoStartContextV1 config schema validation failed, broker_called=false and no new broker order. Frozen policy b0_quote_v2:SNIPER_MINIQMT:ma_8ec5e389:20260714:v1 has algo_config containing price_mode=LIMIT_TRIGGER_BY_BEST_QUOTE plus policy/runtime fields tca and timer_iterations. The strict SNIPER plugin schema has additionalProperties=false and accepts only price_mode, while miniqmt_kernel_product passes the entire algo_config unchanged as plugin_config. Preserve the frozen execution-policy hash and business semantics, split plugin-owned config from policy/runtime metadata deterministically, fail closed on truly unknown plugin fields, and prove KERNEL_V2 plan-start reaches product creation without broker side effects in tests.",
   "allowed_write_scope": [
+    "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
     "tests/aistock_validation/bugs/20260825_BUG-1188-miniqmt-k6-passes-policy-level-fields-into-strict-sniper-plugin-config.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "K6 deterministically projects only plugin-owned fields into the strict plugin_config, retains the complete frozen execution-policy hash and separately consumed TCA/runtime metadata, rejects truly unknown or invalid fields, and reaches plan authority creation without broker side effects.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +54,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Inspect run simrun_c26b6ab54aaa2cb9 and policy b0_quote_v2:SNIPER_MINIQMT:ma_8ec5e389:20260714:v1; validate its algo_config against the strict SNIPER plugin schema and run the plan_authority_reader tests.",
   "required_verification": [
     "l0",
     "miniqmt_execution_runtime_l2"
@@ -60,13 +62,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "fresh_process_evidence": [
+      "rtk pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -k plan_authority_reader -q -> 10 passed",
+      "fresh pytest process loaded backend source -> 10 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -79,6 +92,16 @@
     "fingerprint": "973740c684a5af775ee83f35",
     "source_event_id": "FE-20260825-973740c684a5"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -k plan_authority_reader -q -> 10 passed",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14",
+    "rtk nox -s simulation_core_l2 -> 653 passed, 2 skipped",
+    "rtk nox -s miniqmt_execution_runtime_l2 -> 1520 passed, 82 skipped",
+    "rtk nox -s l0 -> blocking=0",
+    "rtk ruff check backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -> passed",
+    "python -m py_compile backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
