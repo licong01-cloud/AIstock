@@ -1,10 +1,29 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import dataset_release_source_stage as source_stage
+from backend.services.dataset_release.source_authority import SourceSnapshotDriftBlocked
+
+
+def test_source_stage_help_is_a_clean_fresh_process_smoke() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(source_stage.__file__), "--help"],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert "usage: dataset_release_source_stage.py" in completed.stdout
+    assert completed.stderr == ""
 
 
 def test_source_stage_accepts_only_explicit_repeated_sample_instruments() -> None:
@@ -49,6 +68,104 @@ def test_source_stage_error_envelope_never_persists_raw_exception_text() -> None
     assert envelope["exception_type"] == "RuntimeError"
     assert len(envelope["message_sha256"]) == 64
     assert envelope["context_ref"] is None
+
+
+def test_source_stage_persists_sanitized_typed_error_for_parent(tmp_path) -> None:
+    control = (tmp_path / "control").resolve()
+    execution = control / "attempt_runs" / "attempt-1-7" / "source-freeze"
+    execution.mkdir(parents=True)
+    result = execution / "semantic_result.json"
+    args = source_stage._parser().parse_args(
+        [
+            "--profile",
+            "profile.yaml",
+            "--control-root",
+            str(control),
+            "--cutoff",
+            "2026-07-31",
+            "--attempt-id",
+            "attempt-1",
+            "--attempt-fence",
+            "7",
+            "--execution-id",
+            "source-freeze",
+            "--result-path",
+            str(result),
+            "--predicted-new-bytes",
+            "0",
+            "--pressure-rung",
+            "0",
+            "--stage-timeout-seconds",
+            "300",
+        ]
+    )
+
+    source_stage._write_error_result(
+        args,
+        control_root=control,
+        error=SourceSnapshotDriftBlocked(
+            "source writer ledger changed during partition freeze",
+            context={"query_id": "kline_minute_raw"},
+        ),
+    )
+
+    payload = json.loads(result.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == source_stage.SOURCE_STAGE_ERROR_SCHEMA
+    assert payload["error_code"] == "BLOCKED_SOURCE_SNAPSHOT_DRIFT"
+    assert payload["exception_type"] == "SourceSnapshotDriftBlocked"
+    assert payload["context_ref"] is None
+    assert payload["safety"] == source_stage._ZERO_SAFETY
+    assert "kline_minute_raw" not in json.dumps(payload, sort_keys=True)
+
+
+def test_source_stage_main_persists_error_result_before_reraising(tmp_path, monkeypatch) -> None:
+    control = (tmp_path / "control").resolve()
+    execution = control / "attempt_runs" / "attempt-1-7" / "source-freeze"
+    execution.mkdir(parents=True)
+    result = execution / "semantic_result.json"
+    monkeypatch.setattr(
+        source_stage,
+        "load_dataset_profile",
+        lambda _path: SimpleNamespace(
+            control_root=control,
+            stage_timeouts_seconds={"source_freeze": 300},
+        ),
+    )
+
+    def drift(*_args, **_kwargs):
+        raise SourceSnapshotDriftBlocked("source writer ledger changed during partition freeze")
+
+    monkeypatch.setattr(source_stage, "_execute_stage", drift)
+    argv = [
+        "--profile",
+        "profile.yaml",
+        "--control-root",
+        str(control),
+        "--cutoff",
+        "2026-07-31",
+        "--attempt-id",
+        "attempt-1",
+        "--attempt-fence",
+        "7",
+        "--execution-id",
+        "source-freeze",
+        "--result-path",
+        str(result),
+        "--predicted-new-bytes",
+        "0",
+        "--pressure-rung",
+        "0",
+        "--stage-timeout-seconds",
+        "300",
+    ]
+
+    with pytest.raises(SourceSnapshotDriftBlocked):
+        source_stage.main(argv)
+
+    payload = json.loads(result.read_text(encoding="utf-8"))
+    assert payload["error_code"] == "BLOCKED_SOURCE_SNAPSHOT_DRIFT"
+    assert payload["exception_type"] == "SourceSnapshotDriftBlocked"
+    assert payload["safety"] == source_stage._ZERO_SAFETY
 
 
 def test_source_stage_result_is_bound_to_exact_attempt_execution(tmp_path) -> None:

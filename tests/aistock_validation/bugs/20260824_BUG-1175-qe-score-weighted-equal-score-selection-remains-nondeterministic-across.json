@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1175",
-  "closed_at": null,
+  "closed_at": "2026-08-24T18:28:22.879341Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -52,8 +52,8 @@
   },
   "first_seen_at": "2026-08-24T09:24:27.726126Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e2fac0bca44258a8a091ac16736ff8719e9ca5a1",
+  "fixed_at": "2026-08-24T15:48:53Z",
   "github_issue_number": 3748,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3748",
   "last_seen_at": "2026-08-24T09:24:27.726126Z",
@@ -61,6 +61,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3752",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -81,9 +82,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1175\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1175",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "8090a9a76705e46182850210a0829ac08beda0679c8be0a56cb00770b2291a9e",
+      "contract_digest": "1c45dbc3200ae398eebc37935a64f8807c9509221010f0e9b057d6322389e008",
+      "expected_identity": "e2fac0bca44258a8a091ac16736ff8719e9ca5a1",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-24T18:24:27.080510Z",
+      "mode": "read_only",
+      "observed_identity": "324fc707fc877c0398db0d7a6f72b14f724a599a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a7924eba763384475fd33d017f6d703daad24c35cd2dd45a98e99692f5c96f02",
+      "receipt_sha256": "f40750399709d3f2a1a8fe4a39ba09de270b78a510387892d6887099989604a0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d1a84e201caa8444d7c8c88f263c434c21ff642c47325c2d373f7a068c2bc11f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -93,7 +116,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -106,7 +129,8 @@
     "python -m pytest backend/tests/unified_engine/test_score_weighted_strategy_determinism.py -q -> 5 passed on final HEAD",
     "python -m nox -s validation_module_registry_l0 -> 8 passed",
     "python -m nox -s qe_sector_risk_overlay_backend -> 79 passed",
-    "python -m ruff check scripts/score_weighted_strategy_v2.py backend/tests/unified_engine/test_score_weighted_strategy_determinism.py; python -m py_compile scripts/score_weighted_strategy_v2.py backend/tests/unified_engine/test_score_weighted_strategy_determinism.py; git diff --check -> passed"
+    "python -m ruff check scripts/score_weighted_strategy_v2.py backend/tests/unified_engine/test_score_weighted_strategy_determinism.py; python -m py_compile scripts/score_weighted_strategy_v2.py backend/tests/unified_engine/test_score_weighted_strategy_determinism.py; git diff --check -> passed",
+    "python -m ruff check changed Python files -> passed"
   ],
   "verification_budget": {
     "budget": "standard",

@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 9122afbab4d6e4c15d88b72f22509314bb2cf62537f62914ea1051eb0bdb8641
+source_sha256: 8d86142b3bb0b393271d7e32cc674634fe46b2b50a51eed8720a8d72ad8efcf0
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-13"
@@ -661,6 +661,7 @@ rules:
       type: manual_review
       required_evidence:
         - compact_commit_bound_receipt_persisted
+        - source_merge_receipt_v1_persisted_before_source_cleanup
         - runtime_post_restart_receipt_summary_durable_before_local_copy_cleanup
         - ignored_artifact_manifest_classifies_transient_protected_unknown
         - active_process_and_path_boundary_preflight
@@ -670,7 +671,7 @@ rules:
         - path_registration_local_remote_four_state_readback
         - bare_merge_does_not_imply_cleanup
     baseline_policy: block_incomplete_cleanup_claim_only
-    remediation: Finalize compact durable receipts, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, fail closed on protected or unknown artifacts, then verify path, registration, local branch, and remote branch absence.
+    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, fail closed on protected or unknown artifacts, then verify path, registration, local branch, and remote branch absence.
 
   - rule_id: BUG-RESTART-EFFECTIVE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001
