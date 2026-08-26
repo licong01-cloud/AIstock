@@ -1,12 +1,12 @@
 # AIstock 模拟盘每日交易事实冻结与盘中行情热路径 F2 详细设计
 
 > 文档类型：F2 跨模块实施级详细设计
-> 文档状态：`broker_specific_limit_authority_p1b_source_review_passed_ready_for_pr`
+> 文档状态：`broker_specific_limit_authority_p1c_source_review_passed_ready_for_pr`
 > 日期：2026-08-21
 > 状态更新：2026-08-26
 > 上位权威：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)
 > 适用范围：LocalSIM、MiniQMT SIM、Paper Trading v2、Simulation Runtime、Trading Core
-> 当前事实：设计 PR #3812 已以 merge `7905c0abc3b9efcec53cdaa721a2b41a6004fe23` 合入；BUG-1197 P1-A 已由 PR #3816 squash 合入 merge `8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1`，其 runtime 仍等待用户重启与单 issue close-sync。BUG-1202 / Issue #3820 已完成 P1-B source implementation 与多轮审核：MiniQMT bounded instrument-detail batch、零 `stk_limit/TDX` direct resolver、V2 scheduler/decision/plan/recovery 接线；不实施 LocalSIM P1-C。P1-B PR/CI/merge、P1-C/P1-D、用户重启和正常交易日验收继续分别 pending，且本源码 PR 不执行生产 DDL/DML、依赖、配置、broker 或服务操作。
+> 当前事实：设计 PR #3812 已以 merge `7905c0abc3b9efcec53cdaa721a2b41a6004fe23` 合入；BUG-1197 P1-A 已由 PR #3816 squash 合入 merge `8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1`；BUG-1202 P1-B 已由 PR #3823 squash 合入 merge `eaf59b526753bcee3a5d4c7f62aca32cc5b09921`。两者 runtime 均等待用户重启与各自 close-sync。BUG-1203 / Issue #3825 正实施 P1-C：LocalSIM `stk_limit` 第一权威、仅可用性缺口一次 TDX reference 派生、混合source V2冻结与逐symbol隔离。P1-C PR/CI/merge、P1-D、用户重启和正常交易日验收继续分别 pending，且本源码 PR 不执行生产 DDL/DML、依赖、配置、broker 或服务操作。
 
 ## 1. Background / 背景、结论与不可变约束
 
@@ -360,6 +360,8 @@ P1-B 当前实现（BUG-1202）新增 `BaseQMTClient/XtQuantQMTClient.get_instru
 | R7 | P1-B direct authority与零SQL审核 | 共同V1 provider被MiniQMT独立resolver取代；支持事实方法只执行set-based `stock_st/suspend_d`，产品SQL指纹测试断言零`market.stk_limit`；transport exact/ordered/共享总deadline | findings fixed |
 | R8 | P1-B failure/no-limit/plan恢复审核 | cross-date/missing/invalid/unknown board逐symbol `UNAVAILABLE`，全部失败batch fail；no-limit绑定`OpenDate/DayCountFromIPO`或明确effective date与rule version；V2 quote/decision/plan/recovery strict readback | findings fixed |
 | R9 | P1-B最终回归、静态门禁与DESIGN-COMPLIANCE | 最终rebase后direct=`355 passed,2 skipped`、`simulation_core_l2=687 passed,2 skipped`、`qmt_client_contract=3 passed`、`validation_module_registry_l0=8 passed/ownership 14-of-14`、L0 blocking=0、F2详细设计=`7/7 warnings=0`、蓝图=`132/132 warnings=0`；四项DESIGN-COMPLIANCE逐项复核无缺口 | pass, source review ready for PR |
+| R10 | P1-C trigger taxonomy与source隔离 | `stk_limit` refresh unavailable/合法零行/requested-symbol缺行/null-pre-close才请求TDX；duplicate/alias/cross-date/invalid bounds/unknown board不触发派生；TDX只请求缺失集合一次，K.Last/当日时间/厘转元均严格验证 | findings fixed |
+| R11 | P1-C query budget、failure与最终回归 | 产品SQL测试证明refresh unavailable零查询、available一次exact set-based查询；失败symbol保留并拒单、其余symbol不重分配；direct=`9 passed`、`simulation_core_l2=695 passed,2 skipped`、`paper_v2_backend=1131 passed,3 skipped,2 xfailed`、registry=`8 passed/ownership 14-of-14`、L0 blocking=0、F2=`7/7 + 132/132 warnings=0` | pass, source review ready for PR |
 
 P1-A implementation DESIGN-COMPLIANCE-001：
 
@@ -381,6 +383,16 @@ P1-B implementation DESIGN-COMPLIANCE-001：
 | 禁止私增门禁审批 | pass | resolver由broker自动选择；无RBAC、人工ack/confirm、feature flag或手工恢复 |
 | 状态分离 | pass | P1-A source merge、P1-A runtime pending、P1-B source review passed、P1-B PR/CI/merge、P1-C/P1-D与正常交易日receipt分别记录；DDL/DML/dependency/config/broker/service-control为noop |
 
+P1-C implementation DESIGN-COMPLIANCE-001：
+
+| Control | 结论 | 实现证据 |
+| --- | --- | --- |
+| 禁止简化交付 | pass for approved P1-C slice | 完整覆盖Tushare第一权威、三类可用性触发、null-pre-close补齐、TDX版本化派生、mixed source V2、逐symbol隔离与scheduler接线；不声称P1-D/runtime完成 |
+| 禁止静默错误 | pass | duplicate/alias/cross-date/invalid/unknown board、TDX stale/missing/invalid、supporting fact类型漂移均typed fail；确定性坏行不进入TDX，未使用固定百分比或历史分钟数据回退 |
+| 禁止改变业务逻辑 | pass | 只替换LocalSIM新计划daily-limit resolver；Selection、intent、side、quantity、cash、position、fill、TWAP、OMS/Gateway、MiniQMT与broker route不变 |
+| 禁止私增门禁审批 | pass | resolver由LOCAL_SIM binding自动选择；无RBAC、人工ack/confirm、feature flag或手工恢复 |
+| 状态分离 | pass | P1-A/P1-B source已merge且runtime pending；P1-C source review、PR/merge、用户restart、P1-D与正常交易日receipt独立记录；DDL/DML/dependency/config/broker/service-control为noop |
+
 ## 13. Design Acceptance Matrix / 设计验收矩阵
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
@@ -389,11 +401,11 @@ P1-B implementation DESIGN-COMPLIANCE-001：
 | `F-127` | §4；BUG-1171；`DailyTradingSymbolFactV1/DailyTradingContextV1` | `backend/tests/simulation_runtime/test_daily_trading_context.py` 的V1 source/evidence/row/context hash roundtrip历史证据 | implemented_verified + explicitly approved v1_readonly | 用户明确批准新计划使用V2；V1只读兼容 |
 | `F-128` | §5、§7–§9；目标 LocalSIM provider/scheduler | `backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py`；`backend/tests/simulation_runtime/test_lifecycle_scheduler.py` | design_ready | none |
 | `F-129` | §6、§9；目标 MiniQMT quote ingress governor | `backend/tests/miniqmt_execution_runtime/test_quote_ingress.py`；`backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py` | design_ready | none |
-| `F-130` | §1–§3、§7；BUG-1197 P1-A contract + BUG-1202 P1-B MiniQMT resolver/transport/scheduler | `backend/tests/simulation_runtime/test_instrument_limit_authority.py`与`backend/tests/paper_trading_v2/test_minqmtsim_backend.py`覆盖direct field、date、deadline、zero-stk-limit、no-limit、symbol failure | p1b_source_ready + explicitly approved staged scope | explicitly approved staged scope：P1-C LocalSIM trigger/resolver及P1-B merge/runtime pending |
-| `F-131` | §4、§8；P1-A V2 schema/parser + P1-B quote/decision/plan/recovery readback | `backend/tests/simulation_runtime/test_daily_trading_context_v2.py` + `backend/tests/simulation_runtime/test_instrument_limit_authority.py`覆盖V1/V2、root/context、reference/plan/recovery、no-limit/symbol-failed | p1b_source_ready + explicitly approved staged scope | explicitly approved staged scope：P1-C LocalSIM mixed-source decision/plan接线仍pending |
-| `F-132` | §5、§9、§14–§16；P1-B source query-budget direct evidence；目标normal-day/capacity receipts | `backend/tests/simulation_runtime/test_instrument_limit_authority.py`产品SQL指纹断言MiniQMT支持事实零`stk_limit`并覆盖direct V2/quote/batch | p1b_source_evidence_ready + explicitly approved staged scope | explicitly approved staged scope：P1-C、用户restart、DEV/正常交易日/整日容量证据pending |
+| `F-130` | §1–§3、§7；P1-A contract + P1-B MiniQMT + BUG-1203 P1-C LocalSIM resolver/scheduler | `backend/tests/simulation_runtime/test_instrument_limit_authority.py`；`backend/tests/simulation_runtime/test_localsim_limit_authority.py`覆盖Tushare优先、missing/zero/unavailable/null-pre-close TDX派生与确定性坏行拒绝 | p1c_source_review_passed_ready_for_pr + explicitly approved staged scope | P1-C PR/merge、P1-D/runtime pending |
+| `F-131` | §4、§8；V2 schema/parser + 两backend quote/decision/plan/recovery readback | `backend/tests/simulation_runtime/test_daily_trading_context_v2.py`；`backend/tests/simulation_runtime/test_lifecycle_scheduler.py`；`python -m nox -s simulation_core_l2`=`695 passed,2 skipped` | p1c_source_review_passed_ready_for_pr + explicitly approved staged scope | P1-C PR/merge、P1-D/runtime pending |
+| `F-132` | §5、§9、§14–§16；两backend query-budget direct evidence | `backend/tests/simulation_runtime/test_localsim_limit_authority.py`产品SQL指纹；`python -m nox -s paper_v2_backend`=`1131 passed,3 skipped,2 xfailed` | p1c_source_review_passed_ready_for_pr + explicitly approved staged scope | 用户restart、DEV/正常交易日/整日容量证据pending |
 
-`F-126/F-127` 的历史实现证据只约束V1 readback。BUG-1197已闭合P1-A contract source；BUG-1202只闭合MiniQMT P1-B source，不构成LocalSIM resolver或runtime已完成。`F-130..F-132`整体仍需P1-B merge、P1-C/P1-D、用户重启和正常交易日receipt。
+`F-126/F-127` 的历史实现证据只约束V1 readback。BUG-1197已闭合P1-A contract source，BUG-1202已闭合并合入MiniQMT P1-B source；BUG-1203只闭合LocalSIM P1-C source，不构成P1-D或runtime已完成。`F-130..F-132`整体仍需P1-C merge、P1-D、用户重启和正常交易日receipt。
 
 ## 14. Rollout / Rollback / 发布与回滚
 

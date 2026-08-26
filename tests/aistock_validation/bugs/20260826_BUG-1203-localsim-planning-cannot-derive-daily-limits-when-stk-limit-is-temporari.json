@@ -19,8 +19,11 @@
   "bug_id": "BUG-1203",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
+    "Keep market.stk_limit as the first LocalSIM authority and call TDX exactly once only for refresh-unavailable, legal-zero-row, requested-symbol-missing, or null-pre-close availability gaps.",
+    "Reject duplicate, alias, cross-date, non-finite, non-positive, inverted-bound, unknown-board, stale-reference, and hash/reference corruption without masking them through TDX.",
+    "Freeze a hash-closed DailyTradingContextV2 through pre-trade decision, execution plan, persisted readback, and minute hot-path consumption with zero intraday market SQL or limit recomputation.",
+    "Preserve exact symbol intents and isolate unavailable symbols without reallocating quantity, cash, positions, fills, TWAP, OMS, gateway, or broker route semantics.",
+    "Run required verification plans and itemized DESIGN-COMPLIANCE-001 review.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-26T08:59:01.690908Z",
@@ -229,6 +232,7 @@
   "last_seen_at": "2026-08-26T08:59:01.690908Z",
   "module": "simulation_runtime",
   "non_goals": [
+    "Do not change MiniQMT direct instrument authority, Strategy Package, QE, Selection, execution algorithm, database schema/data, or broker account state.",
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
@@ -243,9 +247,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "pending_source_merge",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
