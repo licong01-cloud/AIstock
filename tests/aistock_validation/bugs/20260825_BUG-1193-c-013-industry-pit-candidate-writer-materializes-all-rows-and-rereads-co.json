@@ -1,0 +1,233 @@
+{
+  "actual": "backend/services/industry_pit/artifact_store.py::_write_jsonl builds encoded = sorted(...) for all rows and lines 73/78/374 use path.read_bytes() for hashing.",
+  "allowed_write_scope": [
+    "backend/services/industry_pit/artifact_store.py",
+    "backend/tests/industry_pit/test_artifact_store.py",
+    "tests/aistock_validation/bugs/20260825_BUG-1193-c-013-industry-pit-candidate-writer-materializes-all-rows-and-rereads-co.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1193",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-25T19:01:22.857117Z",
+  "description": "backend/services/industry_pit/artifact_store.py::_write_jsonl builds encoded = sorted(...) for all rows and lines 73/78/374 use path.read_bytes() for hashing.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260825-bada6ff392c7",
+      "timestamp": "2026-08-25T19:01:22.857101Z"
+    }
+  ],
+  "evidence_uris": [
+    "backend/services/industry_pit/artifact_store.py:67"
+  ],
+  "expected": "Additional canonical-serialization memory is bounded by a fixed byte/row sort chunk plus bounded merge fan-in; file hashes stream from disk; canonical bytes and hashes remain identical for the same inputs. Existing caller-owned interval sequences and the public readback tuple remain unchanged.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/industry_pit/artifact_store.py",
+      "backend/tests/industry_pit/test_artifact_store.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/industry_pit/artifact_store.py",
+        "backend/tests/industry_pit/test_artifact_store.py"
+      ],
+      "impacted_modules": [
+        "local_data"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/industry_pit/artifact_store.py",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_industry_pit_authority"
+        },
+        {
+          "file": "backend/tests/industry_pit/test_artifact_store.py",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_industry_pit_authority"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/industry_pit/artifact_store.py",
+        "backend/tests/industry_pit/test_artifact_store.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/industry_pit/artifact_store.py",
+      "backend/tests/industry_pit/test_artifact_store.py"
+    ]
+  },
+  "first_seen_at": "2026-08-25T19:01:22.857117Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3804,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3804",
+  "last_seen_at": "2026-08-25T19:01:22.857117Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not modify classification/index authority semantics, receipts, candidate hashes, consumers, Qlib export, HMM, Selection, Paper, or Advisory.",
+    "Do not overwrite an existing candidate artifact or activate production data."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Review backend/services/industry_pit/artifact_store.py:_write_jsonl,_file_entry,read_candidate_bundle and run the new multi-chunk regression.",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "fresh_process_evidence": [
+      "python -c fresh import backend.services.industry_pit.artifact_store -> BUG1193_FRESH_PROCESS_IMPORT_OK"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "C-013 industry PIT candidate writer materializes all rows and rereads complete artifacts",
+  "trigger_condition": {
+    "fingerprint": "bada6ff392c7164d507a12da",
+    "source_event_id": "FE-20260825-bada6ff392c7"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
