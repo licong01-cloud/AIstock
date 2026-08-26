@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1200",
-  "closed_at": null,
+  "closed_at": "2026-08-26T08:26:05.910273Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -81,9 +81,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1200\\post-restart-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1200",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "7f2e4f07bd50864a7238ae564e02dd15ff1e50a8d676327fef6a386a05e49f0d",
+      "contract_digest": "6a827a1b5f52fc51be0ba73041b186c74bf2c9951e89286b729a7702dcafcce6",
+      "expected_identity": "14775d019cb578dd15fb8488fa92bd3a430b6f6d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-26T08:20:00.403863Z",
+      "mode": "read_only",
+      "observed_identity": "14775d019cb578dd15fb8488fa92bd3a430b6f6d",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3a88f7a206b6c6a8ac330b4e92d210212f9766d6a77e76096934d9c6c040f2ba",
+      "receipt_sha256": "3d4525fa30ce755e1c55362c5b23cf71b81beda23e75fb66de2944963dc9585c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "9d9d991bd59483e388a8cb8c2403abb6f070c6713529aaafeb5844134176b102",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -93,7 +115,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -104,7 +126,8 @@
   },
   "validation_evidence": [
     "rtk nox -s validation_module_registry_l0 -> passed: 8 passed, ownership 14/14",
-    "rtk nox -s advisory_modeling_backend -> passed: 480 passed, 15 skipped"
+    "rtk nox -s advisory_modeling_backend -> passed: 480 passed, 15 skipped",
+    "rtk nox -s validation_module_registry_l0 -> passed: 8 passed"
   ],
   "verification_budget": {
     "budget": "standard",
