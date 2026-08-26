@@ -99,6 +99,8 @@ jobs:
         language: ${{ fromJson(needs.docs-lite.outputs.languages) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Verify prebuilt AIstock-CI environment
         shell: powershell
