@@ -123,6 +123,7 @@ def run_selection_prior_residual_pipeline(request_path: str | Path) -> dict[str,
     rankings = pd.read_parquet(root / "candidate_rankings.parquet")
     labels = pd.read_parquet(root / "candidate_episode_labels.parquet")
     _verify_policy_source_coverage(request, rankings, labels)
+    labels = _attach_frozen_selection_rank(labels, rankings)
     _verify_label_status_identity(request, labels)
     eligible_dates, coverage_receipt = eligible_constraint_dates(
         labels,
@@ -821,6 +822,72 @@ def _attach_labels(predictions: pd.DataFrame, labels: pd.DataFrame) -> pd.DataFr
         np.nan,
     )
     attached["turnover_liability_fraction_per_day"] = liability
+    return attached
+
+
+def _attach_frozen_selection_rank(labels: pd.DataFrame, rankings: pd.DataFrame) -> pd.DataFrame:
+    keys = ["decision_as_of_trade_date", "target_trade_date", "instrument"]
+    required_labels = {*keys, "selection_rank"}
+    required_rankings = {*keys, "is_candidate_decision", "selection_effective_rank"}
+    if not required_labels.issubset(labels) or not required_rankings.issubset(rankings):
+        raise AdvisoryModelFirstError(
+            "P0-J frozen Selection rank schema is incomplete",
+            reason_code="ADVISORY_SELECTION_PRIOR_RESIDUAL_LABEL_INVALID",
+        )
+
+    effective_rank = pd.to_numeric(rankings["selection_effective_rank"], errors="coerce")
+    candidates = rankings.loc[
+        rankings["is_candidate_decision"] & effective_rank.between(1, 20),
+        [*keys, "selection_effective_rank"],
+    ].copy()
+    if candidates.duplicated(keys).any() or labels.duplicated(keys).any():
+        raise AdvisoryModelFirstError(
+            "P0-J frozen Selection rank identity contains duplicates",
+            reason_code="ADVISORY_SELECTION_PRIOR_RESIDUAL_LABEL_INVALID",
+        )
+    try:
+        attached = labels.merge(candidates, on=keys, how="left", validate="one_to_one")
+    except pd.errors.MergeError as exc:
+        raise AdvisoryModelFirstError(
+            "P0-J frozen Selection rank identity is not one-to-one",
+            reason_code="ADVISORY_SELECTION_PRIOR_RESIDUAL_LABEL_INVALID",
+        ) from exc
+
+    label_rank = pd.to_numeric(attached["selection_rank"], errors="coerce")
+    attached_rank = pd.to_numeric(attached["selection_effective_rank"], errors="coerce")
+    label_rank_values = label_rank.to_numpy(dtype=float, na_value=np.nan)
+    attached_rank_values = attached_rank.to_numpy(dtype=float, na_value=np.nan)
+    if attached.empty or len(attached) != len(labels):
+        raise AdvisoryModelFirstError(
+            "P0-J frozen Selection rank coverage is incomplete",
+            reason_code="ADVISORY_SELECTION_PRIOR_RESIDUAL_LABEL_INVALID",
+        )
+    label_valid = (
+        np.isfinite(label_rank_values)
+        & np.equal(label_rank_values, np.floor(label_rank_values))
+        & label_rank.between(1, 20).to_numpy(dtype=bool, na_value=False)
+    )
+    attached_valid = (
+        np.isfinite(attached_rank_values)
+        & np.equal(attached_rank_values, np.floor(attached_rank_values))
+        & attached_rank.between(1, 20).to_numpy(dtype=bool, na_value=False)
+    )
+    if not label_valid.all() or not attached_valid.all():
+        raise AdvisoryModelFirstError(
+            "P0-J frozen Selection rank contains invalid values",
+            reason_code="ADVISORY_SELECTION_PRIOR_RESIDUAL_LABEL_INVALID",
+            context={
+                "invalid_label_rank_count": int((~label_valid).sum()),
+                "invalid_effective_rank_count": int((~attached_valid).sum()),
+            },
+        )
+    if not np.array_equal(label_rank_values, attached_rank_values):
+        raise AdvisoryModelFirstError(
+            "P0-J frozen Selection rank differs between rankings and labels",
+            reason_code="ADVISORY_SELECTION_PRIOR_RESIDUAL_LABEL_INVALID",
+            context={"mismatch_count": int((label_rank_values != attached_rank_values).sum())},
+        )
+    attached["selection_effective_rank"] = attached_rank.astype(int)
     return attached
 
 
