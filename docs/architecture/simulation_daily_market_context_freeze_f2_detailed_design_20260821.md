@@ -1,12 +1,12 @@
 # AIstock 模拟盘每日交易事实冻结与盘中行情热路径 F2 详细设计
 
 > 文档类型：F2 跨模块实施级详细设计
-> 文档状态：`broker_specific_limit_authority_design_review_passed_ready_for_merge`
+> 文档状态：`broker_specific_limit_authority_p1a_source_review_passed_ready_for_pr`
 > 日期：2026-08-21
 > 状态更新：2026-08-26
 > 上位权威：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)
 > 适用范围：LocalSIM、MiniQMT SIM、Paper Trading v2、Simulation Runtime、Trading Core
-> 当前事实：设计 PR #3651、BUG-1143 PR #3657、BUG-1144 PR #3662、BUG-1171 PR #3745 与 close-sync PR #3769 已形成并验证 `DailyTradingContextV1` 和盘前冻结基础，但 V1 仍把 `market.stk_limit` 硬编码为 LocalSIM/MiniQMT 共同的涨跌停权威。2026-08-26 用户明确修订业务权威：MiniQMT SIM 直接使用 MiniQMT `get_instrument_detail` 当日涨跌停字段；LocalSIM 继续优先使用 `market.stk_limit`，该数据集临时不可用、零行或计划 symbol 缺行时，允许用当日新鲜 TDX reference pre-close 和版本化交易所规则派生。本文只冻结新设计；`F-130..F-132` 的实现 BUG、源码、PR、merge、用户重启和正常交易日验收均为后续独立状态，且本设计 PR 不执行生产 DDL/DML、依赖、配置、broker 或服务操作。
+> 当前事实：设计 PR #3812 已以 merge `7905c0abc3b9efcec53cdaa721a2b41a6004fe23` 合入；BUG-1197 / Issue #3813 正按批准顺序实施 P1-A contract slice。P1-A 只新增 `DailyTradingContextV2`、V1 discriminated readback、broker matrix、symbol failure/mixed-source hash 和共享 A 股 live-reference 纯规则，不接入 MiniQMT/LocalSIM planning resolver。P1-B/P1-C/P1-D、source merge、用户重启和正常交易日验收继续分别 pending，且本源码 PR 不执行生产 DDL/DML、依赖、配置、broker 或服务操作。
 
 ## 1. Background / 背景、结论与不可变约束
 
@@ -321,6 +321,8 @@ MiniQMT quote ingress 的 raw、normalized、contextual projection、plugin eval
 
 P1-A 必须先合入；P1-B/P1-C 可在同一V2契约上拆为小PR，但任一backend不得借另一个backend的数据源。每个源码PR必须登记BUG/Issue、执行DESIGN-COMPLIANCE-001，并把source merge、production DDL/DML、用户重启和runtime evidence分开记录。
 
+P1-A 当前实现（BUG-1197）的 `a_share_live_limit_rule.py` 只复用既有纯函数 `dataset_release/a_share_limit_rule.py` 的板块、比例和版本语义，不修改dataset/worker源码，也不伪造adjustment factor。`simulation_runtime/models.py` 提供严格V2 carrier/build/hash，`daily_limit_authority.py` 提供broker matrix和V1/V2 discriminated readback。该slice不得被写成MiniQMT direct或LocalSIM TDX fallback已经接线。
+
 ## 11. Design Acceptance Index
 
 | ID | 设计验收条款 |
@@ -350,6 +352,19 @@ P1-A 必须先合入；P1-B/P1-C 可在同一V2契约上拆为小PR，但任一b
 | R1 | authority语义、旧V1歧义、跨source边界、价格单位与订单语义 | 显式标记F-126/F-127仅为V1历史；禁止MiniQMT runtime为对比调用Tushare/TDX；固定TDX `K.Last=昨收价（厘）`、`K.Close`拒绝、50-symbol逻辑batch；MiniQMT status字段不得改变既有orderability/资金/持仓/成交 | findings fixed |
 | R2 | V2 schema、混合source、故障层级、迁移与rollback | root carrier改为resolver+实际source集合；区分batch identity损坏与可隔离symbol失败；V1只读/V2新建；rollback不得恢复共同authority或旧hot-path，并纠正BUG-1171为已验证历史事实 | findings fixed |
 | R3 | 12项反向语义清单、Acceptance Matrix与F2结构门禁 | broker matrix、trigger taxonomy、确定性损坏、TDX单位、V1/V2、混合source、symbol隔离、零market SQL、design/runtime状态分离全部满足；F2 validator=`7/7 rows, warnings=0` | pass, zero findings |
+| R4 | P1-A source hash/type/failure审核 | 补齐root source evidence全量重算、context/root双层tamper、exact bool/string/lot/symbol key、no-limit/symbol-failed不暴露partial price；direct/V1/history matrix通过 | findings fixed |
+| R5 | 模块依赖与runtime target审核 | 尝试抽取共享规则会让changed-file inference扩为`backend-main + worker-scheduler`，已完整撤回；最终live纯规则只读复用未修改的dataset纯函数，P1-A保持唯一`backend-main` target | findings fixed |
+| R6 | 静态门禁与最终DESIGN-COMPLIANCE | L0首次仅发现负例哨兵`FALLBACK_DEFAULT`字面量，改为`UNREGISTERED_AUTHORITY`后blocking=0；F2、Ruff、compile、scope、fresh-process和必需nox均通过 | pass, zero findings |
+
+P1-A implementation DESIGN-COMPLIANCE-001：
+
+| Control | 结论 | 实现证据 |
+| --- | --- | --- |
+| 禁止简化交付 | pass for approved P1-A slice | 完整交付P1-A contract、broker matrix、V1/V2 parser、root/context hash、symbol states与live纯规则；明确P1-B/P1-C/P1-D未实现，不把contract冒充resolver wiring |
+| 禁止静默错误 | pass | unknown schema/backend/authority、cross-broker、partial price、coerced bool/lot、hash drift、unknown board/rule均typed fail；无default limit、固定10%、历史close或TWAP fallback |
+| 禁止改变业务逻辑 | pass | 未修改V1、dataset规则、decision/plan/scheduler/adapter、orderability、资金、持仓、数量、成交或broker route；历史规则parity直接测试通过 |
+| 禁止私增门禁审批 | pass | 只增加确定性代码schema/matrix不变量；未增加RBAC、人工ack、confirm-run、feature flag或手工恢复 |
+| 状态分离 | pass | 当前仅BUG-1197工作树source；PR/CI/merge、用户restart、runtime、P1-B/P1-C/P1-D及正常交易日receipt均独立pending；DDL/DML/dependency/config/broker/service-control为noop |
 
 ## 13. Design Acceptance Matrix / 设计验收矩阵
 
@@ -359,11 +374,11 @@ P1-A 必须先合入；P1-B/P1-C 可在同一V2契约上拆为小PR，但任一b
 | `F-127` | §4；BUG-1171；`DailyTradingSymbolFactV1/DailyTradingContextV1` | `backend/tests/simulation_runtime/test_daily_trading_context.py` 的V1 source/evidence/row/context hash roundtrip历史证据 | implemented_verified + explicitly approved v1_readonly | 用户明确批准新计划使用V2；V1只读兼容 |
 | `F-128` | §5、§7–§9；目标 LocalSIM provider/scheduler | `backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py`；`backend/tests/simulation_runtime/test_lifecycle_scheduler.py` | design_ready | none |
 | `F-129` | §6、§9；目标 MiniQMT quote ingress governor | `backend/tests/miniqmt_execution_runtime/test_quote_ingress.py`；`backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py` | design_ready | none |
-| `F-130` | §1–§3、§7；目标broker-specific resolver与source matrix | 目标 `backend/tests/simulation_runtime/test_broker_limit_authority.py`：MiniQMT instrument-detail direct、LocalSIM Tushare/TDX trigger matrix与cross-broker deny | design_ready | explicitly approved staged delivery：本次先冻结设计，source not implemented |
-| `F-131` | §4、§8；目标`DailyTradingContextV2`与decision/plan/recovery | 目标 `backend/tests/simulation_runtime/test_daily_trading_context_v2.py`：V1/V2 roundtrip、tamper、no-limit、symbol isolation与no reallocation | design_ready | explicitly approved staged delivery：本次先冻结设计，source not implemented |
+| `F-130` | §1–§3、§7；BUG-1197 P1-A `daily_limit_authority.py`、既有规则复用与live-reference纯函数 | `backend/tests/simulation_runtime/test_broker_limit_authority.py`、`backend/tests/trading_core/test_a_share_live_limit_rule.py`、`backend/tests/dataset_release/test_a_share_limit_rule.py`：cross-broker deny、版本/比例/舍入/no-limit/非法输入与历史规则不漂移 | p1a_source_review_passed_ready_for_pr + explicitly approved staged scope | P1-B MiniQMT direct与P1-C LocalSIM resolver wiring尚未实现 |
+| `F-131` | §4、§8；BUG-1197 P1-A `DailyTradingContextV2`、source root、V1/V2 parser | `backend/tests/simulation_runtime/test_daily_trading_context_v2.py`：V1/V2 roundtrip、mixed-source/root/context tamper、no-limit、symbol-failed与broker-matrix负例 | p1a_source_review_passed_ready_for_pr + explicitly approved staged scope | decision/plan/recovery接线留在P1-B/P1-C；本slice只交付contract |
 | `F-132` | §5、§9、§14–§16；目标normal-day/capacity receipts | 目标 `backend/tests/paper_trading_v2/test_localsim_limit_authority_fallback.py`、`backend/tests/miniqmt_execution_runtime/test_instrument_limit_authority.py`：zero-stk-limit SQL、derived fault、整日零market-SQL/recompute | design_ready | explicitly approved staged delivery：source/runtime/正常交易日 evidence pending |
 
-`F-126/F-127` 的历史实现证据只约束V1 readback，不构成新broker-specific权威已实现；`F-130..F-132` 在后续源码、用户重启和正常交易日receipt完成前只能保持design-ready/pending。
+`F-126/F-127` 的历史实现证据只约束V1 readback。BUG-1197仅闭合`F-130/F-131`的P1-A contract前置，不构成broker resolver已接线；`F-130..F-132`整体仍需P1-B/P1-C/P1-D、用户重启和正常交易日receipt。
 
 ## 14. Rollout / Rollback / 发布与回滚
 
@@ -397,13 +412,14 @@ P1-A 必须先合入；P1-B/P1-C 可在同一V2契约上拆为小PR，但任一b
 
 | Gate | 本文状态 | 后续要求 |
 | --- | --- | --- |
-| document source merge | pending user approval | 旧PR/BUG事实保留；本文仅为文档变更，`F-130..F-132`尚未登记实现BUG或提交源码 |
+| document source merge | merged PR #3812 / `7905c0ab` | 已批准设计为P1-A源码权威 |
+| P1-A source merge | pending BUG-1197 PR/review | 当前仅工作树源码与direct evidence，不代表main或runtime已具备 |
 | backend dependency | noop | 当前文档不改依赖 |
 | frontend dependency | noop | 当前文档不改前端 |
 | production DDL | noop | 若源码证明需要 additive schema，必须 DEV-first 后另获授权 |
 | production DML | noop | 不修改历史 plan/run/行情数据 |
 | config/binding/broker | noop | 不改运行配置、策略 binding 或 broker |
-| backend restart | noop for design PR；future implementation owner=user | 文档合入不需要重启；源码合入后单独判断 |
+| backend restart | pending only after BUG-1197 source merge；owner=user | P1-A源码变更命中backend-main；当前未重启，工作树代码不影响运行进程 |
 | runtime verification | not started for F-130..F-132 | 文档不改变当前runtime；后续实现、用户重启后按§9.3分别验证MiniQMT直接权威和LocalSIM TDX备选 |
 
 ## 17. 合入条件
