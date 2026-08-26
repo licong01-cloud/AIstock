@@ -724,8 +724,10 @@ rules:
         - no_setup_actions
         - no_dependency_install_commands
         - no_linux_or_production_environment_fallback
+        - windows_git_bash_shell
+        - local_git_object_mirror_reuse
     baseline_policy: block_new_and_changed_workflow
-    remediation: Provision the versioned Windows AIstock-CI runner and fail closed on mismatch; never install dependencies in the CI job.
+    remediation: Provision the versioned Windows AIstock-CI runner with Git Bash and a read-only object mirror, fail closed on mismatch, and never install dependencies in the CI job.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
