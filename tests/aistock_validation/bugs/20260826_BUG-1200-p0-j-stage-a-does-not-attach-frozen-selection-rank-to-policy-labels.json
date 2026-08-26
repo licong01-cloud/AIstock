@@ -1,0 +1,198 @@
+{
+  "actual": "Formal request advselpriorresreq_21397a7add6a112d0b52efc2 reached real WSL feature construction (386 dates, 7720 matured label rows) but stopped before trial 1 with ADVISORY_P0J_SELECTION_PRIOR_DEGENERATE missing selection_effective_rank, producing evidence-only bundle eda3122b9e1d42f7296af99536031eebc96e122c6be3e59d42989e16b7883b36. P0-C candidate_episode_labels.parquet freezes the same rank as selection_rank while candidate_rankings.parquet and the feature matrix use selection_effective_rank; the P0-J pipeline passes labels directly to fit_selection_rank_prior without the one-to-one rank attachment. Expected: attach and validate the frozen ranking rank against label selection_rank on exact candidate identity before training, reject missing/mismatched/duplicate rank loudly, and preserve all candidates with no fill/drop/fallback.",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/selection_prior_residual_pipeline.py",
+    "backend/tests/advisory_model_first/test_selection_prior_residual_pipeline.py",
+    "tests/aistock_validation/bugs/20260826_BUG-1200-p0-j-stage-a-does-not-attach-frozen-selection-rank-to-policy-labels.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1200",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-26T05:55:38.274794Z",
+  "description": "Formal request advselpriorresreq_21397a7add6a112d0b52efc2 reached real WSL feature construction (386 dates, 7720 matured label rows) but stopped before trial 1 with ADVISORY_P0J_SELECTION_PRIOR_DEGENERATE missing selection_effective_rank, producing evidence-only bundle eda3122b9e1d42f7296af99536031eebc96e122c6be3e59d42989e16b7883b36. P0-C candidate_episode_labels.parquet freezes the same rank as selection_rank while candidate_rankings.parquet and the feature matrix use selection_effective_rank; the P0-J pipeline passes labels directly to fit_selection_rank_prior without the one-to-one rank attachment. Expected: attach and validate the frozen ranking rank against label selection_rank on exact candidate identity before training, reject missing/mismatched/duplicate rank loudly, and preserve all candidates with no fill/drop/fallback.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260826-f44b0da5df31",
+      "timestamp": "2026-08-26T05:55:38.274777Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/selection_prior_residual_pipeline.py",
+      "backend/tests/advisory_model_first/test_selection_prior_residual_pipeline.py",
+      "tests/aistock_validation/bugs/20260826_BUG-1200-p0-j-stage-a-does-not-attach-frozen-selection-rank-to-policy-labels.json"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/selection_prior_residual_pipeline.py",
+      "backend/tests/advisory_model_first/test_selection_prior_residual_pipeline.py",
+      "tests/aistock_validation/bugs/20260826_BUG-1200-p0-j-stage-a-does-not-attach-frozen-selection-rank-to-policy-labels.json"
+    ]
+  },
+  "first_seen_at": "2026-08-26T05:55:38.274794Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3815,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3815",
+  "last_seen_at": "2026-08-26T05:55:38.274794Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh nox process loaded the tracked BUG-1200 source and passed advisory_modeling_backend: 480 passed, 15 skipped; no database, descriptor, scheduler, broker, or process mutation.",
+      "Fresh nox process loaded tracked BUG-1200 source and advisory_modeling_backend passed 480 tests with 15 skips"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "P0-J Stage A does not attach frozen Selection rank to policy labels",
+  "trigger_condition": {
+    "fingerprint": "f44b0da5df3171ff74ef92d3",
+    "source_event_id": "FE-20260826-f44b0da5df31"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
