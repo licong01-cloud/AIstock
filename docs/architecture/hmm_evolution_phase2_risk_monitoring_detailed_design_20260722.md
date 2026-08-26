@@ -5914,8 +5914,15 @@ production DDL/DML、依赖和HMM runtime均无变化。
   校验 live frozen denominator 与双 receipt 完全一致，非 dry-run 还要求 producer commit/tree 在构建前后稳定且工作树 clean。
 - `resolved + unaligned + unavailable = expected denominator`，sample/full 必须显式区分。candidate 构建不包含生产 DML、激活、
   HMM adapter、QE/Qlib exporter 或 Selection/Paper/Advisory 迁移；这些消费者仍由各 owner 独立 BUG/PR 验收。
-- 当前源码状态：`BUG1201_P3A_SOURCE_IMPLEMENTED_MULTI_ROUND_REVIEWED_FINAL_VALIDATION_PENDING`。该状态不表示 PR 已合入、
-  backend 已重启、candidate 已签核或生产数据已激活。
+- 最终 HEAD 全分母 dry-run：`5,999,301/5,999,301` assignments 闭合，`4,103 resolved + 260 unaligned +
+  5,994,938 unavailable`，生成逻辑识别 1,040 条 sector facts；opportunity digest 为
+  `b9fd10d9bb23bc658836620e1a1d64d7e8760d42645cc8e7b98e396012910c052`。该运行数据库只读、写入 0、artifact 写入 false、
+  production activation false，Python 工作集抽样约 0.284 GiB。
+- 2021-12-13 极小真实 writer/readback 样本仅包含四只请求股票中当日冻结 PIT 有效的 3 个机会，输出 3 assignments、1 sector fact，
+  candidate hash `350af8901eb8e801da844ff8f4a74c35d62aa71b60bb3ca733d8a063de5e909a`，写入独立 X 盘新目录且未覆盖既有数据。
+- 当前源码状态：`BUG1201_P3A_SOURCE_IMPLEMENTED_MULTI_ROUND_REVIEWED_FINAL_VALIDATION_PASS_PENDING_PR`。大量 typed unavailable
+  来自上游 classification/index evidence coverage，P3A 未缩分母或伪造行业；该状态不表示 PR 已合入、backend 已重启、full candidate
+  已签核或生产数据已激活。
 
 ### 23.36 BUG-1184 详细设计正式审核
 
