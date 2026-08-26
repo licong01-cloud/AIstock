@@ -5858,10 +5858,11 @@ fail closed。只读核验同时确认：canonical universe、交易日与价格
 | phase | 内容 | 负责人 | 完成条件 / 停止条件 |
 |---|---|---|---|
 | P0 设计与影响闭合 | 冻结本节合同、23/4 冲突清单、消费者矩阵、reason codes 与非目标 | 本 HMM 窗口 | 文档 F2 与正式审核通过；不实施代码 |
-| P1 数据权威准备 | 以四个冻结本地文件及公开发布日期为输入，分别构建classification candidate与index-membership candidate；对冻结universe/window构建完整分母，23只冲突股作为强制回归集；构建repo-external writer/readback | 数据准备窗口 | classification与index authority分别满足`resolved+unavailable=expected`；四只classification历史闭合且不使用更新日期；index日期缺证据时单独unavailable；不得猜测或生产DML |
-| P2A shared resolver core | 在数据服务所属最小共享位置实现order-invariant resolver、schema/parser/readback与typed reason；补duplicate、顺序区间、同边界冲突和无未来数据测试 | 数据准备窗口 | 共享源码/数据合同多轮审核通过；不包含HMM、QE、Selection或Advisory业务判断；PR合入另行确认 |
+| P1 数据权威准备（已验证） | 以四个冻结本地文件及公开发布日期为输入，分别构建classification candidate与index-membership candidate；对冻结universe/window构建完整分母，23只冲突股作为强制回归集；构建repo-external writer/readback | 数据准备窗口 | BUG-1189/PR #3795 已合入并完成重启后验证；r6 re-attestation保持双authority、完整分母和候选只读语义，不代表生产激活 |
+| P2A shared resolver core（已验证） | 在数据服务所属最小共享位置实现order-invariant resolver、schema/parser/readback与typed reason；补duplicate、顺序区间、同边界冲突和无未来数据测试 | 数据准备窗口 | BUG-1189与BUG-1193已验证；共享源码不包含HMM、QE、Selection或Advisory业务判断 |
 | P2B HMM adapter | 只在HMM边界接入共享resolver；把typed unavailable映射到既有contributor/coverage，不改变模型合同 | 本 HMM 窗口 | HMM定向测试与601日0-fit preflight无静默选择；源码PR合入另行确认 |
-| P3 数据构建与离线消费者 | 迁移 `sector_data_builder`、QE data service、Qlib exporter；产出 candidate-only dataset/readback 与受影响实验清单 | 数据准备窗口 + QE/数据导出窗口 | 同输入同 hash、完整分母闭合、四只无任意选择、无生产激活；跨模块 PR 分开合入 |
+| P3A 数据准备与sector candidate | `sector_data_builder`消费冻结双authority bundle；以按日有界分区生成assignment与sector fact两张规范化candidate、完整分母报告和readback | 数据准备窗口 | BUG-1201；同输入同hash、`resolved+unaligned+unavailable=denominator`、无静默join、无生产DML/激活；极小样本与全分母签核分开报告 |
+| P3B QE离线消费者 | 迁移 QE data service、Qlib exporter；消费P3A candidate并给出受影响实验清单 | QE/数据导出窗口 | 独立BUG/PR；不得复制resolver或绕过candidate签核；小样本后才可重建候选数据集，生产激活独立授权 |
 | P4 业务消费者 | 迁移 Selection/Paper/Advisory 的行业读取与 unavailable 展示 | 各业务窗口 | 每个模块按自身设计/测试/部署流程完成；本 HMM 窗口不接管其业务逻辑 |
 | P5 HMM 恢复验证 | 在 P1/P2 已合入且 frozen request 闭合后，先运行完整 601 日只读预检，再由用户授权决定是否重启 24-fit HR1 replay | 本 HMM 窗口 | 预检失败即停止；不因单股 unavailable 全局失败，coverage 不足仍失败；训练/selection/model/READY 均需原授权边界 |
 
@@ -5892,16 +5893,37 @@ P3/P4只能在shared contract批准后各自实施，且不得跨窗口编辑同
 
 | decision | status | consequence |
 |---|---|---|
-| C-013-PIT-ID-D1 versioned resolver / no arbitrary tie-break | `PROPOSED_PENDING_USER_APPROVAL` | 取代“当前 is_new rows 等同历史 PIT”的错误前提 |
-| C-013-PIT-ID-D2 classification/index dual authority | `PROPOSED_REVISED_EVIDENCE_AVAILABLE_PENDING_USER_APPROVAL` | classification以计入日期构造区间、更新日期仅lineage；index采用真实进入/退出日；7/30、8/2、12/13分别表示分类有效、causal可用和指数切换，不得混写 |
-| C-013-PIT-ID-D3 interval and same-boundary semantics | `PROPOSED_PENDING_USER_APPROVAL` | 严格顺序可解析；同边界多 identity 显式 unavailable |
-| C-013-PIT-ID-D4 price/universe 与 industry unavailable 分离 | `PROPOSED_PENDING_USER_APPROVAL` | 少量行业缺失不删除股票；行业消费者按既有 coverage 合同验收 |
-| C-013-PIT-ID-D5 cross-consumer migration | `PROPOSED_PENDING_MODULE_OWNERS` | 各窗口独立 PR，不由 HMM 窗口跨模块实施 |
-| C-013-PIT-ID-D6 phased execution | `PROPOSED_PENDING_USER_APPROVAL` | P1 数据权威先于真实训练；任何生产 DML/部署/重启仍独立授权 |
+| C-013-PIT-ID-D1 versioned resolver / no arbitrary tie-break | `APPROVED_USER_SOURCE_IMPLEMENTED_VERIFIED` | BUG-1189共享resolver已合入验证；消费者仍只能通过冻结receipt调用 |
+| C-013-PIT-ID-D2 classification/index dual authority | `APPROVED_USER_SOURCE_IMPLEMENTED_VERIFIED` | classification以计入日期构造区间、更新日期仅lineage；index采用真实进入/退出日；7/30、8/2、12/13分别表示分类有效、causal可用和指数切换，不得混写 |
+| C-013-PIT-ID-D3 interval and same-boundary semantics | `APPROVED_USER_SOURCE_IMPLEMENTED_VERIFIED` | 严格顺序可解析；同边界多identity显式unavailable；BUG-1193只优化writer内存，不改变identity/hash |
+| C-013-PIT-ID-D4 price/universe 与 industry unavailable 分离 | `APPROVED_USER_SHARED_CONTRACT_VERIFIED_CONSUMERS_PENDING` | 少量行业缺失不删除股票；P3A保留完整分母，具体消费者继续按既有coverage合同验收 |
+| C-013-PIT-ID-D5 cross-consumer migration | `APPROVED_USER_PHASED_MODULE_IMPLEMENTATION_IN_PROGRESS` | P3A由数据准备窗口实施；HMM、QE与P4各自独立PR，不由本窗口跨模块修改 |
+| C-013-PIT-ID-D6 phased execution | `APPROVED_USER_P1_P2A_VERIFIED_P3A_IN_PROGRESS` | P1/P2A已闭合；P2B/P3B/P4/P5仍按依赖推进；任何生产DML/部署/重启仍独立授权 |
 
-当前顶层状态为 `BUG_1184_DUAL_AUTHORITY_DESIGN_REVIEWED_F2_PASS_USER_DECISIONS_REQUIRED_NO_SOURCE_IMPLEMENTATION`。HMM HR1 保持
-`0/24 fits`，rotation_L1 capability 仍为 `NOT_AVAILABLE`；PR、merge、close-sync、production DDL/DML、依赖、runtime、服务进程、
-model/READY 均无变化。
+当前顶层状态为 `C013_P1_P2A_VERIFIED_P3A_BUG1201_SOURCE_IN_PROGRESS_CONSUMERS_PENDING`。HMM HR1 保持
+`0/24 fits`，rotation_L1 capability 仍为 `NOT_AVAILABLE`；P2B/P3B/P4/P5、production DDL/DML、候选激活、训练与model/READY均未由
+P1/P2A源码完成事实自动授权。
+
+#### 23.35.8 P1/P2A实现回执与P3A接口包v1
+
+- P1/P2A权威源码：BUG-1189 / Issue #3788 / PR #3795，merge commit `e66d868015eaad28f52f52c54112d2cd23a1d4a5`；
+  post-restart状态为`verified`。
+- bounded writer修复：BUG-1193 / Issue #3804 / PR #3805，merge commit
+  `592aeb1aca848764594623f52fc37acbd63ca6be`；最终verified receipt由PR #3810合入。
+- r6只读re-attestation：`F:/Dev/AIstock_artifacts/BUG-1193-c013-writer-reattest-20260826-48d5faf4-r6`；bundle hash
+  `43257b426110219e02fc45f19341458d77574d65e33c8f72f0b6c6b8f92ae025`，classification/index hash分别为
+  `7e7eee6e100a881c32bb8ad0d59a17ed7010e4c928f78b3117185b46deb3b54b`与
+  `642f780f077177fb57e1533c9d526ee09da3c79880e14ee84add7bfc3c1bbb24`。该路径是候选证据，不是生产运行时authority。
+- P3A接口包v1固定为：输入P1/P2A `candidate_bundle_manifest.json`及其中的双receipt、冻结universe state receipt与denominator digest；
+  输出`assignments.jsonl`、`sector_facts.jsonl`、`candidate_report.json`和`candidate_manifest.json`。assignment逐symbol/date保留
+  `resolved/unaligned/unavailable`及typed reason；sector fact仅在classification/index identity aligned且published fact与至少一个
+  moneyflow contributor可用时形成，并携带contributor expected/resolved/ratio。sector fact的identity固定为L2 authority projection hash，
+  不得从同一L2下任意一只股票的完整L3 identity选取代表值。
+- P3A使用按交易日有界分区，assignment与sector fact分离，避免对每只股票重复保存整套板块行情/资金流；writer/readback校验文件hash、
+  row hash、全局顺序、fact引用与完整分母。数据库访问仅允许显式read-only；artifact只能写repo-external新目录，禁止覆盖、DELETE/INSERT、
+  生产激活或把sample声明为full。
+- 其他窗口必须绑定P3A manifest中的industry bundle hash、双receipt hash、source denominator digest与candidate hash；接口变更由数据准备窗口
+  发布新revision，HMM/QE/P4不得复制resolver或直接修改共享实现。
 
 ### 23.36 BUG-1184 详细设计正式审核
 

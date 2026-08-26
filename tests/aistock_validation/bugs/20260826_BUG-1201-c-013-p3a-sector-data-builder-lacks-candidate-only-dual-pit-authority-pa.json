@@ -2,8 +2,13 @@
   "actual": "The current builder reads legacy market membership and executes DELETE/INSERT against market.sector_data; there is no candidate-only dual-authority build/readback contract.",
   "allowed_write_scope": [
     "backend/services/sector_data_builder.py",
+    "backend/tests/scripts/test_build_sector_data_candidate.py",
     "backend/tests/services/test_sector_data_builder.py",
     "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "noxfile.py",
+    "scripts/build_sector_data_candidate.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260826_BUG-1201-c-013-p3a-sector-data-builder-lacks-candidate-only-dual-pit-authority-pa.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -30,11 +35,17 @@
   ],
   "expected": "Add the approved C-013 P3A candidate-only sector data preparation path using the shared order-invariant resolver and immutable authority receipt/hash, with bounded memory, complete denominator closure, no production DML, and no HMM/QE/business-consumer changes.",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/tests/scripts/test_build_sector_data_candidate.py",
+      "scripts/build_sector_data_candidate.py"
+    ],
     "changed_files": [
       "backend/services/sector_data_builder.py",
       "backend/tests/services/test_sector_data_builder.py",
-      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "ownership": {
       "changed_files": [
@@ -86,8 +97,13 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/sector_data_builder.py",
+      "backend/tests/scripts/test_build_sector_data_candidate.py",
       "backend/tests/services/test_sector_data_builder.py",
-      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/build_sector_data_candidate.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-08-26T07:04:00.664389Z",
@@ -112,9 +128,15 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [],
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
