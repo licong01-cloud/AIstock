@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1201",
-  "closed_at": null,
+  "closed_at": "2026-08-26T12:42:20.217154Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -108,8 +108,8 @@
   },
   "first_seen_at": "2026-08-26T07:04:00.664389Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dab281a525dfe8a6f20abfd9f06fa48ce3a8ce5f",
+  "fixed_at": "2026-08-26T10:19:14Z",
   "github_issue_number": 3819,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3819",
   "last_seen_at": "2026-08-26T07:04:00.664389Z",
@@ -117,6 +117,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3829",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -138,8 +139,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1201\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1201",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "a3045fa42139f402b309ac127872689603567076740f0360af163af0e0ffcd9b",
+      "contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+      "expected_identity": "dab281a525dfe8a6f20abfd9f06fa48ce3a8ce5f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-26T12:37:05.028210Z",
+      "mode": "read_only",
+      "observed_identity": "dab281a525dfe8a6f20abfd9f06fa48ce3a8ce5f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "343632980a601f9e59ec00f9249e576d4d61b53f7841a4042418549d4cd49321",
+      "receipt_sha256": "06371d789af2b258b49a8a55731850475433a9384de5ac124ebf787ea3c9d192",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a69ac5993820576ba6a55101157978ef7da83ec1354eac8c47b8984d0da4086d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -149,7 +173,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1201",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0a3c61a94f38fb66",
+    "recorded_at": "2026-08-26T10:25:27.264814Z",
+    "runtime_contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9b39bc2c639b42dff2bcb67a0fe0b384e3db826e",
+    "source_merge_commit": "dab281a525dfe8a6f20abfd9f06fa48ce3a8ce5f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3829",
+    "validation_evidence": [
+      "PR #3829 CI verdict -> passed"
+    ],
+    "validation_evidence_digest": "64a69df8a644b1b82c06f7783efd743e586b19d05be8441b34f839b41713103c"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -158,6 +203,10 @@
     "fingerprint": "ecb042054b08041825cfcf13",
     "source_event_id": "FE-20260826-ecb042054b08"
   },
+  "validation_evidence": [
+    "PR #3829 CI verdict -> passed",
+    "post-restart-verify BUG-1201 backend-main -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
