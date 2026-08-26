@@ -151,11 +151,19 @@ def test_writer_readback_uses_one_schema_and_preserves_separate_hashes(tmp_path:
     assert readback.index_membership_receipt.receipt_hash == index_receipt.receipt_hash
 
 
+@pytest.mark.parametrize(
+    ("chunk_bytes", "chunk_rows"),
+    ((1, 100), (1024 * 1024, 2)),
+    ids=("byte-bound", "row-bound"),
+)
 def test_jsonl_writer_uses_bounded_multistage_sort_and_preserves_canonical_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    chunk_bytes: int,
+    chunk_rows: int,
 ) -> None:
-    monkeypatch.setattr(artifact_store, "_JSONL_SORT_CHUNK_BYTES", 1)
-    monkeypatch.setattr(artifact_store, "_JSONL_SORT_CHUNK_ROWS", 2)
+    monkeypatch.setattr(artifact_store, "_JSONL_SORT_CHUNK_BYTES", chunk_bytes)
+    monkeypatch.setattr(artifact_store, "_JSONL_SORT_CHUNK_ROWS", chunk_rows)
     monkeypatch.setattr(artifact_store, "_JSONL_MERGE_FAN_IN", 2)
     rows = [
         {"symbol": "300858.SZ", "rank": 4},
@@ -180,6 +188,18 @@ def test_jsonl_writer_uses_bounded_multistage_sort_and_preserves_canonical_bytes
     assert first_observation.row_count == len(rows)
     assert first_observation.size_bytes == len(expected)
     assert first_observation.sha256 == sha256_hex(expected)
+
+
+def test_jsonl_writer_empty_input_preserves_legacy_empty_file_identity(tmp_path: Path) -> None:
+    target = tmp_path / "empty.jsonl"
+
+    observation = artifact_store._write_jsonl(target, ())
+
+    assert target.read_bytes() == b""
+    assert observation.row_count == 0
+    assert observation.size_bytes == 0
+    assert observation.sha256 == sha256_hex(b"")
+    assert list(tmp_path.glob(".empty.jsonl.sort-*")) == []
 
 
 def test_bundle_writer_and_readback_do_not_read_candidate_files_whole(
@@ -237,6 +257,28 @@ def test_jsonl_writer_cleans_private_sort_workspace_after_merge_failure(
 
     assert not target.exists()
     assert list(tmp_path.glob(".candidate.jsonl.sort-*")) == []
+
+
+def test_jsonl_writer_withdraws_final_file_when_sort_workspace_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_rmtree = artifact_store.shutil.rmtree
+
+    def fail_sort_cleanup(path: object, *args: object, **kwargs: object) -> None:
+        if Path(path).name.startswith(".candidate.jsonl.sort-"):
+            raise OSError("synthetic sort cleanup failure")
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(artifact_store.shutil, "rmtree", fail_sort_cleanup)
+    target = tmp_path / "candidate.jsonl"
+    with pytest.raises(OSError, match="synthetic sort cleanup failure"):
+        artifact_store._write_jsonl(target, ({"rank": rank} for rank in (2, 1)))
+
+    assert not target.exists()
+    leftovers = list(tmp_path.glob(".candidate.jsonl.sort-*"))
+    assert len(leftovers) == 1
+    monkeypatch.setattr(artifact_store.shutil, "rmtree", original_rmtree)
+    original_rmtree(leftovers[0])
 
 
 def test_tamper_is_typed_writer_readback_hash_mismatch(tmp_path: Path) -> None:
