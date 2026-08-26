@@ -3,10 +3,10 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-08-26
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0J_SOURCE_IMPLEMENTED_LOCAL_VERIFIED_STAGE_A_NOT_RUN`
+> 当前状态：`P0J_SOURCE_COMMITTED_PR_OPEN_STAGE_A_NOT_RUN`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线 shadow 推理；自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
 > 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity修复、forward evaluation、历史虚拟前向以及P0-E至P0-I Stage A源码/权威结果均已进入`main`；最新P0-I由PR #3803合入commit `e982b2db`。生产descriptor仍指向P0-D exact bundle；P0-E至P0-I均未激活、不替换baseline
-> P0-J源码状态：独立implementation worktree已完成contracts/training/pipeline/bundle/CLI/tests并通过本地门禁；尚未提交、PR、合入或运行正式Stage A，故不属于当前`main`或运行时能力
+> P0-J源码状态：contracts/training/pipeline/bundle/CLI/tests已由commit `525f8fb1`提交并在PR #3811开放评审，且通过本地门禁；尚未合入或运行正式Stage A，故不属于当前`main`或运行时能力
 > 当前生产前向状态：截至 2026-08-23，两个 ENABLED Program 各有7个 forward run；最新 `decision=2026-08-21 -> target=2026-08-24` 均为 `PUBLISHED/NOT_DUE`。该已持久化 run 冻结的是切换前 legacy quality-reranker；第一条自然 P0-D observation 只能在 2026-08-24 收盘后的下一目标交易日运行中形成，禁止回填
 > 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`。源码合入不等于 descriptor 接入或 bundle 激活
 > 演进方向：P0-D历史虚拟前向已证明二分类概率不能稳定表达收益幅度；P0-E outcome weighting同样负向停止。P0-F/P0-G保留收益提升但未满足换手。P0-H把相对P0-D换手压低`0.022708`并改善MDD `0.010688`，但return head日Spearman仅`0.041731`、PBO `0.90`；P0-I改用同日grouped rank后，已完成片段的return日Spearman进一步降为`-0.002229`，且第11条path在冻结price roster上不可行而停止。liability head在P0-H/P0-I分别达到`0.256435`/`0.236089`，证明输出约束有效，连续失败集中在从零学习收益排序。P0-J冻结独立假设：以inner-train的Selection rank单调收益曲线保留强排序先验，只学习未被该先验解释的policy episode残差，并用inner OOF固定零截距系数把残差可靠度收缩到`[0,1]`；保留P0-H liability、exact P0-D预算和全部业务/门槛，禁止用outer validation选择blend权重或扩大搜索。
@@ -733,7 +733,7 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 
 优先级：`P0_NOW_AFTER_P0I_GROUPED_RANK_SIGNAL_FAILURE`。
 
-状态：`SOURCE_IMPLEMENTED_LOCAL_VERIFIED_STAGE_A_NOT_RUN`。
+状态：`SOURCE_COMMITTED_PR_OPEN_STAGE_A_NOT_RUN`（source commit `525f8fb1`，PR #3811）。
 
 权威详细设计：
 `docs/architecture/advisory_p0j_selection_prior_residual_return_f2_design_20260826.md`。

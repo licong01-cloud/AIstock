@@ -1,7 +1,7 @@
 # Advisory P0-J Selection-Prior Residual Return with OOF Reliability Shrinkage F2 详细设计
 
 > 日期：2026-08-26
-> 状态：`SOURCE_IMPLEMENTED_LOCAL_VERIFIED_STAGE_A_NOT_RUN`
+> 状态：`SOURCE_COMMITTED_PR_OPEN_STAGE_A_NOT_RUN`
 > 类型：F2 / Advisory 离线模型 Stage A
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前序权威结果：P0-D exact baseline、P0-H `82afdb81...`、P0-I evidence-only `2378358...`
@@ -433,4 +433,4 @@ Stage A不部署。源码合入只增加离线实验能力和权威结果，不�
 
 状态：`NOT_RUN`。
 
-P0-J源码已在独立implementation worktree完成并通过本地门禁，但尚未提交、创建PR、合入或运行正式Stage A；因此没有正式request/bundle、winner/PBO/advancement结果，也未修改descriptor。源码验证不得冒充模型质量结论。
+P0-J源码已由commit `525f8fb1`提交并在PR #3811开放评审，且通过本地门禁；但尚未合入或运行正式Stage A。因此没有正式request/bundle、winner/PBO/advancement结果，也未修改descriptor。源码提交与PR状态不得冒充模型质量结论。
