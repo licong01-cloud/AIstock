@@ -50,6 +50,7 @@ jobs:
 
       - name: Detect CodeQL fast lane
         id: fast_lane
+        shell: bash
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
