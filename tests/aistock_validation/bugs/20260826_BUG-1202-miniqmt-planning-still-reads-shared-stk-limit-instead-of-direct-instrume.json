@@ -5,6 +5,7 @@
     "backend/services/simulation_runtime/scheduler.py",
     "backend/services/simulation_runtime/decision.py",
     "backend/services/simulation_runtime/daily_limit_authority.py",
+    "backend/services/paper_trading_v2/market_data.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
     "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
@@ -18,7 +19,9 @@
   "bug_id": "BUG-1202",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
+    "Implement one bounded exact-symbol MiniQMT instrument-detail batch and strict per-symbol authority validation.",
+    "Freeze DailyTradingContextV2 for MiniQMT planning and carry it through TradingRuleDecision and ExecutionPlan without querying market.stk_limit or TDX.",
+    "Preserve existing orderability, cash, position, quantity, fill, TWAP and LocalSIM semantics.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
@@ -46,6 +49,7 @@
       "backend/services/simulation_runtime/scheduler.py",
       "backend/services/simulation_runtime/decision.py",
       "backend/services/simulation_runtime/daily_limit_authority.py",
+      "backend/services/paper_trading_v2/market_data.py",
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
       "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
@@ -197,6 +201,7 @@
       "backend/services/simulation_runtime/scheduler.py",
       "backend/services/simulation_runtime/decision.py",
       "backend/services/simulation_runtime/daily_limit_authority.py",
+      "backend/services/paper_trading_v2/market_data.py",
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
       "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
@@ -214,6 +219,8 @@
   "last_seen_at": "2026-08-26T07:11:09.315313Z",
   "module": "simulation_runtime",
   "non_goals": [
+    "Do not implement LocalSIM stk_limit-to-TDX resilience; that remains P1-C after this PR.",
+    "Do not modify protected StrategyPackage, QE, model, selection, database schema/data, broker account, orderability, cash, position, quantity, fill or TWAP assets/semantics.",
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
@@ -229,9 +236,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "pending_source_merge",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
