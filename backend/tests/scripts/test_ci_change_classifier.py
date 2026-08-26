@@ -589,6 +589,22 @@ def test_workflow_fast_contract_test_has_direct_self_mapping(tmp_path: Path) -> 
     ]
 
 
+def test_ci_environment_and_policy_scripts_use_direct_workflow_tests(tmp_path: Path) -> None:
+    expected = {
+        "scripts/ci_environment_verify.py": "backend/tests/scripts/test_ci_environment_verify.py",
+        "scripts/ci_workflow_policy_scan.py": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    }
+
+    for source, test_target in expected.items():
+        payload = classifier.classify_changed_files([source], repo_root=tmp_path)
+
+        assert payload["classification"] == "workflow_validation_only"
+        assert payload["workflow_gate"] == "passed"
+        assert payload["backend_required"] is False
+        assert payload["unmapped_code_files"] == []
+        assert payload["workflow_test_targets"] == [test_target]
+
+
 def test_validation_ui_target_contract_uses_catalog_gate_only(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["backend/tests/test_validation_ui_target_catalog.py"],
