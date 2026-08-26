@@ -748,6 +748,92 @@ class DailyTradingContextProvider:
             "suspend_facts": suspend_facts,
         }
 
+    def load_stk_limit_authority_attempt(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+    ) -> dict[str, Any]:
+        """Read one exact-symbol stk_limit attempt without converting availability gaps into corruption."""
+
+        raw_symbols = [str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()]
+        aliases = [symbol.upper() for symbol in raw_symbols]
+        if len(raw_symbols) != len(set(aliases)) or any(symbol != alias for symbol, alias in zip(raw_symbols, aliases)):
+            raise DataUnavailableError(
+                "stk_limit authority symbol set contains an alias collision",
+                context={"reason_code": "DAILY_TRADING_CONTEXT_SYMBOL_ALIAS_COLLISION"},
+            )
+        requested = tuple(sorted(aliases))
+        if not requested:
+            raise DataUnavailableError(
+                "stk_limit authority requires a non-empty exact symbol set",
+                context={"reason_code": "DAILY_TRADING_CONTEXT_SYMBOL_SET_EMPTY"},
+            )
+        try:
+            audit = self.audit_repository.require_success(dataset="stk_limit", trade_date=trade_date)
+        except DataUnavailableError as exc:
+            return {
+                "schema_version": "stk_limit_authority_attempt_v1",
+                "trade_date": trade_date.isoformat(),
+                "symbol_set": list(requested),
+                "availability": "UNAVAILABLE",
+                "unavailable_reason": exc.message,
+                "refresh_identity": None,
+                "rows": [],
+            }
+        refresh_identity = self._refresh_identity(audit)
+        if int(audit.row_count or 0) == 0:
+            return {
+                "schema_version": "stk_limit_authority_attempt_v1",
+                "trade_date": trade_date.isoformat(),
+                "symbol_set": list(requested),
+                "availability": "ZERO_ROWS",
+                "unavailable_reason": None,
+                "refresh_identity": refresh_identity,
+                "rows": [],
+            }
+        try:
+            with self.conn_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT ts_code, trade_date, pre_close, up_limit, down_limit
+                        FROM market.stk_limit
+                        WHERE ts_code = ANY(%s) AND trade_date = %s
+                        ORDER BY ts_code
+                        """,
+                        (list(requested), trade_date),
+                    )
+                    rows = list(cur.fetchall())
+        except Exception as exc:
+            return {
+                "schema_version": "stk_limit_authority_attempt_v1",
+                "trade_date": trade_date.isoformat(),
+                "symbol_set": list(requested),
+                "availability": "UNAVAILABLE",
+                "unavailable_reason": type(exc).__name__,
+                "refresh_identity": refresh_identity,
+                "rows": [],
+            }
+        return {
+            "schema_version": "stk_limit_authority_attempt_v1",
+            "trade_date": trade_date.isoformat(),
+            "symbol_set": list(requested),
+            "availability": "AVAILABLE",
+            "unavailable_reason": None,
+            "refresh_identity": refresh_identity,
+            "rows": [
+                {
+                    "symbol": row[0],
+                    "trade_date": row[1].isoformat() if isinstance(row[1], date) else row[1],
+                    "pre_close": float(row[2]) if row[2] is not None else None,
+                    "up_limit": float(row[3]) if row[3] is not None else None,
+                    "down_limit": float(row[4]) if row[4] is not None else None,
+                }
+                for row in rows
+            ],
+        }
+
     def load(
         self,
         *,
@@ -1695,6 +1781,56 @@ def fetch_tdx_realtime_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
             if symbol:
                 quotes[symbol] = dict(item)
     return quotes
+
+
+def parse_tdx_reference_pre_close(
+    *,
+    symbol: str,
+    quote: Mapping[str, Any],
+    trade_date: date,
+    as_of_time: datetime,
+) -> dict[str, Any]:
+    """Validate one TDX K.Last reference and return hash-ready CNY/share evidence."""
+
+    normalized = str(symbol or "").strip().upper()
+    if normalized != symbol or not isinstance(quote, Mapping):
+        raise DataUnavailableError(
+            "TDX reference quote identity is invalid",
+            context={"reason_code": "DAILY_LIMIT_TDX_REFERENCE_INVALID", "symbol": symbol},
+        )
+    raw_quote = dict(quote)
+    kline = raw_quote.get("K") if isinstance(raw_quote.get("K"), dict) else {}
+    source_pre_close = _first_number(kline, ("Last",))
+    basis = _quote_price_basis(raw_quote, source="TDX_REALTIME.batch_quote.pre_close")
+    pre_close = (
+        source_pre_close / PRICE_UNIT_DIVISOR
+        if source_pre_close is not None and basis == "raw_li"
+        else source_pre_close
+    )
+    timestamp = _require_tdx_quote_timestamp(
+        symbol=normalized,
+        quote=raw_quote,
+        trade_date=trade_date,
+        as_of_time=as_of_time,
+        source="TDX_REALTIME.batch_quote.pre_close",
+        max_quote_age=TDX_REALTIME_QUOTE_MAX_AGE,
+    )
+    if pre_close is None or not math.isfinite(pre_close) or pre_close <= 0:
+        raise DataUnavailableError(
+            "TDX reference K.Last is missing or invalid",
+            context={"reason_code": "DAILY_LIMIT_TDX_REFERENCE_INVALID", "symbol": normalized},
+        )
+    evidence = {
+        "schema_version": "tdx_reference_pre_close_evidence_v1",
+        "source": "TDX_REALTIME.batch_quote.K.Last",
+        "symbol": normalized,
+        "trade_date": trade_date.isoformat(),
+        "quote_timestamp": timestamp.isoformat(),
+        "source_price_basis": basis,
+        "source_pre_close": source_pre_close,
+        "pre_close": pre_close,
+    }
+    return {**evidence, "evidence_hash": _canonical_json_sha256(evidence)}
 
 
 def quote_tradability_evidence(

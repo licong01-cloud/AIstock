@@ -18700,10 +18700,24 @@ def test_local_sim_snapshot_rejects_cross_plan_facts_instead_of_filtering_them()
 class _CapturingDailyTradingContextProvider:
     def __init__(self) -> None:
         self.kwargs: dict[str, Any] = {}
+        self.stk_limit_attempt_calls: list[tuple[list[str], date]] = []
 
     def load(self, **kwargs: Any) -> SimpleNamespace:
         self.kwargs = dict(kwargs)
         return SimpleNamespace(context_id="dtc_test")
+
+    def load_stk_limit_authority_attempt(self, *, symbols: list[str], trade_date: date) -> dict[str, Any]:
+        normalized = sorted(symbols)
+        self.stk_limit_attempt_calls.append((normalized, trade_date))
+        return {
+            "schema_version": "stk_limit_authority_attempt_v1",
+            "trade_date": trade_date.isoformat(),
+            "symbol_set": normalized,
+            "availability": "ZERO_ROWS",
+            "unavailable_reason": None,
+            "refresh_identity": "refresh_test",
+            "rows": [],
+        }
 
     @staticmethod
     def load_supporting_facts(*, symbols: list[str], trade_date: date) -> dict[str, Any]:
@@ -18737,8 +18751,12 @@ def test_daily_context_wires_tdx_pre_close_authority_for_localsim() -> None:
 
     daily_provider = _CapturingDailyTradingContextProvider()
 
+    quote_calls: list[list[str]] = []
+
     def quote_fetcher(symbols: list[str]) -> dict[str, dict[str, Any]]:
-        return {symbol: {} for symbol in symbols}
+        quote_calls.append(list(symbols))
+        timestamp = f"{TRADE_DATE:%Y%m%d}091000"
+        return {symbol: {"K": {"Last": 10_000}, "time": timestamp} for symbol in symbols}
 
     provider = ProductionSimulationRunContextProvider(
         daily_trading_context_provider=daily_provider,
@@ -18763,9 +18781,12 @@ def test_daily_context_wires_tdx_pre_close_authority_for_localsim() -> None:
         calendar_service_snapshot={"is_trading_day": True},
     )
 
-    assert result == {"context": {"context_id": "dtc_test"}}
-    assert daily_provider.kwargs["pre_close_quote_fetcher"] is quote_fetcher
-    assert daily_provider.kwargs["pre_close_quote_source"] == "TDX_REALTIME.batch_quote.pre_close"
+    assert daily_provider.stk_limit_attempt_calls == [(["000001.SZ"], TRADE_DATE)]
+    assert quote_calls == [["000001.SZ"]]
+    assert result["000001.SZ"]["source"] == "daily_trading_context_v2"
+    reference = result["000001.SZ"]["daily_trading_context"]
+    assert reference["broker_backend"] == SimulationBrokerBackend.LOCAL_SIM.value
+    assert reference["limit_authority"] == "TDX_REFERENCE_DERIVED_V1"
 
 
 def test_daily_context_wires_direct_instrument_authority_for_miniqmt() -> None:
