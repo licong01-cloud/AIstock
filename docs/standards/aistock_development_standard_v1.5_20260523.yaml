@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 120cabe7efcea38116d93b2913cebbb9439da2c41d0c2bd8a417566ff923267c
+source_sha256: e650f5437ba68e1755c9f175809d9c05863c88264d66ae7c3b5c5c57cc22e028
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-26"

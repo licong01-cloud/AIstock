@@ -393,7 +393,7 @@ jobs:
           AISTOCK_USER_BACKEND_PROCESS_CONTROL: forbidden
         run: |
           test "${AISTOCK_USER_BACKEND_PROCESS_CONTROL}" = "forbidden"
-          python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' > workflow_test_targets.txt
+          python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' | tr -d '\r' > workflow_test_targets.txt
           mapfile -t workflow_test_targets < workflow_test_targets.txt
           python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider
 

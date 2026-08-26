@@ -272,7 +272,7 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 
 backend、frontend、Go、workflow validation、PR quality 和安全扫描等 CI 验证必须在预构建的 Windows self-hosted runner 上执行；运行前只允许执行环境身份、版本指纹和工具可用性检查。CI 禁止 `actions/setup-*`、`pip/conda/mamba install`、`npm ci/install`、`go mod download` 以及任何隐式依赖安装。环境缺失、指纹漂移或工具缺失时必须 fail-closed 并报告 `environment_mismatch`，不回退到 GitHub-hosted Linux、生产 `AIstock` 环境或临时安装环境。该规则是执行环境约束，不增加业务测试或人工审批。
 
-Windows runner 的 workflow shell 必须显式解析到 Git Bash（不得落到 WSL `System32\\bash.exe`）；runner wrapper 可配置只读本地 Git object mirror，并通过 `GIT_ALTERNATE_OBJECT_DIRECTORIES` 复用已验证对象。checkout 仍使用浅深度和当前 PR base SHA；仅在 mirror 缺少对象时远程补取。mirror、shell 和代理异常属于 runner 基础设施诊断，不得转化为业务门禁或重复依赖安装。
+Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 WSL `System32\\bash.exe`）；runner wrapper 可配置只读本地 Git object mirror，并通过 `GIT_ALTERNATE_OBJECT_DIRECTORIES` 复用已验证对象。checkout 仍使用浅深度和当前 PR base SHA；仅在 mirror 缺少对象时远程补取。mirror、shell 和代理异常属于 runner 基础设施诊断，禁止转化为业务门禁或重复依赖安装。
 
 <a id="rule-ci-database-safety-001"></a>
 ### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
