@@ -100,7 +100,8 @@
     "fresh_process_evidence": [
       "Fresh pytest process imported tracked DailyTradingContextV2, broker matrix and live-reference rule and passed 77 direct/V1/historical-rule compatibility cases; no backend process control.",
       "Fresh Python process imported the tracked live-reference rule and verified it reuses the existing cn_a_share_price_limit_v2_20260706 rule identity without changing dataset_release source; no database, broker or service side effect.",
-      "Fresh pytest process loaded the tracked P1-A source and passed the 77-test direct/V1/history matrix without user-backend process control."
+      "Fresh pytest process loaded the tracked P1-A source and passed the 77-test direct/V1/history matrix without user-backend process control.",
+      "Fresh pytest process loaded commit 78d438dd tracked P1-A source and passed the 77-test direct/V1/history matrix without user-backend process control."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
