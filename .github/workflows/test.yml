@@ -25,7 +25,7 @@ jobs:
   classify-changes:
     name: Classify CI changed files
     runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       backend_required: ${{ steps.classify.outputs.backend_required }}
       backend_sessions: ${{ steps.classify.outputs.backend_sessions }}
@@ -194,7 +194,7 @@ jobs:
     needs: classify-changes
     if: needs.classify-changes.outputs.docs_lite_required == 'true'
     runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 3
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
