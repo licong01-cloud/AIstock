@@ -43,9 +43,14 @@ jobs:
         id: quality_lane
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          git fetch origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" --no-tags --depth=1
+          if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
+          else
+            git fetch origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" --no-tags --depth=1
+          fi
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
           git diff --name-only "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/changed_files.txt
@@ -68,8 +73,10 @@ jobs:
           AISTOCK_PR_QUALITY_ENFORCE_P0P1: ${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          # Keep base history available for three-dot diffs on branches that merge main.
-          git fetch origin "${BASE_REF}" --no-tags || true
+          # Reuse the base ref prepared by Detect PR quality lane; fetch only for manual runs.
+          if ! git rev-parse --verify "refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1; then
+            git fetch origin "${BASE_REF}" --no-tags --depth=1
+          fi
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
           ENFORCE_ARGS=()

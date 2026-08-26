@@ -34,7 +34,13 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
+          else
+            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          fi
 
       - name: Verify prebuilt AIstock-CI tooling
         shell: powershell
