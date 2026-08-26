@@ -108,8 +108,8 @@
   },
   "first_seen_at": "2026-08-26T07:04:00.664389Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dab281a525dfe8a6f20abfd9f06fa48ce3a8ce5f",
+  "fixed_at": "2026-08-26T10:19:14Z",
   "github_issue_number": 3819,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3819",
   "last_seen_at": "2026-08-26T07:04:00.664389Z",
@@ -117,6 +117,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3829",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -139,6 +140,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -149,7 +151,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1201",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0a3c61a94f38fb66",
+    "recorded_at": "2026-08-26T10:25:27.264814Z",
+    "runtime_contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9b39bc2c639b42dff2bcb67a0fe0b384e3db826e",
+    "source_merge_commit": "dab281a525dfe8a6f20abfd9f06fa48ce3a8ce5f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3829",
+    "validation_evidence": [
+      "PR #3829 CI verdict -> passed"
+    ],
+    "validation_evidence_digest": "64a69df8a644b1b82c06f7783efd743e586b19d05be8441b34f839b41713103c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -158,6 +181,9 @@
     "fingerprint": "ecb042054b08041825cfcf13",
     "source_event_id": "FE-20260826-ecb042054b08"
   },
+  "validation_evidence": [
+    "PR #3829 CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
