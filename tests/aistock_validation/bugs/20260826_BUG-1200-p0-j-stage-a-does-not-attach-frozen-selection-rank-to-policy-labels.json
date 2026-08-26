@@ -50,8 +50,8 @@
   },
   "first_seen_at": "2026-08-26T05:55:38.274794Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "14775d019cb578dd15fb8488fa92bd3a430b6f6d",
+  "fixed_at": "2026-08-26T07:49:40Z",
   "github_issue_number": 3815,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3815",
   "last_seen_at": "2026-08-26T05:55:38.274794Z",
@@ -59,6 +59,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3821",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -81,6 +82,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -91,7 +93,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -100,6 +102,10 @@
     "fingerprint": "f44b0da5df3171ff74ef92d3",
     "source_event_id": "FE-20260826-f44b0da5df31"
   },
+  "validation_evidence": [
+    "rtk nox -s validation_module_registry_l0 -> passed: 8 passed, ownership 14/14",
+    "rtk nox -s advisory_modeling_backend -> passed: 480 passed, 15 skipped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
