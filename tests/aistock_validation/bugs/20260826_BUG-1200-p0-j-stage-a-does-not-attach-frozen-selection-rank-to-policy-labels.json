@@ -1,6 +1,8 @@
 {
   "actual": "Formal request advselpriorresreq_21397a7add6a112d0b52efc2 reached real WSL feature construction (386 dates, 7720 matured label rows) but stopped before trial 1 with ADVISORY_P0J_SELECTION_PRIOR_DEGENERATE missing selection_effective_rank, producing evidence-only bundle eda3122b9e1d42f7296af99536031eebc96e122c6be3e59d42989e16b7883b36. P0-C candidate_episode_labels.parquet freezes the same rank as selection_rank while candidate_rankings.parquet and the feature matrix use selection_effective_rank; the P0-J pipeline passes labels directly to fit_selection_rank_prior without the one-to-one rank attachment. Expected: attach and validate the frozen ranking rank against label selection_rank on exact candidate identity before training, reject missing/mismatched/duplicate rank loudly, and preserve all candidates with no fill/drop/fallback.",
   "allowed_write_scope": [
+    "backend/services/advisory_model_first/selection_prior_residual_pipeline.py",
+    "backend/tests/advisory_model_first/test_selection_prior_residual_pipeline.py",
     "tests/aistock_validation/bugs/20260826_BUG-1200-p0-j-stage-a-does-not-attach-frozen-selection-rank-to-policy-labels.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -26,7 +28,11 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/selection_prior_residual_pipeline.py",
+      "backend/tests/advisory_model_first/test_selection_prior_residual_pipeline.py",
+      "tests/aistock_validation/bugs/20260826_BUG-1200-p0-j-stage-a-does-not-attach-frozen-selection-rank-to-policy-labels.json"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +42,11 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/advisory_model_first/selection_prior_residual_pipeline.py",
+      "backend/tests/advisory_model_first/test_selection_prior_residual_pipeline.py",
+      "tests/aistock_validation/bugs/20260826_BUG-1200-p0-j-stage-a-does-not-attach-frozen-selection-rank-to-policy-labels.json"
+    ]
   },
   "first_seen_at": "2026-08-26T05:55:38.274794Z",
   "fix_branch": null,
@@ -59,13 +69,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh nox process loaded the tracked BUG-1200 source and passed advisory_modeling_backend: 480 passed, 15 skipped; no database, descriptor, scheduler, broker, or process mutation.",
+      "Fresh nox process loaded tracked BUG-1200 source and advisory_modeling_backend passed 480 tests with 15 skips"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

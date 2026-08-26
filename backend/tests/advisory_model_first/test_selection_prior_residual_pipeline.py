@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from backend.services.advisory_model_first.selection_prior_residual_pipeline import (
+    _attach_frozen_selection_rank,
     _attach_labels,
     _load_p0i_evidence,
     _train_p0d_oof,
@@ -91,6 +92,53 @@ def test_attach_labels_leaves_non_matured_liability_missing() -> None:
         0, "turnover_liability_fraction_per_day"
     ]
     assert attached.loc[1, "turnover_liability_fraction_per_day"] == pytest.approx(2 / 25)
+
+
+def test_frozen_selection_rank_is_attached_one_to_one_before_prior_training() -> None:
+    rankings = _priorities(pd.to_datetime(["2026-01-05"]))
+    rankings["is_candidate_decision"] = True
+    labels = rankings[["decision_as_of_trade_date", "target_trade_date", "instrument"]].copy()
+    labels["selection_rank"] = range(1, 21)
+
+    attached = _attach_frozen_selection_rank(labels, rankings)
+
+    assert len(attached) == len(labels)
+    assert attached["selection_effective_rank"].tolist() == list(range(1, 21))
+
+
+def test_frozen_selection_rank_rejects_missing_duplicate_and_drifted_identity() -> None:
+    rankings = _priorities(pd.to_datetime(["2026-01-05"]))
+    rankings["is_candidate_decision"] = True
+    labels = rankings[["decision_as_of_trade_date", "target_trade_date", "instrument"]].copy()
+    labels["selection_rank"] = range(1, 21)
+
+    with pytest.raises(AdvisoryModelFirstError, match="schema is incomplete"):
+        _attach_frozen_selection_rank(labels.drop(columns="selection_rank"), rankings)
+
+    with pytest.raises(AdvisoryModelFirstError, match="coverage is incomplete"):
+        _attach_frozen_selection_rank(labels.iloc[0:0], rankings.iloc[0:0])
+
+    duplicated = pd.concat([rankings, rankings.iloc[[0]]], ignore_index=True)
+    with pytest.raises(AdvisoryModelFirstError, match="contains duplicates"):
+        _attach_frozen_selection_rank(labels, duplicated)
+
+    drifted = labels.copy()
+    drifted.loc[0, "selection_rank"] = 2
+    with pytest.raises(AdvisoryModelFirstError, match="differs between rankings and labels"):
+        _attach_frozen_selection_rank(drifted, rankings)
+
+    invalid_labels = labels.astype({"selection_rank": float})
+    invalid_rankings = rankings.astype({"selection_effective_rank": float})
+    invalid_labels.loc[0, "selection_rank"] = 1.5
+    invalid_rankings.loc[0, "selection_effective_rank"] = 1.5
+    with pytest.raises(AdvisoryModelFirstError, match="contains invalid values"):
+        _attach_frozen_selection_rank(invalid_labels, invalid_rankings)
+
+    missing_labels = labels.astype({"selection_rank": "Int64"})
+    missing_labels.loc[0, "selection_rank"] = pd.NA
+    with pytest.raises(AdvisoryModelFirstError, match="contains invalid values") as exc_info:
+        _attach_frozen_selection_rank(missing_labels, rankings)
+    assert exc_info.value.reason_code == "ADVISORY_SELECTION_PRIOR_RESIDUAL_LABEL_INVALID"
 
 
 def test_frozen_label_and_cpcv_identity_fail_closed() -> None:
