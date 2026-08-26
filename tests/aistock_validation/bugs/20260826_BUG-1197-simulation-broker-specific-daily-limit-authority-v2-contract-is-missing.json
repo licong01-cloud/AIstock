@@ -9,6 +9,7 @@
     "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
     "backend/tests/simulation_runtime/test_broker_limit_authority.py",
     "backend/tests/trading_core/test_a_share_live_limit_rule.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
   ],
@@ -18,6 +19,7 @@
   "closure_requirements": [
     "Implement F-130/F-131 P1-A immutable V2 contracts, strict V1 read-only discrimination, broker/source matrix, symbol failure state and mixed-source hash closure.",
     "Implement the versioned pure TDX live-reference A-share limit rule without adjustment-factor fabrication or runtime source wiring.",
+    "Bind the Trading Core live-reference rule and its direct test to the simulation runtime validation catalog without ambiguous or generic fallback ownership.",
     "Run direct V2, broker-matrix and live-rule tests plus required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
@@ -46,6 +48,7 @@
     ],
     "changed_files": [
       "backend/services/simulation_runtime/models.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
       "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
       "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
     ],
@@ -65,6 +68,7 @@
       "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
       "backend/tests/simulation_runtime/test_broker_limit_authority.py",
       "backend/tests/trading_core/test_a_share_live_limit_rule.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
       "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
       "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
     ]
@@ -89,6 +93,7 @@
   "reproduce_command": "python -c \"from backend.services.simulation_runtime.models import DailyTradingContextV2\"",
   "required_verification": [
     "l0",
+    "validation_module_registry_l0",
     "simulation_core_l2"
   ],
   "risk_area": "bug",
