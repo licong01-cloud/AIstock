@@ -1,12 +1,12 @@
 # AIstock 模拟盘每日交易事实冻结与盘中行情热路径 F2 详细设计
 
 > 文档类型：F2 跨模块实施级详细设计
-> 文档状态：`broker_specific_limit_authority_p1b_source_review_in_progress`
+> 文档状态：`broker_specific_limit_authority_p1b_source_review_passed_ready_for_pr`
 > 日期：2026-08-21
 > 状态更新：2026-08-26
 > 上位权威：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)
 > 适用范围：LocalSIM、MiniQMT SIM、Paper Trading v2、Simulation Runtime、Trading Core
-> 当前事实：设计 PR #3812 已以 merge `7905c0abc3b9efcec53cdaa721a2b41a6004fe23` 合入；BUG-1197 P1-A 已由 PR #3816 squash 合入 merge `8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1`，其 runtime 仍等待用户重启与单 issue close-sync。BUG-1202 / Issue #3820 正实施 P1-B：MiniQMT bounded instrument-detail batch、零 `stk_limit/TDX` direct resolver、V2 scheduler/decision/plan/recovery 接线；不实施 LocalSIM P1-C。P1-B PR/merge、P1-C/P1-D、用户重启和正常交易日验收继续分别 pending，且本源码 PR 不执行生产 DDL/DML、依赖、配置、broker 或服务操作。
+> 当前事实：设计 PR #3812 已以 merge `7905c0abc3b9efcec53cdaa721a2b41a6004fe23` 合入；BUG-1197 P1-A 已由 PR #3816 squash 合入 merge `8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1`，其 runtime 仍等待用户重启与单 issue close-sync。BUG-1202 / Issue #3820 已完成 P1-B source implementation 与多轮审核：MiniQMT bounded instrument-detail batch、零 `stk_limit/TDX` direct resolver、V2 scheduler/decision/plan/recovery 接线；不实施 LocalSIM P1-C。P1-B PR/CI/merge、P1-C/P1-D、用户重启和正常交易日验收继续分别 pending，且本源码 PR 不执行生产 DDL/DML、依赖、配置、broker 或服务操作。
 
 ## 1. Background / 背景、结论与不可变约束
 
@@ -359,6 +359,7 @@ P1-B 当前实现（BUG-1202）新增 `BaseQMTClient/XtQuantQMTClient.get_instru
 | R6 | 静态门禁与最终DESIGN-COMPLIANCE | L0首次仅发现负例哨兵`FALLBACK_DEFAULT`字面量，改为`UNREGISTERED_AUTHORITY`后blocking=0；F2、Ruff、compile、scope、fresh-process和必需nox均通过 | pass, zero findings |
 | R7 | P1-B direct authority与零SQL审核 | 共同V1 provider被MiniQMT独立resolver取代；支持事实方法只执行set-based `stock_st/suspend_d`，产品SQL指纹测试断言零`market.stk_limit`；transport exact/ordered/共享总deadline | findings fixed |
 | R8 | P1-B failure/no-limit/plan恢复审核 | cross-date/missing/invalid/unknown board逐symbol `UNAVAILABLE`，全部失败batch fail；no-limit绑定`OpenDate/DayCountFromIPO`或明确effective date与rule version；V2 quote/decision/plan/recovery strict readback | findings fixed |
+| R9 | P1-B最终回归、静态门禁与DESIGN-COMPLIANCE | 最终rebase后direct=`355 passed,2 skipped`、`simulation_core_l2=687 passed,2 skipped`、`qmt_client_contract=3 passed`、`validation_module_registry_l0=8 passed/ownership 14-of-14`、L0 blocking=0、F2详细设计=`7/7 warnings=0`、蓝图=`132/132 warnings=0`；四项DESIGN-COMPLIANCE逐项复核无缺口 | pass, source review ready for PR |
 
 P1-A implementation DESIGN-COMPLIANCE-001：
 
@@ -378,7 +379,7 @@ P1-B implementation DESIGN-COMPLIANCE-001：
 | 禁止静默错误 | pass | exact symbol/coverage/total deadline、cross-date、字段/tick/no-limit/unknown board、hash/reference损坏均typed fail；无Tushare/TDX/百分比/default limit回退 |
 | 禁止改变业务逻辑 | pass | 失败symbol保留原symbol并以原reason拒单；Selection、target、side、quantity、cash、position、fill、TWAP、OMS/Gateway与broker route不变；LocalSIM未改为MiniQMT authority |
 | 禁止私增门禁审批 | pass | resolver由broker自动选择；无RBAC、人工ack/confirm、feature flag或手工恢复 |
-| 状态分离 | pass | P1-A source merge、P1-A runtime pending、P1-B worktree source、P1-B PR/merge、P1-C/P1-D与正常交易日receipt分别记录；DDL/DML/dependency/config/broker/service-control为noop |
+| 状态分离 | pass | P1-A source merge、P1-A runtime pending、P1-B source review passed、P1-B PR/CI/merge、P1-C/P1-D与正常交易日receipt分别记录；DDL/DML/dependency/config/broker/service-control为noop |
 
 ## 13. Design Acceptance Matrix / 设计验收矩阵
 
