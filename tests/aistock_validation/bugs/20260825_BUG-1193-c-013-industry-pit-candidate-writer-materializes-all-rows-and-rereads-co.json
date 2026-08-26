@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1193",
-  "closed_at": null,
+  "closed_at": "2026-08-26T02:45:03.190670Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -107,9 +107,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1193\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1193",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "7f2e4f07bd50864a7238ae564e02dd15ff1e50a8d676327fef6a386a05e49f0d",
+      "contract_digest": "78d70a7b14acc79920da9c0c100ac9a3a3bd1a1c12a7d29dfea523d8edbae145",
+      "expected_identity": "592aeb1aca848764594623f52fc37acbd63ca6be",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-26T02:38:06.134729Z",
+      "mode": "read_only",
+      "observed_identity": "592aeb1aca848764594623f52fc37acbd63ca6be",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "556e922d66bb4b72b8e2cf6a5fad607ddea3c0180d54a2095d600ea38edea754",
+      "receipt_sha256": "4e921b89fd2cf14ec6f8a9140b7d9014f756f7f922687cc67fcdd6d9486cabd2",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1d06c2c1e64ecee57d46affa54435493d7d993be72db1845f29cfd88cd189e6d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -140,7 +162,7 @@
     ],
     "validation_evidence_digest": "36bad36e04869472feb73ff1f4d89d1f4af9ab774a8cfe216401f16346e46cb9"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -150,7 +172,8 @@
     "source_event_id": "FE-20260825-bada6ff392c7"
   },
   "validation_evidence": [
-    "35 industry PIT tests passed; validation_module_registry_l0 passed; data_sync_autonomy_backend 220 passed 1 skipped; l0 passed; full candidate r6 hash-identical to r5; bounded-memory benchmark passed"
+    "35 industry PIT tests passed; validation_module_registry_l0 passed; data_sync_autonomy_backend 220 passed 1 skipped; l0 passed; full candidate r6 hash-identical to r5; bounded-memory benchmark passed",
+    "post-restart-verify verified runtime identity and business smoke for 592aeb1aca848764594623f52fc37acbd63ca6be"
   ],
   "verification_budget": {
     "budget": "standard",
