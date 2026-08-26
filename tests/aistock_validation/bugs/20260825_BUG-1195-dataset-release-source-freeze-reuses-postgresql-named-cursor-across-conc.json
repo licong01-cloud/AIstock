@@ -56,8 +56,8 @@
   },
   "first_seen_at": "2026-08-25T19:58:12.605677Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0c77a8ff07112043d32258799d6159a3ef216942",
+  "fixed_at": "2026-08-26T01:44:55Z",
   "github_issue_number": 3806,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3806",
   "last_seen_at": "2026-08-25T19:58:12.605677Z",
@@ -65,6 +65,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3807",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -81,6 +82,7 @@
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -91,7 +93,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1195",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ad03e3890856cd27",
+    "recorded_at": "2026-08-26T01:50:54.012180Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2e3229e06c878b2b8978193d54d3dd5bbfb50ec8",
+    "source_merge_commit": "0c77a8ff07112043d32258799d6159a3ef216942",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3807",
+    "validation_evidence": [
+      "PR #3807 exact-head CI verdict -> passed"
+    ],
+    "validation_evidence_digest": "7e5877c1c2697da153b1d8f114a8d54915b2d9885e6002da13465aa8885067a0"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -100,6 +123,9 @@
     "fingerprint": "981e07f97531402b05c20dac",
     "source_event_id": "FE-20260825-981e07f97531"
   },
+  "validation_evidence": [
+    "PR #3807 exact-head CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
