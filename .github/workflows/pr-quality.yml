@@ -33,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
       - name: Verify prebuilt AIstock-CI tooling
         shell: powershell
@@ -45,7 +45,7 @@ jobs:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          git fetch origin "${BASE_REF}" --no-tags || true
+          git fetch origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" --no-tags --depth=1
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
           git diff --name-only "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/changed_files.txt
