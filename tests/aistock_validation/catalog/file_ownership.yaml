@@ -13,6 +13,7 @@ rules:
       - scripts/advisory_policy_utility_prepare_request.py
       - scripts/advisory_dual_head_output_constraint_prepare_request.py
       - scripts/advisory_grouped_rank_output_constraint_prepare_request.py
+      - scripts/advisory_selection_prior_residual_prepare_request.py
       - scripts/advisory_turnover_constrained_utility_prepare_request.py
       - scripts/advisory_meta_label_prepare_request.py
       - scripts/advisory_publish_program_model_descriptor.py
@@ -30,6 +31,7 @@ rules:
       - scripts/wsl/advisory_policy_utility_train.py
       - scripts/wsl/advisory_dual_head_output_constraint_train.py
       - scripts/wsl/advisory_grouped_rank_output_constraint_train.py
+      - scripts/wsl/advisory_selection_prior_residual_train.py
       - scripts/wsl/advisory_turnover_constrained_utility_train.py
       - scripts/wsl/advisory_meta_label_train.py
       - scripts/wsl/advisory_outcome_calibration_train.py
