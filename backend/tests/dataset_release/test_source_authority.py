@@ -16,6 +16,7 @@ from backend.services.dataset_release.pit import freeze_pit_snapshot
 from backend.services.dataset_release.source_authority import (
     PRODUCTION_QUERY_SPECS,
     MonthlySourceAuthority,
+    PostgresSourceSnapshotSession,
     SourceAuditIncomplete,
     SourceRequiredTableMissing,
     SourceSnapshotRevised,
@@ -34,6 +35,58 @@ from backend.services.dataset_release.source_manifest import (
     ColumnSpec,
     PartitionSpec,
 )
+
+
+class _NamedCursorFixture:
+    def __init__(self, connection: "_NamedCursorConnectionFixture", name: str) -> None:
+        self._connection = connection
+        self._name = name
+        self._rows = [(date(2026, 7, 1),)]
+        self.description = (("trade_date",),)
+        self.itersize = 0
+
+    def execute(self, _sql: str, _params: Mapping[str, Any]) -> None:
+        return None
+
+    def fetchmany(self, _size: int) -> list[tuple[date]]:
+        rows, self._rows = self._rows, []
+        return rows
+
+    def close(self) -> None:
+        self._connection.active_names.remove(self._name)
+
+
+class _NamedCursorConnectionFixture:
+    def __init__(self) -> None:
+        self.active_names: set[str] = set()
+        self.opened_names: list[str] = []
+
+    def cursor(self, *, name: str) -> _NamedCursorFixture:
+        if name in self.active_names:
+            raise RuntimeError(f"duplicate cursor: {name}")
+        self.active_names.add(name)
+        self.opened_names.append(name)
+        return _NamedCursorFixture(self, name)
+
+
+def test_postgres_snapshot_parallel_same_query_streams_use_unique_cursor_names(dataset_profile) -> None:
+    connection = _NamedCursorConnectionFixture()
+    session = PostgresSourceSnapshotSession(dataset_profile.resource_policy)
+    session._connection = connection
+
+    first = session.stream("trading_dates", {"start": date(2026, 7, 1)}, fetch_rows=1)
+    second = session.stream("trading_dates", {"start": date(2026, 7, 2)}, fetch_rows=1)
+    try:
+        assert next(first) == {"trade_date": date(2026, 7, 1)}
+        assert next(second) == {"trade_date": date(2026, 7, 1)}
+        assert len(connection.opened_names) == 2
+        assert len(set(connection.opened_names)) == 2
+        assert all(name.startswith("dataset_release_") and len(name) <= 63 for name in connection.opened_names)
+    finally:
+        first.close()
+        second.close()
+
+    assert connection.active_names == set()
 
 
 class FakeSnapshotSession:

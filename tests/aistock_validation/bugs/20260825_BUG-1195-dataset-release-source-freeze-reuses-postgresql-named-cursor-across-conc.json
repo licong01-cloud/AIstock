@@ -1,0 +1,198 @@
+{
+  "actual": "A fresh qe_hmm_full_v2 monthly candidate submission dss_9c5977c4a22a98bd7039374401cd0cee terminates in source-freeze with SOURCE_STAGE_UNHANDLED_ERROR exception_type=DuplicateCursor. PostgresSourceSnapshotSession.stream names every server-side cursor only by query_id, while _iter_execution_rows opens multiple date/code chunk streams for the same query_id concurrently on one repeatable-read connection. The second stream collides with the first cursor name, so resolution stops before run creation. Safety receipt confirms candidate_writes=0, database_writes=0, production_writes=0 and service_process_controls=0. Fix must give each bounded stream a unique server-side cursor identity while preserving one snapshot, read-only semantics, fetch bounds, deterministic row merge, and fail-closed behavior.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/source_authority.py",
+    "backend/tests/dataset_release/test_source_authority.py",
+    "tests/aistock_validation/bugs/20260825_BUG-1195-dataset-release-source-freeze-reuses-postgresql-named-cursor-across-conc.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1195",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-25T19:58:12.605677Z",
+  "description": "A fresh qe_hmm_full_v2 monthly candidate submission dss_9c5977c4a22a98bd7039374401cd0cee terminates in source-freeze with SOURCE_STAGE_UNHANDLED_ERROR exception_type=DuplicateCursor. PostgresSourceSnapshotSession.stream names every server-side cursor only by query_id, while _iter_execution_rows opens multiple date/code chunk streams for the same query_id concurrently on one repeatable-read connection. The second stream collides with the first cursor name, so resolution stops before run creation. Safety receipt confirms candidate_writes=0, database_writes=0, production_writes=0 and service_process_controls=0. Fix must give each bounded stream a unique server-side cursor identity while preserving one snapshot, read-only semantics, fetch bounds, deterministic row merge, and fail-closed behavior.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260825-981e07f97531",
+      "timestamp": "2026-08-25T19:58:12.605661Z"
+    },
+    {
+      "action": "scope_and_runtime_contract_corrected",
+      "actor": "codex",
+      "note": "Live source-freeze evidence identifies backend/services/dataset_release/source_authority.py as the fix point and its direct source-authority test as the regression boundary. Actual changed-file classification is worker_scheduler/worker-scheduler; the persistent fix is tracked source and runtime restart remains user-owned.",
+      "timestamp": "2026-08-25T20:13:24Z"
+    }
+  ],
+  "evidence_uris": [
+    "dataset-release submission dss_9c5977c4a22a98bd7039374401cd0cee; resolution attempt dsra_70cc63a73d344bffaf3c748ca5eefd32; SOURCE_STAGE_UNHANDLED_ERROR DuplicateCursor; all safety write/process counters zero"
+  ],
+  "expected": "Concurrent date/code chunk streams for the same allowlisted source query use distinct bounded server-side cursor identities within one read-only repeatable-read snapshot, preserving deterministic merge order and completing source resolution without DuplicateCursor.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ]
+  },
+  "first_seen_at": "2026-08-25T19:58:12.605677Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3806,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3806",
+  "last_seen_at": "2026-08-25T19:58:12.605677Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Submit one qe_hmm_full_v2 monthly --candidate-only intent with date/code chunking; source-freeze opens concurrent streams for one query_id and the second PostgreSQL named cursor raises DuplicateCursor before run creation.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "fresh isolated import backend.services.dataset_release.source_authority -> BUG1195_FRESH_PROCESS_IMPORT_OK"
+    ],
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "Dataset release source freeze reuses PostgreSQL named cursor across concurrent chunk streams",
+  "trigger_condition": {
+    "fingerprint": "981e07f97531402b05c20dac",
+    "source_event_id": "FE-20260825-981e07f97531"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
