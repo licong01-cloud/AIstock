@@ -24,7 +24,7 @@ jobs:
   dependency-update-validate:
     name: Validate dependency update surface
     runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:

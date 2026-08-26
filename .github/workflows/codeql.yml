@@ -20,7 +20,7 @@ jobs:
   docs-lite:
     name: CodeQL fast-lane no-op
     runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 10
+    timeout-minutes: 20
     outputs:
       docs_lite: ${{ steps.fast_lane.outputs.docs_lite }}
       registry_sync: ${{ steps.fast_lane.outputs.registry_sync }}

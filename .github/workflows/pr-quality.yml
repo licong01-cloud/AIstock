@@ -29,7 +29,7 @@ jobs:
   pr-quality:
     name: Context, scope, and open-source tooling dry-run
     runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
