@@ -655,6 +655,16 @@ rules:
     layer: trading_runtime
     risk_level: critical
     ownership_reason: Unified simulation lifecycle and operator actions require the direct simulation runtime contract plan.
+  - rule_id: simulation_daily_limit_authority
+    priority: 97
+    include:
+      - backend/services/trading_core/a_share_live_limit_rule.py
+      - backend/tests/trading_core/test_a_share_live_limit_rule.py
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2, miniqmt_execution_runtime]
+    layer: trading_runtime
+    risk_level: critical
+    ownership_reason: Broker-specific daily limit authority and its direct contract test govern the immutable shared simulation planning context.
   - rule_id: qmt_infra
     priority: 85
     include:
