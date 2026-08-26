@@ -487,7 +487,7 @@ security_tool_not_prebuilt
 | --- | --- | --- |
 | IWO24-001~008 | 现有 workflow 已具备 compact、UI intake、batch/finalizer、postmortem 等主要基础；具体项以实现 PR 的 live test 为准 | 作为 regression baseline，只补缺口，不重复开发 |
 | IWO25-001~020 | 本设计定义，尚未进入唯一规范、skills 或执行代码 | 在独立 docs-controlled/workflow PR 实现和逐项验证 |
-| IWO26-001~014 | 本设计定义，尚未进入唯一规范、workflow、classifier、Runner 或 guardrail | 先合入本设计，再由独立 workflow/controlled PR 实现和逐项验证 |
+| IWO26-001~014 | 设计已合入；workflow、classifier、Windows AIstock-CI 预检、DEV-only catalog 和 install/database denylist 已在后续实现 PR 落地，Runner provisioning 与 DEV receipt 执行仍由运维/Validation lane 提供 | 以实现 PR 的 focused tests、guardrail receipt 和 CI live run 完成最终验收；Runner/DEV lane 不可用时保持显式 blocked，不自动降级 |
 
 当前状态映射只用于避免重复步骤，不把“已有相似能力”冒充为新验收已通过。
 

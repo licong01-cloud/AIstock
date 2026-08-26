@@ -28,15 +28,16 @@ defaults:
 jobs:
   pr-quality:
     name: Context, scope, and open-source tooling dry-run
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install change-classifier dependency
-        run: python -m pip install --disable-pip-version-check --no-input pyyaml
+      - name: Verify prebuilt AIstock-CI tooling
+        shell: powershell
+        run: python scripts/ci_environment_verify.py
 
       - name: Detect PR quality lane
         id: quality_lane
@@ -57,20 +58,6 @@ jobs:
           echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
           echo "registry_sync=${REGISTRY_SYNC}" >> "${GITHUB_OUTPUT}"
           echo "classification=${CLASSIFICATION}" >> "${GITHUB_OUTPUT}"
-
-      - name: Set up Python 3.12
-        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: .github/requirements/pr-quality.txt
-
-      - name: Install quality tooling
-        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt
 
       - name: Build AIstock PR quality summary
         if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'

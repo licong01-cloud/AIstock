@@ -80,6 +80,8 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_bug_registry_metadata_check.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_ci_changed_files.py",
+    "backend/tests/scripts/test_ci_environment_verify.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
     "backend/tests/scripts/test_issue_flow.py",
@@ -308,22 +310,87 @@ def _workflow_test_targets(paths: list[str]) -> list[str]:
     return targets
 
 
+def _plan_requires_dev_db(plan: dict[str, Any]) -> bool:
+    """Return whether a validation plan must use the existing DEV database.
+
+    CI must never create a disposable database.  Plans that write database
+    state or explicitly declare a database resource are therefore routed out
+    of the ordinary backend matrix and reported as DEV-DB work instead.
+    """
+    if bool(plan.get("requires_dev_db")):
+        return True
+    if bool(plan.get("writes_database")):
+        return True
+    resource_policy = plan.get("resource_policy")
+    if isinstance(resource_policy, str) and any(
+        token in resource_policy.strip().lower() for token in ("postgres", "timescale", "database", "dev_db", "_db")
+    ):
+        return True
+    if isinstance(resource_policy, dict):
+        if bool(resource_policy.get("ddl_idempotency_real_postgres")):
+            return True
+        resource_types = resource_policy.get("resource_types") or []
+        if isinstance(resource_types, str):
+            resource_types = [resource_types]
+        for resource_type in resource_types:
+            normalized = str(resource_type).strip().lower()
+            if "postgres" in normalized or normalized.endswith("database") or normalized.endswith("_db"):
+                return True
+    return False
+
+
 def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str, dict[str, Any]]) -> list[str]:
     sessions: list[str] = []
     for plan_key in selection.get("required_plans") or []:
         plan = plans.get(str(plan_key)) or {}
         session = str(plan.get("nox_session") or "").strip()
         ci_enabled = bool(plan.get("ci_enabled", plan.get("enabled", True)))
-        if plan.get("ci_lane") != "backend" or not ci_enabled or not session or session in sessions:
+        runner_enabled = bool(plan.get("runner_enabled", True))
+        if (
+            plan.get("ci_lane") != "backend"
+            or not ci_enabled
+            or not runner_enabled
+            or _plan_requires_dev_db(plan)
+            or not session
+            or session in sessions
+        ):
             continue
         sessions.append(session)
     return sessions
+
+
+def _dev_db_plan_keys(selection: dict[str, Any], plans: dict[str, dict[str, Any]]) -> list[str]:
+    plan_keys: list[str] = []
+    for plan_key in selection.get("required_plans") or []:
+        normalized = str(plan_key)
+        plan = plans.get(normalized) or {}
+        if _plan_requires_dev_db(plan) and normalized not in plan_keys:
+            plan_keys.append(normalized)
+    return plan_keys
+
+
+def _plan_routing(plan_key: str, plan: dict[str, Any]) -> dict[str, Any]:
+    """Return the runner and database contract for a selected plan."""
+    requires_dev_db = _plan_requires_dev_db(plan)
+    runner_kind = (
+        "windows_ai_stock_ci"
+        if requires_dev_db or plan.get("ci_lane") in {"backend", "frontend", "go"}
+        else "hosted_static"
+    )
+    return {
+        "plan_key": plan_key,
+        "runner_kind": runner_kind,
+        "requires_dev_db": requires_dev_db,
+        "environment_fingerprint_ref": "AIstock-CI" if runner_kind == "windows_ai_stock_ci" else None,
+        "install_forbidden": True,
+    }
 
 
 def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
     plans = flow._plans_by_key()
     selection = flow.select_validation(paths)
     selected_plan_keys: list[str] = []
+    dev_db_plan_keys: list[str] = []
     frontend_test_targets: list[str] = []
     mapped_files: list[str] = []
     unmapped_files: list[str] = []
@@ -343,13 +410,18 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             if plan_key not in selected_plan_keys:
                 selected_plan_keys.append(plan_key)
             plan = plans.get(plan_key) or {}
+            if _plan_requires_dev_db(plan) and plan_key not in dev_db_plan_keys:
+                dev_db_plan_keys.append(plan_key)
             target = str(plan.get("frontend_test_path") or "").strip()
             if plan.get("ci_lane") == "frontend" and target and target not in frontend_test_targets:
                 frontend_test_targets.append(target)
         has_related_deferred_plan = any(
             plan_key not in SHARED_PLAN_KEYS
             and bool((plans.get(plan_key) or {}).get("enabled", True))
-            and bool((plans.get(plan_key) or {}).get("runner_enabled", True))
+            and (
+                bool((plans.get(plan_key) or {}).get("runner_enabled", True))
+                or _plan_requires_dev_db(plans.get(plan_key) or {})
+            )
             for plan_key in required_plans
         )
         if _backend_sessions_from_selection({"required_plans": required_plans}, plans) or has_related_deferred_plan:
@@ -357,8 +429,11 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         elif _is_code_path(path):
             unmapped_files.append(path)
     sessions = _backend_sessions_from_selection({"required_plans": selected_plan_keys}, plans)
+    dev_db_plan_keys = _dev_db_plan_keys({"required_plans": selected_plan_keys}, plans)
     return {
+        "selected_plan_keys": selected_plan_keys,
         "backend_sessions": sessions,
+        "dev_db_plan_keys": dev_db_plan_keys,
         "frontend_test_targets": frontend_test_targets,
         "mapped_files": mapped_files,
         "unmapped_code_files": unmapped_files,
@@ -526,7 +601,9 @@ def classify_changed_files(
         and not _catalog_validation_required(path)
     ]
     catalog_selection = _catalog_backend_selection(business_files)
+    selected_plan_keys = catalog_selection["selected_plan_keys"]
     backend_sessions = catalog_selection["backend_sessions"]
+    dev_db_plan_keys = catalog_selection["dev_db_plan_keys"]
     frontend_test_targets = catalog_selection["frontend_test_targets"]
     mapped_backend_files = catalog_selection["mapped_files"]
     unmapped_code_files = catalog_selection["unmapped_code_files"]
@@ -560,12 +637,15 @@ def classify_changed_files(
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
     if backend_sessions:
         reasons.append("backend code matched direct nox sessions: " + ", ".join(backend_sessions))
+    if dev_db_plan_keys:
+        reasons.append("database validation must use the existing DEV database: " + ", ".join(dev_db_plan_keys))
     if frontend_files:
         reasons.append("frontend code changed; run the single frontend type/lint gate")
     if go_files:
         reasons.append("TDX Go code changed; run the Go unit-test gate")
 
     backend_required = bool(backend_sessions) and not docs_lite_only and not close_sync_metadata_only
+    dev_db_required = bool(dev_db_plan_keys) and not docs_lite_only and not close_sync_metadata_only
     frontend_required = bool(frontend_files) and not docs_lite_only
     go_required = bool(go_files) and not docs_lite_only
     classification = "full_ci_required"
@@ -581,6 +661,8 @@ def classify_changed_files(
         classification = "docs_controlled"
     elif workflow_validation_only:
         classification = "workflow_validation_only"
+    elif dev_db_required and not backend_required and not frontend_required and not go_required:
+        classification = "dev_db_validation_required"
     elif catalog_validation_required and not business_files and not frontend_files and not go_files:
         classification = "catalog_validation_only"
     elif frontend_required and not backend_required and not go_required:
@@ -589,6 +671,13 @@ def classify_changed_files(
         classification = "go_ci_required"
     elif backend_required or frontend_required or go_required:
         classification = "targeted_ci_required"
+    plans = flow._plans_by_key()
+    plan_routing = [_plan_routing(plan_key, plans.get(plan_key) or {}) for plan_key in selected_plan_keys]
+    runner_kind = (
+        "windows_ai_stock_ci"
+        if backend_required or frontend_required or go_required or dev_db_required
+        else "hosted_static"
+    )
     return {
         "schema_version": "aistock_ci_change_classifier_v1",
         "changed_files": normalized,
@@ -614,7 +703,14 @@ def classify_changed_files(
         "prompt_evaluation_required": bool(prompt_evaluation_files),
         "backend_required": backend_required,
         "backend_sessions": backend_sessions,
+        "dev_db_required": dev_db_required,
+        "dev_db_plan_keys": dev_db_plan_keys,
+        "runner_kind": runner_kind,
+        "plan_routing": plan_routing,
+        "environment_fingerprint_ref": "AIstock-CI" if runner_kind == "windows_ai_stock_ci" else None,
+        "install_forbidden": True,
         "backend_plan_keys": catalog_selection["required_plans"],
+        "selected_plan_keys": selected_plan_keys,
         "catalog_impacted_modules": catalog_selection["impacted_modules"],
         "mapped_backend_files": mapped_backend_files,
         "frontend_required": frontend_required,
@@ -647,6 +743,12 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
     lines = [
         f"backend_required={str(payload['backend_required']).lower()}",
         f"backend_sessions={json.dumps(payload['backend_sessions'])}",
+        f"dev_db_required={str(payload['dev_db_required']).lower()}",
+        f"dev_db_plan_keys={json.dumps(payload['dev_db_plan_keys'])}",
+        f"runner_kind={payload['runner_kind']}",
+        f"plan_routing={json.dumps(payload['plan_routing'])}",
+        f"environment_fingerprint_ref={payload['environment_fingerprint_ref'] or 'not_applicable'}",
+        f"install_forbidden={str(payload['install_forbidden']).lower()}",
         f"frontend_required={str(payload['frontend_required']).lower()}",
         f"frontend_test_targets={json.dumps(payload['frontend_test_targets'])}",
         f"go_required={str(payload['go_required']).lower()}",
@@ -687,6 +789,12 @@ def main(argv: list[str] | None = None) -> int:
         "classification": payload["classification"],
         "backend_required": payload["backend_required"],
         "backend_sessions": payload["backend_sessions"],
+        "dev_db_required": payload["dev_db_required"],
+        "dev_db_plan_keys": payload["dev_db_plan_keys"],
+        "runner_kind": payload["runner_kind"],
+        "plan_routing": payload["plan_routing"],
+        "environment_fingerprint_ref": payload["environment_fingerprint_ref"],
+        "install_forbidden": payload["install_forbidden"],
         "frontend_required": payload["frontend_required"],
         "frontend_test_targets": payload["frontend_test_targets"],
         "go_required": payload["go_required"],

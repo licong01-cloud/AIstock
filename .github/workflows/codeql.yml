@@ -19,7 +19,7 @@ permissions:
 jobs:
   docs-lite:
     name: CodeQL fast-lane no-op
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 3
     outputs:
       docs_lite: ${{ steps.fast_lane.outputs.docs_lite }}
@@ -31,8 +31,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install change-classifier dependency
-        run: python -m pip install --disable-pip-version-check --no-input pyyaml
+      - name: Verify prebuilt AIstock-CI tooling
+        shell: powershell
+        run: python scripts/ci_environment_verify.py
 
       - name: Detect CodeQL fast lane
         id: fast_lane
@@ -84,7 +85,7 @@ jobs:
     name: CodeQL (${{ matrix.language }})
     needs: docs-lite
     if: needs.docs-lite.outputs.has_languages == '1'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -92,6 +93,12 @@ jobs:
         language: ${{ fromJson(needs.docs-lite.outputs.languages) }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify prebuilt AIstock-CI environment
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
