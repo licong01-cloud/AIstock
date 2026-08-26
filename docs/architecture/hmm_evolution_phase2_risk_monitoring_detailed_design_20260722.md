@@ -5901,6 +5901,29 @@ fail closed。只读核验同时确认：canonical universe、交易日与价格
 `rotation_L1=NOT_AVAILABLE`且model/READY为0；数据层PR #3795、资源修复PR #3805及runtime close-sync PR #3810已完成。
 production DDL/DML、依赖和HMM runtime均无变化。
 
+#### 23.35.8 P3A 数据准备接口包 v1（BUG-1201）
+
+- P1/P2A 权威源码保持为 BUG-1189 / PR #3795 与 BUG-1193 / PR #3805；P3A 只消费其不可变
+  `candidate_bundle_manifest.json`、双 authority receipt、冻结 universe state receipt 和 denominator digest，不复制 resolver。
+- P3A 输出固定为 repo-external 新目录下的 `assignments.jsonl`、`sector_facts.jsonl`、`candidate_report.json` 和
+  `candidate_manifest.json`。assignment 对每个 frozen symbol/date 保留 `resolved/unaligned/unavailable` 与 typed reason；
+  sector fact 仅在 classification/index identity aligned、published fact 可用且至少一个 moneyflow contributor 可用时形成。
+- assignment 与 sector fact 分离；sector fact identity 使用 L2 authority projection hash，不从同一 L2 下任意股票的完整 L3
+  identity 选取代表。相同 L2 键若映射到冲突 identity，必须 fail closed。
+- writer 按交易日有界消费，先在临时目录完成 schema/hash/readback，再原子发布；失败不得留下正式候选目录。CLI 在只读数据库事务中
+  校验 live frozen denominator 与双 receipt 完全一致，非 dry-run 还要求 producer commit/tree 在构建前后稳定且工作树 clean。
+- `resolved + unaligned + unavailable = expected denominator`，sample/full 必须显式区分。candidate 构建不包含生产 DML、激活、
+  HMM adapter、QE/Qlib exporter 或 Selection/Paper/Advisory 迁移；这些消费者仍由各 owner 独立 BUG/PR 验收。
+- 最终 HEAD 全分母 dry-run：`5,999,301/5,999,301` assignments 闭合，`4,103 resolved + 260 unaligned +
+  5,994,938 unavailable`，生成逻辑识别 1,040 条 sector facts；opportunity digest 为
+  `b9fd10d9bb23bc658836620e1a1d64d7e8760d42645cc8e7b98e396012910c052`。该运行数据库只读、写入 0、artifact 写入 false、
+  production activation false，Python 工作集抽样约 0.284 GiB。
+- 2021-12-13 极小真实 writer/readback 样本仅包含四只请求股票中当日冻结 PIT 有效的 3 个机会，输出 3 assignments、1 sector fact，
+  candidate hash `350af8901eb8e801da844ff8f4a74c35d62aa71b60bb3ca733d8a063de5e909a`，写入独立 X 盘新目录且未覆盖既有数据。
+- 当前源码状态：`BUG1201_P3A_SOURCE_IMPLEMENTED_MULTI_ROUND_REVIEWED_FINAL_VALIDATION_PASS_PENDING_PR`。大量 typed unavailable
+  来自上游 classification/index evidence coverage，P3A 未缩分母或伪造行业；该状态不表示 PR 已合入、backend 已重启、full candidate
+  已签核或生产数据已激活。
+
 ### 23.36 BUG-1184 详细设计正式审核
 
 审核范围仅为BUG-1184事实边界、C-013-PIT-ID-D1～D6、总Decision/Acceptance Index、§24优先级及跨窗口职责；不审核或授权尚未
