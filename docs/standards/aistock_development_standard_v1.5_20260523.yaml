@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: f0cee4193db68c9750ae57022f3149f09a73482b5b43863e859203a66caa0799
+source_sha256: b5e576147a3a5fb175b81314f372864618f5d7386d058105f14279e4e00e5742
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-27"
@@ -729,9 +729,9 @@ rules:
         - pr_quality_no_external_report_action_dependency
         - superseded_pr_runs_cancel_in_progress
         - pr_ci_no_separate_failure_publisher_job
+        - pr_ci_no_external_artifact_action_dependency
         - no_linux_or_production_environment_fallback
         - windows_git_bash_shell
-        - local_git_object_mirror_reuse
     baseline_policy: block_new_and_changed_workflow
     remediation: Provision the versioned Windows AIstock-CI runner with Git Bash and a read-only object mirror, fail closed on mismatch, and never install dependencies in the CI job.
 

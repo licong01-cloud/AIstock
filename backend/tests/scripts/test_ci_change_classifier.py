@@ -1162,8 +1162,9 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert prompt_eval["if"] == "needs.classify-changes.outputs.prompt_evaluation_required == 'true'"
     prompt_eval_run_steps = "\n".join(str(step.get("run", "")) for step in prompt_eval["steps"])
     assert "scripts/llm_provider_adapter.py --json prompt-evaluation" in prompt_eval_run_steps
-    assert "prompt-evaluation" in jobs["failure-bug-register"]["needs"]
-    assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
+    assert "failure-bug-register" not in jobs
+    assert "actions/upload-artifact@" not in Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+    assert "actions/download-artifact@" not in Path(".github/workflows/test.yml").read_text(encoding="utf-8")
 
 
 def test_github_backend_lane_uses_prebuilt_windows_environment_without_database_service_or_install() -> None:
@@ -1212,20 +1213,8 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert 'result" != "success"' in run
     assert 'result" != "skipped"' in run
     assert "CI verdict failed" in run
-
-    registrar = jobs["failure-bug-register"]
-    assert registrar["continue-on-error"] is True
-    assert set(registrar["needs"]) == {
-        "classify-changes",
-        "backend-tests",
-        "workflow-validation-tests",
-        "prompt-evaluation",
-    }
-    registrar_if = str(registrar["if"])
-    assert "needs.backend-tests.result == 'failure'" in registrar_if
-    assert "needs.workflow-validation-tests.result == 'failure'" in registrar_if
-    assert "needs.prompt-evaluation.result == 'failure'" in registrar_if
-    assert not any(step.get("name") == "No targeted CI failure evidence required" for step in registrar["steps"])
+    assert "The failed job logs are the authoritative PR evidence" in run
+    assert "failure-bug-register" not in jobs
 
     classify_steps = jobs["classify-changes"]["steps"]
     assert any(step.get("name") == "Classify CI lane" for step in classify_steps)
@@ -1331,8 +1320,9 @@ def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
 
     assert names.count("Detect PR quality lane") == 1
     assert names.count("Build registry-sync quality record") == 1
-    assert names.count("Comment PR summary") == 1
-    assert names.count("Upload PR quality artifacts") == 1
+    assert names.count("Emit compact PR quality receipt") == 1
+    assert names.count("Comment PR summary") == 0
+    assert names.count("Upload PR quality artifacts") == 0
     assert "Semgrep AIstock guardrails (report-only phase)" not in names
     assert not any("Legacy" in name for name in names)
 
@@ -1432,11 +1422,11 @@ def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
     import yaml
 
     ci = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
-    registrar = ci["jobs"]["failure-bug-register"]
     registrar_text = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
-    assert "issues" not in registrar.get("permissions", {})
+    assert "failure-bug-register" not in ci["jobs"]
     assert "github.rest.issues.create({" not in registrar_text
-    assert "pr-ci-failure-issue-context" in registrar_text
+    assert "pr-ci-failure-issue-context" not in registrar_text
+    assert "actions/upload-artifact@" not in registrar_text
 
     issue_writer = yaml.safe_load(Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8"))
     issue_writer_text = Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8")

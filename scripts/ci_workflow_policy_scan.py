@@ -177,6 +177,8 @@ def build_contract_evidence(
         ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
         and "The failed job logs are the authoritative PR evidence" in test_text,
+        "pr_ci_no_external_artifact_action_dependency": "actions/upload-artifact@" not in test_text
+        and "actions/download-artifact@" not in test_text,
         "no_workflow_services": "CI workflow services are prohibited; use the existing DEV database lane" not in reasons,
         "no_postgres_or_timescaledb_container_creation": "creating a postgres/timescale container is prohibited in CI" not in reasons
         and "disposable postgres/timescale image is prohibited in CI" not in reasons,
