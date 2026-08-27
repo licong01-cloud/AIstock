@@ -1372,18 +1372,17 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert analyze["if"] == "needs.docs-lite.outputs.has_languages == '1'"
     assert analyze["strategy"]["matrix"]["language"] == "${{ fromJson(needs.docs-lite.outputs.languages) }}"
     assert not any(step.get("name") == "Fast-lane CodeQL no-op" for step in analyze_steps)
-    gated_steps = [
-        step for step in analyze_steps if step.get("name") in {"Initialize CodeQL", "Perform CodeQL Analysis"}
-    ]
-    assert gated_steps
-    assert all("if" not in step for step in gated_steps)
-    init = next(step for step in analyze_steps if step.get("name") == "Initialize CodeQL")
-    analyze_step = next(step for step in analyze_steps if step.get("name") == "Perform CodeQL Analysis")
-    action_sha = "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"
-    assert init["uses"] == f"github/codeql-action/init@{action_sha}"
-    assert init["timeout-minutes"] == 5
-    assert "tools" not in init["with"]
-    assert analyze_step["uses"] == f"github/codeql-action/analyze@{action_sha}"
+    direct_analysis = next(step for step in analyze_steps if step.get("name") == "Run CodeQL CLI analysis")
+    assert direct_analysis["timeout-minutes"] == 20
+    assert direct_analysis["env"]["CODEQL_LANGUAGE"] == "${{ matrix.language }}"
+    assert direct_analysis["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+    direct_run = direct_analysis["run"]
+    assert "database create" in direct_run
+    assert '"--build-mode=none"' in direct_run
+    assert "database analyze" in direct_run
+    assert "github upload-results" in direct_run
+    assert '"--wait-for-processing-timeout=120"' in direct_run
+    assert not any("github/codeql-action/" in str(step.get("uses") or "") for step in analyze_steps)
     assert analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_REQUIRED"] == "1"
     assert len(analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
 

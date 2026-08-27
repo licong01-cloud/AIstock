@@ -1,5 +1,5 @@
 {
-  "actual": "Initialize CodeQL can occupy the only runner until the entire 30-minute job timeout; PR #3847 and #3848 classifiers remained queued while node PID 9832 held the connection.",
+  "actual": "The remote github/codeql-action archive can stall before any workflow step starts, and its init Node process can then hold a GitHub HTTPS connection until the 30-minute job timeout. A 5-minute init step timeout did not cover ActionManager downloads; PR #3847 and #3848 remained queued behind the stuck job.",
   "allowed_write_scope": [
     ".github/workflows/codeql.yml",
     "backend/tests/scripts/test_ci_change_classifier.py",
@@ -16,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-27T12:14:38.066924Z",
-  "description": "Initialize CodeQL can occupy the only runner until the entire 30-minute job timeout; PR #3847 and #3848 classifiers remained queued while node PID 9832 held the connection.",
+  "description": "CodeQL used a verified local CLI bundle but still downloaded github/codeql-action source for every job. Real runs stalled both while downloading that action archive and inside its init Node process, outside or beyond a useful step timeout, monopolizing the single Windows runner.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,7 +28,7 @@
   "evidence_uris": [
     "runner worker log lines 4300-4735 and live process/socket evidence on 2026-08-27"
   ],
-  "expected": "CodeQL must remain fail-closed but bound the Initialize CodeQL step to a short explicit timeout, preserving enough time for normal initialization while releasing the single runner promptly on a stalled GitHub connection. Contract tests must enforce the timeout.",
+  "expected": "CodeQL must remain fail-closed while using the already verified local CLI directly for database creation, analysis, and authenticated SARIF upload. The workflow must not download github/codeql-action, and the direct analysis step must have a bounded timeout enforced by contract tests.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [

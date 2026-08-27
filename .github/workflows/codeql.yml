@@ -135,15 +135,43 @@ jobs:
           AISTOCK_CI_ENV_NAME: AIstock-CI
         run: python scripts/ci_environment_verify.py
 
-      - name: Initialize CodeQL
-        timeout-minutes: 5
-        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7, default CLI 2.26.3
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: none
+      - name: Run CodeQL CLI analysis
+        timeout-minutes: 20
+        shell: powershell
+        env:
+          CODEQL_LANGUAGE: ${{ matrix.language }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $codeql = Join-Path $env:AISTOCK_CI_CODEQL_BUNDLE_PATH "codeql.exe"
+          if (-not (Test-Path -LiteralPath $codeql -PathType Leaf)) {
+            throw "Verified CodeQL CLI is missing: $codeql"
+          }
+          $identity = "${{ github.run_id }}-${{ github.run_attempt }}-$env:CODEQL_LANGUAGE"
+          $database = Join-Path $env:RUNNER_TEMP "aistock-codeql-$identity"
+          $sarif = Join-Path $env:RUNNER_TEMP "aistock-codeql-$identity.sarif"
+          $queryLanguage = if ($env:CODEQL_LANGUAGE -eq "javascript-typescript") { "javascript" } else { $env:CODEQL_LANGUAGE }
+          $querySuite = "$queryLanguage-code-scanning.qls"
 
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
-        with:
-          category: "/language:${{ matrix.language }}"
+          & $codeql database create $database `
+            "--language=$env:CODEQL_LANGUAGE" `
+            "--build-mode=none" `
+            "--source-root=$env:GITHUB_WORKSPACE" `
+            "--threads=0"
+          if ($LASTEXITCODE -ne 0) { throw "CodeQL database create failed with exit code $LASTEXITCODE" }
+
+          & $codeql database analyze $database $querySuite `
+            "--format=sarif-latest" `
+            "--sarif-category=/language:$env:CODEQL_LANGUAGE" `
+            "--output=$sarif" `
+            "--threads=0"
+          if ($LASTEXITCODE -ne 0) { throw "CodeQL database analyze failed with exit code $LASTEXITCODE" }
+
+          & $codeql github upload-results `
+            "--repository=$env:GITHUB_REPOSITORY" `
+            "--ref=$env:GITHUB_REF" `
+            "--commit=$env:GITHUB_SHA" `
+            "--sarif=$sarif" `
+            "--checkout-path=$env:GITHUB_WORKSPACE" `
+            "--wait-for-processing-timeout=120"
+          if ($LASTEXITCODE -ne 0) { throw "CodeQL SARIF upload failed with exit code $LASTEXITCODE" }
 
