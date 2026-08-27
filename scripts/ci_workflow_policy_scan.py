@@ -32,6 +32,7 @@ SUPERSEDED_RUN_WORKFLOWS = {
     "dependency-update-validate.yml",
 }
 BASE_FETCH_RETRY_WORKFLOWS = {"test.yml", "codeql.yml", "semgrep.yml", "dependency-update-validate.yml"}
+PR_ONLY_QUALITY_WORKFLOWS = {"test.yml", "semgrep.yml"}
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
     r"|\bnpm\s+(?:ci|install)\b"
@@ -145,6 +146,7 @@ def build_contract_evidence(
     *,
     nox_path: Path = DEFAULT_NOX_PATH,
     classifier_path: Path = Path("scripts/ci_change_classifier.py"),
+    environment_verify_path: Path = Path("scripts/ci_environment_verify.py"),
 ) -> dict[str, bool]:
     """Return the exact evidence booleans named by the machine standard."""
 
@@ -157,6 +159,9 @@ def build_contract_evidence(
     nightly_text = workflow_text.get("nightly.yml", "")
     nox_text = nox_path.read_text(encoding="utf-8") if nox_path.exists() else ""
     classifier_text = classifier_path.read_text(encoding="utf-8") if classifier_path.exists() else ""
+    environment_verify_text = (
+        environment_verify_path.read_text(encoding="utf-8") if environment_verify_path.exists() else ""
+    )
     workflow_findings = scan_workflows(path_list)
     reasons = {item["reason"] for item in workflow_findings}
     windows_runner_re = re.compile(r"runs-on:\s*\[self-hosted,\s*Windows,\s*aistock-ci\]", re.IGNORECASE)
@@ -185,6 +190,23 @@ def build_contract_evidence(
         "bounded_pr_base_fetch_retry": all(
             "base fetch failed after 3 attempts" in workflow_text.get(name, "")
             for name in BASE_FETCH_RETRY_WORKFLOWS
+        ),
+        "non_security_quality_lanes_run_once_on_pull_request": all(
+            "pull_request:" in workflow_text.get(name, "")
+            and not re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get(name, ""))
+            for name in PR_ONLY_QUALITY_WORKFLOWS
+        ),
+        "codeql_default_branch_security_scan_preserved": bool(
+            re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get("codeql.yml", ""))
+            and "branches: [main]" in workflow_text.get("codeql.yml", "")
+        ),
+        "codeql_uses_hash_verified_prebuilt_bundle": (
+            "github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd" in workflow_text.get("codeql.yml", "")
+            and "github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd" in workflow_text.get("codeql.yml", "")
+            and "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'" in workflow_text.get("codeql.yml", "")
+            and "AISTOCK_CI_CODEQL_BUNDLE_SHA256:" in workflow_text.get("codeql.yml", "")
+            and "_work\\_tool\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
+            and "prebuilt CodeQL bundle SHA-256 mismatch" in environment_verify_text
         ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
         and "The failed job logs are the authoritative PR evidence" in test_text,

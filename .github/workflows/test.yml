@@ -3,10 +3,6 @@ name: AIstock CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'tests/aistock_validation/bugs/**'
 
 # AIstock CI runs on pre-provisioned Windows runners. Project dependencies are
 # never installed by CI; runner images are versioned and verified instead.
