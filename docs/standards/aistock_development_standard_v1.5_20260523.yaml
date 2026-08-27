@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: e650f5437ba68e1755c9f175809d9c05863c88264d66ae7c3b5c5c57cc22e028
+source_sha256: d1d9f1608298f4838f8fd3805b17cc1d6acee7d11979f25283ac10861509c358
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-26"
+updated_at: "2026-08-27"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -667,6 +667,7 @@ rules:
         - active_process_and_path_boundary_preflight
         - exact_transient_roots_only_no_git_clean_or_wildcard
         - ignored_asset_tree_transients_require_exact_bounded_structural_classifier
+        - single_manifest_reused_without_repeated_full_ignored_tree_scan
         - manifest_unchanged_before_purge
         - path_registration_local_remote_four_state_readback
         - bare_merge_does_not_imply_cleanup
@@ -723,6 +724,8 @@ rules:
         - environment_fingerprint_match
         - no_setup_actions
         - no_dependency_install_commands
+        - nox_ci_install_fail_closed_guard
+        - policy_scanner_environment_and_nox_contract_checks
         - no_linux_or_production_environment_fallback
         - windows_git_bash_shell
         - local_git_object_mirror_reuse
@@ -748,6 +751,7 @@ rules:
         - existing_dev_database_lane_reference
         - no_ci_ddl_or_dml
         - no_sqlite_substitution_for_real_database_contract
+        - nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database
     baseline_policy: block_new_and_changed_workflow
     remediation: Mark database plans as dev_db_required and run them through the existing DEV database lane; keep CI source checks database-free.
 

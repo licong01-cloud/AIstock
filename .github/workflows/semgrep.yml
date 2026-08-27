@@ -7,6 +7,8 @@ on:
       - 'tests/aistock_validation/bugs/**'
   push:
     branches: [main]
+    paths-ignore:
+      - 'tests/aistock_validation/bugs/**'
   workflow_dispatch: {}
 
 permissions:

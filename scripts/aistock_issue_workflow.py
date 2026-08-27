@@ -808,6 +808,12 @@ def _compact_phase_summary(value: Any) -> dict[str, Any] | None:
         "artifact_estimated_tokens",
         "top_phase",
         "token_usage_status",
+        "queue_seconds",
+        "active_fix_seconds",
+        "local_validation_seconds",
+        "pr_ci_seconds",
+        "merge_aftercare_seconds",
+        "rtk_telemetry",
     )
 
 
@@ -1900,6 +1906,8 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/tests/",
         "docs/",
         "frontend/tests/",
+        "scripts/ci/",
+        "scripts/ci_",
         "tests/",
     )
     known_non_runtime_files = {
@@ -3911,6 +3919,16 @@ def _append_event(
     root: Path | None = None,
     duration_seconds: float | None = None,
 ) -> dict[str, Any]:
+    command_text = str(command or "").strip()
+    rtk_marker = os.environ.get("AISTOCK_RTK_USED", "").strip().lower()
+    if command_text.lower().startswith(("rtk ", "rtk.exe ")):
+        rtk_used: bool | str = True
+    elif rtk_marker in {"1", "true", "yes", "on"}:
+        rtk_used = True
+    elif rtk_marker in {"0", "false", "no", "off"}:
+        rtk_used = False
+    else:
+        rtk_used = "not_recorded"
     event_payload = {
         "timestamp": _utc_now(),
         "client": os.environ.get("AISTOCK_WORKFLOW_CLIENT") or os.environ.get("CODEX_WORKFLOW_CLIENT") or "unknown",
@@ -3922,6 +3940,11 @@ def _append_event(
         "duration_seconds": round(duration_seconds, 3) if duration_seconds is not None else None,
         "result": result,
         "evidence": evidence or {},
+        "tooling": {
+            "rtk_used": rtk_used,
+            "rtk_version": os.environ.get("AISTOCK_RTK_VERSION") or "not_recorded",
+            "rtk_fallback": os.environ.get("AISTOCK_RTK_FALLBACK") or "not_recorded",
+        },
     }
     path = _events_path(bug_id, root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -4019,6 +4042,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
     events = sorted(events, key=lambda item: str(item.get("timestamp") or ""))
     phases: dict[str, dict[str, Any]] = {}
     previous_ts: datetime | None = None
+    previous_phase: str | None = None
     started_at: str | None = None
     ended_at: str | None = None
     known_duration = 0.0
@@ -4036,6 +4060,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
                 "event_count": 0,
                 "known_duration_seconds": 0.0,
                 "inferred_since_previous_seconds": 0.0,
+                "inferred_until_next_seconds": 0.0,
                 "first_at": event.get("timestamp"),
                 "last_at": event.get("timestamp"),
             },
@@ -4046,15 +4071,29 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         if isinstance(duration, (int, float)):
             bucket["known_duration_seconds"] = round(float(bucket["known_duration_seconds"]) + float(duration), 3)
             known_duration += float(duration)
-        if ts and previous_ts:
+        if ts and previous_ts and previous_phase:
             delta = max(0.0, (ts - previous_ts).total_seconds())
-            bucket["inferred_since_previous_seconds"] = round(
-                float(bucket["inferred_since_previous_seconds"]) + delta,
+            previous_bucket = phases[previous_phase]
+            previous_bucket["inferred_until_next_seconds"] = round(
+                float(previous_bucket["inferred_until_next_seconds"]) + delta,
                 3,
             )
             inferred_duration += delta
         if ts:
             previous_ts = ts
+            previous_phase = phase
+
+    rtk_used_count = sum(
+        1 for event in events if (event.get("tooling") or {}).get("rtk_used") is True
+    )
+    rtk_fallback_count = sum(
+        1
+        for event in events
+        if str((event.get("tooling") or {}).get("rtk_fallback") or "not_recorded") != "not_recorded"
+    )
+    rtk_not_recorded_count = sum(
+        1 for event in events if (event.get("tooling") or {}).get("rtk_used") == "not_recorded"
+    )
 
     queue_seconds = _phase_seconds(phases, "discovered")
     context_seconds = _phase_seconds(phases, "context_ready")
@@ -4078,10 +4117,16 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "pr_ci_seconds": round(pr_ci_seconds, 3) if pr_ci_seconds else None,
         "merge_aftercare_seconds": round(merge_aftercare_seconds, 3) if merge_aftercare_seconds else None,
         "code_repair_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
+        "rtk_telemetry": {
+            "used_event_count": rtk_used_count,
+            "fallback_event_count": rtk_fallback_count,
+            "not_recorded_event_count": rtk_not_recorded_count,
+            "status": "recorded" if rtk_used_count or rtk_fallback_count else "not_recorded",
+        },
         "notes": [
             "known_duration_seconds comes from command-level telemetry when available",
             "inferred_elapsed_seconds is wall-clock distance between recorded events and may include human/CI wait time",
-            "code_repair_seconds is intentionally not guessed unless the agent records explicit repair events",
+            "code_repair_seconds is an upper bound between automatic repair-start and finish-plan boundaries and may include local validation run before finish",
         ],
     }
 
@@ -4115,7 +4160,10 @@ def _phase_seconds(phases: dict[str, Any], phase: str) -> float:
     item = phases.get(phase)
     if not isinstance(item, dict):
         return 0.0
-    return max(float(item.get("known_duration_seconds") or 0), float(item.get("inferred_since_previous_seconds") or 0))
+    return max(
+        float(item.get("known_duration_seconds") or 0),
+        float(item.get("inferred_until_next_seconds") or item.get("inferred_since_previous_seconds") or 0),
+    )
 
 
 def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
@@ -4127,7 +4175,10 @@ def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         known = round(float(item.get("known_duration_seconds") or 0), 3)
-        inferred = round(float(item.get("inferred_since_previous_seconds") or 0), 3)
+        inferred = round(
+            float(item.get("inferred_until_next_seconds") or item.get("inferred_since_previous_seconds") or 0),
+            3,
+        )
         rows.append(
             {
                 "phase": str(phase),
@@ -4176,7 +4227,8 @@ def _h6_summary(timing: dict[str, Any], context_metrics: dict[str, Any], artifac
         "pr_ci_seconds": timing.get("pr_ci_seconds"),
         "merge_aftercare_seconds": timing.get("merge_aftercare_seconds"),
         "code_repair_seconds": timing.get("code_repair_seconds"),
-        "code_repair_note": "active_fix_seconds is derived from workflow state events; exact editor time is recorded only when clients emit explicit repair events",
+        "rtk_telemetry": timing.get("rtk_telemetry") or {"status": "not_recorded"},
+        "code_repair_note": "active_fix_seconds is a phase-bound upper bound, not exact editor-only time; validation executed before finish may be included",
     }
 
 
@@ -9031,6 +9083,13 @@ def build_start_plan(
                 "run_finish_plan_before_reporting_done",
             ],
         )
+        _append_event(
+            canonical_bug_id,
+            event="fix_in_progress",
+            state="fix_in_progress",
+            root=target_root,
+            evidence={"automatic_phase_boundary": "context_ready_to_active_repair"},
+        )
     else:
         context_metrics = {
             "context_pack_md": {"path": str(context_md_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
@@ -9105,6 +9164,15 @@ def build_finish_plan(
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
+    current_state = _load_state(canonical_bug_id, REPO_ROOT) or {}
+    if str(current_state.get("state") or "") in {"context_ready", "fix_in_progress"}:
+        _append_event(
+            canonical_bug_id,
+            event="fix_applied",
+            state="fix_applied",
+            root=REPO_ROOT,
+            evidence={"automatic_phase_boundary": "finish_plan_started"},
+        )
     changed = _normalize_changed_files(changed_files) if changed_files is not None else _finish_changed_files(base, head)
     validation = _apply_validation_budget(
         record=record,
@@ -10406,6 +10474,25 @@ def _publish_changed_clients_after_merge(
             payload["blocking"].append(sync_result.get("stderr") or "canonical root fast-forward failed")
             payload["workflow_gate"] = "blocked"
             return payload
+
+    root_after = _git_snapshot(root)
+    payload["root_after"] = root_after
+    contains_merge = _run_command(
+        ["git", "merge-base", "--is-ancestor", merge_commit, "HEAD"],
+        cwd=root,
+        timeout=30,
+    )
+    payload["merge_commit_containment"] = {
+        "ok": bool(contains_merge.get("ok")),
+        "merge_commit": merge_commit,
+        "canonical_head": root_after.get("head"),
+    }
+    if not contains_merge.get("ok"):
+        payload["blocking"].append(
+            "canonical main does not contain the verified source merge commit after fast-forward"
+        )
+        payload["workflow_gate"] = "blocked"
+        return payload
 
     changed = _merge_commit_changed_files(merge_commit, root=root)
     payload["merge_diff"] = changed
@@ -12776,6 +12863,7 @@ def _worktree_ignored_artifact_profile(
     )
     backend_log_prefix = WORKTREE_BACKEND_LOG_ROOT + "/"
     roots: list[str] = []
+    transient_entries: list[tuple[str, str]] = []
     canonical_lines: list[str] = []
     for rel in ignored:
         if rel in protected:
@@ -12795,6 +12883,7 @@ def _worktree_ignored_artifact_profile(
             if root:
                 category = "transient"
                 roots.append(root)
+                transient_entries.append((rel, root))
                 profile["transient_count"] += 1
                 if len(profile["transient_samples"]) < 20:
                     profile["transient_samples"].append(rel)
@@ -12822,6 +12911,14 @@ def _worktree_ignored_artifact_profile(
     profile["ignored_count"] = len(ignored)
     profile["transient_roots"] = minimal_roots
     profile["transient_root_count"] = len(minimal_roots)
+    retained_transient_paths = sorted(
+        rel
+        for rel, _classified_root in transient_entries
+        if any(rel == root or rel.startswith(root.rstrip("/") + "/") for root in minimal_roots)
+    )
+    profile["transient_manifest_sha256"] = hashlib.sha256(
+        "\n".join(retained_transient_paths).encode("utf-8")
+    ).hexdigest()
     profile["manifest_sha256"] = hashlib.sha256("\n".join(canonical_lines).encode("utf-8")).hexdigest()
     return profile
 
@@ -12869,41 +12966,59 @@ def _purge_worktree_transient_artifacts(
     expected_profile: dict[str, Any],
     protected_paths: set[str] | None = None,
 ) -> dict[str, Any]:
-    live = _worktree_ignored_artifact_profile(
-        worktree_path,
-        canonical_root=canonical_root,
-        protected_paths=protected_paths,
-    )
-    if live.get("scan_status") != "complete":
-        raise WorkflowError(str(live.get("error") or "ignored artifact rescan failed"))
-    if live.get("manifest_sha256") != expected_profile.get("manifest_sha256"):
-        raise WorkflowError("ignored artifact manifest changed after cleanup preflight")
-    if live.get("protected_count") or live.get("unknown_count"):
+    del canonical_root, protected_paths  # The complete preflight profile is the authority for this purge.
+    if expected_profile.get("scan_status") != "complete":
+        raise WorkflowError(str(expected_profile.get("error") or "ignored artifact preflight was incomplete"))
+    if expected_profile.get("protected_count") or expected_profile.get("unknown_count"):
         raise WorkflowError("ignored artifacts include protected or unknown files")
+    transient_roots = [str(item) for item in expected_profile.get("transient_roots") or []]
+    live = _run_command(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *transient_roots],
+        cwd=worktree_path,
+        timeout=120,
+    )
+    if not live.get("ok"):
+        raise WorkflowError(str(live.get("stderr") or live.get("stdout") or "targeted transient rescan failed"))
+    live_paths = sorted(
+        {_normalize_worktree_artifact_path(item) for item in str(live.get("stdout") or "").split("\0") if item}
+    )
+    live_digest = hashlib.sha256("\n".join(live_paths).encode("utf-8")).hexdigest()
+    if live_digest != expected_profile.get("transient_manifest_sha256"):
+        raise WorkflowError("ignored artifact manifest changed after cleanup preflight")
+    tracked = _run_command(
+        ["git", "ls-files", "-z", "--", *transient_roots],
+        cwd=worktree_path,
+        timeout=60,
+    )
+    if not tracked.get("ok") or str(tracked.get("stdout") or "").strip("\0"):
+        raise WorkflowError("transient cleanup roots gained tracked files after cleanup preflight")
     validated_roots = [
         (str(relative_root), _validated_transient_root_target(worktree_path, str(relative_root)))
-        for relative_root in live.get("transient_roots") or []
+        for relative_root in transient_roots
     ]
     removed_roots: list[str] = []
     for relative_root, target in validated_roots:
         _remove_exact_transient_root(worktree_path, relative_root, target=target)
         removed_roots.append(relative_root)
-    after = _worktree_ignored_artifact_profile(
-        worktree_path,
-        canonical_root=canonical_root,
-        protected_paths=protected_paths,
+    after = _run_command(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *transient_roots],
+        cwd=worktree_path,
+        timeout=120,
     )
-    if after.get("scan_status") != "complete" or after.get("ignored_count"):
-        raise WorkflowError("transient artifact purge did not leave an empty ignored-artifact inventory")
+    after_paths = [item for item in str(after.get("stdout") or "").split("\0") if item]
+    if not after.get("ok") or after_paths:
+        raise WorkflowError("transient artifact purge did not leave the targeted roots empty")
     return {
         "ok": True,
         "schema_version": "aistock_worktree_transient_purge_v1",
-        "manifest_sha256": live.get("manifest_sha256"),
+        "manifest_sha256": expected_profile.get("manifest_sha256"),
+        "transient_manifest_sha256": live_digest,
         "removed_root_count": len(removed_roots),
         "removed_roots": removed_roots[:50],
         "removed_roots_truncated": len(removed_roots) > 50,
-        "ignored_count_before": live.get("ignored_count"),
-        "ignored_count_after": after.get("ignored_count"),
+        "ignored_count_before": len(live_paths),
+        "ignored_count_after": 0,
+        "scan_scope": "preflight_full_manifest_then_targeted_root_readback",
     }
 
 
@@ -14717,6 +14832,45 @@ def _merge_required_check_result_with_transport_fallback(
         return result, None
     message = str(result.get("stderr") or result.get("stdout") or "required PR check query failed")
     if not _looks_like_github_transport_failure(message):
+        # ``gh pr checks --required`` may briefly return a non-zero status
+        # while GitHub has not published the required contexts yet.  Keep this
+        # fail-closed, but represent it as a pending sentinel so the bounded
+        # poller can observe the next report instead of requiring a manual
+        # rerun.
+        if any(
+            marker in message.casefold()
+            for marker in ("no required checks reported", "no checks reported", "no required status checks")
+        ):
+            try:
+                rest_result = _rest_required_pr_check_result(
+                    pr_url,
+                    expected_head=str(payload.get("headRefOid") or ""),
+                    base_ref=str(payload.get("baseRefName") or ""),
+                )
+            except WorkflowError:
+                rest_result = None
+            if rest_result is not None:
+                return rest_result, {
+                    "stage": "required_checks_not_yet_reported",
+                    "source": "github_rest",
+                    "head_sha": rest_result.get("head_sha"),
+                }
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [
+                        {
+                            "name": "github-required-checks-reporting",
+                            "state": "pending",
+                            "bucket": "pending",
+                            "workflow": "github",
+                        }
+                    ]
+                ),
+                "stderr": message,
+                "source": "github_pending_sentinel",
+            }, None
         return result, None
     rest_result = _rest_required_pr_check_result(
         pr_url,
@@ -14941,6 +15095,58 @@ def _complete_pr_merge_attempt(
     }
 
 
+def _await_required_pr_checks(
+    pr_url: str,
+    *,
+    payload: dict[str, Any],
+    bug_id: str | None = None,
+    attempts: int = 6,
+    delay_seconds: int = 10,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, list[str]], list[dict[str, Any]]]:
+    """Poll queued required checks briefly instead of forcing manual retries.
+
+    This remains fail-closed: only a completely green result returns to the
+    merge caller; a failed check or an exhausted bounded wait is reported as
+    blocked.  The short poll is limited to the merge operation and never
+    becomes a long ``gh pr checks --watch`` loop.
+    """
+
+    max_attempts = max(1, int(attempts))
+    wait_seconds = max(0, int(delay_seconds))
+    history: list[dict[str, Any]] = []
+    latest_result: dict[str, Any] = {"ok": False, "stdout": "[]", "stderr": "not run"}
+    latest_fallback: dict[str, Any] | None = None
+    latest_summary: dict[str, list[str]] = {"failed": [], "pending": [], "non_blocking": [], "passed": []}
+    for index in range(1, max_attempts + 1):
+        latest_result, latest_fallback = _merge_required_check_result_with_transport_fallback(
+            pr_url,
+            payload=payload,
+            bug_id=bug_id,
+        )
+        latest_summary = _required_pr_check_summary(latest_result)
+        history.append(
+            {
+                "attempt": index,
+                "failed": list(latest_summary["failed"]),
+                "pending": list(latest_summary["pending"]),
+                "passed": list(latest_summary["passed"]),
+            }
+        )
+        if latest_summary["failed"] or not latest_summary["pending"]:
+            return latest_result, latest_fallback, latest_summary, history
+        if index < max_attempts and wait_seconds:
+            time.sleep(wait_seconds)
+    if bug_id:
+        _append_event(
+            bug_id,
+            event="required_checks_bounded_wait_exhausted",
+            state="blocked",
+            result="pending",
+            evidence={"pr_url": pr_url, "attempts": history},
+        )
+    return latest_result, latest_fallback, latest_summary, history
+
+
 def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
     payload, view_fallback = _merge_pr_view_with_transport_fallback(pr_url)
     if payload.get("state") == "MERGED":
@@ -14948,11 +15154,10 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
         if view_fallback:
             result["read_fallbacks"] = [view_fallback]
         return result
-    required_result, checks_fallback = _merge_required_check_result_with_transport_fallback(
+    required_result, checks_fallback, check_summary, check_history = _await_required_pr_checks(
         pr_url,
         payload=payload,
     )
-    check_summary = _required_pr_check_summary(required_result)
     failed = check_summary["failed"]
     pending = check_summary["pending"]
     if failed or pending:
@@ -14967,6 +15172,7 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
     read_fallbacks = [item for item in (view_fallback, checks_fallback) if item]
     if read_fallbacks:
         completed["read_fallbacks"] = read_fallbacks
+    completed["required_checks_poll"] = check_history
     return completed
 
 
@@ -14977,12 +15183,11 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         if view_fallback:
             result["read_fallbacks"] = [view_fallback]
         return result
-    required_result, checks_fallback = _merge_required_check_result_with_transport_fallback(
+    required_result, checks_fallback, check_summary, check_history = _await_required_pr_checks(
         pr_url,
         payload=payload,
         bug_id=bug_id,
     )
-    check_summary = _required_pr_check_summary(required_result)
     failed = check_summary["failed"]
     pending = check_summary["pending"]
     if failed or pending:
@@ -15018,6 +15223,7 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
     read_fallbacks = [item for item in (view_fallback, checks_fallback) if item]
     if read_fallbacks:
         completed["read_fallbacks"] = read_fallbacks
+    completed["required_checks_poll"] = check_history
     return completed
 
 
