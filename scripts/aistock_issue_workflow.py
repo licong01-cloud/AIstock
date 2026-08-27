@@ -13656,14 +13656,33 @@ def _maybe_create_pr(
         _write_state(bug_id, state="pushed", branch=branch, next_actions=["create_pr_from_pr_body"])
     if create_pr:
         title = pr_title or f"{bug_id} issue workflow fix"
-        body_path = str(REPO_ROOT / str(finish.get("pr_body_path")))
-        result = _execute_workflow_command(
+        body_path = REPO_ROOT / str(finish.get("pr_body_path"))
+        head_result = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=30)
+        expected_head = str(head_result.get("stdout") or "").strip()
+        if not head_result.get("ok") or not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head):
+            raise WorkflowError(head_result.get("stderr") or "cannot resolve source PR head SHA")
+        result = _create_pr_with_transport_fallback(
+            branch=branch,
+            base="main",
+            title=title,
+            body_path=body_path,
+            expected_head=expected_head,
+            root=REPO_ROOT,
+        )
+        if not result.get("ok"):
+            raise WorkflowError(result.get("stderr") or result.get("stdout") or "PR create failed")
+        _append_event(
             bug_id,
-            ["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body-file", body_path],
-            state="pr_opened",
-            cwd=REPO_ROOT,
-            timeout=120,
             event="command:gh_pr_create",
+            state="pr_opened",
+            command="gh pr create",
+            cwd=REPO_ROOT,
+            result="ok",
+            evidence={
+                "source": result.get("source"),
+                "recovered_from_transport_error": result.get("recovered_from_transport_error", False),
+                "head_sha": expected_head,
+            },
         )
         pr_url = str(result.get("stdout") or "").splitlines()[-1].strip()
         actions.append({"command": "gh pr create", "result": result})
@@ -15242,6 +15261,192 @@ def _close_sync_changed_files(close_sync: dict[str, Any]) -> list[str]:
     return sorted(set(files))
 
 
+def _rest_open_pr_for_branch(
+    branch: str,
+    *,
+    root: Path,
+    base: str = "main",
+    expected_head: str | None = None,
+) -> dict[str, Any] | None:
+    owner = GITHUB_REPO.split("/", 1)[0]
+    query = urllib.parse.urlencode(
+        {"state": "open", "head": f"{owner}:{branch}", "base": base, "per_page": "2"}
+    )
+    result = _run_transport_read_with_retry(
+        ["gh", "api", f"repos/{GITHUB_REPO}/pulls?{query}"],
+        cwd=root,
+        timeout=60,
+        attempts=2,
+    )
+    if not result.get("ok"):
+        detail = result.get("stderr") or result.get("stdout") or "unknown transport error"
+        raise WorkflowError(f"cannot query open PRs through REST: {detail}")
+    try:
+        rows = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"cannot parse open PR REST readback: {exc}") from exc
+    if not isinstance(rows, list) or not rows:
+        return None
+    if len(rows) > 1:
+        raise WorkflowError(f"multiple open PRs found for {branch} -> {base}")
+    row = rows[0] if isinstance(rows[0], dict) else {}
+    head = row.get("head") if isinstance(row.get("head"), dict) else {}
+    observed_head = str(head.get("sha") or "").strip()
+    observed_branch = str(head.get("ref") or "").strip()
+    observed_base = str(((row.get("base") or {}).get("ref") if isinstance(row.get("base"), dict) else "") or "")
+    if observed_branch != branch or observed_base != base:
+        raise WorkflowError("GitHub REST PR readback returned a different head/base")
+    if expected_head and observed_head != expected_head:
+        raise WorkflowError(
+            f"PR head changed before create readback: expected {expected_head}, observed {observed_head or 'missing'}"
+        )
+    return {
+        "number": row.get("number"),
+        "url": row.get("html_url"),
+        "headRefName": observed_branch,
+        "headRefOid": observed_head,
+        "title": row.get("title"),
+        "source": "github_rest",
+    }
+
+
+def _rest_remote_branch_sha(branch: str, *, root: Path) -> str:
+    encoded = urllib.parse.quote(branch, safe="")
+    result = _run_transport_read_with_retry(
+        ["gh", "api", f"repos/{GITHUB_REPO}/git/ref/heads/{encoded}"],
+        cwd=root,
+        timeout=60,
+        attempts=2,
+    )
+    if not result.get("ok"):
+        raise WorkflowError(result.get("stderr") or result.get("stdout") or "cannot read remote branch head")
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"cannot parse remote branch readback: {exc}") from exc
+    return str(((payload.get("object") or {}).get("sha") if isinstance(payload, dict) else "") or "").strip()
+
+
+def _create_pr_with_transport_fallback(
+    *,
+    branch: str,
+    base: str,
+    title: str,
+    body_path: Path,
+    expected_head: str,
+    root: Path,
+) -> dict[str, Any]:
+    primary = _run_command(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            GITHUB_REPO,
+            "--base",
+            base,
+            "--head",
+            branch,
+            "--title",
+            title,
+            "--body-file",
+            str(body_path),
+        ],
+        cwd=root,
+        timeout=120,
+    )
+    if primary.get("ok"):
+        return {**primary, "recovered_from_transport_error": False, "source": "github_graphql"}
+
+    message = f"{primary.get('stdout')}\n{primary.get('stderr')}"
+    transport_failure = _looks_like_github_transport_failure(message)
+    already_exists = "already exists" in message.casefold()
+    if not transport_failure and not already_exists:
+        return primary
+
+    existing = _rest_open_pr_for_branch(
+        branch,
+        root=root,
+        base=base,
+        expected_head=expected_head,
+    )
+    if existing:
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": str(existing.get("url") or ""),
+            "stderr": "",
+            "recovered_from_transport_error": transport_failure,
+            "source": "github_rest_existing_readback",
+            "pr": existing,
+        }
+    if already_exists and not transport_failure:
+        return primary
+
+    remote_head = _rest_remote_branch_sha(branch, root=root)
+    if remote_head != expected_head:
+        raise WorkflowError(
+            f"remote branch changed before REST PR create: expected {expected_head}, observed {remote_head or 'missing'}"
+        )
+    created = _run_command(
+        [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            f"repos/{GITHUB_REPO}/pulls",
+            "-f",
+            f"title={title}",
+            "-f",
+            f"head={branch}",
+            "-f",
+            f"base={base}",
+            "-F",
+            f"body=@{body_path}",
+        ],
+        cwd=root,
+        timeout=120,
+    )
+    if not created.get("ok"):
+        created_message = f"{created.get('stdout')}\n{created.get('stderr')}"
+        if _looks_like_github_transport_failure(created_message):
+            existing = _rest_open_pr_for_branch(
+                branch,
+                root=root,
+                base=base,
+                expected_head=expected_head,
+            )
+            if existing:
+                return {
+                    "ok": True,
+                    "returncode": 0,
+                    "stdout": str(existing.get("url") or ""),
+                    "stderr": "",
+                    "recovered_from_transport_error": True,
+                    "source": "github_rest_post_readback",
+                    "pr": existing,
+                }
+        return created
+    try:
+        payload = json.loads(str(created.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"cannot parse REST PR create response: {exc}") from exc
+    head = payload.get("head") if isinstance(payload.get("head"), dict) else {}
+    observed_head = str(head.get("sha") or "").strip()
+    observed_base = str(((payload.get("base") or {}).get("ref") if isinstance(payload.get("base"), dict) else "") or "")
+    if observed_head != expected_head or observed_base != base:
+        raise WorkflowError("REST PR create readback did not preserve the verified head/base")
+    return {
+        "ok": True,
+        "returncode": 0,
+        "stdout": str(payload.get("html_url") or ""),
+        "stderr": "",
+        "recovered_from_transport_error": True,
+        "source": "github_rest_create",
+        "pr": payload,
+    }
+
+
 def _open_pr_for_branch(branch: str, *, root: Path) -> dict[str, Any] | None:
     if not branch:
         return None
@@ -15265,6 +15470,9 @@ def _open_pr_for_branch(branch: str, *, root: Path) -> dict[str, Any] | None:
         timeout=60,
     )
     if not existing.get("ok"):
+        message = f"{existing.get('stdout')}\n{existing.get('stderr')}"
+        if _looks_like_github_transport_failure(message):
+            return _rest_open_pr_for_branch(branch, root=root)
         return None
     try:
         rows = json.loads(str(existing.get("stdout") or "[]"))
@@ -15322,7 +15530,10 @@ def _maybe_commit_and_pr_close_sync(
     actions.append({"command": f"git commit -m {commit_message}", "result": commit})
     if not commit.get("ok") and "nothing to commit" not in f"{commit.get('stdout')}\n{commit.get('stderr')}".lower():
         raise WorkflowError(commit.get("stderr") or commit.get("stdout") or "close-sync git commit failed")
-    commit_sha = _run_command(["git", "rev-parse", "--short=12", "HEAD"], cwd=root, timeout=30)
+    commit_sha = _run_command(["git", "rev-parse", "HEAD"], cwd=root, timeout=30)
+    expected_head = str(commit_sha.get("stdout") or "").strip()
+    if not commit_sha.get("ok") or not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head):
+        raise WorkflowError(commit_sha.get("stderr") or "cannot resolve close-sync commit SHA")
 
     push = _run_command(["git", "push", "-u", "origin", branch], cwd=root, timeout=180)
     actions.append({"command": f"git push -u origin {branch}", "result": push})
@@ -15373,57 +15584,18 @@ def _maybe_commit_and_pr_close_sync(
         ]
     )
     _write_text(body_path, "\n".join(body_lines) + "\n")
-    pr = _run_command(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--repo",
-            GITHUB_REPO,
-            "--base",
-            "main",
-            "--head",
-            branch,
-            "--title",
-            f"chore(issue): close-sync {title_label}",
-            "--body-file",
-            str(body_path),
-        ],
-        cwd=root,
-        timeout=120,
+    pr = _create_pr_with_transport_fallback(
+        branch=branch,
+        base="main",
+        title=f"chore(issue): close-sync {title_label}",
+        body_path=body_path,
+        expected_head=expected_head,
+        root=root,
     )
     actions.append({"command": "gh pr create close-sync", "result": pr})
     pr_url = str(pr.get("stdout") or "").splitlines()[-1].strip() if pr.get("ok") else None
     if not pr.get("ok"):
-        text = f"{pr.get('stdout')}\n{pr.get('stderr')}"
-        if "already exists" not in text.lower():
-            raise WorkflowError(pr.get("stderr") or pr.get("stdout") or "close-sync PR create failed")
-        existing = _run_command(
-            [
-                "gh",
-                "pr",
-                "list",
-                "--repo",
-                GITHUB_REPO,
-                "--head",
-                branch,
-                "--state",
-                "open",
-                "--json",
-                "url",
-                "--limit",
-                "1",
-            ],
-            cwd=root,
-            timeout=60,
-        )
-        if existing.get("ok"):
-            try:
-                rows = json.loads(str(existing.get("stdout") or "[]"))
-                if rows:
-                    pr_url = rows[0].get("url")
-            except json.JSONDecodeError:
-                pr_url = None
+        raise WorkflowError(pr.get("stderr") or pr.get("stdout") or "close-sync PR create failed")
     result = {
         "workflow_gate": "pr_opened" if pr.get("ok") or pr_url else "committed",
         "root": str(root),

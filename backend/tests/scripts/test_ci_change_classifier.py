@@ -1377,6 +1377,27 @@ def test_codeql_selects_only_changed_languages() -> None:
     ]
     assert gated_steps
     assert all("if" not in step for step in gated_steps)
+    init = next(step for step in analyze_steps if step.get("name") == "Initialize CodeQL")
+    analyze_step = next(step for step in analyze_steps if step.get("name") == "Perform CodeQL Analysis")
+    assert init["uses"] == "github/codeql-action/init@v4"
+    assert init["with"]["tools"] == "${{ env.AISTOCK_CI_CODEQL_BUNDLE_PATH }}"
+    assert analyze_step["uses"] == "github/codeql-action/analyze@v4"
+    assert analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_REQUIRED"] == "1"
+    assert len(analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
+
+
+def test_source_quality_workflows_do_not_repeat_on_merge_commit() -> None:
+    import yaml
+
+    for relative_path in (
+        ".github/workflows/test.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/semgrep.yml",
+    ):
+        workflow = yaml.safe_load(Path(relative_path).read_text(encoding="utf-8"))
+        triggers = workflow[True]
+        assert "pull_request" in triggers
+        assert "push" not in triggers
 
 
 def test_semgrep_uses_registry_sync_fast_lane() -> None:

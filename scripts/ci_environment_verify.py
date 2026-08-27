@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -13,6 +14,18 @@ from typing import Mapping, Sequence
 
 DEFAULT_ENVIRONMENT_NAME = "AIstock-CI"
 DEFAULT_REQUIRED_MODULES = ("nox", "pytest", "yaml")
+CODEQL_BUNDLE_REQUIRED_ENV = "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED"
+CODEQL_BUNDLE_PATH_ENV = "AISTOCK_CI_CODEQL_BUNDLE_PATH"
+CODEQL_BUNDLE_SHA256_ENV = "AISTOCK_CI_CODEQL_BUNDLE_SHA256"
+CODEQL_BUNDLE_VERSION_ENV = "AISTOCK_CI_CODEQL_BUNDLE_VERSION"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def verify_environment(
@@ -31,6 +44,11 @@ def verify_environment(
     expected_fingerprint = env.get("AISTOCK_CI_EXPECTED_FINGERPRINT", "").strip()
     actual_fingerprint = env.get("AISTOCK_CI_ENV_FINGERPRINT", "").strip()
     env_root = env.get("AISTOCK_CI_ENV_ROOT", "").strip()
+    codeql_bundle_required = env.get(CODEQL_BUNDLE_REQUIRED_ENV, "").strip() == "1"
+    codeql_bundle_path = env.get(CODEQL_BUNDLE_PATH_ENV, "").strip()
+    codeql_bundle_sha256 = env.get(CODEQL_BUNDLE_SHA256_ENV, "").strip().casefold()
+    codeql_bundle_version = env.get(CODEQL_BUNDLE_VERSION_ENV, "").strip()
+    codeql_bundle_observed_sha256: str | None = None
     failures: list[str] = []
 
     if observed_system != "Windows":
@@ -56,6 +74,23 @@ def verify_environment(
     if missing_modules:
         failures.append("missing prebuilt modules=" + ",".join(missing_modules))
 
+    if codeql_bundle_required:
+        bundle = Path(codeql_bundle_path) if codeql_bundle_path else None
+        if bundle is None:
+            failures.append(f"{CODEQL_BUNDLE_PATH_ENV} is missing")
+        elif not bundle.is_file():
+            failures.append("prebuilt CodeQL bundle does not exist")
+        elif not codeql_bundle_sha256:
+            failures.append(f"{CODEQL_BUNDLE_SHA256_ENV} is missing")
+        elif not codeql_bundle_version:
+            failures.append(f"{CODEQL_BUNDLE_VERSION_ENV} is missing")
+        else:
+            codeql_bundle_observed_sha256 = _sha256(bundle)
+            if codeql_bundle_observed_sha256.casefold() != codeql_bundle_sha256:
+                failures.append("prebuilt CodeQL bundle SHA-256 mismatch")
+            if codeql_bundle_version.casefold() not in bundle.name.casefold():
+                failures.append("prebuilt CodeQL bundle version is not reflected in its filename")
+
     payload: dict[str, object] = {
         "schema_version": "aistock_ci_environment_receipt_v1",
         "status": "ready" if not failures else "environment_mismatch",
@@ -66,6 +101,13 @@ def verify_environment(
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "required_modules": list(required_modules),
         "missing_modules": missing_modules,
+        "codeql_bundle_required": codeql_bundle_required,
+        "codeql_bundle_present": bool(codeql_bundle_path and Path(codeql_bundle_path).is_file()),
+        "codeql_bundle_version": codeql_bundle_version or None,
+        "codeql_bundle_sha256_match": (
+            codeql_bundle_observed_sha256 is not None
+            and codeql_bundle_observed_sha256.casefold() == codeql_bundle_sha256
+        ),
         "failure_reasons": failures,
     }
     return payload

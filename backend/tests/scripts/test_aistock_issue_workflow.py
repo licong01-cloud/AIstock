@@ -10620,6 +10620,163 @@ def test_merge_success_uses_rest_only_when_graphql_verification_transport_fails(
     assert not any(args[:4] == ["gh", "api", "--method", "PUT"] for args in commands)
 
 
+def test_pr_create_transport_failure_uses_head_pinned_rest_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    body = tmp_path / "pr.md"
+    body.write_text("body", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        if args[:3] == ["gh", "pr", "create"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"] and "/pulls?" in args[2]:
+            return {"ok": True, "returncode": 0, "stdout": "[]", "stderr": ""}
+        if args[:2] == ["gh", "api"] and "/git/ref/heads/" in args[2]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"object": {"sha": head_sha}}),
+                "stderr": "",
+            }
+        if args[:4] == ["gh", "api", "--method", "POST"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "html_url": "https://github.example/pull/299",
+                        "head": {"sha": head_sha, "ref": "bug/BUG-199"},
+                        "base": {"ref": "main"},
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+
+    result = workflow._create_pr_with_transport_fallback(
+        branch="bug/BUG-199",
+        base="main",
+        title="BUG-199 fix",
+        body_path=body,
+        expected_head=head_sha,
+        root=tmp_path,
+    )
+
+    assert result["ok"] is True
+    assert result["source"] == "github_rest_create"
+    assert result["recovered_from_transport_error"] is True
+    assert sum(args[:4] == ["gh", "api", "--method", "POST"] for args in calls) == 1
+
+
+def test_pr_create_transport_failure_reads_existing_pr_before_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    body = tmp_path / "pr.md"
+    body.write_text("body", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        if args[:3] == ["gh", "pr", "create"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "TLS handshake timeout"}
+        if args[:2] == ["gh", "api"] and "/pulls?" in args[2]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [
+                        {
+                            "number": 299,
+                            "html_url": "https://github.example/pull/299",
+                            "title": "BUG-199 fix",
+                            "head": {"sha": head_sha, "ref": "bug/BUG-199"},
+                            "base": {"ref": "main"},
+                        }
+                    ]
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._create_pr_with_transport_fallback(
+        branch="bug/BUG-199",
+        base="main",
+        title="BUG-199 fix",
+        body_path=body,
+        expected_head=head_sha,
+        root=tmp_path,
+    )
+
+    assert result["source"] == "github_rest_existing_readback"
+    assert not any(args[:4] == ["gh", "api", "--method", "POST"] for args in calls)
+
+
+def test_pr_create_non_transport_failure_does_not_use_rest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = tmp_path / "pr.md"
+    body.write_text("body", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        return {"ok": False, "returncode": 1, "stdout": "", "stderr": "HTTP 403: forbidden"}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._create_pr_with_transport_fallback(
+        branch="bug/BUG-199",
+        base="main",
+        title="BUG-199 fix",
+        body_path=body,
+        expected_head="a" * 40,
+        root=tmp_path,
+    )
+
+    assert result["ok"] is False
+    assert len(calls) == 1
+
+
+def test_pr_create_does_not_post_when_existing_pr_readback_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = tmp_path / "pr.md"
+    body.write_text("body", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(workflow.WorkflowError, match="cannot query open PRs"):
+        workflow._create_pr_with_transport_fallback(
+            branch="bug/BUG-199",
+            base="main",
+            title="BUG-199 fix",
+            body_path=body,
+            expected_head="a" * 40,
+            root=tmp_path,
+        )
+
+    assert not any(args[:4] == ["gh", "api", "--method", "POST"] for args in calls)
+
+
 def test_close_sync_pr_commit_only_stages_bug_registry_files(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -10650,8 +10807,8 @@ def test_close_sync_pr_commit_only_stages_bug_registry_files(
                 "stdout": " M tests/aistock_validation/bugs/bug199.json",
                 "stderr": "",
             }
-        if args[:3] == ["git", "rev-parse", "--short=12"]:
-            return {"ok": True, "returncode": 0, "stdout": "abc123def456", "stderr": ""}
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return {"ok": True, "returncode": 0, "stdout": "a" * 40, "stderr": ""}
         if args[:2] == ["gh", "pr"]:
             return {"ok": True, "returncode": 0, "stdout": "https://github.example/pull/299", "stderr": ""}
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
@@ -10672,7 +10829,7 @@ def test_close_sync_pr_commit_only_stages_bug_registry_files(
     )
 
     assert payload["workflow_gate"] == "pr_opened"
-    assert payload["commit"] == "abc123def456"
+    assert payload["commit"] == "a" * 40
     assert payload["pr_url"] == "https://github.example/pull/299"
     assert ["git", "add", "tests/aistock_validation/bugs/bug199.json"] in calls
     assert not any("close-sync-evidence.json" in " ".join(args) for args in calls if args[:2] == ["git", "add"])
@@ -11013,8 +11170,8 @@ def test_close_sync_pr_commit_can_use_batch_title_and_body(
                 "stdout": " M tests/aistock_validation/bugs/bug199.json\n M tests/aistock_validation/bugs/bug200.json",
                 "stderr": "",
             }
-        if args[:3] == ["git", "rev-parse", "--short=12"]:
-            return {"ok": True, "returncode": 0, "stdout": "abc123def456", "stderr": ""}
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return {"ok": True, "returncode": 0, "stdout": "a" * 40, "stderr": ""}
         if args[:2] == ["gh", "pr"]:
             return {"ok": True, "returncode": 0, "stdout": "https://github.example/pull/399", "stderr": ""}
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
