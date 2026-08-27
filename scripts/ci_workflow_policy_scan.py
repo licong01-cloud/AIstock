@@ -32,7 +32,7 @@ SUPERSEDED_RUN_WORKFLOWS = {
     "dependency-update-validate.yml",
 }
 BASE_FETCH_RETRY_WORKFLOWS = {"test.yml", "codeql.yml", "semgrep.yml", "dependency-update-validate.yml"}
-SOURCE_QUALITY_WORKFLOWS = {"test.yml", "codeql.yml", "semgrep.yml"}
+PR_ONLY_QUALITY_WORKFLOWS = {"test.yml", "semgrep.yml"}
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
     r"|\bnpm\s+(?:ci|install)\b"
@@ -191,10 +191,14 @@ def build_contract_evidence(
             "base fetch failed after 3 attempts" in workflow_text.get(name, "")
             for name in BASE_FETCH_RETRY_WORKFLOWS
         ),
-        "source_quality_lanes_run_once_on_pull_request": all(
+        "non_security_quality_lanes_run_once_on_pull_request": all(
             "pull_request:" in workflow_text.get(name, "")
             and not re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get(name, ""))
-            for name in SOURCE_QUALITY_WORKFLOWS
+            for name in PR_ONLY_QUALITY_WORKFLOWS
+        ),
+        "codeql_default_branch_security_scan_preserved": bool(
+            re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get("codeql.yml", ""))
+            and "branches: [main]" in workflow_text.get("codeql.yml", "")
         ),
         "codeql_uses_hash_verified_prebuilt_bundle": (
             "github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd" in workflow_text.get("codeql.yml", "")

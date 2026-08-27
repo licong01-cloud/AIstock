@@ -1387,18 +1387,21 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert len(analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
 
 
-def test_source_quality_workflows_do_not_repeat_on_merge_commit() -> None:
+def test_non_security_quality_workflows_do_not_repeat_on_merge_commit() -> None:
     import yaml
 
     for relative_path in (
         ".github/workflows/test.yml",
-        ".github/workflows/codeql.yml",
         ".github/workflows/semgrep.yml",
     ):
         workflow = yaml.safe_load(Path(relative_path).read_text(encoding="utf-8"))
         triggers = workflow[True]
         assert "pull_request" in triggers
         assert "push" not in triggers
+
+    codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))[True]
+    assert "pull_request" in codeql
+    assert codeql["push"]["branches"] == ["main"]
 
 
 def test_semgrep_uses_registry_sync_fast_lane() -> None:

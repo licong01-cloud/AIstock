@@ -36,7 +36,7 @@
   "evidence_uris": [
     "PR #3837 source checks and post-merge run 33054434301; close-sync PR #3838 finalizer events"
   ],
-  "expected": "PR 完成确定性质量判定后不在 merge commit 重跑同一重型 source lanes；CodeQL 使用预置且校验过的本地 bundle，禁止运行期下载；PR 创建仅在 GitHub transport 错误时以 head-pinned REST 安全降级并读回确认。",
+  "expected": "PR 完成确定性质量判定后，AIstock CI 与非发布型 Semgrep 不在 merge commit 重跑；CodeQL 保留主线 Security 基线扫描，但使用预置且校验过的本地 toolcache，禁止运行期下载；PR 创建仅在 GitHub transport 错误时以 head-pinned REST 安全降级并读回确认。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [

@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: b83de99932082f8bf13e4bc929040d973d8fd75f88f1d4cba6e40dd2bf6b84fd
+source_sha256: c1ec2e9727238c8af346cdefee0ebeddd6a192bd92bcc47fa531000e2dd49b4a
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-27"
@@ -729,7 +729,8 @@ rules:
         - pr_quality_no_external_report_action_dependency
         - superseded_pr_runs_cancel_in_progress
         - bounded_pr_base_fetch_retry
-        - source_quality_lanes_run_once_on_pull_request
+        - non_security_quality_lanes_run_once_on_pull_request
+        - codeql_default_branch_security_scan_preserved
         - codeql_uses_hash_verified_prebuilt_bundle
         - pr_ci_no_separate_failure_publisher_job
         - pr_ci_no_external_artifact_action_dependency

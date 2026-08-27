@@ -282,7 +282,7 @@ backend、frontend、Go、workflow validation、PR quality 和安全扫描等 CI
 
 CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须把本地 toolcache 路径、固定版本和 identity manifest SHA-256 纳入环境校验，并固定到默认 CLI 与 toolcache 版本完全一致的 immutable CodeQL Action release，使 action 直接命中已解压目录；目录不完整、版本或 hash 漂移直接失败，禁止临时下载或每次重新解压 bundle 替代。
 
-main 必须启用“通过 PR 合入”的分支保护。AIstock CI、Semgrep 与 CodeQL 的 source 质量判定在 PR merge tree 上各执行一次；合入生成的 main merge commit 不重复触发同一组重型 lanes。定时或手工安全扫描可以保留，close-sync metadata 继续只运行其专用轻量校验。若临时取消 PR 保护，必须先恢复 main push 的等价 fail-closed 校验，不得留下无验证直推路径。
+main 必须启用“通过 PR 合入”的分支保护。AIstock CI 与不发布主线安全基线的 Semgrep source 判定在 PR merge tree 上各执行一次，合入生成的 main merge commit 不重复运行；CodeQL 必须同时保留 PR 扫描和 `push: main` 扫描，因为后者负责更新默认分支 Security/Code Scanning 基线，不能当作重复门禁删除。定时或手工安全扫描可以保留，close-sync metadata 继续只运行其专用轻量校验。若临时取消 PR 保护，必须先恢复 main push 的等价 fail-closed 校验，不得留下无验证直推路径。
 
 Nox、测试 helper 和脚本内部同样受零安装约束：GitHub Actions 或 `AISTOCK_CI_INSTALL_FORBIDDEN=1` 下发现依赖缺失必须直接失败，禁止在 helper 内自动执行安装。CI policy scanner 同时检查 workflow YAML、Windows `AIstock-CI` runner/环境/DEV-DB 路由标记和 Nox 隐式安装边界；仅做关键词扫描不得宣称完整合同通过。
 
