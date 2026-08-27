@@ -69,7 +69,7 @@ jobs:
         github.event.workflow_run.head_branch == github.event.repository.default_branch
       )
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build failure issue summary
         id: failure_summary
@@ -125,7 +125,7 @@ jobs:
           fi
 
       - name: Upload failure issue context
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-failure-issue-context
           path: tmp/validation/ci_failure_issue/
@@ -133,7 +133,7 @@ jobs:
           retention-days: 14
 
       - name: Create or update failure issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         with:
