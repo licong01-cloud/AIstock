@@ -1,5 +1,5 @@
 {
-  "actual": "On unchanged main, test_execute_session_returns_explicit_timeout consistently takes about 6.06 seconds for a 1-second timeout because taskkill does not promptly terminate the spawned child.",
+  "actual": "On unchanged main, test_execute_session_returns_explicit_timeout consistently takes about 6.06 seconds because its global Popen test double also intercepts subprocess.run(taskkill ...) and replaces the termination command with a second sleeper.",
   "allowed_write_scope": [
     "scripts/nightly_session_runner.py",
     "backend/tests/scripts/test_nightly_session_runner.py",
@@ -15,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-27T11:40:46.095524Z",
-  "description": "On unchanged main, test_execute_session_returns_explicit_timeout consistently takes about 6.06 seconds for a 1-second timeout because taskkill does not promptly terminate the spawned child.",
+  "description": "The Windows timeout regression test replaces the shared subprocess.Popen symbol for every command. That replacement unintentionally captures the production taskkill subprocess too, prevents the real termination path from running, and reports a false Nightly timeout overrun.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -27,7 +27,7 @@
   "evidence_uris": [
     "canonical main a9941381 repeated reproduction on 2026-08-27"
   ],
-  "expected": "A timed-out Nightly session must terminate its Windows process tree promptly, persist an explicit timeout receipt, and return within the documented termination grace period.",
+  "expected": "The test double must replace only the Nightly child process while preserving the real Windows taskkill subprocess, so the test validates the production timeout contract instead of disabling it.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -109,7 +109,7 @@
   "suspected_modules": [
     "validation"
   ],
-  "title": "Nightly session timeout does not terminate Windows child process promptly",
+  "title": "Nightly timeout test intercepts taskkill and reports a false process overrun",
   "trigger_condition": {
     "fingerprint": "c213acc259d08b2e364cdb78",
     "source_event_id": "FE-20260827-c213acc259d0"
