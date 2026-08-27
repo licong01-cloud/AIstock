@@ -474,6 +474,38 @@ def _is_code_path(path: str) -> bool:
     return False
 
 
+def _codeql_language(path: str) -> str | None:
+    suffix = Path(path).suffix.lower()
+    if suffix == ".py":
+        return "python"
+    if suffix in {".js", ".jsx", ".ts", ".tsx"}:
+        return "javascript-typescript"
+    return None
+
+
+def _is_test_source_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    parts = normalized.split("/")
+    name = parts[-1]
+    return (
+        any(part in {"test", "tests", "__tests__", "e2e"} for part in parts[:-1])
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+        or ".test." in name
+        or ".spec." in name
+    )
+
+
+def _codeql_languages(paths: list[str], *, exclude_test_sources: bool) -> list[str]:
+    observed = {
+        language
+        for path in paths
+        if not (exclude_test_sources and _is_test_source_path(path))
+        if (language := _codeql_language(path)) is not None
+    }
+    return [language for language in ("python", "javascript-typescript") if language in observed]
+
+
 def _is_bug_registry_metadata_path(path: str) -> bool:
     return path.startswith(BUG_REGISTRY_PREFIX)
 
@@ -687,6 +719,8 @@ def classify_changed_files(
         if backend_required or frontend_required or go_required or dev_db_required
         else "hosted_static"
     )
+    codeql_languages = _codeql_languages(normalized, exclude_test_sources=False)
+    codeql_pr_languages = _codeql_languages(normalized, exclude_test_sources=True)
     return {
         "schema_version": "aistock_ci_change_classifier_v1",
         "changed_files": normalized,
@@ -727,6 +761,9 @@ def classify_changed_files(
         "frontend_files": frontend_files,
         "go_required": go_required,
         "go_files": go_files,
+        "codeql_languages": codeql_languages,
+        "codeql_pr_languages": codeql_pr_languages,
+        "codeql_pr_test_only": bool(codeql_languages) and not codeql_pr_languages,
         "unmapped_code_files": unmapped_code_files,
         "obsolete_surface_removal": False,
         "nightly_deferred_verification": {
