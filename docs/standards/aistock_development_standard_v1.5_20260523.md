@@ -50,6 +50,8 @@
 3. `enforcement_phase` 使用 `changed_file_scan`、`task_planning`、`interactive_execution`、`pr_readiness`、`issue_lifecycle`、`design_delivery`、`standard_change`、`production_activation` 或 `release_deployment`。条件控制在不适用时记为 `noop`，禁止伪装成 pending gate。
 4. CI job、页面 check、测试计划和门禁分别计数。skipped job、warning、advisory、delegated plan、诊断 evidence publisher 和 telemetry collector 都不是合并硬门禁。
 5. 失败证据发布器保持 best-effort、可见和可审计，但禁止成为 `CI verdict` 的依赖或用自身故障覆盖真实测试结论。分支保护只消费聚合后的确定性质量判定。
+6. 共享 runner 的 PR/push workflow 必须按 workflow 与 PR/ref 配置 `concurrency`，并对同一目标启用 `cancel-in-progress: true`；新 commit 发布后，旧 commit 的 queued/in-progress run 属于 superseded 诊断状态，不得继续占用 runner 或要求人工重新授权。
+7. PR 失败诊断优先使用原失败 job 日志和 `GITHUB_STEP_SUMMARY`。禁止为报告、评论或重复上传证据单独排队一个 runner job，也不得让这类诊断额外下载 `upload-artifact`、`download-artifact` 或 `github-script` action；default-branch 的正式故障登记仍由独立 fail-closed workflow 负责。
 
 ### 2.4 PR、合入和 aftercare
 
@@ -59,6 +61,9 @@
 4. 生产 DDL、依赖安装、运行时激活分别报告为 `noop`、`applied_and_verified` 或 `pending`；代码合入与运行时激活是两个独立结果。
 5. 授权按动作和目标独立判断，但不按消息次数拆分。同一条用户指令可以明确打包源码合入、精确命名的 source worktree/local branch/remote branch cleanup，以及已通过 DEV 验证的具体生产目标与 migration；授权包完整时，合入后直接继续这些已授权动作，禁止再次索要同一授权。
 6. 裸 `merge` 授权仍只覆盖源码合入和必要 BUG/metadata 同步，不推导 cleanup、DDL/DML、依赖、激活、进程控制或删除。打包动作逐项执行和报告；某一项前置条件失败只阻断该项，不伪造成功，也不扩大其他授权。
+7. 仅修改 `tests/aistock_validation/bugs/**` 的 close-sync metadata push 不重复运行源码 CI、Semgrep 或 CodeQL；source PR 已完成的质量判定和 commit-bound receipt 仍是权威证据。
+8. 合入时 GitHub 尚未发布 required checks 或检查处于 queued/pending，workflow 使用短时、有上限的轮询；检查失败或轮询超时仍 fail-closed，但禁止把瞬时未发布状态转化为人工重复授权或无限 watch。
+9. merge finalizer 在 runtime/client 推断前先幂等同步 canonical `main` 到已验证 merge commit；相同输入可安全重试，旧 root snapshot 不得触发业务窗口重新执行或抢占客户端 owner。
 
 <a id="rule-worktree-cleanup-evidence-001"></a>
 ### 2.5 [WORKTREE-CLEANUP-EVIDENCE-001] worktree 临时证据终结与清理
@@ -71,6 +76,7 @@
 6. 位于整体 ignored 资产树内的运行产物，只有精确分类器验证固定目录、有限且完整的文件名集合、非权威 schema、文件大小上限、无额外文件、无 tracked file、无 symlink/junction/reparse point，并继续通过活动进程引用与 manifest 漂移门禁后，才可标为 `transient`。任一条件不满足仍归为 `unknown`；禁止为兼容单类运行产物而放宽其父资产树。
 7. 执行顺序固定为：evidence finalization → ignored/process manifest → transient purge → 普通 `git worktree remove` → local branch delete → remote branch SHA 校验与 delete → 路径/注册/local/remote 四态读回。任一步失败只报告已完成状态并停止后续破坏性动作，禁止伪造 `cleanup_done`。
 8. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
+9. cleanup 对同一目标 worktree 只生成一次完整 ignored-artifact manifest；后续分类和删除复用该 manifest，并仅对实际删除的精确 roots 做漂移读回。除 manifest 漂移、路径身份变化或删除失败外，禁止重复遍历整个 ignored tree。
 
 ## 3. 风险与工作量分级
 
@@ -110,6 +116,7 @@
 2. 超过任务卡命令预算、约 30 分钟，或需要 UI/API/business-flow/跨模块深度覆盖时，使用 Validation Center/CI/nightly。
 3. nightly 对当天合入变更按模块和计划去重，返回紧凑 receipt；PR 只记录直接相关的通过证据和委托计划。
 4. 过期、重复、只验证实现细节或与模块无依赖关系的测试从 active plan 移除或归档。
+5. workflow receipt 分别记录 active repair、local validation、runner queue、PR CI、merge/aftercare 的已知耗时；无法直接观测的阶段保持 `not_recorded`，禁止把相邻事件间隔伪装成代码开发时间。RTK telemetry 只消费调用方已提供的使用/回退信息，不额外探测或形成门禁。
 
 ### 4.3 测试价值标准
 
@@ -253,7 +260,7 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 <a id="rule-tool-rtk-001"></a>
 ### 6.20 [TOOL-RTK-001] RTK 输出压缩
 
-交互开发窗口对 RTK 已支持且预计产生高输出的命令必须使用 `rtk git`、`rtk rg`、`rtk pytest`、`rtk nox`、`rtk npm` 等包装。只有目标调用不受支持、RTK 不可用、诊断需要精确原始输出，或包装器首次执行失败/改变语义时才直接回退，并用一句话记录原因；禁止为同一能力重复探测。未受信任的项目自定义 filter 只是不加载该 filter，不影响继续使用 RTK 内置包装；禁止任何窗口自行执行 `rtk trust`。RTK 缺失或回退产生可见警告但不阻断任务、PR、合入或 CI；CI 使用原始确定性命令且不安装 RTK。workflow 仅消费调用方已有的 `rtk_used/version/fallback` telemetry，缺失时记录 `not_recorded`，不新增探测命令或门禁。
+交互开发窗口对 RTK 已支持且预计产生高输出的命令必须使用 `rtk git`、`rtk gh`、`rtk rg`、`rtk pytest`、`rtk ruff`、`rtk tsc`、`rtk npm`、`rtk playwright` 等实际存在的包装。`nox` 当前没有专用 wrapper，使用原始 `python -m nox` 或一次可见的通用回退；禁止在规范、skill 或提示词中虚构 `rtk nox`。只有目标调用不受支持、RTK 不可用、诊断需要精确原始输出，或包装器首次执行失败/改变语义时才直接回退，并用一句话记录原因；禁止为同一能力重复探测。未受信任的项目自定义 filter 只是不加载该 filter，不影响继续使用 RTK 内置包装；禁止任何窗口自行执行 `rtk trust`。RTK 缺失或回退产生可见警告但不阻断任务、PR、合入或 CI；CI 使用原始确定性命令且不安装 RTK。workflow 仅消费调用方已有的 `rtk_used/version/fallback` telemetry，缺失时记录 `not_recorded`，不新增探测命令或门禁。
 
 <a id="rule-backend-restart-ownership-001"></a>
 ### 6.21 [BACKEND-RESTART-OWNERSHIP-001] 后端重启所有权
@@ -272,12 +279,20 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 
 backend、frontend、Go、workflow validation、PR quality 和安全扫描等 CI 验证必须在预构建的 Windows self-hosted runner 上执行；运行前只允许执行环境身份、版本指纹和工具可用性检查。CI 禁止 `actions/setup-*`、`pip/conda/mamba install`、`npm ci/install`、`go mod download` 以及任何隐式依赖安装。环境缺失、指纹漂移或工具缺失时必须 fail-closed 并报告 `environment_mismatch`，不回退到 GitHub-hosted Linux、生产 `AIstock` 环境或临时安装环境。该规则是执行环境约束，不增加业务测试或人工审批。
 
+Nox、测试 helper 和脚本内部同样受零安装约束：GitHub Actions 或 `AISTOCK_CI_INSTALL_FORBIDDEN=1` 下发现依赖缺失必须直接失败，禁止在 helper 内自动执行安装。CI policy scanner 同时检查 workflow YAML、Windows `AIstock-CI` runner/环境/DEV-DB 路由标记和 Nox 隐式安装边界；仅做关键词扫描不得宣称完整合同通过。
+
+PR CI 的评论、完整 artifact 上传和其他报告发布器属于非阻断诊断，不得要求 runner 在 job 初始化阶段下载额外 action archive。分类、静态检查、测试、UI 验收和 workflow policy 的真实质量结果直接写入原 job summary/stdout 和 commit-bound PR receipt；临时文件留在 job workspace，不以 `upload-artifact`/`download-artifact` 作为 PR 合入前置依赖。default-branch 正式故障登记、已批准的发布资产和独立运维备份不受此限制，但其发布失败不得覆盖测试结论，也不得延迟 required `CI verdict`。
+
 Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 WSL `System32\\bash.exe`）；runner wrapper 可配置只读本地 Git object mirror，并通过 `GIT_ALTERNATE_OBJECT_DIRECTORIES` 复用已验证对象。checkout 仍使用浅深度和当前 PR base SHA；仅在 mirror 缺少对象时远程补取。mirror、shell 和代理异常属于 runner 基础设施诊断，禁止转化为业务门禁或重复依赖安装。
+
+PR base commit 已在 checkout 中时直接更新本地 ref，不执行远程请求；确需补取 base ref 时使用固定 3 次、短退避的 bounded retry，并在连续失败后以基础设施错误 fail-closed。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
 <a id="rule-ci-database-safety-001"></a>
 ### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
 
 CI workflow 不声明 `services`、启动 PostgreSQL/TimescaleDB 容器、创建临时数据库或执行 DDL/DML。需要数据库的计划必须由 changed-file classifier 标记为 `dev_db_required`，转交现有 DEV 数据库验证 lane；DEV 验证、源码 CI 和生产迁移分别记录。DEV 不可用时状态为 `blocked/pending`，禁止改用独立数据库、SQLite 替代真实契约或静默跳过。只读单元测试可使用进程内 SQLite fixture，但不冒充 DEV/生产数据库验证。
+
+Nightly 的 DR snapshot/restore-readback 属于独立运维 lane，只能连接已存在且已授权的目标并执行既定只读/备份 runbook；不得创建或启动数据库容器，也不得冒充 PR CI 或 DEV 验证。该 lane 必须使用独立名称、权限和 receipt，使 `AIstock` 运维环境与 `AIstock-CI` PR 环境不会被混淆。
 
 <a id="rule-context-budget-001"></a>
 ### 7.1 [CONTEXT-BUDGET-001] 上下文预算

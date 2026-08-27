@@ -96,6 +96,20 @@ def _paper_v2_force_realtime(args: list[str]) -> bool:
     return "--require-live-bars" in args or "--require-fills" in args
 
 
+def _ci_dependency_install_forbidden() -> bool:
+    """Return whether this run must use the prebuilt validation environment.
+
+    GitHub Actions must never repair a missing frontend dependency tree at
+    runtime.  Local developers can still opt into the historical ``npm ci``
+    bootstrap by leaving both markers unset.
+    """
+
+    return any(
+        os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+        for name in ("GITHUB_ACTIONS", "AISTOCK_CI_INSTALL_FORBIDDEN")
+    )
+
+
 def _validation_artifact_args(*, output_json: str, summary_md: str | None = None) -> list[str]:
     if not _validation_artifacts_enabled():
         return []
@@ -325,6 +339,12 @@ def _ensure_frontend_node_modules(session: nox.Session) -> None:
     frontend = ROOT / "frontend"
     if (frontend / "node_modules" / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright")).exists():
         return
+    if _ci_dependency_install_forbidden():
+        session.error(
+            "frontend Playwright is missing from the prebuilt CI environment; "
+            "CI/Nightly cannot run npm ci. Rebuild the AIstock-CI image or run "
+            "an explicit local dependency bootstrap before validation."
+        )
     session.log("frontend node_modules missing Playwright; running npm ci once for validation workspace")
     old_cwd = Path.cwd()
     os.chdir(frontend)

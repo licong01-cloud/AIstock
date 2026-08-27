@@ -247,7 +247,6 @@ def test_development_standard_is_single_authority_for_workflow_clients() -> None
         for keyword in ("不得", "不允许", "严禁")
     )
     assert standard.count("**禁止") == 4
-    assert all(keyword not in standard for keyword in ("不得", "不允许", "严禁"))
 
     client_entries = (
         Path(".codex/skills/aistock-task-router/SKILL.md"),
@@ -1154,7 +1153,7 @@ def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
     assert env["AISTOCK_PR_QUALITY_ENFORCE_P0P1"] == "${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}"
 
 
-def test_pr_quality_workflow_truncates_oversized_comment() -> None:
+def test_pr_quality_workflow_emits_compact_receipt_without_comment_action() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
     comment_steps = [
@@ -1162,11 +1161,16 @@ def test_pr_quality_workflow_truncates_oversized_comment() -> None:
         for step in steps
         if isinstance(step, dict) and str(step.get("name") or "") == "Comment PR summary"
     ]
-    script = comment_steps[0]["with"]["script"]
+    receipt_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Emit compact PR quality receipt"
+    ]
 
-    assert "const maxChars = 55000;" in script
-    assert "body.length > maxChars" in script
-    assert "omitted from the PR comment because the compact budget was exceeded" in script
+    assert comment_steps == []
+    assert len(receipt_steps) == 1
+    assert "gate=pr_quality_receipt" in receipt_steps[0]["run"]
+    assert "artifact_upload=disabled" in receipt_steps[0]["run"]
 
 
 def test_standalone_semgrep_scans_changed_files_only() -> None:

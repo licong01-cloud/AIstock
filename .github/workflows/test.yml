@@ -5,6 +5,8 @@ on:
     branches: [main]
   push:
     branches: [main]
+    paths-ignore:
+      - 'tests/aistock_validation/bugs/**'
 
 # AIstock CI runs on pre-provisioned Windows runners. Project dependencies are
 # never installed by CI; runner images are versioned and verified instead.
@@ -19,7 +21,10 @@ env:
 
 permissions:
   contents: read
-  pull-requests: write
+
+concurrency:
+  group: aistock-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   classify-changes:
@@ -60,7 +65,16 @@ jobs:
           if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
           else
-            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"; then
+                break
+              fi
+              if [[ "${attempt}" == "3" ]]; then
+                echo "base fetch failed after 3 attempts" >&2
+                exit 1
+              fi
+              sleep $((attempt * 2))
+            done
           fi
 
       - name: Verify prebuilt AIstock-CI environment
@@ -90,16 +104,6 @@ jobs:
             --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
             --output-json tmp/validation/ci_change_classifier/summary.json
 
-      - name: Upload CI change-classifier artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-change-classifier
-          path: |
-            tmp/validation/ci_change_classifier/
-            scripts/ci_failure_issue_summary.py
-          if-no-files-found: ignore
-
   static-gate:
     name: Static gate (l0 + module registry)
     needs: classify-changes
@@ -119,7 +123,16 @@ jobs:
           if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
           else
-            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"; then
+                break
+              fi
+              if [[ "${attempt}" == "3" ]]; then
+                echo "base fetch failed after 3 attempts" >&2
+                exit 1
+              fi
+              sleep $((attempt * 2))
+            done
           fi
 
       - name: Verify prebuilt AIstock-CI environment
@@ -199,14 +212,6 @@ jobs:
         if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true' && needs.classify-changes.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_catalog_integrity
 
-      - name: Upload guardrail evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: guardrail-evidence
-          path: tmp/validation/guardrails/
-          if-no-files-found: ignore
-
   docs-lite:
     name: Docs-lite version record
     needs: classify-changes
@@ -227,7 +232,16 @@ jobs:
           if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
           else
-            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"; then
+                break
+              fi
+              if [[ "${attempt}" == "3" ]]; then
+                echo "base fetch failed after 3 attempts" >&2
+                exit 1
+              fi
+              sleep $((attempt * 2))
+            done
           fi
 
       - name: Verify prebuilt AIstock-CI environment
@@ -261,13 +275,6 @@ jobs:
           } > tmp/validation/docs_lite/version-record.md
           cat tmp/validation/docs_lite/version-record.md
 
-      - name: Upload docs-lite record
-        uses: actions/upload-artifact@v4
-        with:
-          name: docs-lite-version-record
-          path: tmp/validation/docs_lite/
-          if-no-files-found: error
-
   backend-tests:
     name: Backend tests (${{ matrix.session }})
     needs: [classify-changes, static-gate]
@@ -289,16 +296,6 @@ jobs:
 
       - name: nox -s ${{ matrix.session }}
         run: python -m nox -s ${{ matrix.session }}
-
-      - name: Upload validation artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: validation-${{ matrix.session }}
-          path: |
-            tmp/validation/
-            tmp/coverage/
-          if-no-files-found: ignore
 
   frontend-quality:
     name: Frontend quality (type + lint)
@@ -334,19 +331,6 @@ jobs:
           python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' > module_test_targets.txt
           mapfile -t module_test_targets < module_test_targets.txt
           npm run test:e2e -- "${module_test_targets[@]}"
-
-      - name: Upload frontend UI acceptance evidence
-        if: always() && needs.classify-changes.outputs.frontend_test_targets != '[]'
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-ui-evidence-${{ github.run_id }}
-          path: |
-            tmp/playwright-results-f014-phase4/
-            tmp/playwright-results/
-            tmp/playwright-report-f014-phase4/
-            tmp/playwright-report/
-          if-no-files-found: warn
-          retention-days: 14
 
   tdx-go-tests:
     name: TDX Go tests
@@ -403,14 +387,6 @@ jobs:
           python scripts/ci_workflow_policy_scan.py \
             --output-json tmp/validation/ci_workflow_policy/receipt.json
 
-      - name: Upload CI workflow policy receipt
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-workflow-policy
-          path: tmp/validation/ci_workflow_policy/
-          if-no-files-found: ignore
-
   prompt-evaluation:
     name: Validation LLM prompt evaluation
     needs: [classify-changes, static-gate]
@@ -431,7 +407,16 @@ jobs:
           if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
           else
-            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"; then
+                break
+              fi
+              if [[ "${attempt}" == "3" ]]; then
+                echo "base fetch failed after 3 attempts" >&2
+                exit 1
+              fi
+              sleep $((attempt * 2))
+            done
           fi
 
       - name: Verify prebuilt AIstock-CI environment
@@ -465,95 +450,6 @@ jobs:
             --provider github_models \
             "${changed_args[@]}" \
             --output tmp/validation/llm_prompt_evaluation/prompt-evaluation.json
-
-      - name: Upload prompt evaluation artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: llm-prompt-evaluation
-          path: tmp/validation/llm_prompt_evaluation/
-          if-no-files-found: error
-
-  failure-bug-register:
-    name: Publish PR CI failure evidence
-    # Diagnostics must never replace the deterministic test verdict. Preserve
-    # logs/artifacts/comments when possible, but tolerate publisher failures.
-    continue-on-error: true
-    needs: [classify-changes, backend-tests, workflow-validation-tests, prompt-evaluation]
-    # Keep this job green/no-op when targeted tests pass or are intentionally
-    # skipped. PR failures retain compact evidence without creating a second
-    # Issue alongside the default-branch failure workflow.
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure') }}
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Download classifier receipt and failure-summary tool
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: ci-change-classifier
-
-      - name: Verify prebuilt AIstock-CI environment
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        shell: powershell
-        env:
-          AISTOCK_CI_ENV_NAME: AIstock-CI
-        run: python scripts/ci_environment_verify.py
-
-      - name: Build CI failure evidence
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          mkdir -p tmp/validation/ci_failure_issue
-          python scripts/ci_failure_issue_summary.py \
-            --repo "${{ github.repository }}" \
-            --run-id "${{ github.run_id }}" \
-            --run-url "${RUN_URL}" \
-            --severity "P1" \
-            --source-name "AIstock CI" \
-            --branch "${{ github.head_ref || github.ref_name }}" \
-            --commit "${{ github.sha }}" \
-            --log-attempts 3 \
-            --log-wait-seconds 10 \
-            --output tmp/validation/ci_failure_issue/summary.json \
-            --markdown-output tmp/validation/ci_failure_issue/body.md \
-            --context-output tmp/validation/ci_failure_issue/context-pack.json \
-            --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md
-
-      - name: Upload CI failure evidence
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr-ci-failure-issue-context
-          path: tmp/validation/ci_failure_issue/
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Comment PR with CI failure evidence
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const routingBody = [
-              '### CI failure evidence is available',
-              '',
-              'One or more targeted CI jobs failed on this PR.',
-              '',
-              'Inspect the `pr-ci-failure-issue-context` artifact. Failed default-branch runs are registered only by the `Issue On Test Fail` workflow.',
-            ].join('\n');
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: context.issue.number,
-              body: routingBody,
-            });
 
   ci-verdict:
     name: CI verdict
@@ -608,6 +504,13 @@ jobs:
             failures+=("dev_db=external_DEV_validation_required:${DEV_DB_PLANS}")
           fi
           if (( ${#failures[@]} > 0 )); then
+            {
+              echo "### CI verdict failed"
+              echo
+              printf -- '- `%s`\n' "${failures[@]}"
+              echo
+              echo "The failed job logs are the authoritative PR evidence; no separate publisher job or action download is required."
+            } >> "${GITHUB_STEP_SUMMARY}"
             printf 'CI verdict failed: %s\n' "${failures[*]}" >&2
             exit 1
           fi

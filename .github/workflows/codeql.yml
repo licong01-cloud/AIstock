@@ -7,6 +7,8 @@ on:
       - 'tests/aistock_validation/bugs/**'
   push:
     branches: [main]
+    paths-ignore:
+      - 'tests/aistock_validation/bugs/**'
   schedule:
     - cron: '27 20 * * 0'
   workflow_dispatch: {}
@@ -15,6 +17,10 @@ permissions:
   actions: read
   contents: read
   security-events: write
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   docs-lite:
@@ -40,8 +46,16 @@ jobs:
           if (git cat-file -e "${env:BASE_SHA}^{commit}" 2>$null) {
             git update-ref "refs/remotes/origin/${env:BASE_REF}" "${env:BASE_SHA}"
           } else {
-            git fetch --no-tags --depth=1 origin "refs/heads/${env:BASE_REF}:refs/remotes/origin/${env:BASE_REF}"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $fetched = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              git fetch --no-tags --depth=1 origin "refs/heads/${env:BASE_REF}:refs/remotes/origin/${env:BASE_REF}"
+              if ($LASTEXITCODE -eq 0) { $fetched = $true; break }
+              if ($attempt -lt 3) { Start-Sleep -Seconds ($attempt * 2) }
+            }
+            if (-not $fetched) {
+              Write-Error "base fetch failed after 3 attempts"
+              exit 1
+            }
           }
 
       - name: Verify prebuilt AIstock-CI tooling

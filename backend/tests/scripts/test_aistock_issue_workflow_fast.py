@@ -344,7 +344,10 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
     monkeypatch.setattr(
         workflow,
         "_run_command",
-        lambda args, **kwargs: events.append("root_sync") or _result(),
+        lambda args, **kwargs: events.append(
+            "root_sync" if args[:2] == ["git", "merge"] else "merge_containment"
+        )
+        or _result(),
     )
     monkeypatch.setattr(
         workflow,
@@ -380,7 +383,8 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
 
     assert result["workflow_gate"] == "installed_and_verified"
     assert result["selected_lanes"] == ["merge_aftercare", "router"]
-    assert events == ["root_sync", "install:merge_aftercare", "install:router"]
+    assert events == ["root_sync", "merge_containment", "install:merge_aftercare", "install:router"]
+    assert result["merge_commit_containment"]["ok"] is True
 
 
 def test_merge_aftercare_backfills_preexisting_stale_lanes_in_same_profile(
@@ -399,6 +403,7 @@ def test_merge_aftercare_backfills_preexisting_stale_lanes_in_same_profile(
         "_git_snapshot",
         lambda root: {"branch": "main", "dirty": False, "head": "same", "origin_main": "same"},
     )
+    monkeypatch.setattr(workflow, "_run_command", lambda args, **kwargs: _result())
     monkeypatch.setattr(
         workflow,
         "_merge_commit_changed_files",

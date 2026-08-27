@@ -7,11 +7,17 @@ on:
       - 'tests/aistock_validation/bugs/**'
   push:
     branches: [main]
+    paths-ignore:
+      - 'tests/aistock_validation/bugs/**'
   workflow_dispatch: {}
 
 permissions:
   contents: read
   security-events: write
+
+concurrency:
+  group: semgrep-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:
@@ -36,7 +42,16 @@ jobs:
           if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
           else
-            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"; then
+                break
+              fi
+              if [[ "${attempt}" == "3" ]]; then
+                echo "base fetch failed after 3 attempts" >&2
+                exit 1
+              fi
+              sleep $((attempt * 2))
+            done
           fi
 
       - name: Verify prebuilt AIstock-CI and Semgrep tooling
@@ -92,12 +107,4 @@ jobs:
         run: |
           python -c "import json; data=json.load(open('tmp/validation/semgrep/change-classification.json', encoding='utf-8')); print(json.dumps({'docs_lite': data['docs_lite_required'], 'registry_sync': data['close_sync_metadata_only'], 'validation': data['classification'], 'semgrep': 'skipped'}, ensure_ascii=False))" > tmp/validation/semgrep/semgrep.json
           cat tmp/validation/semgrep/semgrep.json
-
-      - name: Upload Semgrep report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: semgrep-${{ github.run_id }}
-          path: tmp/validation/semgrep/
-          if-no-files-found: ignore
 

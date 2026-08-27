@@ -1126,7 +1126,7 @@ def test_validation_receipt_binds_allowlisted_command_to_current_commit(
 @pytest.mark.parametrize(
     ("evidence", "expected_kind", "expected_plan"),
     [
-        ("rtk nox -s guardrail_changed_files -> passed", "nox", "guardrail_changed_files"),
+        ("python -m nox -s guardrail_changed_files -> passed", "nox", "guardrail_changed_files"),
         (
             "rtk pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 44 passed",
             "pytest",
@@ -1424,6 +1424,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ],
         root=isolated_workflow_root,
     )
+    ci_policy_tool = workflow._classify_runtime_impact(
+        ["scripts/ci_workflow_policy_scan.py"],
+        root=isolated_workflow_root,
+    )
 
     assert dependency["runtime_impact"] == "backend"
     assert dependency["target_ids"] == ["backend-main"]
@@ -1476,6 +1480,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert unmapped_script["runtime_impact"] == "unknown"
     assert nightly_intake["runtime_impact"] == "none"
     assert nightly_intake["runtime_files"] == []
+    assert ci_policy_tool["runtime_impact"] == "none"
+    assert ci_policy_tool["runtime_files"] == []
 
     offline_contract = workflow.build_runtime_contract(
         record=_bug(
@@ -8724,6 +8730,13 @@ def test_explicit_linked_issue_resumes_matching_incomplete_reservation(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    workflow.write_allocator_state(
+        Path(os.environ["AISTOCK_BUG_ID_STATE_PATH"]),
+        last_allocated=952,
+        updated_at="2026-08-27T00:00:00Z",
+        updated_by="pytest/interrupted-registration",
+        fingerprint_index_version=workflow.FINGERPRINT_INDEX_VERSION,
+    )
     reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-952.json"
     _write_json(
         reservation,
@@ -9519,7 +9532,8 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     assert payload["timing_summary"]["event_count"] == 2
     assert payload["timing_summary"]["known_duration_seconds"] == 2.5
     assert payload["flow_overhead_estimate"]["context_estimated_tokens"] == 20
-    assert payload["h6_summary"]["top_phase"]["phase"] == "gh_pr_create"
+    assert payload["h6_summary"]["top_phase"]["phase"] == "context_ready"
+    assert payload["h6_summary"]["top_phase"]["inferred_seconds"] == 5.0
     assert payload["phase_cost_table"]
     assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
     assert payload["code_intelligence_efficiency"]["broad_scan_avoided"] is True
@@ -10251,6 +10265,77 @@ def test_rest_required_check_fallback_honors_required_app_id(monkeypatch: pytest
     )
 
     assert workflow._required_pr_check_summary(result)["pending"] == ["CI verdict"]
+
+
+def test_required_check_reporting_gap_is_pending_not_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        assert args[:3] == ["gh", "pr", "checks"]
+        return {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "no required checks reported for this pull request",
+        }
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_rest_required_pr_check_result",
+        lambda *args, **kwargs: (_ for _ in ()).throw(workflow.WorkflowError("REST temporarily unavailable")),
+    )
+    result, _fallback = workflow._merge_required_check_result_with_transport_fallback(
+        "https://github.example/pull/199",
+        payload={"headRefOid": "a" * 40, "baseRefName": "main"},
+    )
+
+    assert calls == 1
+    assert workflow._required_pr_check_summary(result)["pending"] == ["github-required-checks-reporting"]
+
+
+def test_timing_summary_attributes_wall_time_to_previous_phase_and_keeps_rtk_optional(
+    isolated_workflow_root: Path,
+) -> None:
+    events = [
+        {
+            "timestamp": "2026-08-27T00:00:00Z",
+            "event": "fix_in_progress",
+            "state": "fix_in_progress",
+            "duration_seconds": None,
+            "tooling": {"rtk_used": True, "rtk_fallback": "not_recorded"},
+        },
+        {
+            "timestamp": "2026-08-27T00:00:10Z",
+            "event": "fix_applied",
+            "state": "fix_applied",
+            "duration_seconds": None,
+            "tooling": {"rtk_used": "not_recorded", "rtk_fallback": "not_recorded"},
+        },
+        {
+            "timestamp": "2026-08-27T00:00:12Z",
+            "event": "state:validation_passed",
+            "state": "validation_passed",
+            "duration_seconds": None,
+            "tooling": {"rtk_used": "not_recorded", "rtk_fallback": "not_recorded"},
+        },
+    ]
+    path = workflow._events_path("BUG-199", isolated_workflow_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+
+    summary = workflow._workflow_timing_summary("BUG-199", isolated_workflow_root)
+
+    assert summary["active_fix_seconds"] == 12.0
+    assert summary["phases"]["fix_in_progress"]["inferred_until_next_seconds"] == 10.0
+    assert summary["rtk_telemetry"] == {
+        "used_event_count": 1,
+        "fallback_event_count": 0,
+        "not_recorded_event_count": 2,
+        "status": "recorded",
+    }
 
 
 def test_merge_transport_failure_falls_back_once_to_head_pinned_rest(
@@ -11171,7 +11256,7 @@ def test_merge_finalizer_plan_preserves_bundled_cleanup_and_gate_actions() -> No
         source_pr_url="https://github.example/pull/266",
         source_branch="bug/BUG-266-workflow",
         source_worktree="F:/Dev/task worktree",
-        validation_evidence=["rtk nox -s l0 -> passed"],
+        validation_evidence=["python -m nox -s l0 -> passed"],
         allow_missing_linkage=True,
         production_gates={
             "production_ddl_gate": "pending_authorized_apply",
@@ -11189,7 +11274,7 @@ def test_merge_finalizer_plan_preserves_bundled_cleanup_and_gate_actions() -> No
     assert command.count("--bug-id") == 2
     assert '--source-branch "bug/BUG-266-workflow"' in command
     assert '--source-worktree "F:/Dev/task worktree"' in command
-    assert '--validation-evidence "rtk nox -s l0 -> passed"' in command
+    assert '--validation-evidence "python -m nox -s l0 -> passed"' in command
     assert "--allow-missing-linkage" in command
     assert "--sync-root" in command
     assert "--merge-close-sync-pr" in command
@@ -12786,6 +12871,39 @@ def test_worktree_transient_purge_stops_on_manifest_drift(
         )
     assert first.exists()
     assert second.exists()
+
+
+def test_worktree_transient_purge_stops_when_root_gains_tracked_file(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    temporary = worktree / "tmp" / "validation" / "first.json"
+    temporary.parent.mkdir(parents=True)
+    temporary.write_text("first", encoding="utf-8")
+    tracked_checks = 0
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal tracked_checks
+        if args[:3] == ["git", "ls-files", "--others"]:
+            existing = "tmp/validation/first.json" if temporary.exists() else ""
+            return {"ok": True, "returncode": 0, "stdout": existing, "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            tracked_checks += 1
+            tracked = "tmp/validation/tracked.txt" if tracked_checks > 1 else ""
+            return {"ok": True, "returncode": 0, "stdout": tracked, "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    with pytest.raises(workflow.WorkflowError, match="gained tracked files"):
+        workflow._purge_worktree_transient_artifacts(
+            worktree,
+            canonical_root=isolated_workflow_root,
+            expected_profile=profile,
+        )
+    assert temporary.exists()
 
 
 def test_worktree_ignored_artifact_profile_blocks_unknown_and_unfinalized_receipt(

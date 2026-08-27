@@ -114,6 +114,8 @@ jobs:
 
   dr-snapshot:
     name: DR snapshot prod DB
+    # Operations-only DR lane: it probes an already-running authorized target.
+    # It is not PR CI, DEV validation, or permission to create/start a database.
     needs: runner-preflight
     if: github.event_name != 'workflow_dispatch' || inputs.run_dr
     # self-hosted is mandatory because the DR job needs to read the local
@@ -124,6 +126,7 @@ jobs:
       run:
         shell: powershell
     env:
+      AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'
       DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
       DR_PG_CONTAINER: 'timescaledb'
     steps:
@@ -199,6 +202,7 @@ jobs:
       run:
         shell: powershell
     env:
+      AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'
       DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
       DR_PG_CONTAINER: 'timescaledb'
     steps:
