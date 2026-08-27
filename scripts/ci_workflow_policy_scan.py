@@ -226,6 +226,14 @@ def build_contract_evidence(
             and workflow_text.get("codeql.yml", "").count('$env:GIT_CONFIG_KEY_0 = "core.longpaths"') == 2
             and "git -C $source fetch --no-tags --depth=1" not in workflow_text.get("codeql.yml", "")
         ),
+        "codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push": (
+            "codeql_pr_languages" in classifier_text
+            and "codeql_pr_test_only" in classifier_text
+            and "LANGUAGE_FIELD=" in workflow_text.get("codeql.yml", "")
+            and "pull_request_test_only" in workflow_text.get("codeql.yml", "")
+            and "codeql_languages" in workflow_text.get("codeql.yml", "")
+            and "github.event_name" in workflow_text.get("codeql.yml", "")
+        ),
         "code_intelligence_refresh_is_scheduled_or_manual_only": (
             "schedule:" in code_intelligence_refresh_text
             and "workflow_dispatch:" in code_intelligence_refresh_text

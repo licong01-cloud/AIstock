@@ -1371,9 +1371,11 @@ def test_codeql_selects_only_changed_languages() -> None:
     detect_step = next(step for step in fast_lane["steps"] if step.get("name") == "Detect CodeQL fast lane")
     assert "scripts/ci_change_classifier.py" in detect_step["run"]
     assert "close_sync_metadata_only" in detect_step["run"]
-    assert "*.py) PYTHON_CHANGED=1" in detect_step["run"]
-    assert "*.js|*.jsx|*.ts|*.tsx) JAVASCRIPT_CHANGED=1" in detect_step["run"]
-    assert "LANGUAGES='[]'" in detect_step["run"]
+    assert "codeql_pr_languages" in detect_step["run"]
+    assert "codeql_languages" in detect_step["run"]
+    assert detect_step["env"]["EVENT_NAME"] == "${{ github.event_name }}"
+    assert "pull_request_test_only" in detect_step["run"]
+    assert "PYTHON_CHANGED" not in detect_step["run"]
     assert len(prepare_steps) == 2
     assert all("--no-write-fetch-head" in step["run"] for step in prepare_steps)
     assert all("--depth=1" not in step["run"] for step in prepare_steps)
@@ -1402,6 +1404,46 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert not any("github/codeql-action/" in str(step.get("uses") or "") for step in analyze_steps)
     assert analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_REQUIRED"] == "1"
     assert len(analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
+
+
+def test_codeql_pr_skips_test_only_languages_but_preserves_main_push_languages(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/tests/scripts/test_nightly_session_runner.py",
+            "tests/aistock_validation/bugs/20260827_BUG-1210-example.json",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["codeql_languages"] == ["python"]
+    assert payload["codeql_pr_languages"] == []
+    assert payload["codeql_pr_test_only"] is True
+
+
+def test_codeql_pr_keeps_runtime_language_when_source_and_tests_change(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/services/example.py", "backend/tests/test_example.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["codeql_languages"] == ["python"]
+    assert payload["codeql_pr_languages"] == ["python"]
+    assert payload["codeql_pr_test_only"] is False
+
+
+def test_codeql_pr_skips_frontend_test_only_language(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "frontend/src/example.spec.ts",
+            "frontend/src/__tests__/helper.ts",
+            "frontend/e2e/example.test.tsx",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["codeql_languages"] == ["javascript-typescript"]
+    assert payload["codeql_pr_languages"] == []
+    assert payload["codeql_pr_test_only"] is True
 
 
 def test_non_security_quality_workflows_do_not_repeat_on_merge_commit() -> None:

@@ -105,6 +105,7 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
           HEAD_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           mkdir -p tmp/validation/codeql
           python scripts/ci_changed_files.py \
@@ -118,30 +119,15 @@ jobs:
             --output-json tmp/validation/codeql/change-classification.json
           DOCS_LITE=$(python -c "import json; print('1' if json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8'))['docs_lite_required'] else '0')")
           REGISTRY_SYNC=$(python -c "import json; print('1' if json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8'))['close_sync_metadata_only'] else '0')")
-          PYTHON_CHANGED=0
-          JAVASCRIPT_CHANGED=0
-          while IFS= read -r path; do
-            case "${path}" in
-              *.py) PYTHON_CHANGED=1 ;;
-              *.js|*.jsx|*.ts|*.tsx) JAVASCRIPT_CHANGED=1 ;;
-            esac
-          done < tmp/validation/codeql/changed_files.txt
-          if [ "${PYTHON_CHANGED}" = "1" ] && [ "${JAVASCRIPT_CHANGED}" = "1" ]; then
-            LANGUAGES='["python","javascript-typescript"]'
-          elif [ "${PYTHON_CHANGED}" = "1" ]; then
-            LANGUAGES='["python"]'
-          elif [ "${JAVASCRIPT_CHANGED}" = "1" ]; then
-            LANGUAGES='["javascript-typescript"]'
-          else
-            LANGUAGES='[]'
-          fi
+          LANGUAGE_FIELD=$([ "${EVENT_NAME}" = "pull_request" ] && echo codeql_pr_languages || echo codeql_languages)
+          LANGUAGES=$(python -c "import json; data=json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8')); print(json.dumps(data['${LANGUAGE_FIELD}'], separators=(',', ':')))" )
           HAS_LANGUAGES=$([ "${LANGUAGES}" = "[]" ] && echo 0 || echo 1)
           echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
           echo "registry_sync=${REGISTRY_SYNC}" >> "${GITHUB_OUTPUT}"
           echo "languages=${LANGUAGES}" >> "${GITHUB_OUTPUT}"
           echo "has_languages=${HAS_LANGUAGES}" >> "${GITHUB_OUTPUT}"
           if [ "${HAS_LANGUAGES}" = "0" ]; then
-            python -c "import json; data=json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8')); print(json.dumps({'docs_lite': data['docs_lite_required'], 'registry_sync': data['close_sync_metadata_only'], 'validation': data['classification'], 'codeql': 'skipped', 'reason': 'no_changed_codeql_language'}, ensure_ascii=False))" > tmp/validation/codeql/codeql.json
+            python -c "import json; data=json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8')); print(json.dumps({'docs_lite': data['docs_lite_required'], 'registry_sync': data['close_sync_metadata_only'], 'validation': data['classification'], 'codeql': 'skipped', 'reason': 'pull_request_test_only' if data['codeql_pr_test_only'] and '${EVENT_NAME}' == 'pull_request' else 'no_changed_codeql_language'}, ensure_ascii=False))" > tmp/validation/codeql/codeql.json
             cat tmp/validation/codeql/codeql.json
           fi
 
