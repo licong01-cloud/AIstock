@@ -4941,7 +4941,11 @@ def _duplicate_bug_id_sources(
         if int(source.get("number") or 0) != number:
             continue
         kind = source.get("kind")
-        if kind == "allocator":
+        # The allocator state is an observation of the reservation counter,
+        # not a durable BUG record.  Treat both historical ``allocator`` and
+        # current ``allocator_state`` source kinds as non-duplicates so an
+        # interrupted registration can safely resume its reserved BUG id.
+        if kind in {"allocator", "allocator_state"}:
             continue
         if kind == "github_issue" and allowed_issue and str(source.get("github_issue_number")) == allowed_issue:
             continue
