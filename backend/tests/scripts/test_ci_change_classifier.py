@@ -1481,7 +1481,26 @@ def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
     assert "issues" not in guardrail.get("permissions", {})
     assert "workflow_run:" not in guardrail_text
     assert "github.rest.issues" not in guardrail_text
-    assert "actions/upload-artifact@v4" in guardrail_text
+    assert "actions/upload-artifact@v7" in guardrail_text
+
+
+def test_javascript_actions_use_native_node24_major_versions() -> None:
+    combined = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(Path(".github/workflows").glob("*.yml"))
+    )
+    expected = {
+        "actions/checkout@": "actions/checkout@v7",
+        "actions/upload-artifact@": "actions/upload-artifact@v7",
+        "actions/download-artifact@": "actions/download-artifact@v8",
+        "actions/github-script@": "actions/github-script@v9",
+    }
+    for prefix, expected_ref in expected.items():
+        refs = {
+            line.strip().removeprefix("- ").removeprefix("uses: ")
+            for line in combined.splitlines()
+            if prefix in line
+        }
+        assert refs == {expected_ref}
 
 
 def test_non_required_pr_workflows_skip_pure_bug_registry_changes() -> None:

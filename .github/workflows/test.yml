@@ -48,7 +48,7 @@ jobs:
       prompt_evaluation_required: ${{ steps.classify.outputs.prompt_evaluation_required }}
       classification: ${{ steps.classify.outputs.classification }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
@@ -106,7 +106,7 @@ jobs:
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
@@ -215,7 +215,7 @@ jobs:
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
@@ -282,7 +282,7 @@ jobs:
       matrix:
         session: ${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify AIstock-CI environment
         shell: powershell
@@ -303,7 +303,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify prebuilt frontend toolchain
         shell: powershell
@@ -338,7 +338,7 @@ jobs:
       run:
         working-directory: tdx-api-main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify prebuilt AIstock-CI environment
         shell: powershell
@@ -358,7 +358,7 @@ jobs:
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify prebuilt AIstock-CI environment
         shell: powershell
@@ -390,7 +390,7 @@ jobs:
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
