@@ -1,0 +1,212 @@
+{
+  "actual": "On unchanged main, test_execute_session_returns_explicit_timeout consistently takes about 6.06 seconds because its global Popen test double also intercepts subprocess.run(taskkill ...) and replaces the termination command with a second sleeper.",
+  "allowed_write_scope": [
+    "scripts/nightly_session_runner.py",
+    "backend/tests/scripts/test_nightly_session_runner.py",
+    "tests/aistock_validation/bugs/20260827_BUG-1210-nightly-session-timeout-does-not-terminate-windows-child-process-promptl.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1210",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-27T11:40:46.095524Z",
+  "description": "The Windows timeout regression test replaces the shared subprocess.Popen symbol for every command. That replacement unintentionally captures the production taskkill subprocess too, prevents the real termination path from running, and reports a false Nightly timeout overrun.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260827-c213acc259d0",
+      "timestamp": "2026-08-27T11:40:46.095502Z"
+    }
+  ],
+  "evidence_uris": [
+    "canonical main a9941381 repeated reproduction on 2026-08-27"
+  ],
+  "expected": "The test double must replace only the Nightly child process while preserving the real Windows taskkill subprocess, so the test validates the production timeout contract instead of disabling it.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/nightly_session_runner.py",
+      "backend/tests/scripts/test_nightly_session_runner.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "scripts/nightly_session_runner.py",
+        "backend/tests/scripts/test_nightly_session_runner.py"
+      ],
+      "impacted_modules": [
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/nightly_session_runner.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_nightly_session_runner.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/nightly_session_runner.py",
+        "backend/tests/scripts/test_nightly_session_runner.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/nightly_session_runner.py",
+      "backend/tests/scripts/test_nightly_session_runner.py"
+    ]
+  },
+  "first_seen_at": "2026-08-27T11:40:46.095524Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3846,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3846",
+  "last_seen_at": "2026-08-27T11:40:46.095524Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_nightly_session_runner.py::test_execute_session_returns_explicit_timeout -q -p no:cacheprovider",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly timeout test intercepts taskkill and reports a false process overrun",
+  "trigger_condition": {
+    "fingerprint": "c213acc259d08b2e364cdb78",
+    "source_event_id": "FE-20260827-c213acc259d0"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
