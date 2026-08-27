@@ -280,7 +280,9 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 
 backend、frontend、Go、workflow validation、PR quality 和安全扫描等 CI 验证必须在预构建的 Windows self-hosted runner 上执行；运行前只允许执行环境身份、版本指纹和工具可用性检查。CI 禁止 `actions/setup-*`、`pip/conda/mamba install`、`npm ci/install`、`go mod download` 以及任何隐式依赖安装。环境缺失、指纹漂移或工具缺失时必须 fail-closed 并报告 `environment_mismatch`，不回退到 GitHub-hosted Linux、生产 `AIstock` 环境或临时安装环境。该规则是执行环境约束，不增加业务测试或人工审批。
 
-CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须把本地 toolcache 路径、固定版本和 identity manifest SHA-256 纳入环境校验，并固定到默认 CLI 与 toolcache 版本完全一致的 immutable CodeQL Action release，使 action 直接命中已解压目录；目录不完整、版本或 hash 漂移直接失败，禁止临时下载或每次重新解压 bundle 替代。
+CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须把本地 toolcache 路径、固定版本和 identity manifest SHA-256 纳入环境校验，并直接调用已校验的本地 `codeql.exe` 执行 `database create`、`database analyze` 和 `github upload-results`；`.github/workflows/codeql.yml` 禁止使用 `github/codeql-action`、`actions/checkout` 或其他远端 `uses:`。目录不完整、版本或 hash 漂移直接失败，禁止临时下载或每次重新解压 bundle 替代。PR 仅修改测试源和 BUG 元数据时可以跳过完整 CodeQL analyze，但只要包含业务/运行源码仍必须扫描；`push: main` 继续扫描全部变更语言以维护默认分支 Security/Code Scanning 基线。
+
+其他确需 JavaScript Action 的 workflow 仅允许使用经 runner 实跑验证的原生 Node 24 主版本：`actions/checkout@v7`、`actions/upload-artifact@v7`、`actions/download-artifact@v8`、`actions/github-script@v9`；不得为了消除告警依赖 runner 的强制 Node 版本兼容层。版本升级必须同步 machine-policy evidence 与合同测试，但不得把这些远端 Action 重新引入 CodeQL 或 Code Intelligence 快速路径。
 
 main 必须启用“通过 PR 合入”的分支保护。AIstock CI 与不发布主线安全基线的 Semgrep source 判定在 PR merge tree 上各执行一次，合入生成的 main merge commit 不重复运行；CodeQL 必须同时保留 PR 扫描和 `push: main` 扫描，因为后者负责更新默认分支 Security/Code Scanning 基线，不能当作重复门禁删除。定时或手工安全扫描可以保留，close-sync metadata 继续只运行其专用轻量校验。若临时取消 PR 保护，必须先恢复 main push 的等价 fail-closed 校验，不得留下无验证直推路径。
 
