@@ -83,6 +83,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_ci_environment_verify.py",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
     "backend/tests/scripts/test_issue_flow.py",
     "backend/tests/scripts/test_issue_flow_pr_quality.py",
@@ -126,6 +127,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/ci_changed_files.py",
     "scripts/ci_environment_verify.py",
     "scripts/ci_failure_issue_summary.py",
+    "scripts/ci/prepare_self_hosted_workspace.py",
     "scripts/ci_workflow_policy_scan.py",
     "scripts/code_intelligence_adapter.py",
     "scripts/issue_flow.py",
@@ -168,6 +170,9 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/ci_changed_files.py": ("backend/tests/scripts/test_ci_changed_files.py",),
     "scripts/ci_environment_verify.py": ("backend/tests/scripts/test_ci_environment_verify.py",),
     "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
+    "scripts/ci/prepare_self_hosted_workspace.py": (
+        "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
+    ),
     "scripts/ci_workflow_policy_scan.py": ("backend/tests/scripts/test_ci_workflow_policy_scan.py",),
     "scripts/code_intelligence_adapter.py": ("backend/tests/scripts/test_code_intelligence_adapter.py",),
     "scripts/issue_flow.py": (

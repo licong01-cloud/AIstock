@@ -3,6 +3,9 @@
   "allowed_write_scope": [
     "scripts/ci/prepare_self_hosted_workspace.py",
     "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "scripts/aistock_issue_workflow.py",
     "tests/aistock_validation/bugs/20260827_BUG-1204-code-intelligence-self-hosted-workspace-cleanup-rejects-read-only-git-ob.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -31,7 +34,10 @@
       "backend/tests/scripts/test_prepare_self_hosted_workspace.py"
     ],
     "changed_files": [
-      "scripts/ci/prepare_self_hosted_workspace.py"
+      "scripts/ci/prepare_self_hosted_workspace.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "scripts/aistock_issue_workflow.py"
     ],
     "ownership": {
       "changed_files": [],
@@ -44,7 +50,10 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/ci/prepare_self_hosted_workspace.py",
-      "backend/tests/scripts/test_prepare_self_hosted_workspace.py"
+      "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "scripts/aistock_issue_workflow.py"
     ]
   },
   "first_seen_at": "2026-08-27T02:48:45.393327Z",

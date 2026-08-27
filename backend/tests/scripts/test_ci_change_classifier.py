@@ -94,6 +94,21 @@ def test_workflow_change_with_bug_metadata_uses_workflow_lane(tmp_path: Path) ->
     assert payload["workflow_validation_required"] is True
 
 
+def test_self_hosted_workspace_prepare_stays_in_workflow_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/ci/prepare_self_hosted_workspace.py",
+            "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["workflow_validation_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["unmapped_code_files"] == []
+
+
 def test_standard_skill_workflow_and_runtime_catalog_stay_in_focused_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
