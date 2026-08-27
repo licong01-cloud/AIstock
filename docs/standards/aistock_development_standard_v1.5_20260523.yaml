@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: d1d9f1608298f4838f8fd3805b17cc1d6acee7d11979f25283ac10861509c358
+source_sha256: 9ba24ef1e12ec36f86f88cc6175ddb59eca18da53bdd491b300510d716a48d57
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-27"
@@ -726,6 +726,7 @@ rules:
         - no_dependency_install_commands
         - nox_ci_install_fail_closed_guard
         - policy_scanner_environment_and_nox_contract_checks
+        - pr_quality_no_external_report_action_dependency
         - no_linux_or_production_environment_fallback
         - windows_git_bash_shell
         - local_git_object_mirror_reuse

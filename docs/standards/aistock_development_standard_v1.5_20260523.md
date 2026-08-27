@@ -279,6 +279,8 @@ backend、frontend、Go、workflow validation、PR quality 和安全扫描等 CI
 
 Nox、测试 helper 和脚本内部同样受零安装约束：GitHub Actions 或 `AISTOCK_CI_INSTALL_FORBIDDEN=1` 下发现依赖缺失必须直接失败，禁止在 helper 内自动执行安装。CI policy scanner 同时检查 workflow YAML、Windows `AIstock-CI` runner/环境/DEV-DB 路由标记和 Nox 隐式安装边界；仅做关键词扫描不得宣称完整合同通过。
 
+PR quality 的评论、完整 artifact 上传和其他报告发布器属于非阻断诊断，不得要求 runner 在 job 初始化阶段下载额外 action archive。真实质量结果直接写入 job summary/stdout 和 commit-bound PR receipt；报告发布失败或禁用不得覆盖测试结论，也不得延迟 required `CI verdict`。
+
 Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 WSL `System32\\bash.exe`）；runner wrapper 可配置只读本地 Git object mirror，并通过 `GIT_ALTERNATE_OBJECT_DIRECTORIES` 复用已验证对象。checkout 仍使用浅深度和当前 PR base SHA；仅在 mirror 缺少对象时远程补取。mirror、shell 和代理异常属于 runner 基础设施诊断，禁止转化为业务门禁或重复依赖安装。
 
 <a id="rule-ci-database-safety-001"></a>

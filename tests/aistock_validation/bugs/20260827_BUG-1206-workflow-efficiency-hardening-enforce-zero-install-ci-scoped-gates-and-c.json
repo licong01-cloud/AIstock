@@ -5,6 +5,7 @@
     "scripts/ci_workflow_policy_scan.py",
     "scripts/aistock_issue_workflow.py",
     ".github/workflows/test.yml",
+    ".github/workflows/pr-quality.yml",
     ".github/workflows/codeql.yml",
     ".github/workflows/semgrep.yml",
     ".github/workflows/nightly.yml",
@@ -49,6 +50,7 @@
       "scripts/ci_workflow_policy_scan.py",
       "scripts/aistock_issue_workflow.py",
       ".github/workflows/test.yml",
+      ".github/workflows/pr-quality.yml",
       ".github/workflows/codeql.yml",
       ".github/workflows/semgrep.yml",
       ".github/workflows/nightly.yml",
@@ -68,6 +70,7 @@
         "scripts/ci_workflow_policy_scan.py",
         "scripts/aistock_issue_workflow.py",
         ".github/workflows/test.yml",
+        ".github/workflows/pr-quality.yml",
         ".github/workflows/codeql.yml",
         ".github/workflows/semgrep.yml",
         ".github/workflows/nightly.yml",
@@ -127,6 +130,17 @@
         },
         {
           "file": ".github/workflows/test.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/pr-quality.yml",
           "impact_modules": [
             "validation.runner",
             "validation.center",
@@ -270,6 +284,7 @@
         "scripts/ci_workflow_policy_scan.py",
         "scripts/aistock_issue_workflow.py",
         ".github/workflows/test.yml",
+        ".github/workflows/pr-quality.yml",
         ".github/workflows/codeql.yml",
         ".github/workflows/semgrep.yml",
         ".github/workflows/nightly.yml",
@@ -291,6 +306,7 @@
       "scripts/ci_workflow_policy_scan.py",
       "scripts/aistock_issue_workflow.py",
       ".github/workflows/test.yml",
+      ".github/workflows/pr-quality.yml",
       ".github/workflows/codeql.yml",
       ".github/workflows/semgrep.yml",
       ".github/workflows/nightly.yml",

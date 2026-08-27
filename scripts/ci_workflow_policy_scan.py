@@ -145,6 +145,7 @@ def build_contract_evidence(
     pr_texts = [workflow_text[name] for name in sorted(WINDOWS_PR_WORKFLOWS) if name in workflow_text]
     pr_combined = "\n".join(pr_texts)
     test_text = workflow_text.get("test.yml", "")
+    pr_quality_text = workflow_text.get("pr-quality.yml", "")
     nightly_text = workflow_text.get("nightly.yml", "")
     nox_text = nox_path.read_text(encoding="utf-8") if nox_path.exists() else ""
     classifier_text = classifier_path.read_text(encoding="utf-8") if classifier_path.exists() else ""
@@ -165,6 +166,8 @@ def build_contract_evidence(
         and all("ubuntu-" not in text.casefold() and "conda run -n aistock" not in text.casefold() for text in pr_texts),
         "windows_git_bash_shell": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
         and all("shell: bash" in text.casefold() for text in pr_texts),
+        "pr_quality_no_external_report_action_dependency": "actions/upload-artifact@" not in pr_quality_text
+        and "actions/github-script@" not in pr_quality_text,
         "no_workflow_services": "CI workflow services are prohibited; use the existing DEV database lane" not in reasons,
         "no_postgres_or_timescaledb_container_creation": "creating a postgres/timescale container is prohibited in CI" not in reasons
         and "disposable postgres/timescale image is prohibited in CI" not in reasons,
