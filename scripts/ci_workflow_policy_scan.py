@@ -157,6 +157,7 @@ def build_contract_evidence(
     test_text = workflow_text.get("test.yml", "")
     pr_quality_text = workflow_text.get("pr-quality.yml", "")
     nightly_text = workflow_text.get("nightly.yml", "")
+    code_intelligence_refresh_text = workflow_text.get("code-intelligence-refresh.yml", "")
     nox_text = nox_path.read_text(encoding="utf-8") if nox_path.exists() else ""
     classifier_text = classifier_path.read_text(encoding="utf-8") if classifier_path.exists() else ""
     environment_verify_text = (
@@ -201,12 +202,38 @@ def build_contract_evidence(
             and "branches: [main]" in workflow_text.get("codeql.yml", "")
         ),
         "codeql_uses_hash_verified_prebuilt_bundle": (
-            "github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd" in workflow_text.get("codeql.yml", "")
-            and "github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd" in workflow_text.get("codeql.yml", "")
-            and "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'" in workflow_text.get("codeql.yml", "")
+            "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'" in workflow_text.get("codeql.yml", "")
             and "AISTOCK_CI_CODEQL_BUNDLE_SHA256:" in workflow_text.get("codeql.yml", "")
             and "_work\\_tool\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
             and "prebuilt CodeQL bundle SHA-256 mismatch" in environment_verify_text
+            and "database create" in workflow_text.get("codeql.yml", "")
+            and "database analyze" in workflow_text.get("codeql.yml", "")
+            and "github upload-results" in workflow_text.get("codeql.yml", "")
+        ),
+        "codeql_remote_action_download_is_eliminated": (
+            "github/codeql-action/" not in workflow_text.get("codeql.yml", "")
+            and "actions/checkout@" not in workflow_text.get("codeql.yml", "")
+            and "uses:" not in workflow_text.get("codeql.yml", "")
+            and "- name: Run CodeQL CLI analysis\n        timeout-minutes: 20\n"
+            in workflow_text.get("codeql.yml", "")
+        ),
+        "codeql_exact_local_workspace_fetch_is_bounded": (
+            workflow_text.get("codeql.yml", "").count("Prepare exact local workspace (no remote actions)") == 2
+            and workflow_text.get("codeql.yml", "").count("--no-write-fetch-head") == 2
+            and workflow_text.get("codeql.yml", "").count("exact workspace source fetch failed after 3 attempts") == 2
+            and workflow_text.get("codeql.yml", "").count("refs/aistock-ci/codeql-") == 2
+            and workflow_text.get("codeql.yml", "").count("update-ref -d $cacheRef") == 2
+            and workflow_text.get("codeql.yml", "").count('$env:GIT_CONFIG_KEY_0 = "core.longpaths"') == 2
+            and "git -C $source fetch --no-tags --depth=1" not in workflow_text.get("codeql.yml", "")
+        ),
+        "code_intelligence_refresh_is_scheduled_or_manual_only": (
+            "schedule:" in code_intelligence_refresh_text
+            and "workflow_dispatch:" in code_intelligence_refresh_text
+            and not re.search(r"(?m)^\s{2}push:\s*$", code_intelligence_refresh_text)
+        ),
+        "code_intelligence_refresh_has_no_external_artifact_action_dependency": (
+            "actions/upload-artifact@" not in code_intelligence_refresh_text
+            and "actions/download-artifact@" not in code_intelligence_refresh_text
         ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
         and "The failed job logs are the authoritative PR evidence" in test_text,
