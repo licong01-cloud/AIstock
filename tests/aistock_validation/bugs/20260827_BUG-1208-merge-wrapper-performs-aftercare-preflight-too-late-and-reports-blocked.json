@@ -1,84 +1,131 @@
 {
-  "actual": "Unchanged main fails test_nightly_workflow_wires_warning_only_adaptive_scheduler_job at the stale foreach assertion even though nightly_session_runner.py is wired and has dedicated behavioral tests.",
+  "actual": "The source PR merged first; missing evidence then blocked the finalizer, while the wrapper still returned merged_close_synced and requested cleanup. Finalizer state also wrote close_synced on blocked results. Close-sync polling exhausted after about 3.5 minutes while required CodeQL occupied the only runner for about 6.5 minutes.",
   "allowed_write_scope": [
-    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
-    "tests/aistock_validation/bugs/20260827_BUG-1209-nightly-workflow-contract-still-requires-removed-inline-session-loop.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20260827_BUG-1208-merge-wrapper-performs-aftercare-preflight-too-late-and-reports-blocked.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1209",
-  "closed_at": "2026-08-27T11:44:26Z",
+  "bug_id": "BUG-1208",
+  "closed_at": "2026-08-27T15:53:51Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-27T11:16:55.794339Z",
-  "description": "Unchanged main fails test_nightly_workflow_wires_warning_only_adaptive_scheduler_job at the stale foreach assertion even though nightly_session_runner.py is wired and has dedicated behavioral tests.",
+  "created_at": "2026-08-27T11:02:31.334569Z",
+  "description": "The source PR merged first; missing evidence then blocked the finalizer, while the wrapper still returned merged_close_synced and requested cleanup. Finalizer state also wrote close_synced on blocked results. Close-sync polling exhausted after about 3.5 minutes while required CodeQL occupied the only runner for about 6.5 minutes.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260827-f2f62b338a14",
-      "timestamp": "2026-08-27T11:16:55.794322Z"
+      "note": "Promoted from IC-20260827-197e482a2867",
+      "timestamp": "2026-08-27T11:02:31.334551Z"
     }
   ],
   "evidence_uris": [
-    "canonical main a9941381 baseline reproduction on 2026-08-27"
+    "BUG-1207 durable workflow events and close-sync PR #3841 CI timeline"
   ],
-  "expected": "The workflow contract should assert the current session-runner delegation, plan input, bounded timeouts, and absence of hardcoded per-session execution without requiring obsolete inline implementation text.",
+  "expected": "Merge mode must preflight or reuse durable validation evidence before source merge, require explicit cleanup authorization, propagate finalizer blocking truthfully, persist a non-close-synced state when blocked, and give close-sync CI a bounded wait aligned with the single-runner queue.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ],
     "ownership": {
       "changed_files": [
-        "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
       ],
       "impacted_modules": [
-        "tests.backend"
+        "validation.guardrails",
+        "validation.center",
+        "validation.runner",
+        "validation.module_quality",
+        "tests.backend",
+        "validation.coverage"
       ],
       "matched_rules": [
         {
-          "file": "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
-          "impact_modules": [],
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
           "primary_module": "tests.backend",
           "risk_level": "medium",
-          "rule_id": "backend_tests_default"
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
         }
       ],
       "risk_levels": [
+        "high",
         "medium"
       ],
       "suggested_scope": [
-        "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ]
   },
-  "first_seen_at": "2026-08-27T11:16:55.794339Z",
+  "first_seen_at": "2026-08-27T11:02:31.334569Z",
   "fix_branch": null,
-  "fix_commit": "7933ba5955a7c15c8523a09d23b99c781e107f60",
-  "fixed_at": "2026-08-27T11:44:26Z",
-  "github_issue_number": 3844,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3844",
-  "last_seen_at": "2026-08-27T11:16:55.794339Z",
+  "fix_commit": "07e33b2ba54553922078092f778b21a82a8b1f17",
+  "fixed_at": "2026-08-27T15:53:51Z",
+  "github_issue_number": 3843,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3843",
+  "last_seen_at": "2026-08-27T11:02:31.334569Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3845",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3848",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py run --bug-id BUG-1207 --mode merge --pr-url https://github.com/licong01-cloud/AIstock/pull/3840 --merge --sync-root --branch bug/BUG-1207-ci-codeql-graphql-pr-20260827 --worktree F:/Dev/AIstock_worktrees/BUG-1207-ci-codeql-graphql-pr-20260827",
   "required_verification": [
-    "l0"
+    "l0",
+    "guardrail_changed_files"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -94,48 +141,46 @@
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P2",
+  "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1209",
+    "bug_id": "BUG-1208",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "47f3430b0c56a0cc",
-    "recorded_at": "2026-08-27T11:49:40.559624Z",
+    "receipt_id": "ac717c759a732ef8",
+    "recorded_at": "2026-08-27T15:57:27.247337Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "2f89ef785209aecd4e2dd013893b199b3989558a",
-    "source_merge_commit": "7933ba5955a7c15c8523a09d23b99c781e107f60",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3845",
+    "source_head_oid": "857146abc8da67dd89771b4a843e3b5dec4706b6",
+    "source_merge_commit": "07e33b2ba54553922078092f778b21a82a8b1f17",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3848",
     "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 429 passed, 2 skipped",
       "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
-      "python -m nox -s validation_workflow_automation -> 557 passed, 2 skipped",
-      "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider -> passed",
-      "python -m ruff check backend/tests/scripts/test_nightly_adaptive_scheduler.py -> passed"
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed, blocking=0, 3/3 mapped"
     ],
-    "validation_evidence_digest": "2292b5e5c9ddcc7cddb3ff0ef97fca9244ccda3770705447ff525e6eea8e48af"
+    "validation_evidence_digest": "845c975d99f056aae183a0709f1a296d006d8689bf4a2011e92f4ebf9c72e2f6"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "Nightly workflow contract still requires removed inline session loop",
+  "title": "Merge wrapper performs aftercare preflight too late and reports blocked finalizer as success",
   "trigger_condition": {
-    "fingerprint": "f2f62b338a14311cf358e538",
-    "source_event_id": "FE-20260827-f2f62b338a14"
+    "fingerprint": "197e482a28670d36043a5454",
+    "source_event_id": "FE-20260827-197e482a2867"
   },
   "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 429 passed, 2 skipped",
     "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
-    "python -m nox -s validation_workflow_automation -> 557 passed, 2 skipped",
-    "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider -> passed",
-    "python -m ruff check backend/tests/scripts/test_nightly_adaptive_scheduler.py -> passed"
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed, blocking=0, 3/3 mapped"
   ],
   "verification_budget": {
-    "budget": "light",
+    "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [],
       "plans": [],
@@ -169,10 +214,11 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "guardrail_changed_files"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "25-35%"
+    "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -189,7 +235,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "light",
+      "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [],
         "plans": [],
@@ -223,10 +269,11 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "guardrail_changed_files"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "25-35%"
+      "target_cost_percent_of_legacy": "30-45%"
     }
   }
 }

@@ -1,84 +1,122 @@
 {
-  "actual": "Unchanged main fails test_nightly_workflow_wires_warning_only_adaptive_scheduler_job at the stale foreach assertion even though nightly_session_runner.py is wired and has dedicated behavioral tests.",
+  "actual": "The remote github/codeql-action archive can stall before any workflow step starts, and its init Node process can then hold a GitHub HTTPS connection until the 30-minute job timeout. A 5-minute init step timeout did not cover ActionManager downloads; PR #3847 and #3848 remained queued behind the stuck job.",
   "allowed_write_scope": [
-    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
-    "tests/aistock_validation/bugs/20260827_BUG-1209-nightly-workflow-contract-still-requires-removed-inline-session-loop.json",
+    ".github/workflows/codeql.yml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "scripts/ci_workflow_policy_scan.py",
+    "tests/aistock_validation/bugs/20260827_BUG-1211-stalled-codeql-init-holds-the-only-windows-runner-until-the-30-minute-jo.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1209",
-  "closed_at": "2026-08-27T11:44:26Z",
+  "bug_id": "BUG-1211",
+  "closed_at": "2026-08-27T13:27:18Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-27T11:16:55.794339Z",
-  "description": "Unchanged main fails test_nightly_workflow_wires_warning_only_adaptive_scheduler_job at the stale foreach assertion even though nightly_session_runner.py is wired and has dedicated behavioral tests.",
+  "created_at": "2026-08-27T12:14:38.066924Z",
+  "description": "CodeQL used a verified local CLI bundle but still downloaded github/codeql-action source for every job. Real runs stalled both while downloading that action archive and inside its init Node process, outside or beyond a useful step timeout, monopolizing the single Windows runner.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260827-f2f62b338a14",
-      "timestamp": "2026-08-27T11:16:55.794322Z"
+      "note": "Promoted from IC-20260827-dec3eac6e3a6",
+      "timestamp": "2026-08-27T12:14:38.066905Z"
     }
   ],
   "evidence_uris": [
-    "canonical main a9941381 baseline reproduction on 2026-08-27"
+    "runner worker log lines 4300-4735 and live process/socket evidence on 2026-08-27"
   ],
-  "expected": "The workflow contract should assert the current session-runner delegation, plan input, bounded timeouts, and absence of hardcoded per-session execution without requiring obsolete inline implementation text.",
+  "expected": "CodeQL must remain fail-closed while using the already verified local CLI directly for database creation, analysis, and authenticated SARIF upload. The workflow must not download github/codeql-action, and the direct analysis step must have a bounded timeout enforced by contract tests.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      ".github/workflows/codeql.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "scripts/ci_workflow_policy_scan.py"
     ],
     "ownership": {
       "changed_files": [
-        "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+        ".github/workflows/codeql.yml",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "scripts/ci_workflow_policy_scan.py"
       ],
       "impacted_modules": [
-        "tests.backend"
+        "validation.guardrails",
+        "validation.runner",
+        "validation.center",
+        "platform.config",
+        "scripts"
       ],
       "matched_rules": [
         {
-          "file": "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+          "file": ".github/workflows/codeql.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "scripts/ci_workflow_policy_scan.py",
           "impact_modules": [],
-          "primary_module": "tests.backend",
+          "primary_module": "scripts",
           "risk_level": "medium",
-          "rule_id": "backend_tests_default"
+          "rule_id": "scripts_default"
         }
       ],
       "risk_levels": [
+        "high",
         "medium"
       ],
       "suggested_scope": [
-        "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+        ".github/workflows/codeql.yml",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "scripts/ci_workflow_policy_scan.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      ".github/workflows/codeql.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "scripts/ci_workflow_policy_scan.py"
     ]
   },
-  "first_seen_at": "2026-08-27T11:16:55.794339Z",
+  "first_seen_at": "2026-08-27T12:14:38.066924Z",
   "fix_branch": null,
-  "fix_commit": "7933ba5955a7c15c8523a09d23b99c781e107f60",
-  "fixed_at": "2026-08-27T11:44:26Z",
-  "github_issue_number": 3844,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3844",
-  "last_seen_at": "2026-08-27T11:16:55.794339Z",
+  "fix_commit": "973bf53a3dccd54589b4f940cfdcdb2e889f8854",
+  "fixed_at": "2026-08-27T13:27:18Z",
+  "github_issue_number": 3849,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3849",
+  "last_seen_at": "2026-08-27T12:14:38.066924Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3845",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3850",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider",
+  "reproduce_command": "Inspect F:/Dev/github-actions-runner/aistock/_diag/Worker_20260827-114726-utc.log and Get-NetTCPConnection -OwningProcess 9832 during main CodeQL run for merge 7933ba59",
   "required_verification": [
-    "l0"
+    "l0",
+    "guardrail_changed_files"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -94,48 +132,46 @@
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P2",
+  "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1209",
+    "bug_id": "BUG-1211",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "47f3430b0c56a0cc",
-    "recorded_at": "2026-08-27T11:49:40.559624Z",
+    "receipt_id": "04f9b0773ee156ad",
+    "recorded_at": "2026-08-27T13:35:22.552393Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "2f89ef785209aecd4e2dd013893b199b3989558a",
-    "source_merge_commit": "7933ba5955a7c15c8523a09d23b99c781e107f60",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3845",
+    "source_head_oid": "b85a08f66b40573b2ece4f1041739bd137afc5a2",
+    "source_merge_commit": "973bf53a3dccd54589b4f940cfdcdb2e889f8854",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3850",
     "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider -> 73 passed",
       "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
-      "python -m nox -s validation_workflow_automation -> 557 passed, 2 skipped",
-      "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider -> passed",
-      "python -m ruff check backend/tests/scripts/test_nightly_adaptive_scheduler.py -> passed"
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed, blocking=0, 5/5 mapped"
     ],
-    "validation_evidence_digest": "2292b5e5c9ddcc7cddb3ff0ef97fca9244ccda3770705447ff525e6eea8e48af"
+    "validation_evidence_digest": "11f69e0f98224d20e0fee0ea4d27937be45c926185bb5d9e242a31bddb521f6f"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "Nightly workflow contract still requires removed inline session loop",
+  "title": "Stalled CodeQL init holds the only Windows runner until the 30-minute job timeout",
   "trigger_condition": {
-    "fingerprint": "f2f62b338a14311cf358e538",
-    "source_event_id": "FE-20260827-f2f62b338a14"
+    "fingerprint": "dec3eac6e3a6634c5118713e",
+    "source_event_id": "FE-20260827-dec3eac6e3a6"
   },
   "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider -> 73 passed",
     "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
-    "python -m nox -s validation_workflow_automation -> 557 passed, 2 skipped",
-    "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider -> passed",
-    "python -m ruff check backend/tests/scripts/test_nightly_adaptive_scheduler.py -> passed"
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed, blocking=0, 5/5 mapped"
   ],
   "verification_budget": {
-    "budget": "light",
+    "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [],
       "plans": [],
@@ -169,10 +205,11 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "guardrail_changed_files"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "25-35%"
+    "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -189,7 +226,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "light",
+      "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [],
         "plans": [],
@@ -223,10 +260,11 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "guardrail_changed_files"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "25-35%"
+      "target_cost_percent_of_legacy": "30-45%"
     }
   }
 }

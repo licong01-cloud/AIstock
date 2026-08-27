@@ -1,86 +1,142 @@
 {
-  "actual": "Unchanged main fails test_nightly_workflow_wires_warning_only_adaptive_scheduler_job at the stale foreach assertion even though nightly_session_runner.py is wired and has dedicated behavioral tests.",
+  "actual": "Every non-registry main push launches the 45-minute refresh and actions/upload-artifact download failure can consume the sole runner before useful work starts.",
   "allowed_write_scope": [
-    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
-    "tests/aistock_validation/bugs/20260827_BUG-1209-nightly-workflow-contract-still-requires-removed-inline-session-loop.json",
+    ".github/workflows/code-intelligence-refresh.yml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "scripts/ci_workflow_policy_scan.py",
+    "tests/aistock_validation/bugs/20260827_BUG-1213-code-intelligence-refresh-runs-on-every-main-push-and-depends-on-remote.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1209",
-  "closed_at": "2026-08-27T11:44:26Z",
+  "bug_id": "BUG-1213",
+  "closed_at": "2026-08-27T15:18:31Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-27T11:16:55.794339Z",
-  "description": "Unchanged main fails test_nightly_workflow_wires_warning_only_adaptive_scheduler_job at the stale foreach assertion even though nightly_session_runner.py is wired and has dedicated behavioral tests.",
+  "created_at": "2026-08-27T14:49:14.213849Z",
+  "description": "Every non-registry main push launches the 45-minute refresh and actions/upload-artifact download failure can consume the sole runner before useful work starts.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260827-f2f62b338a14",
-      "timestamp": "2026-08-27T11:16:55.794322Z"
+      "note": "Promoted from IC-20260827-87b55412c161",
+      "timestamp": "2026-08-27T14:49:14.213849Z"
     }
   ],
   "evidence_uris": [
-    "canonical main a9941381 baseline reproduction on 2026-08-27"
+    "https://github.com/licong01-cloud/AIstock/actions/runs/33082636882"
   ],
-  "expected": "The workflow contract should assert the current session-runner delegation, plan input, bounded timeouts, and absence of hardcoded per-session execution without requiring obsolete inline implementation text.",
+  "expected": "Run code-intelligence refresh on the daily schedule or explicit dispatch, persist graph state locally, and avoid nonessential remote artifact actions.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      ".github/workflows/code-intelligence-refresh.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_code_intelligence_adapter.py",
+      "scripts/ci_workflow_policy_scan.py"
     ],
     "ownership": {
       "changed_files": [
-        "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+        ".github/workflows/code-intelligence-refresh.yml",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "backend/tests/scripts/test_code_intelligence_adapter.py",
+        "scripts/ci_workflow_policy_scan.py"
       ],
       "impacted_modules": [
-        "tests.backend"
+        "validation.guardrails",
+        "validation.runner",
+        "validation.center",
+        "platform.config",
+        "scripts"
       ],
       "matched_rules": [
         {
-          "file": "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
-          "impact_modules": [],
+          "file": ".github/workflows/code-intelligence-refresh.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/tests/scripts/test_code_intelligence_adapter.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
           "primary_module": "tests.backend",
           "risk_level": "medium",
-          "rule_id": "backend_tests_default"
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "scripts/ci_workflow_policy_scan.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
         }
       ],
       "risk_levels": [
+        "high",
         "medium"
       ],
       "suggested_scope": [
-        "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+        ".github/workflows/code-intelligence-refresh.yml",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "backend/tests/scripts/test_code_intelligence_adapter.py",
+        "scripts/ci_workflow_policy_scan.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      ".github/workflows/code-intelligence-refresh.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_code_intelligence_adapter.py",
+      "scripts/ci_workflow_policy_scan.py"
     ]
   },
-  "first_seen_at": "2026-08-27T11:16:55.794339Z",
+  "first_seen_at": "2026-08-27T14:49:14.213849Z",
   "fix_branch": null,
-  "fix_commit": "7933ba5955a7c15c8523a09d23b99c781e107f60",
-  "fixed_at": "2026-08-27T11:44:26Z",
-  "github_issue_number": 3844,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3844",
-  "last_seen_at": "2026-08-27T11:16:55.794339Z",
+  "fix_commit": "7f58d24f4f3f934cbf8bfebefc89350208bef1cc",
+  "fixed_at": "2026-08-27T15:18:31Z",
+  "github_issue_number": 3856,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3856",
+  "last_seen_at": "2026-08-27T14:49:14.213849Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3845",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3857",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider",
+  "reproduce_command": "gh run view 33082636882 --repo licong01-cloud/AIstock --log-failed",
   "required_verification": [
-    "l0"
+    "l0",
+    "guardrail_changed_files"
   ],
-  "risk_area": "bug",
+  "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
@@ -96,43 +152,41 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
   "source_merge_receipt": {
-    "bug_id": "BUG-1209",
+    "bug_id": "BUG-1213",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "47f3430b0c56a0cc",
-    "recorded_at": "2026-08-27T11:49:40.559624Z",
+    "receipt_id": "4a36bbcecb6a258b",
+    "recorded_at": "2026-08-27T15:24:46.044839Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "2f89ef785209aecd4e2dd013893b199b3989558a",
-    "source_merge_commit": "7933ba5955a7c15c8523a09d23b99c781e107f60",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3845",
+    "source_head_oid": "9c46e26b72be11ce41952105cefdc0c6df94f32f",
+    "source_merge_commit": "7f58d24f4f3f934cbf8bfebefc89350208bef1cc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3857",
     "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider -> 88 passed",
       "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
-      "python -m nox -s validation_workflow_automation -> 557 passed, 2 skipped",
-      "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider -> passed",
-      "python -m ruff check backend/tests/scripts/test_nightly_adaptive_scheduler.py -> passed"
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed, blocking=0, 5/5 mapped"
     ],
-    "validation_evidence_digest": "2292b5e5c9ddcc7cddb3ff0ef97fca9244ccda3770705447ff525e6eea8e48af"
+    "validation_evidence_digest": "289f88ad76248e7b146a70eb6587c2ef838dab829d5308dd24cf4a8818851898"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "Nightly workflow contract still requires removed inline session loop",
+  "title": "Code intelligence refresh runs on every main push and depends on remote artifact download",
   "trigger_condition": {
-    "fingerprint": "f2f62b338a14311cf358e538",
-    "source_event_id": "FE-20260827-f2f62b338a14"
+    "fingerprint": "87b55412c161bb0b941811f9",
+    "source_event_id": "FE-20260827-87b55412c161"
   },
   "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider -> 88 passed",
     "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
-    "python -m nox -s validation_workflow_automation -> 557 passed, 2 skipped",
-    "python -m pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider -> passed",
-    "python -m ruff check backend/tests/scripts/test_nightly_adaptive_scheduler.py -> passed"
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed, blocking=0, 5/5 mapped"
   ],
   "verification_budget": {
     "budget": "light",
@@ -169,7 +223,8 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "guardrail_changed_files"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "25-35%"
@@ -223,7 +278,8 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "l0",
+        "guardrail_changed_files"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "25-35%"
