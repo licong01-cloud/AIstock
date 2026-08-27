@@ -98,3 +98,29 @@ def test_required_codeql_bundle_fails_closed_on_hash_drift(tmp_path: Path) -> No
 
     assert payload["status"] == "environment_mismatch"
     assert "prebuilt CodeQL bundle SHA-256 mismatch" in payload["failure_reasons"]
+
+
+def test_preexpanded_codeql_toolcache_identity_is_ready(tmp_path: Path) -> None:
+    codeql = tmp_path / "CodeQL" / "2.26.3" / "x64" / "codeql"
+    codeql.mkdir(parents=True)
+    manifest = codeql / ".codeqlmanifest.json"
+    manifest.write_text('{"version":"2.26.3"}', encoding="utf-8")
+    (codeql / "codeql.cmd").write_text("@echo off", encoding="utf-8")
+    codeql.parent.with_name("x64.complete").touch()
+    expected = hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+    payload = verify_environment(
+        _env(
+            tmp_path,
+            AISTOCK_CI_CODEQL_BUNDLE_REQUIRED="1",
+            AISTOCK_CI_CODEQL_BUNDLE_PATH=str(codeql),
+            AISTOCK_CI_CODEQL_BUNDLE_SHA256=expected,
+            AISTOCK_CI_CODEQL_BUNDLE_VERSION="2.26.3",
+        ),
+        system="Windows",
+        prefix=str(tmp_path),
+        required_modules=(),
+    )
+
+    assert payload["status"] == "ready"
+    assert payload["codeql_bundle_kind"] == "toolcache"

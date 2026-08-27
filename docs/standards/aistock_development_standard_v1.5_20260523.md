@@ -280,7 +280,7 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 
 backend、frontend、Go、workflow validation、PR quality 和安全扫描等 CI 验证必须在预构建的 Windows self-hosted runner 上执行；运行前只允许执行环境身份、版本指纹和工具可用性检查。CI 禁止 `actions/setup-*`、`pip/conda/mamba install`、`npm ci/install`、`go mod download` 以及任何隐式依赖安装。环境缺失、指纹漂移或工具缺失时必须 fail-closed 并报告 `environment_mismatch`，不回退到 GitHub-hosted Linux、生产 `AIstock` 环境或临时安装环境。该规则是执行环境约束，不增加业务测试或人工审批。
 
-CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须把本地 bundle 路径、固定版本和 SHA-256 纳入环境校验，并通过 action 的 `tools` 输入显式使用该 bundle；文件缺失或 hash 漂移直接失败，禁止临时下载替代。CodeQL Action 使用当前受支持的主版本，但 CLI bundle 版本仍由 runner 合同独立固定。
+CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须把本地 toolcache 路径、固定版本和 identity manifest SHA-256 纳入环境校验，并固定到默认 CLI 与 toolcache 版本完全一致的 immutable CodeQL Action release，使 action 直接命中已解压目录；目录不完整、版本或 hash 漂移直接失败，禁止临时下载或每次重新解压 bundle 替代。
 
 main 必须启用“通过 PR 合入”的分支保护。AIstock CI、Semgrep 与 CodeQL 的 source 质量判定在 PR merge tree 上各执行一次；合入生成的 main merge commit 不重复触发同一组重型 lanes。定时或手工安全扫描可以保留，close-sync metadata 继续只运行其专用轻量校验。若临时取消 PR 保护，必须先恢复 main push 的等价 fail-closed 校验，不得留下无验证直推路径。
 

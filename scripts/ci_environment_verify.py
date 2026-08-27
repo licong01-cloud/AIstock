@@ -78,18 +78,27 @@ def verify_environment(
         bundle = Path(codeql_bundle_path) if codeql_bundle_path else None
         if bundle is None:
             failures.append(f"{CODEQL_BUNDLE_PATH_ENV} is missing")
-        elif not bundle.is_file():
+        elif not bundle.exists():
             failures.append("prebuilt CodeQL bundle does not exist")
         elif not codeql_bundle_sha256:
             failures.append(f"{CODEQL_BUNDLE_SHA256_ENV} is missing")
         elif not codeql_bundle_version:
             failures.append(f"{CODEQL_BUNDLE_VERSION_ENV} is missing")
         else:
-            codeql_bundle_observed_sha256 = _sha256(bundle)
-            if codeql_bundle_observed_sha256.casefold() != codeql_bundle_sha256:
-                failures.append("prebuilt CodeQL bundle SHA-256 mismatch")
-            if codeql_bundle_version.casefold() not in bundle.name.casefold():
-                failures.append("prebuilt CodeQL bundle version is not reflected in its filename")
+            identity_file = bundle / ".codeqlmanifest.json" if bundle.is_dir() else bundle
+            if not identity_file.is_file():
+                failures.append("prebuilt CodeQL bundle identity manifest does not exist")
+            elif bundle.is_dir() and (
+                not (bundle / "codeql.cmd").is_file()
+                or not bundle.parent.with_name(f"{bundle.parent.name}.complete").is_file()
+            ):
+                failures.append("prebuilt CodeQL toolcache entry is incomplete")
+            else:
+                codeql_bundle_observed_sha256 = _sha256(identity_file)
+                if codeql_bundle_observed_sha256.casefold() != codeql_bundle_sha256:
+                    failures.append("prebuilt CodeQL bundle SHA-256 mismatch")
+            if codeql_bundle_version.casefold() not in str(bundle).casefold():
+                failures.append("prebuilt CodeQL bundle version is not reflected in its path")
 
     payload: dict[str, object] = {
         "schema_version": "aistock_ci_environment_receipt_v1",
@@ -102,7 +111,10 @@ def verify_environment(
         "required_modules": list(required_modules),
         "missing_modules": missing_modules,
         "codeql_bundle_required": codeql_bundle_required,
-        "codeql_bundle_present": bool(codeql_bundle_path and Path(codeql_bundle_path).is_file()),
+        "codeql_bundle_present": bool(codeql_bundle_path and Path(codeql_bundle_path).exists()),
+        "codeql_bundle_kind": (
+            "toolcache" if codeql_bundle_path and Path(codeql_bundle_path).is_dir() else "archive"
+        ),
         "codeql_bundle_version": codeql_bundle_version or None,
         "codeql_bundle_sha256_match": (
             codeql_bundle_observed_sha256 is not None

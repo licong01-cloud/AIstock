@@ -197,11 +197,11 @@ def build_contract_evidence(
             for name in SOURCE_QUALITY_WORKFLOWS
         ),
         "codeql_uses_hash_verified_prebuilt_bundle": (
-            "github/codeql-action/init@v4" in workflow_text.get("codeql.yml", "")
-            and "github/codeql-action/analyze@v4" in workflow_text.get("codeql.yml", "")
-            and "tools: ${{ env.AISTOCK_CI_CODEQL_BUNDLE_PATH }}" in workflow_text.get("codeql.yml", "")
+            "github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd" in workflow_text.get("codeql.yml", "")
+            and "github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd" in workflow_text.get("codeql.yml", "")
             and "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'" in workflow_text.get("codeql.yml", "")
             and "AISTOCK_CI_CODEQL_BUNDLE_SHA256:" in workflow_text.get("codeql.yml", "")
+            and "_work\\_tool\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
             and "prebuilt CodeQL bundle SHA-256 mismatch" in environment_verify_text
         ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text

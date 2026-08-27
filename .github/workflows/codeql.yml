@@ -113,8 +113,8 @@ jobs:
     timeout-minutes: 30
     env:
       AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'
-      AISTOCK_CI_CODEQL_BUNDLE_PATH: 'F:\Dev\github-actions-runner\prebuilt\codeql-bundle-win64-2.26.3.tar.gz'
-      AISTOCK_CI_CODEQL_BUNDLE_SHA256: d67307d8da58eca4feaf520c625ef3d1504ac7e39dcae195989d47434f52ef5f
+      AISTOCK_CI_CODEQL_BUNDLE_PATH: 'F:\Dev\github-actions-runner\aistock\_work\_tool\CodeQL\2.26.3\x64\codeql'
+      AISTOCK_CI_CODEQL_BUNDLE_SHA256: 504311cdee523aae41ae0ecc318f5d225ff051bbe9c50a94840d11cd35f2c38b
       AISTOCK_CI_CODEQL_BUNDLE_VERSION: 2.26.3
     strategy:
       fail-fast: false
@@ -132,14 +132,13 @@ jobs:
         run: python scripts/ci_environment_verify.py
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7, default CLI 2.26.3
         with:
           languages: ${{ matrix.language }}
           build-mode: none
-          tools: ${{ env.AISTOCK_CI_CODEQL_BUNDLE_PATH }}
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/language:${{ matrix.language }}"
 

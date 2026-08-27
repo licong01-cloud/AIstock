@@ -1379,9 +1379,10 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert all("if" not in step for step in gated_steps)
     init = next(step for step in analyze_steps if step.get("name") == "Initialize CodeQL")
     analyze_step = next(step for step in analyze_steps if step.get("name") == "Perform CodeQL Analysis")
-    assert init["uses"] == "github/codeql-action/init@v4"
-    assert init["with"]["tools"] == "${{ env.AISTOCK_CI_CODEQL_BUNDLE_PATH }}"
-    assert analyze_step["uses"] == "github/codeql-action/analyze@v4"
+    action_sha = "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"
+    assert init["uses"] == f"github/codeql-action/init@{action_sha}"
+    assert "tools" not in init["with"]
+    assert analyze_step["uses"] == f"github/codeql-action/analyze@{action_sha}"
     assert analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_REQUIRED"] == "1"
     assert len(analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
 
