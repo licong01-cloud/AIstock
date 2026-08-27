@@ -108,11 +108,3 @@ jobs:
           python -c "import json; data=json.load(open('tmp/validation/semgrep/change-classification.json', encoding='utf-8')); print(json.dumps({'docs_lite': data['docs_lite_required'], 'registry_sync': data['close_sync_metadata_only'], 'validation': data['classification'], 'semgrep': 'skipped'}, ensure_ascii=False))" > tmp/validation/semgrep/semgrep.json
           cat tmp/validation/semgrep/semgrep.json
 
-      - name: Upload Semgrep report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: semgrep-${{ github.run_id }}
-          path: tmp/validation/semgrep/
-          if-no-files-found: ignore
-

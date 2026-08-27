@@ -731,6 +731,7 @@ rules:
         - bounded_pr_base_fetch_retry
         - pr_ci_no_separate_failure_publisher_job
         - pr_ci_no_external_artifact_action_dependency
+        - pr_workflows_no_external_report_action_dependency
         - no_linux_or_production_environment_fallback
         - windows_git_bash_shell
     baseline_policy: block_new_and_changed_workflow

@@ -190,6 +190,10 @@ def build_contract_evidence(
         and "The failed job logs are the authoritative PR evidence" in test_text,
         "pr_ci_no_external_artifact_action_dependency": "actions/upload-artifact@" not in test_text
         and "actions/download-artifact@" not in test_text,
+        "pr_workflows_no_external_report_action_dependency": all(
+            marker not in pr_combined
+            for marker in ("actions/upload-artifact@", "actions/download-artifact@", "actions/github-script@")
+        ),
         "no_workflow_services": "CI workflow services are prohibited; use the existing DEV database lane" not in reasons,
         "no_postgres_or_timescaledb_container_creation": "creating a postgres/timescale container is prohibited in CI" not in reasons
         and "disposable postgres/timescale image is prohibited in CI" not in reasons,
