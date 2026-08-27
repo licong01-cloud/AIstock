@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: c1ec2e9727238c8af346cdefee0ebeddd6a192bd92bcc47fa531000e2dd49b4a
+source_sha256: a9aaba566710a187f90c663bb3194228169b089802d372418ed7385ba3afca45
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-27"
@@ -732,13 +732,19 @@ rules:
         - non_security_quality_lanes_run_once_on_pull_request
         - codeql_default_branch_security_scan_preserved
         - codeql_uses_hash_verified_prebuilt_bundle
+        - codeql_remote_action_download_is_eliminated
+        - codeql_exact_local_workspace_fetch_is_bounded
+        - codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push
+        - code_intelligence_refresh_is_scheduled_or_manual_only
+        - code_intelligence_refresh_has_no_external_artifact_action_dependency
+        - javascript_actions_use_approved_native_node24_majors
         - pr_ci_no_separate_failure_publisher_job
         - pr_ci_no_external_artifact_action_dependency
         - pr_workflows_no_external_report_action_dependency
         - no_linux_or_production_environment_fallback
         - windows_git_bash_shell
     baseline_policy: block_new_and_changed_workflow
-    remediation: Require PR-based main updates, provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
+    remediation: Require PR-based main updates, provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001

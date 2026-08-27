@@ -83,6 +83,37 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "pr_ci_no_external_artifact_action_dependency" in evidence
     assert "pr_workflows_no_external_report_action_dependency" in evidence
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
+    assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
+
+
+def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -> None:
+    import yaml
+
+    standard_path = Path("docs/standards/aistock_development_standard_v1.5_20260523.md")
+    catalog_path = Path("docs/standards/aistock_development_standard_v1.5_20260523.yaml")
+    standard = standard_path.read_text(encoding="utf-8")
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    rule = next(item for item in catalog["rules"] if item["rule_id"] == "CI-ENVIRONMENT-PARITY-001")
+    required = set(rule["checker"]["required_evidence"])
+    expected = {
+        "codeql_remote_action_download_is_eliminated",
+        "codeql_exact_local_workspace_fetch_is_bounded",
+        "codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push",
+        "code_intelligence_refresh_is_scheduled_or_manual_only",
+        "code_intelligence_refresh_has_no_external_artifact_action_dependency",
+        "javascript_actions_use_approved_native_node24_majors",
+    }
+
+    assert expected <= required
+    assert "immutable CodeQL Action release" not in standard
+    assert "禁止使用 `github/codeql-action`、`actions/checkout` 或其他远端 `uses:`" in standard
+    for action_ref in (
+        "actions/checkout@v7",
+        "actions/upload-artifact@v7",
+        "actions/download-artifact@v8",
+        "actions/github-script@v9",
+    ):
+        assert action_ref in standard
 
 
 def test_nox_frontend_dependency_gap_fails_closed_in_ci(

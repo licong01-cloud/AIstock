@@ -164,6 +164,7 @@ def build_contract_evidence(
         environment_verify_path.read_text(encoding="utf-8") if environment_verify_path.exists() else ""
     )
     workflow_findings = scan_workflows(path_list)
+    combined_workflow_text = "\n".join(workflow_text.values())
     reasons = {item["reason"] for item in workflow_findings}
     windows_runner_re = re.compile(r"runs-on:\s*\[self-hosted,\s*Windows,\s*aistock-ci\]", re.IGNORECASE)
     evidence = {
@@ -242,6 +243,15 @@ def build_contract_evidence(
         "code_intelligence_refresh_has_no_external_artifact_action_dependency": (
             "actions/upload-artifact@" not in code_intelligence_refresh_text
             and "actions/download-artifact@" not in code_intelligence_refresh_text
+        ),
+        "javascript_actions_use_approved_native_node24_majors": all(
+            set(re.findall(rf"{re.escape(prefix)}v\d+", combined_workflow_text)) == {expected}
+            for prefix, expected in {
+                "actions/checkout@": "actions/checkout@v7",
+                "actions/upload-artifact@": "actions/upload-artifact@v7",
+                "actions/download-artifact@": "actions/download-artifact@v8",
+                "actions/github-script@": "actions/github-script@v9",
+            }.items()
         ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
         and "The failed job logs are the authoritative PR evidence" in test_text,
