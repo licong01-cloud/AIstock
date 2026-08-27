@@ -1,6 +1,8 @@
 {
   "actual": "The post-merge Code Intelligence Refresh workflow fails in prepare_self_hosted_workspace.py when clearing an existing Windows runner workspace. shutil.rmtree attempts to unlink read-only .git/objects files and raises WinError 5, leaving graph refresh failed. Cleanup must handle Windows read-only attributes safely within the runner workspace without broad deletion, preserve canonical source safety, and keep fail-closed behavior for unsafe destinations.",
   "allowed_write_scope": [
+    "scripts/ci/prepare_self_hosted_workspace.py",
+    "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
     "tests/aistock_validation/bugs/20260827_BUG-1204-code-intelligence-self-hosted-workspace-cleanup-rejects-read-only-git-ob.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -25,8 +27,12 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
+    "added_files": [
+      "backend/tests/scripts/test_prepare_self_hosted_workspace.py"
+    ],
+    "changed_files": [
+      "scripts/ci/prepare_self_hosted_workspace.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +42,10 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/ci/prepare_self_hosted_workspace.py",
+      "backend/tests/scripts/test_prepare_self_hosted_workspace.py"
+    ]
   },
   "first_seen_at": "2026-08-27T02:48:45.393327Z",
   "fix_branch": null,
