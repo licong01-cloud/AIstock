@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     ".github/workflows/code-intelligence-refresh.yml",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
     "scripts/ci_workflow_policy_scan.py",
     "tests/aistock_validation/bugs/20260827_BUG-1213-code-intelligence-refresh-runs-on-every-main-push-and-depends-on-remote.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -34,12 +35,14 @@
     "changed_files": [
       ".github/workflows/code-intelligence-refresh.yml",
       "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_code_intelligence_adapter.py",
       "scripts/ci_workflow_policy_scan.py"
     ],
     "ownership": {
       "changed_files": [
         ".github/workflows/code-intelligence-refresh.yml",
         "backend/tests/scripts/test_ci_change_classifier.py",
+        "backend/tests/scripts/test_code_intelligence_adapter.py",
         "scripts/ci_workflow_policy_scan.py"
       ],
       "impacted_modules": [
@@ -73,6 +76,19 @@
           "rule_id": "dev_quality_tooling"
         },
         {
+          "file": "backend/tests/scripts/test_code_intelligence_adapter.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
           "file": "scripts/ci_workflow_policy_scan.py",
           "impact_modules": [],
           "primary_module": "scripts",
@@ -87,6 +103,7 @@
       "suggested_scope": [
         ".github/workflows/code-intelligence-refresh.yml",
         "backend/tests/scripts/test_ci_change_classifier.py",
+        "backend/tests/scripts/test_code_intelligence_adapter.py",
         "scripts/ci_workflow_policy_scan.py"
       ],
       "unmatched_files": []
@@ -95,6 +112,7 @@
     "scope_files": [
       ".github/workflows/code-intelligence-refresh.yml",
       "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_code_intelligence_adapter.py",
       "scripts/ci_workflow_policy_scan.py"
     ]
   },
