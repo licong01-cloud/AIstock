@@ -15195,7 +15195,13 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
     return completed
 
 
-def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
+def _merge_pr_if_ready_for_bug(
+    bug_id: str,
+    pr_url: str,
+    *,
+    required_check_attempts: int = 6,
+    required_check_delay_seconds: int = 10,
+) -> dict[str, Any]:
     payload, view_fallback = _merge_pr_view_with_transport_fallback(pr_url, bug_id=bug_id)
     if payload.get("state") == "MERGED":
         result = {"already_merged": True, "view": payload}
@@ -15206,6 +15212,8 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         pr_url,
         payload=payload,
         bug_id=bug_id,
+        attempts=required_check_attempts,
+        delay_seconds=required_check_delay_seconds,
     )
     failed = check_summary["failed"]
     pending = check_summary["pending"]
@@ -16070,7 +16078,15 @@ def _merge_close_sync_pr_if_ready(
             "next_command": f"gh pr merge {pr_url} --squash",
         }
     try:
-        result = _merge_pr_if_ready_for_bug(bug_id, pr_url)
+        # Close-sync CI normally queues behind the source merge's default-branch
+        # CodeQL run on the single Windows runner.  Keep this wait bounded, but
+        # long enough to avoid a guaranteed second manual finalizer invocation.
+        result = _merge_pr_if_ready_for_bug(
+            bug_id,
+            pr_url,
+            required_check_attempts=16,
+            required_check_delay_seconds=30,
+        )
     except WorkflowError as exc:
         return {
             "workflow_gate": "blocked",
@@ -16079,7 +16095,7 @@ def _merge_close_sync_pr_if_ready(
             "blocking": [str(exc)],
             "next_command": (
                 f"python scripts/aistock_issue_workflow.py watch-ci --bug-id {bug_id} "
-                f"--pr-url {pr_url} --attempts 6 --delay-seconds 30"
+                f"--pr-url {pr_url} --attempts 16 --delay-seconds 30"
             ),
         }
     return {
@@ -16680,14 +16696,23 @@ def build_merge_finalizer_plan(
     if root_sync_deferrals:
         payload["next_actions"].append("sync_root_after_unrelated_dirty_files_are_resolved")
         payload["next_commands"].extend(payload["root_sync_deferred"].get("next_commands") or [])
+    durable_state = (
+        "blocked"
+        if payload["workflow_gate"] == "blocked"
+        else (
+            "complete"
+            if payload["workflow_gate"] == "complete"
+            else (
+                "fixed_source_pending_user_restart"
+                if runtime_pending
+                else ("close_synced" if close_sync_persisted else "merged")
+            )
+        )
+    )
     for state_bug_id in canonical_bug_ids:
         _write_state(
             state_bug_id,
-            state=(
-                "complete"
-                if payload["workflow_gate"] == "complete"
-                else ("fixed_source_pending_user_restart" if runtime_pending else "close_synced")
-            ),
+            state=durable_state,
             pr_url=source_pr_url,
             commit=merge_commit,
             close_sync=close_sync,
@@ -16834,25 +16859,63 @@ def build_run_plan(
                 "workflow_gate": "merge_requires_explicit_flag",
                 "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} --mode merge --pr-url {pr_url} --merge",
             }
+        merge_evidence = flow._unique_strings(
+            [str(item).strip() for item in validation_evidence if str(item).strip()]
+        )
+        if not merge_evidence:
+            durable_state = _load_state(canonical_bug_id, REPO_ROOT) or {}
+            durable_errors = flow._as_list(durable_state.get("validation_evidence_errors"))
+            if not durable_errors:
+                merge_evidence = flow._unique_strings(
+                    [
+                        str(item).strip()
+                        for item in flow._as_list(durable_state.get("validation_evidence"))
+                        if str(item).strip()
+                    ]
+                )
+        if not merge_evidence:
+            raise WorkflowError(
+                "run --mode merge requires validated evidence before source merge; "
+                "rerun finish or pass --validation-evidence"
+            )
         merge_result = _merge_pr_if_ready_for_bug(canonical_bug_id, pr_url)
         finalizer = build_merge_finalizer_plan(
             bug_id=canonical_bug_id,
             source_pr_url=pr_url,
             source_branch=branch,
             source_worktree=worktree,
-            validation_evidence=validation_evidence,
+            validation_evidence=merge_evidence,
             issue_json=issue_json,
             allow_missing_linkage=allow_missing_linkage,
             production_gates=production_gates or _production_gates_payload(),
             sync_root=sync_root,
             merge_close_sync_pr=False,
-            cleanup=bool(branch),
+            cleanup=False,
             apply=True,
             source_pr_check=merge_result.get("verified") if isinstance(merge_result, dict) else None,
         )
+        finalizer_gate = str(finalizer.get("workflow_gate") or "blocked")
+        finalizer_blocked = finalizer_gate == "blocked"
+        close_sync_merge_gate = str(
+            (finalizer.get("close_sync_pr_merge") or {}).get("workflow_gate") or ""
+        )
+        close_sync_is_merged = close_sync_merge_gate in {"merged", "already_merged"}
+        if finalizer_blocked:
+            wrapper_gate = "merged_aftercare_blocked"
+            wrapper_state = "merged"
+        elif finalizer_gate == "fixed_source_pending_user_restart":
+            wrapper_gate = "merged_runtime_verification_pending"
+            wrapper_state = "fixed_source_pending_user_restart"
+        elif close_sync_is_merged:
+            wrapper_gate = "merged_close_synced"
+            wrapper_state = "close_synced"
+        else:
+            wrapper_gate = "merged_close_sync_pr_opened"
+            wrapper_state = "merged"
+        next_actions = flow._unique_strings(flow._as_list(finalizer.get("next_actions")))
         _write_state(
             canonical_bug_id,
-            state="close_synced",
+            state=wrapper_state,
             pr_url=pr_url,
             commit=finalizer.get("source_merge_commit"),
             merge=merge_result,
@@ -16860,19 +16923,21 @@ def build_run_plan(
             close_sync=finalizer.get("close_sync"),
             close_sync_commit=finalizer.get("close_sync_commit"),
             cleanup_plan=finalizer.get("cleanup"),
-            next_actions=["merge_close_sync_pr_when_ready", "run_cleanup_after_merge_apply_when_ready"],
+            next_actions=next_actions,
         )
         return {
             "schema_version": "aistock_issue_workflow_run_v1",
             "generated_at": _utc_now(),
             "bug_id": canonical_bug_id,
             "mode": mode,
-            "workflow_gate": "merged_close_synced",
+            "workflow_gate": wrapper_gate,
+            "blocking": flow._as_list(finalizer.get("blocking")) if finalizer_blocked else [],
             "merge": merge_result,
             "finalizer": finalizer,
             "close_sync": finalizer.get("close_sync"),
             "close_sync_commit": finalizer.get("close_sync_commit"),
             "cleanup": finalizer.get("cleanup"),
+            "next_actions": next_actions,
         }
     raise WorkflowError(f"Unsupported run mode for Phase 1: {mode}")
 
