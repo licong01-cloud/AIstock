@@ -157,6 +157,7 @@ def build_contract_evidence(
     test_text = workflow_text.get("test.yml", "")
     pr_quality_text = workflow_text.get("pr-quality.yml", "")
     nightly_text = workflow_text.get("nightly.yml", "")
+    code_intelligence_refresh_text = workflow_text.get("code-intelligence-refresh.yml", "")
     nox_text = nox_path.read_text(encoding="utf-8") if nox_path.exists() else ""
     classifier_text = classifier_path.read_text(encoding="utf-8") if classifier_path.exists() else ""
     environment_verify_text = (
@@ -224,6 +225,15 @@ def build_contract_evidence(
             and workflow_text.get("codeql.yml", "").count("update-ref -d $cacheRef") == 2
             and workflow_text.get("codeql.yml", "").count('$env:GIT_CONFIG_KEY_0 = "core.longpaths"') == 2
             and "git -C $source fetch --no-tags --depth=1" not in workflow_text.get("codeql.yml", "")
+        ),
+        "code_intelligence_refresh_is_scheduled_or_manual_only": (
+            "schedule:" in code_intelligence_refresh_text
+            and "workflow_dispatch:" in code_intelligence_refresh_text
+            and not re.search(r"(?m)^\s{2}push:\s*$", code_intelligence_refresh_text)
+        ),
+        "code_intelligence_refresh_has_no_external_artifact_action_dependency": (
+            "actions/upload-artifact@" not in code_intelligence_refresh_text
+            and "actions/download-artifact@" not in code_intelligence_refresh_text
         ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
         and "The failed job logs are the authoritative PR evidence" in test_text,
