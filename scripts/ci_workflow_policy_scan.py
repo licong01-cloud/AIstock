@@ -24,7 +24,14 @@ WINDOWS_PR_WORKFLOWS = {
     "semgrep.yml",
     "dependency-update-validate.yml",
 }
-SUPERSEDED_RUN_WORKFLOWS = {"test.yml", "pr-quality.yml", "codeql.yml", "semgrep.yml"}
+SUPERSEDED_RUN_WORKFLOWS = {
+    "test.yml",
+    "pr-quality.yml",
+    "codeql.yml",
+    "semgrep.yml",
+    "dependency-update-validate.yml",
+}
+BASE_FETCH_RETRY_WORKFLOWS = {"test.yml", "codeql.yml", "semgrep.yml", "dependency-update-validate.yml"}
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
     r"|\bnpm\s+(?:ci|install)\b"
@@ -174,6 +181,10 @@ def build_contract_evidence(
             and "cancel-in-progress: true" in workflow_text.get(name, "")
             and "github.event.pull_request.number" in workflow_text.get(name, "")
             for name in SUPERSEDED_RUN_WORKFLOWS
+        ),
+        "bounded_pr_base_fetch_retry": all(
+            "base fetch failed after 3 attempts" in workflow_text.get(name, "")
+            for name in BASE_FETCH_RETRY_WORKFLOWS
         ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
         and "The failed job logs are the authoritative PR evidence" in test_text,

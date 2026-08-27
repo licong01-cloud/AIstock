@@ -42,7 +42,16 @@ jobs:
           if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
           else
-            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"; then
+                break
+              fi
+              if [[ "${attempt}" == "3" ]]; then
+                echo "base fetch failed after 3 attempts" >&2
+                exit 1
+              fi
+              sleep $((attempt * 2))
+            done
           fi
 
       - name: Verify prebuilt AIstock-CI and Semgrep tooling

@@ -8,6 +8,7 @@
     ".github/workflows/pr-quality.yml",
     ".github/workflows/codeql.yml",
     ".github/workflows/semgrep.yml",
+    ".github/workflows/dependency-update-validate.yml",
     ".github/workflows/nightly.yml",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
     "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
