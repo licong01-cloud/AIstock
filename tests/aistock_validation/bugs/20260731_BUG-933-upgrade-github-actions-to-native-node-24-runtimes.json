@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-933",
-  "closed_at": null,
+  "closed_at": "2026-08-27T17:00:10Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -73,83 +73,129 @@
       "matched_rules": [
         {
           "file": ".github/workflows/code-intelligence-refresh.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": ".github/workflows/codeql.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": ".github/workflows/dependency-update-validate.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": ".github/workflows/issue-auto-link.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": ".github/workflows/issue-on-guardrail-fail.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": ".github/workflows/issue-on-test-fail.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": ".github/workflows/nightly.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": ".github/workflows/pr-quality.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": ".github/workflows/semgrep.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": ".github/workflows/test.yml",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         },
         {
           "file": "backend/tests/scripts/test_ci_change_classifier.py",
-          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "impact_modules": [
+            "platform.config",
+            "validation.center",
+            "validation.runner"
+          ],
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
         }
       ],
-      "risk_levels": ["high"],
+      "risk_levels": [
+        "high"
+      ],
       "suggested_scope": [
         ".github/workflows/code-intelligence-refresh.yml",
         ".github/workflows/codeql.yml",
@@ -182,8 +228,8 @@
   },
   "first_seen_at": "2026-07-31T02:11:25.075675Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9d81d8b4cce26c1fdc66794c56dfb83fb34c2b3f",
+  "fixed_at": "2026-08-27T17:00:10Z",
   "github_issue_number": 2965,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2965",
   "last_seen_at": "2026-07-31T02:11:25.075675Z",
@@ -191,6 +237,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3842",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -200,9 +247,38 @@
     "validation_center_backend"
   ],
   "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required"
+  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-933",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "395303402d65e5f8",
+    "recorded_at": "2026-08-27T17:02:28.028195Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "44aeb1e4416953ffb1981beabeba4e3ef04cf62d",
+    "source_merge_commit": "9d81d8b4cce26c1fdc66794c56dfb83fb34c2b3f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3842",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider -> 67 passed",
+      "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed, blocking=0, 10/10 mapped"
+    ],
+    "validation_evidence_digest": "38f0b331a36053a16c3814cc0e5e81cb078369513085413457ec981e7064e2be"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -211,6 +287,11 @@
     "fingerprint": "8bcac944de84567684993c5a",
     "source_event_id": "FE-20260731-8bcac944de84"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider -> 67 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed, blocking=0, 10/10 mapped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
