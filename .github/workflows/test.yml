@@ -21,7 +21,10 @@ env:
 
 permissions:
   contents: read
-  pull-requests: write
+
+concurrency:
+  group: aistock-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   classify-changes:
@@ -476,87 +479,6 @@ jobs:
           path: tmp/validation/llm_prompt_evaluation/
           if-no-files-found: error
 
-  failure-bug-register:
-    name: Publish PR CI failure evidence
-    # Diagnostics must never replace the deterministic test verdict. Preserve
-    # logs/artifacts/comments when possible, but tolerate publisher failures.
-    continue-on-error: true
-    needs: [classify-changes, backend-tests, workflow-validation-tests, prompt-evaluation]
-    # Keep this job green/no-op when targeted tests pass or are intentionally
-    # skipped. PR failures retain compact evidence without creating a second
-    # Issue alongside the default-branch failure workflow.
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure') }}
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Download classifier receipt and failure-summary tool
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: ci-change-classifier
-
-      - name: Verify prebuilt AIstock-CI environment
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        shell: powershell
-        env:
-          AISTOCK_CI_ENV_NAME: AIstock-CI
-        run: python scripts/ci_environment_verify.py
-
-      - name: Build CI failure evidence
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          mkdir -p tmp/validation/ci_failure_issue
-          python scripts/ci_failure_issue_summary.py \
-            --repo "${{ github.repository }}" \
-            --run-id "${{ github.run_id }}" \
-            --run-url "${RUN_URL}" \
-            --severity "P1" \
-            --source-name "AIstock CI" \
-            --branch "${{ github.head_ref || github.ref_name }}" \
-            --commit "${{ github.sha }}" \
-            --log-attempts 3 \
-            --log-wait-seconds 10 \
-            --output tmp/validation/ci_failure_issue/summary.json \
-            --markdown-output tmp/validation/ci_failure_issue/body.md \
-            --context-output tmp/validation/ci_failure_issue/context-pack.json \
-            --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md
-
-      - name: Upload CI failure evidence
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr-ci-failure-issue-context
-          path: tmp/validation/ci_failure_issue/
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Comment PR with CI failure evidence
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const routingBody = [
-              '### CI failure evidence is available',
-              '',
-              'One or more targeted CI jobs failed on this PR.',
-              '',
-              'Inspect the `pr-ci-failure-issue-context` artifact. Failed default-branch runs are registered only by the `Issue On Test Fail` workflow.',
-            ].join('\n');
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: context.issue.number,
-              body: routingBody,
-            });
-
   ci-verdict:
     name: CI verdict
     needs:
@@ -610,6 +532,13 @@ jobs:
             failures+=("dev_db=external_DEV_validation_required:${DEV_DB_PLANS}")
           fi
           if (( ${#failures[@]} > 0 )); then
+            {
+              echo "### CI verdict failed"
+              echo
+              printf -- '- `%s`\n' "${failures[@]}"
+              echo
+              echo "The failed job logs are the authoritative PR evidence; no separate publisher job or action download is required."
+            } >> "${GITHUB_STEP_SUMMARY}"
             printf 'CI verdict failed: %s\n' "${failures[*]}" >&2
             exit 1
           fi

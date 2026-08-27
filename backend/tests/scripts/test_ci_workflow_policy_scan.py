@@ -77,6 +77,8 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert all(evidence.values())
     assert "nox_ci_install_fail_closed_guard" in evidence
     assert "pr_quality_no_external_report_action_dependency" in evidence
+    assert "superseded_pr_runs_cancel_in_progress" in evidence
+    assert "pr_ci_no_separate_failure_publisher_job" in evidence
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
 
 

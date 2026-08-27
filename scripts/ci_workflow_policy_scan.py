@@ -24,6 +24,7 @@ WINDOWS_PR_WORKFLOWS = {
     "semgrep.yml",
     "dependency-update-validate.yml",
 }
+SUPERSEDED_RUN_WORKFLOWS = {"test.yml", "pr-quality.yml", "codeql.yml", "semgrep.yml"}
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
     r"|\bnpm\s+(?:ci|install)\b"
@@ -168,6 +169,14 @@ def build_contract_evidence(
         and all("shell: bash" in text.casefold() for text in pr_texts),
         "pr_quality_no_external_report_action_dependency": "actions/upload-artifact@" not in pr_quality_text
         and "actions/github-script@" not in pr_quality_text,
+        "superseded_pr_runs_cancel_in_progress": all(
+            "concurrency:" in workflow_text.get(name, "")
+            and "cancel-in-progress: true" in workflow_text.get(name, "")
+            and "github.event.pull_request.number" in workflow_text.get(name, "")
+            for name in SUPERSEDED_RUN_WORKFLOWS
+        ),
+        "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
+        and "The failed job logs are the authoritative PR evidence" in test_text,
         "no_workflow_services": "CI workflow services are prohibited; use the existing DEV database lane" not in reasons,
         "no_postgres_or_timescaledb_container_creation": "creating a postgres/timescale container is prohibited in CI" not in reasons
         and "disposable postgres/timescale image is prohibited in CI" not in reasons,
