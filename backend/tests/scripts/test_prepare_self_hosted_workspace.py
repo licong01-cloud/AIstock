@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,18 @@ def _git(repo: Path, *args: str) -> str:
     )
     assert proc.returncode == 0, proc.stderr or proc.stdout
     return proc.stdout.strip()
+
+
+def test_clear_directory_removes_readonly_git_object_tree(tmp_path: Path) -> None:
+    destination = tmp_path / "runner" / "_work" / "AIstock" / "AIstock"
+    readonly_object = destination / ".git" / "objects" / "21" / ("9" * 40)
+    readonly_object.parent.mkdir(parents=True)
+    readonly_object.write_bytes(b"git object")
+    readonly_object.chmod(stat.S_IREAD)
+
+    prepare._clear_directory(destination)
+
+    assert list(destination.iterdir()) == []
 
 
 def test_prepare_workspace_clones_local_source_without_root_worktree_writes(tmp_path: Path, monkeypatch) -> None:

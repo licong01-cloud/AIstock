@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -128,15 +130,42 @@ def _append_github_env(env_file: Path | None, *, key: str, value: str) -> bool:
     return True
 
 
+def _is_permission_error(exc: BaseException) -> bool:
+    return isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 5 or getattr(exc, "errno", None) in {
+        errno.EACCES,
+        errno.EPERM,
+    }
+
+
+def _clear_readonly_and_retry(func: Any, path: str, exc_info: Any) -> None:
+    """Retry one failed rmtree operation after clearing a read-only attribute."""
+    error = exc_info[1] if isinstance(exc_info, tuple) and len(exc_info) > 1 else None
+    if error is not None and not _is_permission_error(error):
+        raise error
+    os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+    func(path)
+
+
+def _unlink_child(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError as exc:
+        if not _is_permission_error(exc):
+            raise
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        path.unlink()
+
+
 def _clear_directory(path: Path) -> None:
+    """Clear only the validated disposable destination, tolerating read-only files."""
     path.mkdir(parents=True, exist_ok=True)
     for child in path.iterdir():
         if child.name in {".", ".."}:
             continue
         if child.is_dir() and not child.is_symlink():
-            shutil.rmtree(child)
+            shutil.rmtree(child, onerror=_clear_readonly_and_retry)
         else:
-            child.unlink()
+            _unlink_child(child)
 
 
 def _validate_destination(dest: Path, source: Path, *, allow_any_dest: bool) -> None:
