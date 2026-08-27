@@ -80,7 +80,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Check self-hosted runner availability
         env:
@@ -106,7 +106,7 @@ jobs:
 
       - name: Upload runner health evidence
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: runner-health-${{ github.run_id }}
           path: tmp/validation/runner_health/
@@ -337,7 +337,7 @@ jobs:
         id: upload_nightly_l3
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-l3-results-${{ github.run_id }}
           path: tmp/validation/nightly_l3/
@@ -346,7 +346,7 @@ jobs:
 
       - name: Retry Nightly L3 session results upload
         if: always() && steps.upload_nightly_l3.outcome == 'failure'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-l3-results-${{ github.run_id }}
           path: tmp/validation/nightly_l3/
@@ -911,7 +911,7 @@ jobs:
 
       - name: Upload code intelligence artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: code-intelligence-${{ github.run_id }}
           path: tmp/validation/code-intelligence/${{ github.run_id }}/
@@ -930,11 +930,11 @@ jobs:
       actions: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download code intelligence refs
         if: always()
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: code-intelligence-${{ github.run_id }}
           path: tmp/validation/code-intelligence/${{ github.run_id }}
@@ -942,7 +942,7 @@ jobs:
 
       - name: Download Nightly L3 session results
         if: always()
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nightly-l3-results-${{ github.run_id }}
           path: tmp/validation/nightly_l3/
@@ -1072,7 +1072,7 @@ jobs:
 
       - name: Upload Nightly failure issue context
         if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-failure-issue-context
           path: tmp/validation/nightly_failure_issue/
@@ -1081,7 +1081,7 @@ jobs:
 
       - name: Auto-register failure as actionable GitHub Issue
         if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -1285,7 +1285,7 @@ jobs:
 
       - name: Upload Nightly BUG promotion context
         if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-bug-promotion-${{ github.run_id }}
           path: |
@@ -1306,7 +1306,7 @@ jobs:
 
       - name: Upload summary
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-summary-${{ github.run_id }}
           path: tmp/validation/nightly_summary/
