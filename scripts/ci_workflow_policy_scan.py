@@ -220,6 +220,10 @@ def build_contract_evidence(
             workflow_text.get("codeql.yml", "").count("Prepare exact local workspace (no remote actions)") == 2
             and workflow_text.get("codeql.yml", "").count("--no-write-fetch-head") == 2
             and workflow_text.get("codeql.yml", "").count("exact workspace source fetch failed after 3 attempts") == 2
+            and workflow_text.get("codeql.yml", "").count("refs/aistock-ci/codeql-") == 2
+            and workflow_text.get("codeql.yml", "").count("update-ref -d $cacheRef") == 2
+            and workflow_text.get("codeql.yml", "").count('$env:GIT_CONFIG_KEY_0 = "core.longpaths"') == 2
+            and "git -C $source fetch --no-tags --depth=1" not in workflow_text.get("codeql.yml", "")
         ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
         and "The failed job logs are the authoritative PR evidence" in test_text,

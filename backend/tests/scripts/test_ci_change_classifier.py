@@ -1376,7 +1376,11 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert "LANGUAGES='[]'" in detect_step["run"]
     assert len(prepare_steps) == 2
     assert all("--no-write-fetch-head" in step["run"] for step in prepare_steps)
+    assert all("--depth=1" not in step["run"] for step in prepare_steps)
     assert all(step["run"].count("rev-parse --verify --quiet") == 2 for step in prepare_steps)
+    assert all("refs/aistock-ci/codeql-" in step["run"] for step in prepare_steps)
+    assert all("update-ref -d $cacheRef" in step["run"] for step in prepare_steps)
+    assert all('$env:GIT_CONFIG_KEY_0 = "core.longpaths"' in step["run"] for step in prepare_steps)
     assert all("refs/pull/$env:PR_NUMBER/merge" in step["run"] for step in prepare_steps)
     assert all("exact workspace source fetch failed after 3 attempts" in step["run"] for step in prepare_steps)
     assert all("scripts/ci/prepare_self_hosted_workspace.py" in step["run"] for step in prepare_steps)
