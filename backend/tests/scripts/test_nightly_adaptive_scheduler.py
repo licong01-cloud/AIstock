@@ -431,7 +431,11 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "--fail-on-blocked" in workflow
     assert 'git cat-file -e "$watermark^{commit}"' in workflow
     assert "using explicit full-run fallback" in workflow
-    assert "foreach ($session in $plan.selected_sessions)" in workflow
+    assert "scripts/nightly_session_runner.py" in workflow
+    assert '--plan "$outDir/execution-plan.json"' in workflow
+    assert "--session-timeout-seconds 1200" in workflow
+    assert "--total-timeout-seconds 6300" in workflow
+    assert "foreach ($session in $plan.selected_sessions)" not in workflow
     assert "nox -s paper_v2_l3" not in workflow
     assert "id: upload_nightly_l3" in workflow
     assert "steps.upload_nightly_l3.outcome == 'failure'" in workflow
