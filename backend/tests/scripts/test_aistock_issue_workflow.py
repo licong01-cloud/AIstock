@@ -9532,7 +9532,8 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     assert payload["timing_summary"]["event_count"] == 2
     assert payload["timing_summary"]["known_duration_seconds"] == 2.5
     assert payload["flow_overhead_estimate"]["context_estimated_tokens"] == 20
-    assert payload["h6_summary"]["top_phase"]["phase"] == "gh_pr_create"
+    assert payload["h6_summary"]["top_phase"]["phase"] == "context_ready"
+    assert payload["h6_summary"]["top_phase"]["inferred_seconds"] == 5.0
     assert payload["phase_cost_table"]
     assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
     assert payload["code_intelligence_efficiency"]["broad_scan_avoided"] is True
