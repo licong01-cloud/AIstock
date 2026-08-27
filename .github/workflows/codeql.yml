@@ -136,6 +136,7 @@ jobs:
         run: python scripts/ci_environment_verify.py
 
       - name: Initialize CodeQL
+        timeout-minutes: 5
         uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7, default CLI 2.26.3
         with:
           languages: ${{ matrix.language }}

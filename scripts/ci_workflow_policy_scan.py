@@ -208,6 +208,10 @@ def build_contract_evidence(
             and "_work\\_tool\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
             and "prebuilt CodeQL bundle SHA-256 mismatch" in environment_verify_text
         ),
+        "codeql_init_network_stall_is_bounded": (
+            "- name: Initialize CodeQL\n        timeout-minutes: 5\n"
+            in workflow_text.get("codeql.yml", "")
+        ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
         and "The failed job logs are the authoritative PR evidence" in test_text,
         "pr_ci_no_external_artifact_action_dependency": "actions/upload-artifact@" not in test_text
