@@ -369,7 +369,7 @@
       "production_frontend_dependency_gate": "noop"
     },
     "receipt_id": "c654fc1c979f2569",
-    "recorded_at": "2026-08-27T08:35:06.969126Z",
+    "recorded_at": "2026-08-27T08:38:59.276157Z",
     "runtime_contract_digest": "35343b440d535d28f7adbce288e2e1d37ea1e1f424e81752b78268fe3eac22d5",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
