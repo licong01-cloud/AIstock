@@ -171,6 +171,8 @@ def test_frontend_node_modules_install_runs_only_when_playwright_missing(
     caller_cwd.mkdir()
     monkeypatch.chdir(caller_cwd)
     monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("AISTOCK_CI_INSTALL_FORBIDDEN", raising=False)
     calls: list[tuple[tuple[str, ...], Path, dict[str, object]]] = []
 
     class DummySession:
