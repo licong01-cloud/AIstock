@@ -1098,19 +1098,9 @@ def test_open_source_tooling_configs_are_parseable() -> None:
 def test_semgrep_runs_only_in_dedicated_changed_file_workflow() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
-    setup_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict) and str(step.get("uses") or "").startswith("actions/setup-python")
-    ]
-    assert setup_steps[0]["with"]["cache-dependency-path"] == ".github/requirements/pr-quality.txt"
-
-    install_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict) and str(step.get("name") or "") == "Install quality tooling"
-    ]
-    assert "python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt" in str(install_steps[0]["run"])
+    assert any(step.get("name") == "Verify prebuilt AIstock-CI tooling" for step in steps)
+    assert not any("setup-python" in str(step.get("uses") or "") for step in steps)
+    assert not any("pip install" in str(step.get("run") or "") for step in steps)
 
     semgrep_steps = [
         step
@@ -1182,19 +1172,9 @@ def test_pr_quality_workflow_truncates_oversized_comment() -> None:
 def test_standalone_semgrep_scans_changed_files_only() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["semgrep"]["steps"]
-    setup_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict) and str(step.get("uses") or "").startswith("actions/setup-python")
-    ]
-    assert setup_steps[0]["with"]["cache-dependency-path"] == ".github/requirements/semgrep.txt"
-
-    install_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict) and str(step.get("name") or "") == "Install Semgrep"
-    ]
-    assert "python -m pip install --prefer-binary -r .github/requirements/semgrep.txt" in str(install_steps[0]["run"])
+    assert any(step.get("name") == "Verify prebuilt AIstock-CI and Semgrep tooling" for step in steps)
+    assert not any("setup-python" in str(step.get("uses") or "") for step in steps)
+    assert not any("pip install" in str(step.get("run") or "") for step in steps)
 
     semgrep_steps = [
         step
@@ -1231,10 +1211,10 @@ def test_dependency_update_validate_covers_github_tooling_requirements() -> None
     assert "python scripts/validate_changed_requirements.py" in runs
     assert '--base-commit "${{ steps.changes.outputs.base_commit }}"' in runs
     assert '--head-commit "${{ steps.changes.outputs.head_commit }}"' in runs
-    assert 'python -m pip install --dry-run -r "$changed" -c "$constraints"' in runs
-    assert 'python -m pip install --dry-run -r "$file"' not in runs
-    assert "python -m pip install --dry-run ." in runs
-    assert "npm ci" in runs
-    assert "npx tsc --noEmit" in runs
+    assert "python -m pip check" in runs
+    assert "pip install" not in runs
+    assert "python -m pip install --dry-run ." not in runs
+    assert "npm ci" not in runs
+    assert "node_modules/.bin/tsc --noEmit" in runs
     assert "npm run lint" in runs
     assert 'python -m nox -s l0 -- "${changed_files[@]}"' in runs

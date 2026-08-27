@@ -6,12 +6,18 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 DEFAULT_CATALOG = Path("docs/standards/aistock_development_standard_v1.5_20260523.yaml")
@@ -282,6 +288,51 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
                                 )
                             )
                             break
+    return findings
+
+
+def scan_ci_workflow_policy(files: Iterable[Path], root: Path) -> list[Finding]:
+    """Adapt the stdlib workflow denylist into normal guardrail findings."""
+    from scripts.ci_workflow_policy_scan import scan_workflow_text
+
+    findings: list[Finding] = []
+    for file_path in files:
+        path_key = _path_key(file_path, root)
+        if not path_key.startswith(".github/workflows/"):
+            continue
+        for item in scan_workflow_text(file_path.read_text(encoding="utf-8", errors="ignore"), path_key):
+            database_violation = any(
+                token in item["reason"]
+                for token in ("database", "postgres", "timescale", "services", "container")
+            )
+            rule_id = "CI-DATABASE-SAFETY-001" if database_violation else "CI-ENVIRONMENT-PARITY-001"
+            title = (
+                "CI workflow must not create an independent database service"
+                if database_violation
+                else "CI workflow must use prebuilt Windows tooling without installation"
+            )
+            remediation = (
+                "Route database validation to the existing DEV database; do not declare services or start a database container."
+                if database_violation
+                else "Use the prebuilt Windows AIstock-CI runner and remove setup or dependency installation commands."
+            )
+            fingerprint = hashlib.sha256(
+                f"{rule_id}:{path_key}:{item['line']}".encode("utf-8")
+            ).hexdigest()[:16]
+            findings.append(
+                Finding(
+                    rule_id=rule_id,
+                    title=title,
+                    severity="P0",
+                    category="ci_workflow",
+                    file=path_key,
+                    line=int(item["line"]),
+                    message=item["reason"],
+                    remediation=remediation,
+                    baseline_policy="block_new_only",
+                    fingerprint=fingerprint,
+                )
+            )
     return findings
 
 
@@ -696,6 +747,7 @@ def main() -> int:
 
     files = iter_files(candidate_paths, root=root, suffixes=suffixes, skip_parts=skip_parts)
     findings = scan_files(files, rules=rules, root=root)
+    findings.extend(scan_ci_workflow_policy(files, root))
     if args.changed_only or args.staged_only:
         findings = filter_findings_to_changed_lines(
             findings,

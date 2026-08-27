@@ -131,8 +131,25 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
         repo_root=tmp_path,
     )
 
-    assert advisory_payload["classification"] == "targeted_ci_required"
-    assert advisory_payload["backend_sessions"] == ["advisory_dev_input_onboarding_backend"]
+    assert advisory_payload["classification"] == "dev_db_validation_required"
+    assert advisory_payload["backend_required"] is False
+    assert advisory_payload["backend_sessions"] == []
+    assert advisory_payload["dev_db_required"] is True
+    assert advisory_payload["dev_db_plan_keys"] == ["advisory_dev_input_onboarding_backend"]
+    assert advisory_payload["runner_kind"] == "windows_ai_stock_ci"
+    assert advisory_payload["environment_fingerprint_ref"] == "AIstock-CI"
+    assert advisory_payload["install_forbidden"] is True
+    advisory_routing = next(
+        item for item in advisory_payload["plan_routing"]
+        if item["plan_key"] == "advisory_dev_input_onboarding_backend"
+    )
+    assert advisory_routing == {
+        "plan_key": "advisory_dev_input_onboarding_backend",
+        "runner_kind": "windows_ai_stock_ci",
+        "requires_dev_db": True,
+        "environment_fingerprint_ref": "AIstock-CI",
+        "install_forbidden": True,
+    }
     assert advisory_payload["unmapped_code_files"] == []
 
     payload = classifier.classify_changed_files(
@@ -570,6 +587,22 @@ def test_workflow_fast_contract_test_has_direct_self_mapping(tmp_path: Path) -> 
     assert payload["workflow_test_targets"] == [
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ]
+
+
+def test_ci_environment_and_policy_scripts_use_direct_workflow_tests(tmp_path: Path) -> None:
+    expected = {
+        "scripts/ci_environment_verify.py": "backend/tests/scripts/test_ci_environment_verify.py",
+        "scripts/ci_workflow_policy_scan.py": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    }
+
+    for source, test_target in expected.items():
+        payload = classifier.classify_changed_files([source], repo_root=tmp_path)
+
+        assert payload["classification"] == "workflow_validation_only"
+        assert payload["workflow_gate"] == "passed"
+        assert payload["backend_required"] is False
+        assert payload["unmapped_code_files"] == []
+        assert payload["workflow_test_targets"] == [test_target]
 
 
 def test_validation_ui_target_contract_uses_catalog_gate_only(tmp_path: Path) -> None:
@@ -1062,6 +1095,21 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert jobs["classify-changes"]["outputs"]["backend_sessions"].endswith(
         "steps.classify.outputs.backend_sessions }}"
     )
+    assert jobs["classify-changes"]["outputs"]["dev_db_required"].endswith(
+        "steps.classify.outputs.dev_db_required }}"
+    )
+    assert jobs["classify-changes"]["outputs"]["dev_db_plan_keys"].endswith(
+        "steps.classify.outputs.dev_db_plan_keys }}"
+    )
+    assert jobs["classify-changes"]["outputs"]["runner_kind"].endswith(
+        "steps.classify.outputs.runner_kind }}"
+    )
+    assert jobs["classify-changes"]["outputs"]["environment_fingerprint_ref"].endswith(
+        "steps.classify.outputs.environment_fingerprint_ref }}"
+    )
+    assert jobs["classify-changes"]["outputs"]["install_forbidden"].endswith(
+        "steps.classify.outputs.install_forbidden }}"
+    )
     assert jobs["classify-changes"]["outputs"]["frontend_required"].endswith(
         "steps.classify.outputs.frontend_required }}"
     )
@@ -1087,9 +1135,9 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "backend/tests/scripts/test_llm_provider_adapter.py \\" not in workflow_runs
     assert jobs["frontend-quality"]["if"] == "needs.classify-changes.outputs.frontend_required == 'true'"
     frontend_runs = "\n".join(str(step.get("run", "")) for step in jobs["frontend-quality"]["steps"])
-    assert "npm exec tsc" in frontend_runs
+    assert "node_modules/.bin/tsc" in frontend_runs
     assert "npm run lint" in frontend_runs
-    assert "npx playwright install --with-deps chromium" in frontend_runs
+    assert "npx playwright install --with-deps chromium" not in frontend_runs
     assert "FRONTEND_TEST_TARGETS" in frontend_runs
     assert 'npm run test:e2e -- "${module_test_targets[@]}"' in frontend_runs
     assert jobs["tdx-go-tests"]["if"] == "needs.classify-changes.outputs.go_required == 'true'"
@@ -1103,17 +1151,19 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
 
 
-def test_github_backend_dependency_surface_installs_pinned_runtime_dependencies() -> None:
+def test_github_backend_lane_uses_prebuilt_windows_environment_without_database_service_or_install() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["backend-tests"]["steps"]
-    install = next(
-        step for step in steps if step.get("name") == "Install backend deps via venv (no conda on hosted runners)"
-    )
-
-    assert "hmmlearn==0.3.3" in str(install["run"])
-    assert "mcp[cli]==1.25.0" in str(install["run"])
+    backend = workflow["jobs"]["backend-tests"]
+    assert backend["runs-on"] == ["self-hosted", "Windows", "aistock-ci"]
+    assert "services" not in backend
+    steps = backend["steps"]
+    assert any(step.get("name") == "Verify AIstock-CI environment" for step in steps)
+    runs = "\n".join(str(step.get("run", "")) for step in steps)
+    assert "pip install" not in runs
+    assert "conda install" not in runs
+    assert "scripts/ci_environment_verify.py" in runs
 
 
 def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
@@ -1151,6 +1201,7 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     registrar = jobs["failure-bug-register"]
     assert registrar["continue-on-error"] is True
     assert set(registrar["needs"]) == {
+        "classify-changes",
         "backend-tests",
         "workflow-validation-tests",
         "prompt-evaluation",
@@ -1162,8 +1213,7 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert not any(step.get("name") == "No targeted CI failure evidence required" for step in registrar["steps"])
 
     classify_steps = jobs["classify-changes"]["steps"]
-    install = next(step for step in classify_steps if step.get("name") == "Install change-classifier dependency")
-    assert "pyyaml" in install["run"]
+    assert any(step.get("name") == "Classify CI lane" for step in classify_steps)
 
 
 def test_static_gate_uses_registry_metadata_fast_lane() -> None:
@@ -1344,7 +1394,7 @@ def test_semgrep_uses_registry_sync_fast_lane() -> None:
     assert "registry_sync == '1'" in str(no_op["if"])
 
 
-def test_classifier_dependency_is_installed_before_detection() -> None:
+def test_classifier_uses_prebuilt_tooling_without_install_steps() -> None:
     import yaml
 
     workflows = {
@@ -1356,12 +1406,11 @@ def test_classifier_dependency_is_installed_before_detection() -> None:
     for path, (job_name, detect_name) in workflows.items():
         workflow = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         steps = workflow["jobs"][job_name]["steps"]
-        install_index = next(
-            index for index, step in enumerate(steps) if step.get("name") == "Install change-classifier dependency"
-        )
-        detect_index = next(index for index, step in enumerate(steps) if step.get("name") == detect_name)
-        assert install_index < detect_index
-        assert "pyyaml" in steps[install_index]["run"].lower()
+        runs = "\n".join(str(step.get("run", "")) for step in steps)
+        uses = "\n".join(str(step.get("uses", "")) for step in steps)
+        assert "pip install" not in runs
+        assert "setup-python" not in uses
+        assert any(step.get("name") == detect_name for step in steps)
 
 
 def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:

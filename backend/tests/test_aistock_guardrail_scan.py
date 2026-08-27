@@ -58,6 +58,33 @@ def test_catalog_loads_and_compiles_regex_rules() -> None:
     assert rules_by_id["DOC-LOCATION-001"].effect == "warn"
 
 
+def test_ci_workflow_policy_is_enforced_by_guardrail_scanner(tmp_path: Path) -> None:
+    scanner = _load_module()
+    workflow = tmp_path / ".github" / "workflows" / "bad.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(
+        """
+        jobs:
+          test:
+            services:
+              postgres:
+                image: postgres:16
+            steps:
+              - uses: actions/setup-python@v5
+              - run: python -m pip install pytest
+        """,
+        encoding="utf-8",
+    )
+
+    findings = scanner.scan_ci_workflow_policy([workflow], tmp_path)
+
+    assert {finding.rule_id for finding in findings} == {
+        "CI-DATABASE-SAFETY-001",
+        "CI-ENVIRONMENT-PARITY-001",
+    }
+    assert all(finding.severity == "P0" for finding in findings)
+
+
 def test_catalog_references_current_human_readable_standard() -> None:
     scanner = _load_module()
 
@@ -91,7 +118,7 @@ def test_catalog_references_current_human_readable_standard() -> None:
         assert control.get("failure_policy")
 
     controls = _unified_controls(catalog)
-    assert len(controls) == 30
+    assert len(controls) == 32
     assert set(item["control_id"] for item in catalog["manual_review_controls"]) == {
         "DESIGN-COMPLIANCE-001",
         "ISSUE-GITHUB-SYNC-001",
@@ -99,7 +126,7 @@ def test_catalog_references_current_human_readable_standard() -> None:
         "STD-SYNC-001",
     }
     effect_counts = {effect: sum(item["effect"] == effect for item in controls.values()) for effect in effects}
-    assert effect_counts == {"block": 20, "warn": 8, "advisory": 2}
+    assert effect_counts == {"block": 22, "warn": 8, "advisory": 2}
 
 
 def test_rdagent_release_identity_control_is_fail_closed() -> None:

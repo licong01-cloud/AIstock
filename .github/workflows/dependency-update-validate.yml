@@ -23,30 +23,35 @@ defaults:
 jobs:
   dependency-update-validate:
     name: Validate dependency update surface
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: [self-hosted, Windows, aistock-ci]
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Install validation tooling
+      - name: Fetch current PR base ref only
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install nox pyyaml pytest
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
+          else
+            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          fi
+
+      - name: Verify prebuilt AIstock-CI tooling
+        shell: powershell
+        run: python scripts/ci_environment_verify.py
 
       - name: Detect and select the changed dependency surface
         id: changes
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           mkdir -p tmp/validation/dependency_update
           python scripts/ci_changed_files.py \
@@ -108,11 +113,11 @@ jobs:
                   --constraints-output "$constraints" \
                   --summary-output "$summary"
                 if [[ -s "$changed" ]]; then
-                  python -m pip install --dry-run -r "$changed" -c "$constraints"
+                  python -m pip check
                 fi
                 ;;
               pyproject.toml)
-                python -m pip install --dry-run .
+                python -m pip check
                 ;;
               .github/renovate.json)
                 python -m json.tool "$file" > /dev/null
@@ -120,20 +125,15 @@ jobs:
             esac
           done < tmp/validation/dependency_update/changed-files.txt
 
-      - name: Set up Node.js 20
-        if: steps.changes.outputs.frontend == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
       - name: Validate changed frontend dependencies
         if: steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: |
-          npm ci
-          npx tsc --noEmit
+          if [ ! -d node_modules ]; then
+            echo 'frontend/node_modules is not prebuilt; dependency installation is prohibited in CI' >&2
+            exit 1
+          fi
+          ./node_modules/.bin/tsc --noEmit
           npm run lint
 
       - name: Static gate

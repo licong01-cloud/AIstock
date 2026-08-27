@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 8d86142b3bb0b393271d7e32cc674634fe46b2b50a51eed8720a8d72ad8efcf0
+source_sha256: e650f5437ba68e1755c9f175809d9c05863c88264d66ae7c3b5c5c57cc22e028
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-13"
+updated_at: "2026-08-26"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -704,6 +704,52 @@ rules:
         - close_sync_worktree_current_with_origin_main
     baseline_policy: block_issue_verified_until_post_restart_passed
     remediation: Keep the BUG fixed_source_pending_user_restart until the user restarts the catalog target and post-restart read-only identity and smoke evidence passes.
+
+  - rule_id: CI-ENVIRONMENT-PARITY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-environment-parity-001
+    title: CI uses a prebuilt Windows AIstock-CI environment and never installs project dependencies
+    severity: P0
+    category: ci_efficiency
+    enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_ci_when_prebuilt_environment_is_missing_or_drifted
+    checker:
+      type: external
+      command_key: ci_workflow_policy_scan
+      required_evidence:
+        - windows_self_hosted_runner
+        - prebuilt_aistock_ci_environment
+        - environment_fingerprint_match
+        - no_setup_actions
+        - no_dependency_install_commands
+        - no_linux_or_production_environment_fallback
+        - windows_git_bash_shell
+        - local_git_object_mirror_reuse
+    baseline_policy: block_new_and_changed_workflow
+    remediation: Provision the versioned Windows AIstock-CI runner with Git Bash and a read-only object mirror, fail closed on mismatch, and never install dependencies in the CI job.
+
+  - rule_id: CI-DATABASE-SAFETY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
+    title: CI never creates a database or service and routes database validation to the existing DEV database
+    severity: P0
+    category: ci_database_safety
+    enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_ci_database_service_or_unrouted_database_plan
+    checker:
+      type: external
+      command_key: ci_workflow_policy_scan
+      required_evidence:
+        - no_workflow_services
+        - no_postgres_or_timescaledb_container_creation
+        - classifier_dev_db_required_output
+        - existing_dev_database_lane_reference
+        - no_ci_ddl_or_dml
+        - no_sqlite_substitution_for_real_database_contract
+    baseline_policy: block_new_and_changed_workflow
+    remediation: Mark database plans as dev_db_required and run them through the existing DEV database lane; keep CI source checks database-free.
 
 manual_review_controls:
   - control_id: DESIGN-COMPLIANCE-001

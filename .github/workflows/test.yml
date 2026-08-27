@@ -6,10 +6,8 @@ on:
   push:
     branches: [main]
 
-# AIstock is a Windows-first project; runners must be Windows.
-# CI uses a venv installed from requirements.txt (no conda) so the workflow
-# stays portable to GitHub-hosted Windows runners. Local dev still uses the
-# AIstock conda env per docs/process/.
+# AIstock CI runs on pre-provisioned Windows runners. Project dependencies are
+# never installed by CI; runner images are versioned and verified instead.
 defaults:
   run:
     shell: bash
@@ -26,11 +24,17 @@ permissions:
 jobs:
   classify-changes:
     name: Classify CI changed files
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: [self-hosted, Windows, aistock-ci]
+    timeout-minutes: 10
     outputs:
       backend_required: ${{ steps.classify.outputs.backend_required }}
       backend_sessions: ${{ steps.classify.outputs.backend_sessions }}
+      dev_db_required: ${{ steps.classify.outputs.dev_db_required }}
+      dev_db_plan_keys: ${{ steps.classify.outputs.dev_db_plan_keys }}
+      runner_kind: ${{ steps.classify.outputs.runner_kind }}
+      plan_routing: ${{ steps.classify.outputs.plan_routing }}
+      environment_fingerprint_ref: ${{ steps.classify.outputs.environment_fingerprint_ref }}
+      install_forbidden: ${{ steps.classify.outputs.install_forbidden }}
       frontend_required: ${{ steps.classify.outputs.frontend_required }}
       frontend_test_targets: ${{ steps.classify.outputs.frontend_test_targets }}
       go_required: ${{ steps.classify.outputs.go_required }}
@@ -45,13 +49,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
+
+      - name: Fetch current PR base ref only
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
+          else
+            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          fi
+
+      - name: Verify prebuilt AIstock-CI environment
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Build changed-file list
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           mkdir -p tmp/validation/ci_change_classifier
           python scripts/ci_changed_files.py \
@@ -60,9 +82,6 @@ jobs:
             --base-sha "${BASE_SHA}" \
             --head-sha "${HEAD_SHA}"
           cat tmp/validation/ci_change_classifier/changed_files.txt
-
-      - name: Install change-classifier dependency
-        run: python -m pip install --disable-pip-version-check --no-input pyyaml
 
       - name: Classify CI lane
         id: classify
@@ -76,18 +95,38 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ci-change-classifier
-          path: tmp/validation/ci_change_classifier/
+          path: |
+            tmp/validation/ci_change_classifier/
+            scripts/ci_failure_issue_summary.py
           if-no-files-found: ignore
 
   static-gate:
     name: Static gate (l0 + module registry)
     needs: classify-changes
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
+
+      - name: Fetch current PR base ref only
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
+          else
+            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          fi
+
+      - name: Verify prebuilt AIstock-CI environment
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Docs-lite version record
         if: needs.classify-changes.outputs.static_gate_required == 'false'
@@ -105,19 +144,12 @@ jobs:
           } > tmp/validation/guardrails/docs-lite-version-record.md
           cat tmp/validation/guardrails/docs-lite-version-record.md
 
-      - name: Set up Python 3.12
-        if: needs.classify-changes.outputs.static_gate_required != 'false'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
       - name: Build registry changed-file list
         if: needs.classify-changes.outputs.close_sync_metadata_only == 'true'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           mkdir -p tmp/validation/bug_registry
           python scripts/ci_changed_files.py \
@@ -134,18 +166,12 @@ jobs:
             --close-sync-only \
             --output-json tmp/validation/guardrails/bug-registry-metadata.json
 
-      - name: Install nox + light deps
-        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install nox httpx pyyaml pytest
-
       - name: Build static-gate changed-file list
         if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           mkdir -p tmp/validation/guardrails
           python scripts/ci_changed_files.py \
@@ -185,18 +211,36 @@ jobs:
     name: Docs-lite version record
     needs: classify-changes
     if: needs.classify-changes.outputs.docs_lite_required == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
+    runs-on: [self-hosted, Windows, aistock-ci]
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
+
+      - name: Fetch current PR base ref only
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
+          else
+            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          fi
+
+      - name: Verify prebuilt AIstock-CI environment
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Record documentation-only change
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
           CLASSIFICATION: ${{ needs.classify-changes.outputs.classification }}
         run: |
           mkdir -p tmp/validation/docs_lite
@@ -228,82 +272,22 @@ jobs:
     name: Backend tests (${{ matrix.session }})
     needs: [classify-changes, static-gate]
     if: needs.classify-changes.outputs.backend_required != 'false'
-    # ubuntu-latest is required because GitHub-hosted Windows runners do NOT
-    # support `services:` containers (pg_isready / docker daemon are absent).
-    # All current backend nox sessions are pure Python + a postgres URL, so
-    # they run cleanly on Linux. Local developers still use Windows + conda
-    # AIstock; this CI surface is Linux-only by design.
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         session: ${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}
-    services:
-      postgres:
-        image: timescale/timescaledb:latest-pg14
-        ports: ['5433:5432']
-        env:
-          POSTGRES_USER: aistock
-          POSTGRES_PASSWORD: aistock_dev_password
-          POSTGRES_DB: aistock_dev
-        options: >-
-          --health-cmd "pg_isready -U aistock"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Install backend deps via venv (no conda on hosted runners)
-        # IMPORTANT: do NOT pip install -r requirements.txt on Linux.
-        # requirements.txt is a Windows conda export (UTF-16, contains
-        # `file:///C:/...` pins like `anaconda-anon-usage @ file:///C:/...`)
-        # that cannot resolve on ubuntu-latest. Stage 4+5 r1 round 2 fix:
-        # enumerate the actual Linux-safe dependency set required to run
-        # the backend nox sessions in this matrix, then `pip check` to
-        # fail fast if anything is missing or conflicting.
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install \
-            nox \
-            fastapi 'uvicorn[standard]' pydantic 'pydantic-settings' python-dotenv \
-            httpx 'httpx-sse' requests aiofiles openai==2.44.0 litellm==1.90.2 reportlab schedule \
-            yfinance akshare ta pywencai h5py \
-            sqlalchemy alembic psycopg2-binary 'asyncpg' \
-            pyyaml 'orjson' \
-            pytest 'pytest-cov' 'pytest-asyncio' 'pytest-mock' \
-            'mcp[cli]==1.25.0' \
-            pandas numpy scipy 'scikit-learn' hmmlearn==0.3.3 pyarrow==21.0.0 \
-            'python-dateutil' pytz \
-            'tenacity' 'cachetools' \
-            'aiosqlite'
-          python -m pip check
-
-      - name: Bootstrap disposable Watchlist test schema
-        if: matrix.session == 'watchlist_backend'
+      - name: Verify AIstock-CI environment
+        shell: powershell
         env:
-          AISTOCK_CI_DISPOSABLE_POSTGRES: '1'
-          TDX_DB_HOST: 127.0.0.1
-          TDX_DB_PORT: 5433
-          TDX_DB_NAME: aistock_dev
-          TDX_DB_USER: aistock
-          TDX_DB_PASSWORD: aistock_dev_password
-        run: python -m backend.tests.watchlist.bootstrap_disposable_schema
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: nox -s ${{ matrix.session }}
-        env:
-          TDX_DB_HOST: 127.0.0.1
-          TDX_DB_PORT: 5433
-          TDX_DB_NAME: aistock_dev
-          TDX_DB_USER: aistock
-          TDX_DB_PASSWORD: aistock_dev_password
         run: python -m nox -s ${{ matrix.session }}
 
       - name: Upload validation artifacts
@@ -320,7 +304,7 @@ jobs:
     name: Frontend quality (type + lint)
     needs: [classify-changes, static-gate]
     if: needs.classify-changes.outputs.frontend_required == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 15
     defaults:
       run:
@@ -328,25 +312,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        run: npm ci --prefer-offline --no-audit --no-fund
+      - name: Verify prebuilt frontend toolchain
+        shell: powershell
+        run: |
+          python ../scripts/ci_environment_verify.py
+          if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is not preinstalled on aistock runner' }
+          if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm is not preinstalled on aistock runner' }
+          if (-not (Test-Path -LiteralPath 'node_modules')) { throw 'frontend/node_modules is not prebuilt; dependency installation is prohibited in CI' }
 
       - name: Type-check changed frontend surface
-        run: npm exec tsc -- --noEmit --incremental false
+        run: ./node_modules/.bin/tsc --noEmit --incremental false
 
       - name: Lint frontend surface
         run: npm run lint
-
-      - name: Install Playwright Chromium
-        if: needs.classify-changes.outputs.frontend_test_targets != '[]'
-        run: npx playwright install --with-deps chromium
 
       - name: Run owning frontend module tests
         if: needs.classify-changes.outputs.frontend_test_targets != '[]'
@@ -374,7 +352,7 @@ jobs:
     name: TDX Go tests
     needs: [classify-changes, static-gate]
     if: needs.classify-changes.outputs.go_required == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 10
     defaults:
       run:
@@ -382,34 +360,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: tdx-api-main/go.mod
-          cache-dependency-path: tdx-api-main/go.sum
+      - name: Verify prebuilt AIstock-CI environment
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python ../scripts/ci_environment_verify.py
 
       - name: Run Go tests
+        env:
+          GOPROXY: off
         run: go test ./...
 
   workflow-validation-tests:
     name: Workflow validation fast lane (no user-backend process control)
     needs: [classify-changes, static-gate]
     if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Install workflow validation deps
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyyaml pytest ruff nox requests httpx
+      - name: Verify prebuilt AIstock-CI environment
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Run focused workflow validation tests
         env:
@@ -418,37 +393,58 @@ jobs:
           AISTOCK_USER_BACKEND_PROCESS_CONTROL: forbidden
         run: |
           test "${AISTOCK_USER_BACKEND_PROCESS_CONTROL}" = "forbidden"
-          python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' > workflow_test_targets.txt
+          python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' | tr -d '\r' > workflow_test_targets.txt
           mapfile -t workflow_test_targets < workflow_test_targets.txt
           python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider
+
+      - name: Enforce CI workflow policy
+        run: |
+          mkdir -p tmp/validation/ci_workflow_policy
+          python scripts/ci_workflow_policy_scan.py \
+            --output-json tmp/validation/ci_workflow_policy/receipt.json
+
+      - name: Upload CI workflow policy receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-workflow-policy
+          path: tmp/validation/ci_workflow_policy/
+          if-no-files-found: ignore
 
   prompt-evaluation:
     name: Validation LLM prompt evaluation
     needs: [classify-changes, static-gate]
     if: needs.classify-changes.outputs.prompt_evaluation_required == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Install prompt evaluation deps
+      - name: Fetch current PR base ref only
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyyaml pytest requests
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
+          else
+            git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          fi
+
+      - name: Verify prebuilt AIstock-CI environment
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Build changed-file list
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           mkdir -p tmp/validation/llm_prompt_evaluation
           python scripts/ci_changed_files.py \
@@ -483,19 +479,29 @@ jobs:
     # Diagnostics must never replace the deterministic test verdict. Preserve
     # logs/artifacts/comments when possible, but tolerate publisher failures.
     continue-on-error: true
-    needs: [backend-tests, workflow-validation-tests, prompt-evaluation]
+    needs: [classify-changes, backend-tests, workflow-validation-tests, prompt-evaluation]
     # Keep this job green/no-op when targeted tests pass or are intentionally
     # skipped. PR failures retain compact evidence without creating a second
     # Issue alongside the default-branch failure workflow.
     if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure') }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Download classifier receipt and failure-summary tool
         if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-change-classifier
+
+      - name: Verify prebuilt AIstock-CI environment
+        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Build CI failure evidence
         if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
@@ -511,7 +517,7 @@ jobs:
             --severity "P1" \
             --source-name "AIstock CI" \
             --branch "${{ github.head_ref || github.ref_name }}" \
-            --commit "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --commit "${{ github.sha }}" \
             --log-attempts 3 \
             --log-wait-seconds 10 \
             --output tmp/validation/ci_failure_issue/summary.json \
@@ -561,7 +567,7 @@ jobs:
       - workflow-validation-tests
       - prompt-evaluation
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 3
     steps:
       - name: Require every selected CI lane to pass
@@ -574,6 +580,8 @@ jobs:
           GO_RESULT: ${{ needs.tdx-go-tests.result }}
           WORKFLOW_RESULT: ${{ needs.workflow-validation-tests.result }}
           PROMPT_RESULT: ${{ needs.prompt-evaluation.result }}
+          DEV_DB_REQUIRED: ${{ needs.classify-changes.outputs.dev_db_required }}
+          DEV_DB_PLANS: ${{ needs.classify-changes.outputs.dev_db_plan_keys }}
         run: |
           failures=()
           for entry in "classify:${CLASSIFY_RESULT}" "static:${STATIC_RESULT}"; do
@@ -596,6 +604,9 @@ jobs:
               failures+=("${lane}=${result}")
             fi
           done
+          if [[ "${DEV_DB_REQUIRED}" = "true" ]]; then
+            failures+=("dev_db=external_DEV_validation_required:${DEV_DB_PLANS}")
+          fi
           if (( ${#failures[@]} > 0 )); then
             printf 'CI verdict failed: %s\n' "${failures[*]}" >&2
             exit 1

@@ -19,8 +19,8 @@ permissions:
 jobs:
   docs-lite:
     name: CodeQL fast-lane no-op
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
+    runs-on: [self-hosted, Windows, aistock-ci]
+    timeout-minutes: 20
     outputs:
       docs_lite: ${{ steps.fast_lane.outputs.docs_lite }}
       registry_sync: ${{ steps.fast_lane.outputs.registry_sync }}
@@ -29,17 +29,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
-      - name: Install change-classifier dependency
-        run: python -m pip install --disable-pip-version-check --no-input pyyaml
+      - name: Fetch current PR base ref only
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if (git cat-file -e "${env:BASE_SHA}^{commit}" 2>$null) {
+            git update-ref "refs/remotes/origin/${env:BASE_REF}" "${env:BASE_SHA}"
+          } else {
+            git fetch --no-tags --depth=1 origin "refs/heads/${env:BASE_REF}:refs/remotes/origin/${env:BASE_REF}"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Verify prebuilt AIstock-CI tooling
+        shell: powershell
+        run: python scripts/ci_environment_verify.py
 
       - name: Detect CodeQL fast lane
         id: fast_lane
+        shell: bash
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           mkdir -p tmp/validation/codeql
           python scripts/ci_changed_files.py \
@@ -84,7 +99,7 @@ jobs:
     name: CodeQL (${{ matrix.language }})
     needs: docs-lite
     if: needs.docs-lite.outputs.has_languages == '1'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -92,6 +107,14 @@ jobs:
         language: ${{ fromJson(needs.docs-lite.outputs.languages) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify prebuilt AIstock-CI environment
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
