@@ -1358,6 +1358,12 @@ def test_codeql_selects_only_changed_languages() -> None:
     fast_lane = jobs["docs-lite"]
     analyze = jobs["analyze"]
     analyze_steps = analyze["steps"]
+    prepare_steps = [
+        step
+        for job in (fast_lane, analyze)
+        for step in job["steps"]
+        if step.get("name") == "Prepare exact local workspace (no remote actions)"
+    ]
 
     assert fast_lane["outputs"]["registry_sync"].endswith("steps.fast_lane.outputs.registry_sync }}")
     assert fast_lane["outputs"]["languages"].endswith("steps.fast_lane.outputs.languages }}")
@@ -1368,21 +1374,32 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert "*.py) PYTHON_CHANGED=1" in detect_step["run"]
     assert "*.js|*.jsx|*.ts|*.tsx) JAVASCRIPT_CHANGED=1" in detect_step["run"]
     assert "LANGUAGES='[]'" in detect_step["run"]
+    assert len(prepare_steps) == 2
+    assert all("--no-write-fetch-head" in step["run"] for step in prepare_steps)
+    assert all("--depth=1" not in step["run"] for step in prepare_steps)
+    assert all(step["run"].count("rev-parse --verify --quiet") == 2 for step in prepare_steps)
+    assert all("refs/aistock-ci/codeql-" in step["run"] for step in prepare_steps)
+    assert all("update-ref -d $cacheRef" in step["run"] for step in prepare_steps)
+    assert all('$env:GIT_CONFIG_KEY_0 = "core.longpaths"' in step["run"] for step in prepare_steps)
+    assert all("refs/pull/$env:PR_NUMBER/merge" in step["run"] for step in prepare_steps)
+    assert all("exact workspace source fetch failed after 3 attempts" in step["run"] for step in prepare_steps)
+    assert all("scripts/ci/prepare_self_hosted_workspace.py" in step["run"] for step in prepare_steps)
+    assert not any("uses" in step for job in jobs.values() for step in job.get("steps", []))
 
     assert analyze["if"] == "needs.docs-lite.outputs.has_languages == '1'"
     assert analyze["strategy"]["matrix"]["language"] == "${{ fromJson(needs.docs-lite.outputs.languages) }}"
     assert not any(step.get("name") == "Fast-lane CodeQL no-op" for step in analyze_steps)
-    gated_steps = [
-        step for step in analyze_steps if step.get("name") in {"Initialize CodeQL", "Perform CodeQL Analysis"}
-    ]
-    assert gated_steps
-    assert all("if" not in step for step in gated_steps)
-    init = next(step for step in analyze_steps if step.get("name") == "Initialize CodeQL")
-    analyze_step = next(step for step in analyze_steps if step.get("name") == "Perform CodeQL Analysis")
-    action_sha = "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"
-    assert init["uses"] == f"github/codeql-action/init@{action_sha}"
-    assert "tools" not in init["with"]
-    assert analyze_step["uses"] == f"github/codeql-action/analyze@{action_sha}"
+    direct_analysis = next(step for step in analyze_steps if step.get("name") == "Run CodeQL CLI analysis")
+    assert direct_analysis["timeout-minutes"] == 20
+    assert direct_analysis["env"]["CODEQL_LANGUAGE"] == "${{ matrix.language }}"
+    assert direct_analysis["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+    direct_run = direct_analysis["run"]
+    assert "database create" in direct_run
+    assert '"--build-mode=none"' in direct_run
+    assert "database analyze" in direct_run
+    assert "github upload-results" in direct_run
+    assert '"--wait-for-processing-timeout=120"' in direct_run
+    assert not any("github/codeql-action/" in str(step.get("uses") or "") for step in analyze_steps)
     assert analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_REQUIRED"] == "1"
     assert len(analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
 

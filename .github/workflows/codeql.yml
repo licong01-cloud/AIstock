@@ -33,9 +33,45 @@ jobs:
       languages: ${{ steps.fast_lane.outputs.languages }}
       has_languages: ${{ steps.fast_lane.outputs.has_languages }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 2
+      - name: Prepare exact local workspace (no remote actions)
+        shell: powershell
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $source = "F:/Dev/AIstock"
+          $cacheRef = "refs/aistock-ci/codeql-${{ github.run_id }}-${{ github.run_attempt }}-$env:GITHUB_JOB"
+          try {
+            git -C $source rev-parse --verify --quiet "$env:EXPECTED_COMMIT^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              $fetchRef = if ($env:PR_NUMBER) { "refs/pull/$env:PR_NUMBER/merge" } else { "refs/heads/$env:REF_NAME" }
+              $fetched = $false
+              for ($attempt = 1; $attempt -le 3; $attempt++) {
+                git -C $source fetch --no-tags --no-write-fetch-head origin "${fetchRef}:$cacheRef"
+                if ($LASTEXITCODE -eq 0) {
+                  git -C $source rev-parse --verify --quiet "$env:EXPECTED_COMMIT^{commit}" 2>$null
+                  if ($LASTEXITCODE -eq 0) { $fetched = $true; break }
+                }
+                if ($attempt -lt 3) { Start-Sleep -Seconds ($attempt * 2) }
+              }
+              if (-not $fetched) { throw "exact workspace source fetch failed after 3 attempts: $fetchRef" }
+            }
+            git -C $source update-ref $cacheRef $env:EXPECTED_COMMIT
+            if ($LASTEXITCODE -ne 0) { throw "failed to pin exact workspace cache ref: $cacheRef" }
+            $env:GIT_CONFIG_COUNT = "1"
+            $env:GIT_CONFIG_KEY_0 = "core.longpaths"
+            $env:GIT_CONFIG_VALUE_0 = "true"
+            python "$source/scripts/ci/prepare_self_hosted_workspace.py" `
+              --source $source `
+              --dest $env:GITHUB_WORKSPACE `
+              --expected-commit $env:EXPECTED_COMMIT `
+              --repo $env:GITHUB_REPOSITORY `
+              --summary-json "$env:RUNNER_TEMP/aistock_self_hosted_workspace/$env:GITHUB_JOB.json"
+            if ($LASTEXITCODE -ne 0) { throw "exact local workspace preparation failed" }
+          } finally {
+            git -C $source update-ref -d $cacheRef
+          }
 
       - name: Fetch current PR base ref only
         if: github.event_name == 'pull_request'
@@ -125,9 +161,45 @@ jobs:
       matrix:
         language: ${{ fromJson(needs.docs-lite.outputs.languages) }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
+      - name: Prepare exact local workspace (no remote actions)
+        shell: powershell
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $source = "F:/Dev/AIstock"
+          $cacheRef = "refs/aistock-ci/codeql-${{ github.run_id }}-${{ github.run_attempt }}-$env:GITHUB_JOB"
+          try {
+            git -C $source rev-parse --verify --quiet "$env:EXPECTED_COMMIT^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              $fetchRef = if ($env:PR_NUMBER) { "refs/pull/$env:PR_NUMBER/merge" } else { "refs/heads/$env:REF_NAME" }
+              $fetched = $false
+              for ($attempt = 1; $attempt -le 3; $attempt++) {
+                git -C $source fetch --no-tags --no-write-fetch-head origin "${fetchRef}:$cacheRef"
+                if ($LASTEXITCODE -eq 0) {
+                  git -C $source rev-parse --verify --quiet "$env:EXPECTED_COMMIT^{commit}" 2>$null
+                  if ($LASTEXITCODE -eq 0) { $fetched = $true; break }
+                }
+                if ($attempt -lt 3) { Start-Sleep -Seconds ($attempt * 2) }
+              }
+              if (-not $fetched) { throw "exact workspace source fetch failed after 3 attempts: $fetchRef" }
+            }
+            git -C $source update-ref $cacheRef $env:EXPECTED_COMMIT
+            if ($LASTEXITCODE -ne 0) { throw "failed to pin exact workspace cache ref: $cacheRef" }
+            $env:GIT_CONFIG_COUNT = "1"
+            $env:GIT_CONFIG_KEY_0 = "core.longpaths"
+            $env:GIT_CONFIG_VALUE_0 = "true"
+            python "$source/scripts/ci/prepare_self_hosted_workspace.py" `
+              --source $source `
+              --dest $env:GITHUB_WORKSPACE `
+              --expected-commit $env:EXPECTED_COMMIT `
+              --repo $env:GITHUB_REPOSITORY `
+              --summary-json "$env:RUNNER_TEMP/aistock_self_hosted_workspace/$env:GITHUB_JOB.json"
+            if ($LASTEXITCODE -ne 0) { throw "exact local workspace preparation failed" }
+          } finally {
+            git -C $source update-ref -d $cacheRef
+          }
 
       - name: Verify prebuilt AIstock-CI environment
         shell: powershell
@@ -135,14 +207,43 @@ jobs:
           AISTOCK_CI_ENV_NAME: AIstock-CI
         run: python scripts/ci_environment_verify.py
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7, default CLI 2.26.3
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: none
+      - name: Run CodeQL CLI analysis
+        timeout-minutes: 20
+        shell: powershell
+        env:
+          CODEQL_LANGUAGE: ${{ matrix.language }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $codeql = Join-Path $env:AISTOCK_CI_CODEQL_BUNDLE_PATH "codeql.exe"
+          if (-not (Test-Path -LiteralPath $codeql -PathType Leaf)) {
+            throw "Verified CodeQL CLI is missing: $codeql"
+          }
+          $identity = "${{ github.run_id }}-${{ github.run_attempt }}-$env:CODEQL_LANGUAGE"
+          $database = Join-Path $env:RUNNER_TEMP "aistock-codeql-$identity"
+          $sarif = Join-Path $env:RUNNER_TEMP "aistock-codeql-$identity.sarif"
+          $queryLanguage = if ($env:CODEQL_LANGUAGE -eq "javascript-typescript") { "javascript" } else { $env:CODEQL_LANGUAGE }
+          $querySuite = "$queryLanguage-code-scanning.qls"
 
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
-        with:
-          category: "/language:${{ matrix.language }}"
+          & $codeql database create $database `
+            "--language=$env:CODEQL_LANGUAGE" `
+            "--build-mode=none" `
+            "--source-root=$env:GITHUB_WORKSPACE" `
+            "--threads=0"
+          if ($LASTEXITCODE -ne 0) { throw "CodeQL database create failed with exit code $LASTEXITCODE" }
+
+          & $codeql database analyze $database $querySuite `
+            "--format=sarif-latest" `
+            "--sarif-category=/language:$env:CODEQL_LANGUAGE" `
+            "--output=$sarif" `
+            "--threads=0"
+          if ($LASTEXITCODE -ne 0) { throw "CodeQL database analyze failed with exit code $LASTEXITCODE" }
+
+          & $codeql github upload-results `
+            "--repository=$env:GITHUB_REPOSITORY" `
+            "--ref=$env:GITHUB_REF" `
+            "--commit=$env:GITHUB_SHA" `
+            "--sarif=$sarif" `
+            "--checkout-path=$env:GITHUB_WORKSPACE" `
+            "--wait-for-processing-timeout=120"
+          if ($LASTEXITCODE -ne 0) { throw "CodeQL SARIF upload failed with exit code $LASTEXITCODE" }
 

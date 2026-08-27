@@ -50,8 +50,13 @@ def test_execute_session_returns_explicit_timeout(monkeypatch) -> None:
     )
     original_popen = runner.subprocess.Popen
 
-    def sleeping_popen(_command, **kwargs):
-        return original_popen([sys.executable, "-c", "import time; time.sleep(5)"], **kwargs)
+    def sleeping_popen(command, **kwargs):
+        if command and command[0] == sys.executable:
+            return original_popen([sys.executable, "-c", "import time; time.sleep(5)"], **kwargs)
+        # subprocess.run(taskkill ...) also delegates to subprocess.Popen.
+        # Preserve that real termination path instead of replacing it with a
+        # second sleeper and manufacturing a timeout overrun.
+        return original_popen(command, **kwargs)
 
     monkeypatch.setattr(runner.subprocess, "Popen", sleeping_popen)
 

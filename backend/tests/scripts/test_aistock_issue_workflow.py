@@ -11210,6 +11210,12 @@ def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    workflow._write_state(
+        "BUG-199",
+        state="validation_passed",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        validation_evidence_errors=[],
+    )
     close_sync_payload = {
         "workflow_gate": "close_synced",
         "registry_root": str(isolated_workflow_root / "registry"),
@@ -11221,7 +11227,7 @@ def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {
+        lambda bug_id, pr_url, **kwargs: {
             "already_merged": True,
             "recovered_from_local_merge_error": True,
             "verified": {"checked": True, "merged": True, "pr": {"mergeCommit": {"oid": "merge123"}}},
@@ -11253,6 +11259,92 @@ def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
         changed_files=[],
         create_worktree=False,
         dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+        pr_url="https://github.example/pull/199",
+        merge=True,
+        branch="bug/BUG-199-workflow",
+        worktree=str(isolated_workflow_root / "task"),
+    )
+
+    assert payload["workflow_gate"] == "merged_close_sync_pr_opened"
+    assert payload["merge"]["recovered_from_local_merge_error"] is True
+    assert captured["create_registry_worktree"] is True
+    assert captured["merge_commit"] == "merge123"
+    assert captured["validation_evidence"] == ["python -m nox -s l0 -> passed"]
+    assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
+    assert payload["cleanup"] is None
+    assert payload["next_actions"] == [
+        "merge_close_sync_pr_after_checks_are_green",
+        "run_cleanup_after_merge",
+    ]
+    assert workflow._load_state("BUG-199")["state"] == "merged"
+
+
+def test_run_merge_mode_requires_evidence_before_source_merge(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    monkeypatch.setattr(
+        workflow,
+        "_merge_pr_if_ready_for_bug",
+        lambda *args, **kwargs: pytest.fail("source PR must not merge before evidence preflight"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="requires validated evidence before source merge"):
+        workflow.build_run_plan(
+            bug_id="BUG-199",
+            mode="merge",
+            issue_json=str(issue),
+            changed_files=[],
+            create_worktree=False,
+            dry_run=False,
+            validation_evidence=[],
+            task_slug=None,
+            allow_missing_linkage=False,
+            allow_closed=False,
+            base="origin/main",
+            head="HEAD",
+            pr_url="https://github.example/pull/199",
+            merge=True,
+        )
+
+
+def test_run_merge_mode_propagates_blocked_finalizer_and_never_infers_cleanup(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    monkeypatch.setattr(
+        workflow,
+        "_merge_pr_if_ready_for_bug",
+        lambda *args, **kwargs: {"verified": {"merged": True}},
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_finalizer(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "workflow_gate": "blocked",
+            "blocking": ["close-sync checks are pending"],
+            "next_actions": ["resume_merge_finalizer"],
+            "cleanup": None,
+        }
+
+    monkeypatch.setattr(workflow, "build_merge_finalizer_plan", fake_finalizer)
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="merge",
+        issue_json=str(issue),
+        changed_files=[],
+        create_worktree=False,
+        dry_run=False,
         validation_evidence=["python -m nox -s l0 -> passed"],
         task_slug=None,
         allow_missing_linkage=False,
@@ -11265,12 +11357,37 @@ def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
         worktree=str(isolated_workflow_root / "task"),
     )
 
-    assert payload["workflow_gate"] == "merged_close_synced"
-    assert payload["merge"]["recovered_from_local_merge_error"] is True
-    assert captured["create_registry_worktree"] is True
-    assert captured["merge_commit"] == "merge123"
-    assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
-    assert payload["cleanup"]["workflow_gate"] == "ready_for_cleanup"
+    assert captured["cleanup"] is False
+    assert payload["workflow_gate"] == "merged_aftercare_blocked"
+    assert payload["blocking"] == ["close-sync checks are pending"]
+    assert payload["next_actions"] == ["resume_merge_finalizer"]
+    assert workflow._load_state("BUG-199")["state"] == "merged"
+
+
+def test_close_sync_auto_merge_uses_single_runner_aware_bounded_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_merge(bug_id: str, pr_url: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"bug_id": bug_id, "pr_url": pr_url, **kwargs})
+        return {"verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}}
+
+    monkeypatch.setattr(workflow, "_merge_pr_if_ready_for_bug", fake_merge)
+
+    payload = workflow._merge_close_sync_pr_if_ready(
+        bug_id="BUG-199",
+        close_sync_commit={"pr_url": "https://github.example/pull/299"},
+        auto_merge=True,
+    )
+
+    assert payload["workflow_gate"] == "merged"
+    assert captured == {
+        "bug_id": "BUG-199",
+        "pr_url": "https://github.example/pull/299",
+        "required_check_attempts": 16,
+        "required_check_delay_seconds": 30,
+    }
 
 
 def test_merge_finalizer_persists_close_sync_and_reports_postmortem(
@@ -11497,7 +11614,7 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+        lambda bug_id, pr_url, **kwargs: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
     )
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
         cleanup_calls.append(kwargs)
@@ -11677,7 +11794,7 @@ def test_merge_finalizer_defers_source_cleanup_when_invoked_from_source_worktree
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+        lambda bug_id, pr_url, **kwargs: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
     )
 
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
@@ -11764,7 +11881,7 @@ def test_merge_finalizer_blocks_when_close_sync_cleanup_blocks(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+        lambda bug_id, pr_url, **kwargs: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
     )
 
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
@@ -11792,6 +11909,7 @@ def test_merge_finalizer_blocks_when_close_sync_cleanup_blocks(
     assert payload["workflow_gate"] == "blocked"
     assert payload["close_sync_cleanup"]["workflow_gate"] == "blocked"
     assert payload["blocking"] == ["worktree is dirty"]
+    assert workflow._load_state("BUG-199")["state"] == "blocked"
 
 
 def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
@@ -11835,7 +11953,7 @@ def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+        lambda bug_id, pr_url, **kwargs: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
     )
 
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
@@ -12171,7 +12289,7 @@ def test_merge_finalizer_merges_existing_open_close_sync_pr(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: (
+        lambda bug_id, pr_url, **kwargs: (
             merged_prs.append((bug_id, pr_url))
             or {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}}
         ),
@@ -12255,7 +12373,7 @@ def test_merge_finalizer_ignores_close_sync_pr_for_different_source_pr(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: (
+        lambda bug_id, pr_url, **kwargs: (
             merged_prs.append((bug_id, pr_url))
             or {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}}
         ),
