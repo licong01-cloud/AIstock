@@ -211,8 +211,15 @@ def build_contract_evidence(
         ),
         "codeql_remote_action_download_is_eliminated": (
             "github/codeql-action/" not in workflow_text.get("codeql.yml", "")
+            and "actions/checkout@" not in workflow_text.get("codeql.yml", "")
+            and "uses:" not in workflow_text.get("codeql.yml", "")
             and "- name: Run CodeQL CLI analysis\n        timeout-minutes: 20\n"
             in workflow_text.get("codeql.yml", "")
+        ),
+        "codeql_exact_local_workspace_fetch_is_bounded": (
+            workflow_text.get("codeql.yml", "").count("Prepare exact local workspace (no remote actions)") == 2
+            and workflow_text.get("codeql.yml", "").count("--no-write-fetch-head") == 2
+            and workflow_text.get("codeql.yml", "").count("exact workspace source fetch failed after 3 attempts") == 2
         ),
         "pr_ci_no_separate_failure_publisher_job": "failure-bug-register:" not in test_text
         and "The failed job logs are the authoritative PR evidence" in test_text,

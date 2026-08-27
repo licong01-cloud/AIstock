@@ -33,9 +33,35 @@ jobs:
       languages: ${{ steps.fast_lane.outputs.languages }}
       has_languages: ${{ steps.fast_lane.outputs.has_languages }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
+      - name: Prepare exact local workspace (no remote actions)
+        shell: powershell
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $source = "F:/Dev/AIstock"
+          git -C $source cat-file -e "$env:EXPECTED_COMMIT^{commit}" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            $fetchRef = if ($env:PR_NUMBER) { "refs/pull/$env:PR_NUMBER/merge" } else { "refs/heads/$env:REF_NAME" }
+            $fetched = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              git -C $source fetch --no-tags --depth=1 --no-write-fetch-head origin $fetchRef
+              if ($LASTEXITCODE -eq 0) {
+                git -C $source cat-file -e "$env:EXPECTED_COMMIT^{commit}" 2>$null
+                if ($LASTEXITCODE -eq 0) { $fetched = $true; break }
+              }
+              if ($attempt -lt 3) { Start-Sleep -Seconds ($attempt * 2) }
+            }
+            if (-not $fetched) { throw "exact workspace source fetch failed after 3 attempts: $fetchRef" }
+          }
+          python "$source/scripts/ci/prepare_self_hosted_workspace.py" `
+            --source $source `
+            --dest $env:GITHUB_WORKSPACE `
+            --expected-commit $env:EXPECTED_COMMIT `
+            --repo $env:GITHUB_REPOSITORY `
+            --summary-json "$env:RUNNER_TEMP/aistock_self_hosted_workspace/$env:GITHUB_JOB.json"
+          if ($LASTEXITCODE -ne 0) { throw "exact local workspace preparation failed" }
 
       - name: Fetch current PR base ref only
         if: github.event_name == 'pull_request'
@@ -125,9 +151,35 @@ jobs:
       matrix:
         language: ${{ fromJson(needs.docs-lite.outputs.languages) }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+      - name: Prepare exact local workspace (no remote actions)
+        shell: powershell
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $source = "F:/Dev/AIstock"
+          git -C $source cat-file -e "$env:EXPECTED_COMMIT^{commit}" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            $fetchRef = if ($env:PR_NUMBER) { "refs/pull/$env:PR_NUMBER/merge" } else { "refs/heads/$env:REF_NAME" }
+            $fetched = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              git -C $source fetch --no-tags --depth=1 --no-write-fetch-head origin $fetchRef
+              if ($LASTEXITCODE -eq 0) {
+                git -C $source cat-file -e "$env:EXPECTED_COMMIT^{commit}" 2>$null
+                if ($LASTEXITCODE -eq 0) { $fetched = $true; break }
+              }
+              if ($attempt -lt 3) { Start-Sleep -Seconds ($attempt * 2) }
+            }
+            if (-not $fetched) { throw "exact workspace source fetch failed after 3 attempts: $fetchRef" }
+          }
+          python "$source/scripts/ci/prepare_self_hosted_workspace.py" `
+            --source $source `
+            --dest $env:GITHUB_WORKSPACE `
+            --expected-commit $env:EXPECTED_COMMIT `
+            --repo $env:GITHUB_REPOSITORY `
+            --summary-json "$env:RUNNER_TEMP/aistock_self_hosted_workspace/$env:GITHUB_JOB.json"
+          if ($LASTEXITCODE -ne 0) { throw "exact local workspace preparation failed" }
 
       - name: Verify prebuilt AIstock-CI environment
         shell: powershell

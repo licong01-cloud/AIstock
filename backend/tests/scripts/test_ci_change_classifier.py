@@ -1358,6 +1358,12 @@ def test_codeql_selects_only_changed_languages() -> None:
     fast_lane = jobs["docs-lite"]
     analyze = jobs["analyze"]
     analyze_steps = analyze["steps"]
+    prepare_steps = [
+        step
+        for job in (fast_lane, analyze)
+        for step in job["steps"]
+        if step.get("name") == "Prepare exact local workspace (no remote actions)"
+    ]
 
     assert fast_lane["outputs"]["registry_sync"].endswith("steps.fast_lane.outputs.registry_sync }}")
     assert fast_lane["outputs"]["languages"].endswith("steps.fast_lane.outputs.languages }}")
@@ -1368,6 +1374,12 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert "*.py) PYTHON_CHANGED=1" in detect_step["run"]
     assert "*.js|*.jsx|*.ts|*.tsx) JAVASCRIPT_CHANGED=1" in detect_step["run"]
     assert "LANGUAGES='[]'" in detect_step["run"]
+    assert len(prepare_steps) == 2
+    assert all("--no-write-fetch-head" in step["run"] for step in prepare_steps)
+    assert all("refs/pull/$env:PR_NUMBER/merge" in step["run"] for step in prepare_steps)
+    assert all("exact workspace source fetch failed after 3 attempts" in step["run"] for step in prepare_steps)
+    assert all("scripts/ci/prepare_self_hosted_workspace.py" in step["run"] for step in prepare_steps)
+    assert not any("uses" in step for job in jobs.values() for step in job.get("steps", []))
 
     assert analyze["if"] == "needs.docs-lite.outputs.has_languages == '1'"
     assert analyze["strategy"]["matrix"]["language"] == "${{ fromJson(needs.docs-lite.outputs.languages) }}"
