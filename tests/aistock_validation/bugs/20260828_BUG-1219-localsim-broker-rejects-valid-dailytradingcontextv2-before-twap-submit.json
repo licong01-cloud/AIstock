@@ -1,8 +1,10 @@
 {
-  "actual": "LocalSimBroker directly calls DailyTradingContextV1.model_validate, rejects schema_version=daily_trading_context_v2, and blocks every order before broker_called.",
+  "actual": "LocalSimBroker directly calls DailyTradingContextV1.model_validate and the downstream frozen-fact adapter accepts only the V1 market.stk_limit reference shape, so schema_version=daily_trading_context_v2 is rejected before broker_called.",
   "allowed_write_scope": [
     "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/services/paper_trading_v2/market_data.py",
     "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
     "tests/aistock_validation/bugs/20260828_BUG-1219-localsim-broker-rejects-valid-dailytradingcontextv2-before-twap-submit.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -15,7 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-28T05:33:23.287678Z",
-  "description": "LocalSimBroker directly calls DailyTradingContextV1.model_validate, rejects schema_version=daily_trading_context_v2, and blocks every order before broker_called.",
+  "description": "LocalSimBroker directly calls DailyTradingContextV1.model_validate and the downstream frozen-fact adapter accepts only the V1 market.stk_limit reference shape, so a valid broker-specific DailyTradingContextV2 is rejected before broker_called and every order is blocked.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -32,12 +34,16 @@
     "added_files": [],
     "changed_files": [
       "backend/services/paper_trading_v2/broker/localsim.py",
-      "backend/tests/paper_trading_v2/test_localsim_backend.py"
+      "backend/services/paper_trading_v2/market_data.py",
+      "backend/tests/paper_trading_v2/test_localsim_backend.py",
+      "backend/tests/paper_trading_v2/test_market_data.py"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/paper_trading_v2/broker/localsim.py",
-        "backend/tests/paper_trading_v2/test_localsim_backend.py"
+        "backend/services/paper_trading_v2/market_data.py",
+        "backend/tests/paper_trading_v2/test_localsim_backend.py",
+        "backend/tests/paper_trading_v2/test_market_data.py"
       ],
       "impacted_modules": [
         "paper_v2",
@@ -56,7 +62,27 @@
           "rule_id": "paper_v2_services"
         },
         {
+          "file": "backend/services/paper_trading_v2/market_data.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
           "file": "backend/tests/paper_trading_v2/test_localsim_backend.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_market_data.py",
           "impact_modules": [
             "selection_center",
             "strategy_package"
@@ -71,14 +97,18 @@
       ],
       "suggested_scope": [
         "backend/services/paper_trading_v2/broker/localsim.py",
-        "backend/tests/paper_trading_v2/test_localsim_backend.py"
+        "backend/services/paper_trading_v2/market_data.py",
+        "backend/tests/paper_trading_v2/test_localsim_backend.py",
+        "backend/tests/paper_trading_v2/test_market_data.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/paper_trading_v2/broker/localsim.py",
-      "backend/tests/paper_trading_v2/test_localsim_backend.py"
+      "backend/services/paper_trading_v2/market_data.py",
+      "backend/tests/paper_trading_v2/test_localsim_backend.py",
+      "backend/tests/paper_trading_v2/test_market_data.py"
     ]
   },
   "first_seen_at": "2026-08-28T05:33:23.287678Z",
@@ -95,17 +125,25 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "python -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py -q",
+  "reproduce_command": "python -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/paper_trading_v2/test_market_data.py -q",
   "required_verification": [
     "l0",
-    "paper_v2_backend"
+    "paper_v2_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/paper_trading_v2/test_market_data.py -q -p no:cacheprovider -> 109 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
