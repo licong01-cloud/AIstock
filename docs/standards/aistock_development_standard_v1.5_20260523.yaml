@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 051066b51bc0cc624519fb192e7e76a4e01339bf3638bc4c606892f001489ec0
+source_sha256: c234a34db2d1b1a7262ab3a6621ea65b586bacfb3241c9762c092b7dd356edc5
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-28"
@@ -558,6 +558,9 @@ rules:
         - shared_validation_matrix
         - close_sync_compatibility_signature
         - per_issue_evidence_and_issue_sync
+        - same_run_github_actions_read_prohibited
+        - nightly_failure_groups_are_module_scoped
+        - heterogeneous_failure_groups_require_triage
         - host_wide_counter_and_permanent_reservation_remain_authoritative
         - ordinary_fix_pr_omits_repository_allocator_single_value
     baseline_policy: manual_review_only
