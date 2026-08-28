@@ -13617,13 +13617,37 @@ def _checks_summary_payload(checks_view: dict[str, list[str]]) -> dict[str, Any]
 
 
 def _view_pr_checks(pr_url: str) -> dict[str, Any]:
-    view = _run_command(["gh", "pr", "view", pr_url, "--json", "statusCheckRollup"], cwd=REPO_ROOT, timeout=60)
+    source = "github_graphql"
+    view = _run_transport_read_with_retry(
+        ["gh", "pr", "view", pr_url, "--json", "statusCheckRollup"],
+        cwd=REPO_ROOT,
+        timeout=60,
+        attempts=2,
+    )
     if not view.get("ok"):
-        return {"workflow_gate": "checks_unavailable", "check_summary": {"failed_count": 0, "pending_count": 0, "passed_count": 0, "non_blocking_count": 0}, "error": view.get("stderr") or view.get("stdout")}
-    try:
-        checks = json.loads(str(view.get("stdout") or "{}")).get("statusCheckRollup") or []
-    except json.JSONDecodeError as exc:
-        return {"workflow_gate": "checks_unavailable", "check_summary": {"failed_count": 0, "pending_count": 0, "passed_count": 0, "non_blocking_count": 0}, "error": str(exc)}
+        message = str(view.get("stderr") or view.get("stdout") or "PR checks unavailable")
+        if not _looks_like_github_transport_failure(message):
+            return {"workflow_gate": "checks_unavailable", "check_summary": {"failed_count": 0, "pending_count": 0, "passed_count": 0, "non_blocking_count": 0}, "error": message}
+        try:
+            readback = _github_pull_rest_readback(pr_url)
+            check_runs = _run_transport_read_with_retry(
+                ["gh", "api", f"repos/{GITHUB_REPO}/commits/{readback['head_sha']}/check-runs?per_page=100"],
+                cwd=REPO_ROOT,
+                timeout=30,
+                attempts=2,
+            )
+            payload = _parse_rest_object(check_runs, context="PR check-runs readback")
+            checks = [item for item in payload.get("check_runs") or [] if isinstance(item, dict)]
+            if int(payload.get("total_count") or len(checks)) > len(checks):
+                raise WorkflowError("PR check-runs readback exceeds the supported single page")
+            source = "github_rest"
+        except WorkflowError as exc:
+            return {"workflow_gate": "checks_unavailable", "check_summary": {"failed_count": 0, "pending_count": 0, "passed_count": 0, "non_blocking_count": 0}, "error": str(exc)}
+    else:
+        try:
+            checks = json.loads(str(view.get("stdout") or "{}")).get("statusCheckRollup") or []
+        except json.JSONDecodeError as exc:
+            return {"workflow_gate": "checks_unavailable", "check_summary": {"failed_count": 0, "pending_count": 0, "passed_count": 0, "non_blocking_count": 0}, "error": str(exc)}
     classified = _classify_pr_checks(checks)
     if not checks:
         gate = "checks_pending"
@@ -13633,7 +13657,7 @@ def _view_pr_checks(pr_url: str) -> dict[str, Any]:
         gate = "checks_pending"
     else:
         gate = "checks_passed"
-    return {"workflow_gate": gate, "check_summary": _checks_summary_payload(classified), "classified": classified, "raw_count": len(checks)}
+    return {"workflow_gate": gate, "check_summary": _checks_summary_payload(classified), "classified": classified, "raw_count": len(checks), "source": source}
 
 
 def _watch_pr_checks_compact(bug_id: str, pr_url: str, *, attempts: int = 3, delay_seconds: int = 10) -> dict[str, Any]:
