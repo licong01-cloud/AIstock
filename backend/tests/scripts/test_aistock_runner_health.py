@@ -161,13 +161,14 @@ def test_render_markdown_includes_actionable_sections() -> None:
     assert "production_ddl_gate" in markdown
 
 
-def test_cli_writes_outputs_and_returns_blocked(tmp_path: Path, capsys) -> None:
+def test_cli_writes_outputs_and_returns_blocked(tmp_path: Path, capsys, monkeypatch) -> None:
     runners = tmp_path / "runners.json"
     runs = tmp_path / "runs.json"
     output_json = tmp_path / "runner-health.json"
     output_md = tmp_path / "runner-health.md"
     runners.write_text(json.dumps({"total_count": 0, "runners": []}), encoding="utf-8")
     runs.write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
 
     rc = health.main(
         [
@@ -186,7 +187,9 @@ def test_cli_writes_outputs_and_returns_blocked(tmp_path: Path, capsys) -> None:
     assert rc == 2
     assert json.loads(output_json.read_text(encoding="utf-8"))["workflow_gate"] == "blocked"
     assert "AIstock Runner Health" in output_md.read_text(encoding="utf-8")
-    assert json.loads(capsys.readouterr().out)["schema_version"] == "aistock_runner_health_v1"
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["schema_version"] == "aistock_runner_health_v1"
+    assert "::error::no online GitHub Actions runner" in captured.err
 
 
 def test_resolve_github_token_prefers_env_over_gh(monkeypatch) -> None:

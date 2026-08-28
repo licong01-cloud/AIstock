@@ -351,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(report, indent=2, ensure_ascii=True))
     if report["workflow_gate"] != "ready" and os.environ.get("GITHUB_ACTIONS"):
         message = "; ".join(report.get("blocking") or ["runner health blocked"])
-        print(f"::error::{message}")
+        print(f"::error::{message}", file=sys.stderr)
     return 0 if report["workflow_gate"] == "ready" else 2
 
 
