@@ -14,6 +14,13 @@ import yaml
 import scripts.aistock_issue_workflow as workflow
 
 
+def _green_merge_quality_checks() -> list[dict[str, str]]:
+    return [
+        {"name": name, "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock quality"}
+        for name in workflow.MERGE_QUALITY_CHECK_CONTEXTS
+    ]
+
+
 def _fake_code_intelligence_summary(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": "aistock_code_intelligence_summary_v1",
@@ -10263,9 +10270,7 @@ def test_merge_uses_cleanup_owned_branch_deletion(
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": json.dumps(
-                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
-                ),
+                "stdout": json.dumps(_green_merge_quality_checks()),
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
@@ -10317,9 +10322,7 @@ def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": json.dumps(
-                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
-                ),
+                "stdout": json.dumps(_green_merge_quality_checks()),
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
@@ -10374,6 +10377,24 @@ def test_generic_merge_helper_blocks_failed_required_check(monkeypatch: pytest.M
         workflow._merge_pr_if_ready("https://github.example/pull/199")
 
     assert not any(args[:3] == ["gh", "pr", "merge"] for args in commands)
+
+
+def test_merge_quality_contract_blocks_when_only_ci_verdict_is_reported() -> None:
+    result = workflow._normalize_merge_quality_check_result(
+        {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(
+                [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
+            ),
+            "stderr": "",
+        }
+    )
+
+    assert result is not None
+    summary = workflow._required_pr_check_summary(result)
+    assert summary["passed"] == ["CI verdict"]
+    assert summary["pending"] == list(workflow.MERGE_QUALITY_CHECK_CONTEXTS[1:])
 
 
 def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
@@ -10437,15 +10458,16 @@ def test_merge_read_transport_failures_recover_through_rest(monkeypatch: pytest.
         if args[:2] == ["gh", "api"] and "/check-runs?" in args[2]:
             return ok(
                 {
-                    "total_count": 1,
+                    "total_count": len(workflow.MERGE_QUALITY_CHECK_CONTEXTS),
                     "check_runs": [
                         {
-                            "id": 9,
-                            "name": "CI verdict",
+                            "id": index,
+                            "name": name,
                             "status": "completed",
                             "conclusion": "success",
                             "app": {"id": 15368},
                         }
+                        for index, name in enumerate(workflow.MERGE_QUALITY_CHECK_CONTEXTS, start=9)
                     ],
                 }
             )
@@ -10513,15 +10535,16 @@ def test_rest_required_check_fallback_keeps_pending_check_blocking(
             payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
         elif "/check-runs?" in args[2]:
             payload = {
-                "total_count": 1,
+                "total_count": len(workflow.MERGE_QUALITY_CHECK_CONTEXTS),
                 "check_runs": [
                     {
-                        "id": 9,
-                        "name": "CI verdict",
-                        "status": "in_progress",
-                        "conclusion": None,
+                        "id": index,
+                        "name": name,
+                        "status": "in_progress" if name == "CI verdict" else "completed",
+                        "conclusion": None if name == "CI verdict" else "success",
                         "app": {"id": 15368},
                     }
+                    for index, name in enumerate(workflow.MERGE_QUALITY_CHECK_CONTEXTS, start=9)
                 ],
             }
         else:
@@ -10570,15 +10593,16 @@ def test_rest_required_check_fallback_honors_required_app_id(monkeypatch: pytest
             payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
         elif "/check-runs?" in args[2]:
             payload = {
-                "total_count": 1,
+                "total_count": len(workflow.MERGE_QUALITY_CHECK_CONTEXTS),
                 "check_runs": [
                     {
-                        "id": 9,
-                        "name": "CI verdict",
+                        "id": index,
+                        "name": name,
                         "status": "completed",
                         "conclusion": "success",
-                        "app": {"id": 99999},
+                        "app": {"id": 99999 if name == "CI verdict" else 15368},
                     }
+                    for index, name in enumerate(workflow.MERGE_QUALITY_CHECK_CONTEXTS, start=9)
                 ],
             }
         elif args[2].endswith("/status"):
@@ -10691,9 +10715,7 @@ def test_merge_transport_failure_falls_back_once_to_head_pinned_rest(
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": json.dumps(
-                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
-                ),
+                "stdout": json.dumps(_green_merge_quality_checks()),
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
@@ -10768,9 +10790,7 @@ def test_bug_merge_transport_fallback_records_recovery_events(monkeypatch: pytes
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": json.dumps(
-                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
-                ),
+                "stdout": json.dumps(_green_merge_quality_checks()),
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
@@ -10833,7 +10853,7 @@ def test_merge_transport_fallback_fails_closed_on_head_drift(monkeypatch: pytest
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": json.dumps([{"name": "CI verdict", "bucket": "pass"}]),
+                "stdout": json.dumps(_green_merge_quality_checks()),
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
@@ -10873,7 +10893,7 @@ def test_merge_non_transport_error_does_not_use_rest_fallback(monkeypatch: pytes
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": json.dumps([{"name": "CI verdict", "bucket": "pass"}]),
+                "stdout": json.dumps(_green_merge_quality_checks()),
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
@@ -10913,7 +10933,7 @@ def test_merge_success_uses_rest_only_when_graphql_verification_transport_fails(
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": json.dumps([{"name": "CI verdict", "bucket": "pass"}]),
+                "stdout": json.dumps(_green_merge_quality_checks()),
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
