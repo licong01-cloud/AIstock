@@ -81,6 +81,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "bounded_pr_base_fetch_retry" in evidence
     assert "pr_ci_no_separate_failure_publisher_job" in evidence
     assert "pr_ci_no_external_artifact_action_dependency" in evidence
+    assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
     assert "pr_workflows_no_external_report_action_dependency" in evidence
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
     assert evidence["bounded_dual_runner_roles"] is True
@@ -123,6 +124,7 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "javascript_actions_use_approved_native_node24_majors",
         "bounded_dual_runner_roles",
         "policy_evidence_remains_one_scanner_step",
+        "pr_ci_static_gate_reuses_classifier_checkout",
     }
 
     assert expected <= required
