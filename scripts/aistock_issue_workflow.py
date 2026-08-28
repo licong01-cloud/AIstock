@@ -7367,10 +7367,13 @@ def build_submit_bug_plan(
         candidate_path = output_dir / "candidate.json"
         github_body_path = output_dir / "github-issue-body.md"
         bug_path = _bug_json_path(record, registry_root)
-        _add_record_allowed_scope(
-            record,
-            _repo_rel(bug_path, registry_root),
-            _repo_rel(_allocator_path(registry_root), registry_root),
+        _add_record_allowed_scope(record, _repo_rel(bug_path, registry_root))
+        if not create_fix_worktree:
+            _add_record_allowed_scope(record, _repo_rel(_allocator_path(registry_root), registry_root))
+        record["repository_allocator_persistence"] = (
+            "omitted_from_fix_pr_global_reservation_is_authoritative"
+            if create_fix_worktree
+            else "registry_intake_updates_legacy_observation"
         )
         github_result: dict[str, Any] | None = (
             {
@@ -7541,7 +7544,8 @@ def build_submit_bug_plan(
             _write_json(write_candidate_path, {"event": event, "candidate": candidate})
             _write_text(write_github_body_path, _render_github_issue_body(record, candidate))
             _write_json(write_bug_path, record)
-            _write_allocator(max(allocated_number, int(allocation_report.get("max_number") or 0)), write_root)
+            if not create_fix_worktree:
+                _write_allocator(max(allocated_number, int(allocation_report.get("max_number") or 0)), write_root)
             fix_registration_commit = (
                 _commit_bug_registration_in_fix_worktree(write_root, canonical_bug_id)
                 if create_fix_worktree and write_root != registry_root
