@@ -135,7 +135,7 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_55fe2fbc8b833576/terminal-evidence",
     "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
     "fresh_process_evidence": [
       "python -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/paper_trading_v2/test_market_data.py -q -p no:cacheprovider -> 109 passed"
