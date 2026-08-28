@@ -76,6 +76,22 @@ class DualHeadFinalModels:
 
 
 @dataclass(frozen=True)
+class LiabilityHeadOOFResult:
+    predictions: pd.DataFrame
+    best_iterations: tuple[int, ...]
+    fold_receipts: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class FinalLiabilityHeadModel:
+    booster: Any
+    transform: PolicyUtilityTransformFit
+    feature_names: tuple[str, ...]
+    categorical_vocabulary: dict[str, tuple[int, ...]]
+    boost_rounds: int
+
+
+@dataclass(frozen=True)
 class OOFPriceScale:
     return_location_bps: float
     return_scale_bps: float
@@ -324,6 +340,63 @@ def train_dual_head_oof(
     )
 
 
+def train_liability_head_oof(
+    *,
+    features: pd.DataFrame,
+    labels: pd.DataFrame,
+    folds: Sequence[InnerFoldSpec],
+    family: Any,
+    seed: int,
+    liability_clip_min: float = 0.02,
+    liability_clip_max: float = 0.4,
+) -> LiabilityHeadOOFResult:
+    """Train the public P0-H-compatible liability head without a return head."""
+    prepared_labels = add_liability_target(labels)
+    parts: list[pd.DataFrame] = []
+    rounds: list[int] = []
+    receipts: list[dict[str, Any]] = []
+    for fold in folds:
+        if not fold.score_dates:
+            continue
+        result = _train_head_fold(
+            features=features,
+            labels=prepared_labels,
+            train_dates=fold.train_dates,
+            validation_dates=fold.validation_dates,
+            score_dates=fold.score_dates,
+            family=family,
+            seed=seed,
+            target_column=LIABILITY_TARGET_COLUMN,
+            prediction_column=LIABILITY_SCORE_COLUMN,
+            clip_bounds=(liability_clip_min, liability_clip_max),
+        )
+        predictions = result.predictions.copy()
+        predictions["inner_block_id"] = fold.block_id
+        parts.append(predictions)
+        rounds.append(result.best_iteration)
+        receipts.append(
+            {
+                "block_id": fold.block_id,
+                "train_decision_count": len(fold.train_dates),
+                "validation_decision_count": len(fold.validation_dates),
+                "score_decision_count": len(fold.score_dates),
+                "purged_decision_count": len(fold.purged_dates),
+                "embargo_decision_count": len(fold.embargo_dates),
+                "liability_best_iteration": result.best_iteration,
+                "liability_metrics": result.metrics,
+            }
+        )
+    if not parts:
+        raise _oof_error("liability-head OOF produced no scored fold")
+    predictions = pd.concat(parts, ignore_index=True)
+    verify_liability_head_predictions(predictions)
+    return LiabilityHeadOOFResult(
+        predictions=predictions,
+        best_iterations=tuple(rounds),
+        fold_receipts=tuple(receipts),
+    )
+
+
 def fit_oof_price_scale(
     predictions: pd.DataFrame,
     *,
@@ -475,6 +548,34 @@ def fit_final_dual_head_models(
     )
 
 
+def fit_final_liability_head(
+    *,
+    features: pd.DataFrame,
+    labels: pd.DataFrame,
+    train_dates: Sequence[pd.Timestamp],
+    family: Any,
+    seed: int,
+    boost_rounds: int,
+) -> FinalLiabilityHeadModel:
+    prepared = add_liability_target(labels)
+    booster, transform, feature_names, vocabulary = _fit_final_head(
+        features=features,
+        labels=prepared,
+        train_dates=train_dates,
+        family=family,
+        seed=seed,
+        target_column=LIABILITY_TARGET_COLUMN,
+        boost_rounds=boost_rounds,
+    )
+    return FinalLiabilityHeadModel(
+        booster=booster,
+        transform=transform,
+        feature_names=feature_names,
+        categorical_vocabulary=vocabulary,
+        boost_rounds=boost_rounds,
+    )
+
+
 def score_final_dual_head_models(
     *,
     features: pd.DataFrame,
@@ -506,6 +607,56 @@ def score_final_dual_head_models(
     )
     _verify_exact_predictions(result)
     return result
+
+
+def score_final_liability_head(
+    *,
+    features: pd.DataFrame,
+    model: FinalLiabilityHeadModel,
+    score_dates: Sequence[pd.Timestamp],
+    liability_clip_min: float = 0.02,
+    liability_clip_max: float = 0.4,
+) -> pd.DataFrame:
+    rows, matrix = _score_matrix(
+        features=features,
+        score_dates=score_dates,
+        feature_names=model.feature_names,
+        categorical_vocabulary=model.categorical_vocabulary,
+    )
+    standardized = model.booster.predict(matrix)
+    predictions = inverse_policy_utility_transform(standardized, model.transform)
+    result = rows[
+        ["decision_as_of_trade_date", "target_trade_date", "instrument", "selection_effective_rank"]
+    ].copy()
+    result[LIABILITY_SCORE_COLUMN] = np.clip(
+        predictions,
+        liability_clip_min,
+        liability_clip_max,
+    )
+    verify_liability_head_predictions(result)
+    return result
+
+
+def verify_liability_head_predictions(predictions: pd.DataFrame) -> None:
+    required = {
+        "decision_as_of_trade_date",
+        "target_trade_date",
+        "instrument",
+        "selection_effective_rank",
+        LIABILITY_SCORE_COLUMN,
+    }
+    if not required.issubset(predictions):
+        raise _oof_error("liability-head prediction columns are incomplete")
+    rows = predictions.copy()
+    rows["decision_as_of_trade_date"] = pd.to_datetime(rows["decision_as_of_trade_date"]).dt.normalize()
+    counts = rows.groupby("decision_as_of_trade_date").size()
+    if counts.empty or not counts.eq(20).all():
+        raise _oof_error("liability-head predictions are not exact Top20")
+    if rows.duplicated(["decision_as_of_trade_date", "instrument"]).any():
+        raise _oof_error("liability-head predictions contain duplicates")
+    values = pd.to_numeric(rows[LIABILITY_SCORE_COLUMN], errors="coerce").to_numpy(float)
+    if not np.isfinite(values).all():
+        raise _oof_error("liability-head predictions contain non-finite values")
 
 
 def dual_head_candidate_metrics(predictions: pd.DataFrame) -> dict[str, Any]:

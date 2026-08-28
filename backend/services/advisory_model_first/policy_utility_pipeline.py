@@ -1210,3 +1210,19 @@ def _peak_rss() -> int:
     if _resource is None:
         return 0
     return int(_resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss) * (1 if platform.system() == "Darwin" else 1024)
+
+
+# Stable public orchestration helpers for later Stage-A challengers.  Keep the
+# original private names for compatibility with P0-D..P0-J while new pipelines
+# depend only on these explicit shared signatures.
+evaluate_policy_validation_blocks = _evaluate
+policy_episode_metrics = _episode_metrics
+paired_policy_metrics = _paired_metrics
+read_policy_json = _read_json
+sha256_policy_file = _sha256
+verify_policy_bound_data_identities = _verify_bound_data_identities
+verify_policy_environment = _verify_environment
+verify_policy_feature_v2_coverage = _verify_feature_v2_coverage
+verify_policy_dataset = _verify_policy_dataset
+verify_policy_source_coverage = _verify_policy_source_coverage
+verify_policy_training_cutoffs = _verify_training_cutoffs
