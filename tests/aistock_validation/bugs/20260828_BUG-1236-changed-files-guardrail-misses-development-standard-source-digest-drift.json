@@ -31,14 +31,24 @@
   ],
   "expected": "The existing changed-files guardrail must fail immediately when either sole-standard file changes and source_sha256 is stale, with the expected digest in one concise remediation finding.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/aistock_guardrail_scan.py",
+    "actual_changed_files": [
       "backend/tests/test_aistock_guardrail_scan.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_guardrail_scan.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1236-changed-files-guardrail-misses-development-standard-source-digest-drift.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/test_aistock_guardrail_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_guardrail_scan.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1236-changed-files-guardrail-misses-development-standard-source-digest-drift.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_guardrail_scan.py",
@@ -148,10 +158,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
