@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 73b4350bd198530ede481600a0e20cede62b775a411a4841ce23886e69e63269
+source_sha256: be3fddeda6707b6718f6f90ddbce8eb208b27173e0dcffc23402a6f0a672ca0e
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-28"
@@ -731,6 +731,9 @@ rules:
         - pr_quality_no_external_report_action_dependency
         - superseded_pr_runs_cancel_in_progress
         - bounded_pr_base_fetch_retry
+        - pr_base_object_requires_proven_merge_base_with_head
+        - insufficient_shallow_ancestry_fetches_only_pinned_base_and_pr_checkout_or_head_with_limited_deepen
+        - no_unbounded_full_history_checkout_for_merge_base_recovery
         - non_security_quality_lanes_run_once_on_pull_request
         - codeql_default_branch_security_scan_preserved
         - codeql_uses_hash_verified_prebuilt_bundle
@@ -794,6 +797,12 @@ manual_review_controls:
     title: New BUG or Issue records must be synchronized to GitHub and include github_issue_number and github_issue_url before merge.
     effect: block
     enforcement_phase: issue_lifecycle
+    required_evidence:
+      - bounded_graphql_read_with_transport_only_rest_fallback
+      - rest_readback_matches_repository_pr_head_merge_commit_and_merge_time
+      - non_transport_and_identity_failures_remain_fail_closed
+      - skip_github_check_is_verified_rest_only_not_unverified_bypass
+      - pr_read_fallback_does_not_suppress_issue_state_comment_or_label_sync
     failure_policy: block_bug_record_merge_and_close_sync
   - control_id: DESIGN-MAIN-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-main-001

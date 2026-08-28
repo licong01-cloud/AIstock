@@ -13820,14 +13820,27 @@ def _maybe_create_pr(
 
 def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[str, Any]:
     if skip_github_check:
-        return {"checked": False, "merged": True, "reason": "skip_github_check"}
+        return _verify_pr_merged_with_rest(
+            pr_url,
+            reason="explicit_rest_only",
+            graphql_attempts=0,
+        )
     result = _run_read_command_with_retry(
         ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,mergeCommit,url,headRefName,headRefOid"],
         cwd=REPO_ROOT,
         timeout=30,
+        attempts=1,
     )
     if not result.get("ok"):
-        raise WorkflowError(result.get("stderr") or result.get("stdout") or f"cannot inspect PR: {pr_url}")
+        message = str(result.get("stderr") or result.get("stdout") or f"cannot inspect PR: {pr_url}")
+        if _looks_like_github_transport_failure(message):
+            return _verify_pr_merged_with_rest(
+                pr_url,
+                reason="graphql_transport_failure",
+                graphql_attempts=int(result.get("attempts") or 0),
+                graphql_error=message,
+            )
+        raise WorkflowError(message)
     try:
         payload = json.loads(str(result.get("stdout") or "{}"))
     except json.JSONDecodeError as exc:
@@ -14660,9 +14673,55 @@ def _github_pull_rest_readback(pr_url: str) -> dict[str, Any]:
         "merged_at": payload.get("merged_at"),
         "merge_commit": str(payload.get("merge_commit_sha") or "").strip() or None,
         "head_sha": str(head.get("sha") or "").strip(),
+        "head_ref": str(head.get("ref") or "").strip(),
         "base_ref": str(base.get("ref") or "").strip(),
         "url": str(payload.get("html_url") or pr_url),
     }
+
+
+def _verify_pr_merged_with_rest(
+    pr_url: str,
+    *,
+    reason: str,
+    graphql_attempts: int,
+    graphql_error: str | None = None,
+) -> dict[str, Any]:
+    pr_number = _github_pr_number_from_url(pr_url)
+    expected_url = f"https://github.com/{GITHUB_REPO}/pull/{pr_number}" if pr_number is not None else ""
+    requested_url = pr_url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    if not expected_url or requested_url != expected_url:
+        raise WorkflowError(
+            "close-sync REST PR identity mismatch: "
+            f"expected_url={expected_url or 'unresolved'} requested_url={requested_url or 'missing'}"
+        )
+    readback = _github_pull_rest_readback(pr_url)
+    observed_url = str(readback.get("url") or "").rstrip("/")
+    if expected_url and observed_url != expected_url:
+        raise WorkflowError(
+            "close-sync REST PR identity mismatch: "
+            f"expected_url={expected_url} observed_url={observed_url or 'missing'}"
+        )
+    if not readback.get("merged"):
+        raise WorkflowError(f"PR is not merged: {pr_url}")
+    head_sha = str(readback.get("head_sha") or "").strip().lower()
+    merge_commit = str(readback.get("merge_commit") or "").strip().lower()
+    merged_at = str(readback.get("merged_at") or "").strip()
+    if not _FULL_GIT_COMMIT_RE.fullmatch(head_sha):
+        raise WorkflowError("close-sync REST PR readback is missing a full head SHA")
+    if not _FULL_GIT_COMMIT_RE.fullmatch(merge_commit):
+        raise WorkflowError("close-sync REST PR readback is missing a full merge commit SHA")
+    if not merged_at:
+        raise WorkflowError("close-sync REST PR readback is missing merged_at")
+    verified = _verified_pr_from_rest_readback(readback)
+    verified["rest_fallback"] = {
+        "reason": reason,
+        "graphql_attempts": graphql_attempts,
+        "graphql_error": str(graphql_error or "")[:1000] or None,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "merge_commit": merge_commit,
+    }
+    return verified
 
 
 def _verified_pr_from_rest_readback(readback: dict[str, Any]) -> dict[str, Any]:
@@ -14675,6 +14734,7 @@ def _verified_pr_from_rest_readback(readback: dict[str, Any]) -> dict[str, Any]:
             "mergedAt": readback.get("merged_at"),
             "mergeCommit": {"oid": readback.get("merge_commit")},
             "url": readback.get("url"),
+            "headRefName": readback.get("head_ref"),
             "headRefOid": readback.get("head_sha"),
         },
     }
@@ -17412,17 +17472,9 @@ def build_close_sync_plan(
             "updated_bug_json": _repo_rel(source_path, close_sync_root),
         }
         github_sync = (
-            (
-                {"status": "skipped_github_check_disabled"}
-                if skip_github_check
-                else _sync_github_issue_runtime_pending(updated, evidence_payload, root=close_sync_root)
-            )
+            _sync_github_issue_runtime_pending(updated, evidence_payload, root=close_sync_root)
             if runtime_pending
-            else (
-                {"status": "skipped_github_check_disabled"}
-                if skip_github_check
-                else _sync_github_issue_after_close(updated, evidence_payload, root=close_sync_root)
-            )
+            else _sync_github_issue_after_close(updated, evidence_payload, root=close_sync_root)
         )
         evidence_payload["github_issue_sync"] = github_sync
         _write_json(output_dir / "close-sync-evidence.json", evidence_payload)
@@ -17630,11 +17682,7 @@ def build_close_sync_batch_plan(
             "updated_bug_json": _repo_rel(source_path, close_sync_root),
             "per_issue_compatibility_key": compatibility["compatibility_key"],
         }
-        github_syncs[item] = (
-            {"status": "skipped_github_check_disabled"}
-            if skip_github_check
-            else _sync_github_issue_after_close(updated, issue_evidence, root=close_sync_root)
-        )
+        github_syncs[item] = _sync_github_issue_after_close(updated, issue_evidence, root=close_sync_root)
         _write_state(
             item,
             state="close_synced",
@@ -18944,7 +18992,11 @@ def build_parser() -> argparse.ArgumentParser:
     close.add_argument("--production-ddl-gate", default="noop")
     close.add_argument("--production-frontend-dependency-gate", default="noop")
     close.add_argument("--production-backend-dependency-gate", default="noop")
-    close.add_argument("--skip-github-check", action="store_true")
+    close.add_argument(
+        "--skip-github-check",
+        action="store_true",
+        help="Use exact GitHub REST merged-PR verification instead of GraphQL; Issue synchronization is still required.",
+    )
     close.add_argument("--create-registry-worktree", action="store_true")
     close.add_argument(
         "--create-pr",
@@ -18969,7 +19021,11 @@ def build_parser() -> argparse.ArgumentParser:
     close_batch.add_argument("--production-ddl-gate", default="noop")
     close_batch.add_argument("--production-frontend-dependency-gate", default="noop")
     close_batch.add_argument("--production-backend-dependency-gate", default="noop")
-    close_batch.add_argument("--skip-github-check", action="store_true")
+    close_batch.add_argument(
+        "--skip-github-check",
+        action="store_true",
+        help="Use exact GitHub REST merged-PR verification instead of GraphQL; Issue synchronization is still required.",
+    )
     close_batch.add_argument("--create-registry-worktree", action="store_true")
     close_batch.add_argument("--create-pr", action="store_true", help="Commit, push, and open one close-sync PR for the batch after --apply.")
     close_batch.add_argument(
