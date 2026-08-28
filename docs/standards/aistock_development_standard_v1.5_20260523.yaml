@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 972090223746f0d9e03ce942775b2530f935b07af5ad0923898a694224fe2877
+source_sha256: 775cc48898488e7ee0262db8015f5ff0b498dff9e5083375c0ca10cfd7a77e5b
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-28"
@@ -306,6 +306,11 @@ rules:
       patterns:
         - 'requests\.(?:get|post|put|delete|patch)\([^\n)]*$'
         - 'subprocess\.Popen\('
+      required_evidence:
+        - pr_check_watch_exact_head_rest_fallback
+        - actions_run_jobs_and_log_rest_fallback
+        - last_green_rest_fallback
+        - non_transport_errors_remain_fail_closed
     baseline_policy: warn_new_only
     remediation: Add timeout, cancellation, output capture, and process cleanup.
 

@@ -212,6 +212,8 @@ QE/RD-Agent/Qlib 产物记录 `artifact_id/type/uri/storage_tier`、hash、size/
 
 HTTP、subprocess、DB 长查询和批处理设置 timeout、取消、日志、退出码和资源释放；长任务提供 heartbeat、状态持久化与幂等恢复。
 
+PR check watch、已完成 Actions run/job/log 诊断和 last-green 定位在 GraphQL/`gh run` 遇到 TLS、EOF、schannel、连接重置或超时时，先执行固定次数重试，再改用等价 GitHub REST endpoint；PR check 绑定 REST 回读的精确 HEAD SHA，Actions jobs 超过单页上限时 fail-closed。权限、策略、输入、404 或其他非传输错误不得改写成网络恢复。REST 与 GraphQL 都失败时返回结构化 unavailable/deferred 结果，不要求重新授权、不启动第二个 workflow、不循环重试。
+
 <a id="rule-db-comment-001"></a>
 ### 6.11 [DB-COMMENT-001] 数据库语义
 

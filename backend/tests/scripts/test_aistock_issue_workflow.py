@@ -10094,6 +10094,57 @@ def test_pr_check_watch_treats_missing_checks_as_pending(
     assert len(payload["attempts"]) == 2
 
 
+def test_pr_check_watch_transport_failure_falls_back_to_exact_head_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"] and args[2].endswith("/pulls/199"):
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "open",
+                        "merged": False,
+                        "head": {"sha": head_sha},
+                        "base": {"ref": "main"},
+                        "html_url": "https://github.example/pull/199",
+                    }
+                ),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"] and "/check-runs?" in args[2]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "total_count": 1,
+                        "check_runs": [
+                            {"name": "CI verdict", "status": "completed", "conclusion": "success"}
+                        ],
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow._view_pr_checks("https://github.example/pull/199")
+
+    assert payload["workflow_gate"] == "checks_passed"
+    assert payload["source"] == "github_rest"
+    assert payload["classified"]["passed"] == ["CI verdict"]
+    assert sum(args[:3] == ["gh", "pr", "view"] for args in commands) == 2
+
+
 def test_run_pr_mode_blocks_pr_automation_from_canonical_root(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
