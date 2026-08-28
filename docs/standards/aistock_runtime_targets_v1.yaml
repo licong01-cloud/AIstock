@@ -76,6 +76,7 @@ targets:
       - backend/services/dataset_release/resolution_processor.py
       - backend/services/dataset_release/resource_budget.py
       - backend/services/dataset_release/resource_gate.py
+      - backend/services/dataset_release/sector_data_candidate_source.py
       - backend/services/dataset_release/source_authority.py
       - backend/services/dataset_release/component_artifact_manifest.py
       - backend/services/dataset_release/component_manifest_producer.py
@@ -107,6 +108,7 @@ targets:
           - backend/services/dataset_release/resolution_processor.py
           - backend/services/dataset_release/resource_budget.py
           - backend/services/dataset_release/resource_gate.py
+          - backend/services/dataset_release/sector_data_candidate_source.py
           - backend/services/dataset_release/source_authority.py
           - backend/services/dataset_release/component_artifact_manifest.py
           - backend/services/dataset_release/component_manifest_producer.py
