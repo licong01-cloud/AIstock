@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1226",
-  "closed_at": null,
+  "closed_at": "2026-08-28T20:24:22Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -159,8 +159,8 @@
   },
   "first_seen_at": "2026-08-28T11:17:49.067148Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fa18d3d8477bd7312ce8a6a38a452c0cf7eebb4d",
+  "fixed_at": "2026-08-28T20:24:22Z",
   "github_issue_number": 3892,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3892",
   "last_seen_at": "2026-08-28T11:17:49.067148Z",
@@ -168,6 +168,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3894",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -184,6 +185,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -193,7 +195,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1226",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0f2f2ff77ad52599",
+    "recorded_at": "2026-08-28T20:28:00.972596Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "566bac4e9551f0c83ea8a7163d77c48c63059aca",
+    "source_merge_commit": "fa18d3d8477bd7312ce8a6a38a452c0cf7eebb4d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3894",
+    "validation_evidence": [
+      "rtk pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_repository_contract_evidence_matches_machine_standard backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -> 2 passed",
+      "rtk nox -s guardrail_changed_files -- --changed-only -> passed; blocking=0; ownership=7/7",
+      "rtk nox -s validation_module_registry_l0 -> passed; 8 passed; ownership=14/14"
+    ],
+    "validation_evidence_digest": "bd3de0c934853d2782a15fcef1be2c6d591c449515dd23661979f5a66372d8f3"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -202,6 +227,14 @@
     "fingerprint": "1f73d652040c26d1a43e7445",
     "source_event_id": "FE-20260828-1f73d652040c"
   },
+  "validation_evidence": [
+    "validation-receipt: id=8fef22964606a309 commit=566bac4e9551f0c83ea8a7163d77c48c63059aca kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_repository_contract_evidence_matches_machine_standard backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q` result=`2 passed`",
+    "validation-receipt: id=c4fd44ff155db518 commit=566bac4e9551f0c83ea8a7163d77c48c63059aca kind=nox plan=guardrail_changed_files status=passed command=`rtk nox -s guardrail_changed_files -- --changed-only` result=`passed; blocking=0; ownership=7/7`",
+    "validation-receipt: id=3314a9ed93dac59f commit=566bac4e9551f0c83ea8a7163d77c48c63059aca kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed; 8 passed; ownership=14/14`",
+    "rtk pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_repository_contract_evidence_matches_machine_standard backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -> 2 passed",
+    "rtk nox -s guardrail_changed_files -- --changed-only -> passed; blocking=0; ownership=7/7",
+    "rtk nox -s validation_module_registry_l0 -> passed; 8 passed; ownership=14/14"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
