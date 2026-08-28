@@ -249,6 +249,8 @@ HTTP、subprocess、DB 长查询和批处理设置 timeout、取消、日志、�
 
 正式 BUG 由工作流分配 `BUG-NNN`，同步创建或关联 GitHub Issue，并在 BUG JSON 保存 `github_issue_number/url`、scope、验证计划和生产 gate。未确认候选保留在 candidate/tmp 区。
 
+合入与 close-sync 的关键 GitHub 读取优先使用有界 GraphQL 查询；仅当错误被识别为 TLS、EOF、timeout、connection reset 等传输故障时，必须自动切换到同一仓库、同一 PR 编号的 REST readback，并逐项校验 `merged`、完整 source head SHA、完整 merge commit SHA、`merged_at` 和 canonical PR URL。HTTP 权限错误、PR 未合入、身份缺失或不一致继续 fail closed。兼容参数 `--skip-github-check` 仅表示跳过 GraphQL 并直接执行上述精确 REST 校验，不得生成 `checked=false/merged=true` 的无证据结论，也不得跳过 Issue 的 reopen/close/comment/label 同步。
+
 <a id="rule-rdagent-release-identity-001"></a>
 ### 6.19 [RDAGENT-RELEASE-IDENTITY-001] RD-Agent 不可变发布身份
 

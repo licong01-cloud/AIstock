@@ -794,6 +794,12 @@ manual_review_controls:
     title: New BUG or Issue records must be synchronized to GitHub and include github_issue_number and github_issue_url before merge.
     effect: block
     enforcement_phase: issue_lifecycle
+    required_evidence:
+      - bounded_graphql_read_with_transport_only_rest_fallback
+      - rest_readback_matches_repository_pr_head_merge_commit_and_merge_time
+      - non_transport_and_identity_failures_remain_fail_closed
+      - skip_github_check_is_verified_rest_only_not_unverified_bypass
+      - pr_read_fallback_does_not_suppress_issue_state_comment_or_label_sync
     failure_policy: block_bug_record_merge_and_close_sync
   - control_id: DESIGN-MAIN-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-main-001
