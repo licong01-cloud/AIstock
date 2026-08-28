@@ -85,6 +85,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
     assert "pr_workflows_no_external_report_action_dependency" in evidence
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
+    assert evidence["nightly_watermark_lookup_is_repo_scoped_and_fail_closed"] is True
     assert evidence["bounded_dual_runner_roles"] is True
     assert evidence["policy_evidence_remains_one_scanner_step"] is True
     assert evidence["javascript_actions_use_approved_native_node24_majors"] is True

@@ -426,11 +426,18 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert dispatch["run_nightly_l3"]["default"] is True
     assert dispatch["full_nightly_run"]["default"] is False
     assert "Build successful-watermark Nightly execution plan" in workflow
-    assert "gh run list --workflow nightly.yml --branch main --event schedule --status success" in workflow
+    assert 'gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml --branch main --event schedule --status success' in workflow
+    assert 'if ($LASTEXITCODE -ne 0) { throw "Failed to query the last successful scheduled Nightly run." }' in workflow
+    assert "ConvertFrom-Json -ErrorAction Stop" in workflow
+    assert "No successful scheduled Nightly watermark exists" in workflow
+    assert 'if ($env:FULL_NIGHTLY_RUN -eq "true")' in workflow
+    assert '-or -not $watermark' not in workflow
     assert "--plan-selection-output" in workflow
     assert "--fail-on-blocked" in workflow
     assert 'git cat-file -e "$watermark^{commit}"' in workflow
-    assert "using explicit full-run fallback" in workflow
+    assert "Successful scheduled Nightly watermark is unavailable locally" in workflow
+    assert "using explicit full-run fallback" not in workflow
+    assert workflow.count('$extraArgs += "--full-run"') == 1
     assert "scripts/nightly_session_runner.py" in workflow
     assert '--plan "$outDir/execution-plan.json"' in workflow
     assert "--session-timeout-seconds 1200" in workflow

@@ -279,25 +279,32 @@ jobs:
         run: |
           $outDir = "tmp/validation/nightly_l3"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          $successful = gh run list --workflow nightly.yml --branch main --event schedule --status success --limit 1 --json headSha | ConvertFrom-Json | Select-Object -First 1
-          $watermark = if ($successful) { $successful.headSha } else { "" }
           $changedFile = "$outDir/changed-files.txt"
           $extraArgs = @()
           $watermarkArgs = @()
-          if ($watermark) { $watermarkArgs += @("--watermark", $watermark) }
-          if ($env:FULL_NIGHTLY_RUN -eq "true" -or -not $watermark) {
+          $watermark = ""
+          if ($env:FULL_NIGHTLY_RUN -eq "true") {
             $extraArgs += "--full-run"
             New-Item -ItemType File -Force -Path $changedFile | Out-Null
           } else {
+            $successfulJson = gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml --branch main --event schedule --status success --limit 1 --json headSha
+            if ($LASTEXITCODE -ne 0) { throw "Failed to query the last successful scheduled Nightly run." }
+            try {
+              $successful = $successfulJson | ConvertFrom-Json -ErrorAction Stop | Select-Object -First 1
+            } catch {
+              throw "Failed to parse the last successful scheduled Nightly run: $($_.Exception.Message)"
+            }
+            $watermark = if ($successful) { [string]$successful.headSha } else { "" }
+            if (-not $watermark) {
+              throw "No successful scheduled Nightly watermark exists; use workflow_dispatch with full_nightly_run=true for an explicit full run."
+            }
             git cat-file -e "$watermark^{commit}" 2>$null
             if ($LASTEXITCODE -ne 0) {
-              Write-Host "::warning::Successful watermark is unavailable locally; using explicit full-run fallback."
-              $extraArgs += "--full-run"
-              New-Item -ItemType File -Force -Path $changedFile | Out-Null
-            } else {
-              git diff --name-only "$watermark...${env:GITHUB_SHA}" | Set-Content -Path $changedFile -Encoding UTF8
-              if ($LASTEXITCODE -ne 0) { throw "Failed to build Nightly change window from $watermark" }
+              throw "Successful scheduled Nightly watermark is unavailable locally: $watermark"
             }
+            git diff --name-only "$watermark...${env:GITHUB_SHA}" | Set-Content -Path $changedFile -Encoding UTF8
+            if ($LASTEXITCODE -ne 0) { throw "Failed to build Nightly change window from $watermark" }
+            $watermarkArgs += @("--watermark", $watermark)
           }
           conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
             --provider deterministic `
