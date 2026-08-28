@@ -8,6 +8,7 @@ param(
   [string]$RunnerName = "$env:COMPUTERNAME-aistock-security",
   [string]$Role = 'security',
   [string[]]$Labels = @('aistock', 'aistock-ci-security'),
+  [string]$StartHelperPath,
   [switch]$Apply,
   [switch]$Start,
   [switch]$Json
@@ -51,6 +52,11 @@ if ($Labels -notcontains "aistock-ci-$Role") {
 $resolvedRoot = Resolve-BoundedPath -Path $InstallRoot -Boundary $AllowedRoot
 $resolvedArchive = [System.IO.Path]::GetFullPath($ArchivePath)
 $resolvedTemplate = [System.IO.Path]::GetFullPath($TemplateWrapper)
+$resolvedStartHelper = if ($StartHelperPath) {
+  [System.IO.Path]::GetFullPath($StartHelperPath)
+} else {
+  Join-Path $PSScriptRoot 'start_aistock_github_runner.ps1'
+}
 $wrapper = Join-Path $resolvedRoot 'run-aistock-runner-hidden.cmd'
 $runnerIdentity = Join-Path $resolvedRoot '.runner'
 $config = Join-Path $resolvedRoot 'config.cmd'
@@ -131,13 +137,23 @@ if (-not $alreadyConfigured) {
 }
 
 $wrapperText = Get-Content -Raw -LiteralPath $resolvedTemplate
+$runnerCallPattern = '(?im)^call run\.cmd(?:\s.*)?$'
+if ($wrapperText -notmatch $runnerCallPattern) {
+  throw "Runner wrapper template does not call run.cmd: $resolvedTemplate"
+}
 $wrapperText = [regex]::Replace(
   $wrapperText,
   '(?im)^cd /d ".*"\s*$',
   ('cd /d "' + $resolvedRoot + '"'),
   1
 )
-if ($wrapperText -notmatch '(?im)^set "AISTOCK_RUNNER_ROLE=') {
+if ($wrapperText -match '(?im)^set "AISTOCK_RUNNER_ROLE=.*"\s*$') {
+  $wrapperText = [regex]::Replace(
+    $wrapperText,
+    '(?im)^set "AISTOCK_RUNNER_ROLE=.*"\s*$',
+    ('set "AISTOCK_RUNNER_ROLE=' + $Role + '"')
+  )
+} else {
   $roleLine = 'set "AISTOCK_RUNNER_ROLE=' + $Role + '"' + "`r`ncall run.cmd"
   $wrapperText = $wrapperText -replace '(?im)^call run\.cmd', $roleLine
 }
@@ -145,10 +161,19 @@ Set-Content -LiteralPath $wrapper -Value $wrapperText -Encoding ASCII
 
 $started = $false
 if ($Start) {
-  $startHelper = Join-Path $PSScriptRoot 'start_aistock_github_runner.ps1'
-  $startPayload = & $startHelper -InstallRoot $resolvedRoot -Json | ConvertFrom-Json
-  if ($LASTEXITCODE -ne 0) {
-    throw "GitHub runner start helper failed with exit code $LASTEXITCODE"
+  if (-not (Test-Path -LiteralPath $resolvedStartHelper -PathType Leaf)) {
+    throw "GitHub runner start helper not found: $resolvedStartHelper"
+  }
+  try {
+    $startPayload = & $resolvedStartHelper -InstallRoot $resolvedRoot -Json | ConvertFrom-Json
+  } catch {
+    throw "GitHub runner start helper failed: $($_.Exception.Message)"
+  }
+  if ($startPayload.schema_version -ne 'aistock_github_runner_start_v1') {
+    throw 'GitHub runner start helper returned an invalid schema'
+  }
+  if ($startPayload.status -notin @('started', 'already_running')) {
+    throw "GitHub runner start helper returned unexpected status: $($startPayload.status)"
   }
   $started = [bool]$startPayload.started
 }

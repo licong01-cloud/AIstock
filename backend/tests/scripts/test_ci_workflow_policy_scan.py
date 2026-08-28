@@ -88,6 +88,23 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
 
 
+def test_dual_runner_policy_does_not_lock_nightly_job_count(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "nightly.yml":
+            text += (
+                "\n  future-ordinary-lane:\n"
+                "    runs-on: [self-hosted, Windows, aistock-ci]\n"
+                "    steps:\n"
+                "      - run: echo future\n"
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["bounded_dual_runner_roles"] is True
+
+
 def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -> None:
     import yaml
 

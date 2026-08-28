@@ -170,6 +170,16 @@ def build_contract_evidence(
     pr_quality_text = workflow_text.get("pr-quality.yml", "")
     nightly_text = workflow_text.get("nightly.yml", "")
     code_intelligence_refresh_text = workflow_text.get("code-intelligence-refresh.yml", "")
+    nightly_runner_re = re.compile(
+        r"runs-on:\s*\[self-hosted,\s*Windows,\s*([a-z0-9-]+)\]",
+        re.IGNORECASE,
+    )
+    nightly_runner_labels = [
+        match.group(1)
+        for line in nightly_text.splitlines()
+        if not line.lstrip().startswith("#")
+        if (match := nightly_runner_re.search(line))
+    ]
     nox_text = nox_path.read_text(encoding="utf-8") if nox_path.exists() else ""
     classifier_text = classifier_path.read_text(encoding="utf-8") if classifier_path.exists() else ""
     environment_verify_text = (
@@ -298,8 +308,9 @@ def build_contract_evidence(
         "bounded_dual_runner_roles": (
             uses_expected_runner("codeql.yml")
             and "runs-on: [self-hosted, Windows, aistock-ci-security]" in code_intelligence_refresh_text
-            and nightly_text.count("runs-on: [self-hosted, Windows, aistock-ci]") == 4
-            and nightly_text.count("runs-on: [self-hosted, Windows, aistock-ci-security]") == 1
+            and bool(nightly_runner_labels)
+            and {label.casefold() for label in nightly_runner_labels}
+            == {"aistock-ci", "aistock-ci-security"}
         ),
         "policy_evidence_remains_one_scanner_step": (
             combined_workflow_text.count("python scripts/ci_workflow_policy_scan.py") == 1
