@@ -85,6 +85,54 @@ def test_ci_workflow_policy_is_enforced_by_guardrail_scanner(tmp_path: Path) -> 
     assert all(finding.severity == "P0" for finding in findings)
 
 
+def test_changed_standard_digest_drift_is_a_blocking_finding(tmp_path: Path) -> None:
+    scanner = _load_module()
+    standard = tmp_path / "standard.md"
+    catalog_path = tmp_path / "standard.yaml"
+    standard.write_text("# Authority\n\nchanged\n", encoding="utf-8")
+    catalog_path.write_text("source_sha256: stale\n", encoding="utf-8")
+    catalog = {
+        "source_standard": "standard.md",
+        "source_sha256": "stale",
+        "rule_sync_policy": {"source_digest_required": True},
+    }
+
+    findings = scanner.scan_standard_digest_consistency(
+        [standard, catalog_path],
+        root=tmp_path,
+        catalog=catalog,
+        catalog_path=catalog_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "STANDARD-SOURCE-DIGEST"
+    assert findings[0].severity == "P1"
+    assert "expected=" in findings[0].message
+    assert "set source_sha256" in findings[0].remediation
+    assert scanner.blocking_findings(findings, "P1", fail_new_only=True) == findings
+
+
+def test_unchanged_standard_digest_contract_is_not_scanned(tmp_path: Path) -> None:
+    scanner = _load_module()
+    standard = tmp_path / "standard.md"
+    catalog_path = tmp_path / "standard.yaml"
+    standard.write_text("# Authority\n", encoding="utf-8")
+    catalog_path.write_text("source_sha256: stale\n", encoding="utf-8")
+
+    findings = scanner.scan_standard_digest_consistency(
+        [tmp_path / "unrelated.py"],
+        root=tmp_path,
+        catalog={
+            "source_standard": "standard.md",
+            "source_sha256": "stale",
+            "rule_sync_policy": {"source_digest_required": True},
+        },
+        catalog_path=catalog_path,
+    )
+
+    assert findings == []
+
+
 def test_catalog_references_current_human_readable_standard() -> None:
     scanner = _load_module()
 
