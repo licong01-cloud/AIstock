@@ -122,8 +122,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh isolated import backend.services.dataset_release.source_authority -> BUG1238_FRESH_PROCESS_IMPORT_OK"
+    ],
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
