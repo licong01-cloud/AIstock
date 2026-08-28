@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: b93ab611df36ba2bef85d2cf0cfb895b2f334bea6fe610c1f42a89fac874f5d1
+source_sha256: 0085bb211e409c73479464a7d679b01292c4893eb0eb872c0829985832bd6870
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-28"
@@ -553,6 +553,9 @@ rules:
         - shared_validation_matrix
         - close_sync_compatibility_signature
         - per_issue_evidence_and_issue_sync
+        - same_run_github_actions_read_prohibited
+        - nightly_failure_groups_are_module_scoped
+        - heterogeneous_failure_groups_require_triage
     baseline_policy: manual_review_only
     remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates.
 
@@ -750,26 +753,6 @@ rules:
         - windows_git_bash_shell
     baseline_policy: block_new_and_changed_workflow
     remediation: Require PR-based main updates, provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
-
-  - rule_id: NIGHTLY-FAILURE-INTAKE-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-nightly-failure-intake-001
-    title: Nightly in-run failure intake uses completed local receipts and withholds heterogeneous auto-filing
-    severity: P1
-    category: ci_efficiency
-    enabled: true
-    effect: block
-    enforcement_phase: pr_readiness
-    failure_policy: block_heterogeneous_nightly_issue_and_bug_autofiling
-    checker:
-      type: pytest
-      test_paths:
-        - backend/tests/scripts/test_ci_failure_issue_summary.py
-      required_evidence:
-        - same_run_github_actions_read_prohibited
-        - nightly_failure_groups_are_module_scoped
-        - heterogeneous_failure_groups_require_triage
-    baseline_policy: block_new_and_changed_workflow
-    remediation: Build Nightly intake from completed local receipts, retain module-scoped groups, and auto-file only a single confirmed module group; query Actions logs only after a run completes.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
