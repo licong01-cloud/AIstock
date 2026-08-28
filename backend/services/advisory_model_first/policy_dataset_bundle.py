@@ -277,3 +277,7 @@ def _json_ready(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     raise TypeError(f"unsupported policy dataset JSON value: {type(value).__name__}")
+
+
+# Stable public JSON normalizer for later immutable model bundles.
+json_ready = _json_ready
