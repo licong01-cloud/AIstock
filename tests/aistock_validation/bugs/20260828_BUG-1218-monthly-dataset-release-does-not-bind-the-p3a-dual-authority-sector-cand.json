@@ -11,6 +11,9 @@
     "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
     "backend/services/dataset_release/sector_data_candidate_source.py",
     "backend/tests/dataset_release/test_sector_data_candidate_source.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    ".codex/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/references/monthly-workflow.md",
     "tests/aistock_validation/bugs/20260828_BUG-1218-monthly-dataset-release-does-not-bind-the-p3a-dual-authority-sector-cand.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -237,14 +240,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Windows fresh process imported sector_data_candidate_source and source_authority: PASS"
+    ],
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },
