@@ -16,7 +16,7 @@ def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: 
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
 
 
-def test_merge_uses_only_github_required_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_merge_uses_stable_quality_contract_and_ignores_advisory_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
 
     def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
@@ -36,7 +36,11 @@ def test_merge_uses_only_github_required_checks(monkeypatch: pytest.MonkeyPatch)
         if args[:3] == ["gh", "pr", "checks"]:
             return _result(
                 stdout=json.dumps(
-                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
+                    [
+                        {"name": name, "state": "SUCCESS", "bucket": "pass", "workflow": "quality"}
+                        for name in workflow.MERGE_QUALITY_CHECK_CONTEXTS
+                    ]
+                    + [{"name": "advisory", "state": "FAILURE", "bucket": "fail", "workflow": "advisory"}]
                 )
             )
         if args[:3] == ["gh", "pr", "merge"]:
@@ -52,7 +56,8 @@ def test_merge_uses_only_github_required_checks(monkeypatch: pytest.MonkeyPatch)
 
     payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
 
-    assert payload["check_summary"]["passed"] == ["CI verdict"]
+    assert payload["check_summary"]["passed"] == list(workflow.MERGE_QUALITY_CHECK_CONTEXTS)
+    assert payload["check_summary"]["failed"] == []
     assert any(args[:3] == ["gh", "pr", "merge"] for args in commands)
 
 

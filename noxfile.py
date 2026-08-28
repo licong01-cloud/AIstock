@@ -1159,14 +1159,29 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path and authoritative factor-metric contract regressions."""
-    _run_pytest(
-        session,
+    targets = [
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
         "backend/tests/quantevolver/test_factor_emit_hook.py",
+        "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
         "backend/tests/test_factor_metrics_h20_contract.py",
         "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
+    ]
+    dynamic_relation_test = (
+        ROOT
+        / "backend"
+        / "tests"
+        / "quantevolver"
+        / "test_dynamic_residual_flow_relation_v1.py"
+    )
+    if dynamic_relation_test.exists():
+        targets.append(
+            "backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py"
+        )
+    _run_pytest(
+        session,
+        *targets,
         "-q",
         "-p",
         "no:cacheprovider",
