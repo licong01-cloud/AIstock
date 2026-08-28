@@ -1,0 +1,265 @@
+{
+  "actual": "Three consecutive attempts failed after 2678.784, 2435.856 and 2127.771 seconds because unrelated completed ingestion jobs changed an over-broad writer-ledger digest; WAITING_SOURCE then retried indefinitely.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/source_authority.py",
+    "backend/tests/dataset_release/test_source_authority.py",
+    "tests/aistock_validation/bugs/20260828_BUG-1238-dataset-source-freeze-retries-forever-on-unrelated-completed-ingestion-j.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1238",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-28T18:48:52.943633Z",
+  "description": "Three consecutive attempts failed after 2678.784, 2435.856 and 2127.771 seconds because unrelated completed ingestion jobs changed an over-broad writer-ledger digest; WAITING_SOURCE then retried indefinitely.",
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: partition reads, MVCC fingerprints, PIT authority, control brackets, and relevant writer quiescence remain unchanged; only writer-ledger relevance is scoped to the frozen source datasets and cutoff",
+    "no_silent_error": "passed: relevant active writers and unclassified active writers still fail closed, failed or cancelled relevant jobs remain in the ledger, invalid or unknown source dates remain conservatively included, and all existing partition and control drift checks remain active",
+    "no_simplified_delivery": "passed: the full source-authority regression file, the qlib_data module plan, a production read-only SQL execution, and the exact three observed drift windows were checked rather than relying on a mocked happy path",
+    "no_unrequested_gate_or_approval": "passed: the patch removes false drift from unrelated or post-cutoff work and adds no resource, approval, database, dependency, activation, or process-control gate",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260828-5e2c0f605613",
+      "timestamp": "2026-08-28T18:48:52.943617Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex_app",
+      "note": "Two formal review rounds passed with no blocking findings. The final review made terminal-job semantics explicit and aligned the receipt field with the fail-closed implementation. Source-authority tests: 54 passed; qlib_data_backend: 20 passed; validation registry: 8 passed with complete ownership mapping; Ruff, py_compile, diff check, and L0 passed. Production read-only SQL execution excluded all seven unrelated rows from the three observed drift windows while retaining 2,264 relevant ledger rows; no database write, dataset export, activation, or process control occurred.",
+      "timestamp": "2026-08-28T19:15:47.0076838Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Unrelated or provably post-cutoff completed ingestion jobs do not invalidate a source freeze; relevant active writers and relevant at-or-before-cutoff mutations remain fail-closed and actual partition/control drift remains detected.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1238-dataset-source-freeze-retries-forever-on-unrelated-completed-ingestion-j.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1238-dataset-source-freeze-retries-forever-on-unrelated-completed-ingestion-j.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/source_authority.py",
+        "backend/tests/dataset_release/test_source_authority.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/source_authority.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_source_authority.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/source_authority.py",
+        "backend/tests/dataset_release/test_source_authority.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ]
+  },
+  "first_seen_at": "2026-08-28T18:48:52.943633Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3922,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3922",
+  "last_seen_at": "2026-08-28T18:48:52.943633Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "fresh isolated import backend.services.dataset_release.source_authority -> BUG1238_FRESH_PROCESS_IMPORT_OK"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Dataset source freeze retries forever on unrelated completed ingestion jobs",
+  "trigger_condition": {
+    "fingerprint": "5e2c0f605613faf568100539",
+    "source_event_id": "FE-20260828-5e2c0f605613"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
