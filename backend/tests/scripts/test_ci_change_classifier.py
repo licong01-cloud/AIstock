@@ -1362,17 +1362,13 @@ def test_pr_quality_proves_merge_base_and_boundedly_deepens_exact_pr_refs() -> N
 
     assert detect["env"]["BASE_SHA"] == "${{ github.event.pull_request.base.sha || '' }}"
     assert detect["env"]["CHECKOUT_REF"] == "${{ github.ref || '' }}"
-    assert run.count('git merge-base "${BASE_SHA}" HEAD') >= 2
-    assert '+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}' in run
-    assert '+${CHECKOUT_REF}:refs/remotes/origin/aistock-pr-checkout' in run
-    assert "--no-write-fetch-head --deepen=64" in run
-    assert "for attempt in 1 2 3" in run
-    assert "pinned PR base/head history preparation failed after 3 attempts" in run
-    assert "pinned PR base has no merge base with HEAD" in run
-    assert run.index('git merge-base "${BASE_COMMIT}" HEAD') < run.index(
+    assert "python scripts/ci_changed_files.py" in run
+    assert "--prepare-pr-merge-base-only" in run
+    assert '--base-sha "${BASE_SHA}"' in run
+    assert '--checkout-ref "${CHECKOUT_REF}"' in run
+    assert run.index("--prepare-pr-merge-base-only") < run.index(
         'git diff --name-only "${BASE_COMMIT}...HEAD"'
     )
-    assert "--depth=1" not in run
 
 
 def test_codeql_selects_only_changed_languages() -> None:

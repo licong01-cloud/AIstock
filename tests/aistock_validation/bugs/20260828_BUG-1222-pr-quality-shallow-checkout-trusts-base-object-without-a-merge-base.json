@@ -1,8 +1,14 @@
 {
-  "actual": "The workflow treats git cat-file success for BASE_SHA as sufficient and performs git diff origin/main...HEAD, which fails depending on retained runner objects and PR commit depth.",
+  "actual": "PR Quality, AIstock CI changed-file classification, and Semgrep trusted visible base objects without proving merge-base ancestry; PR #3884 produced no-merge-base failures in multiple shallow-checkout lanes.",
   "allowed_write_scope": [
     ".github/workflows/pr-quality.yml",
+    ".github/workflows/test.yml",
+    ".github/workflows/semgrep.yml",
+    ".github/workflows/codeql.yml",
+    ".github/workflows/dependency-update-validate.yml",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_changed_files.py",
+    "scripts/ci_changed_files.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
     "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "tests/aistock_validation/bugs/20260828_BUG-1222-pr-quality-shallow-checkout-trusts-base-object-without-a-merge-base.json",
@@ -17,7 +23,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-28T08:07:26.698182Z",
-  "description": "The workflow treats git cat-file success for BASE_SHA as sufficient and performs git diff origin/main...HEAD, which fails depending on retained runner objects and PR commit depth.",
+  "description": "Shared PR CI changed-file lanes treated visible base objects as sufficient without proving merge-base ancestry. PR #3884 exposed the same shallow-checkout failure in PR Quality, AIstock CI classification, and Semgrep, requiring one centralized bounded preparation contract.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -29,7 +35,7 @@
   "evidence_uris": [
     "PR #3884 HEAD e60e4d3b; run 33153699529 job 98791405947"
   ],
-  "expected": "PR Quality must first prove a merge base between the pinned PR base SHA and HEAD. If shallow history is insufficient, fetch only the pinned base/head refs with bounded limited deepening, then verify merge-base before any triple-dot diff. Ordinary short PRs must avoid the extra fetch.",
+  "expected": "All PR CI changed-file lanes use one shared helper that proves pinned-base/HEAD merge-base, avoids fetching when ancestry is available, and otherwise boundedly deepens only exact base and checkout refs before triple-dot diff.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
