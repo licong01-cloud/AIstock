@@ -563,3 +563,7 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+# Stable public serializer for later immutable model bundles.
+stable_hmm_payload = _stable_hmm_payload
