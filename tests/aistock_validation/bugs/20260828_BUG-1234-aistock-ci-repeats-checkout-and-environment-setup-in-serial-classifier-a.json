@@ -33,16 +33,28 @@
   ],
   "expected": "One preparation job must classify changes and execute the selected static or close-sync metadata gate from the same checkout, while CI verdict and all fail-closed quality semantics remain unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1234-aistock-ci-repeats-checkout-and-environment-setup-in-serial-classifier-a.json"
+    ],
     "added_files": [],
     "changed_files": [
       ".github/workflows/test.yml",
       "backend/tests/scripts/test_ci_change_classifier.py",
-      "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1234-aistock-ci-repeats-checkout-and-environment-setup-in-serial-classifier-a.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/test.yml",
@@ -172,10 +184,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
