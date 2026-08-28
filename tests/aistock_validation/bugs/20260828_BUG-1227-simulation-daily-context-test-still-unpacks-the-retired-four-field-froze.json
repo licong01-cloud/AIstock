@@ -1,6 +1,7 @@
 {
   "actual": "Latest origin/main fails simulation_core_l2 at backend/tests/simulation_runtime/test_daily_trading_context.py::test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch. PaperV2MinuteMarketDataProvider._frozen_realtime_daily_inputs now has the authoritative five-field return contract, but this test still unpacks four values. Update the test to assert the fifth limit-price source without changing runtime code, then restore the required simulation_core_l2 baseline.",
   "allowed_write_scope": [
+    "backend/tests/simulation_runtime/test_daily_trading_context.py",
     "tests/aistock_validation/bugs/20260828_BUG-1227-simulation-daily-context-test-still-unpacks-the-retired-four-field-froze.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,12 +23,23 @@
       "timestamp": "2026-08-28T11:20:00.409915Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "origin/main:3f2b78b2d46a847a7bfeee0670dd017b0a0b77ee simulation_core_l2 1 failed, 697 passed, 2 skipped"
+  ],
+  "expected": "The test consumes all five authoritative frozen daily input fields and explicitly asserts both pre-close and limit-price source identities; simulation_core_l2 returns green without runtime-code changes.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1227-simulation-daily-context-test-still-unpacks-the-retired-four-field-froze.json",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1227-simulation-daily-context-test-still-unpacks-the-retired-four-field-froze.json",
+      "backend/tests/simulation_runtime/test_daily_trading_context.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -54,7 +66,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_daily_trading_context.py::test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch -q",
   "required_verification": [
     "l0",
     "simulation_core_l2"
@@ -63,10 +75,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
