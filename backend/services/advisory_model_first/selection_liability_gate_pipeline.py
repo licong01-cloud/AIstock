@@ -315,7 +315,7 @@ def run_selection_liability_gate_pipeline(request_path: str | Path) -> dict[str,
                 request_id=f"{request.request_id}_{path_id}_selection_oof",
             )
             selection_validation_priorities = _selection_priorities(rankings, validation_dates)
-            selection_metrics, selection_daily, selection_episodes = evaluate_policy_validation_blocks(
+            selection_metrics, selection_daily, _ = evaluate_policy_validation_blocks(
                 rankings,
                 selection_validation_priorities,
                 validation_blocks,
@@ -328,11 +328,6 @@ def run_selection_liability_gate_pipeline(request_path: str | Path) -> dict[str,
                 request,
                 cost,
                 f"selection_{path_id}",
-            )
-            selection_episode = policy_episode_metrics(
-                selection_daily,
-                selection_episodes,
-                target_count=policy.target_count,
             )
         except AdvisoryModelFirstError as exc:
             path_failure = {"path_id": path_id, **exc.as_dict()}
@@ -479,9 +474,11 @@ def run_selection_liability_gate_pipeline(request_path: str | Path) -> dict[str,
                         policy_episodes,
                         target_count=policy.target_count,
                     )
-                    _assert_outer_daily_completeness_not_worse(
+                    outer_completeness = _assert_outer_daily_completeness_not_worse(
                         policy_daily,
                         selection_daily,
+                        expected_dates=validation_dates,
+                        target_count=policy.target_count,
                     )
                 except AdvisoryModelFirstError as exc:
                     path_failure = {
@@ -512,12 +509,14 @@ def run_selection_liability_gate_pipeline(request_path: str | Path) -> dict[str,
                         "trial_id": trial_id,
                         "path_id": path_id,
                         "minimum_eligible_candidate_count": min(gate.eligible_count_by_date.values()),
-                        "active_slot_coverage": episode_metrics["policy_active_slot_coverage"],
-                        "selection_active_slot_coverage": selection_episode[
-                            "policy_active_slot_coverage"
+                        "active_slot_coverage": outer_completeness["active_slot_coverage"],
+                        "selection_active_slot_coverage": outer_completeness[
+                            "selection_active_slot_coverage"
                         ],
-                        "cash_day_count": episode_metrics["policy_cash_day_count"],
-                        "selection_cash_day_count": selection_episode["policy_cash_day_count"],
+                        "cash_day_count": outer_completeness["cash_day_count"],
+                        "selection_cash_day_count": outer_completeness[
+                            "selection_cash_day_count"
+                        ],
                         "daily_completeness_not_worse": True,
                         "validation_decision_count": len(validation_dates),
                         "validation_dates_sha256": canonical_json_sha256(
@@ -1420,18 +1419,50 @@ def _optional_float(value: Any) -> float | None:
 def _assert_outer_daily_completeness_not_worse(
     gate_daily: pd.DataFrame,
     selection_daily: pd.DataFrame,
-) -> None:
-    required = {"decision_as_of_trade_date", "active_count", "cash_slot_count"}
+    *,
+    expected_dates: Sequence[pd.Timestamp],
+    target_count: int,
+) -> dict[str, float | int]:
+    required = {
+        "decision_as_of_trade_date",
+        "active_count",
+        "cash_slot_count",
+        "is_candidate_decision",
+    }
     if not required.issubset(gate_daily) or not required.issubset(selection_daily):
         raise _outer_completeness_error("outer completeness rows omit required daily fields")
+    expected = pd.DatetimeIndex(pd.to_datetime(list(expected_dates))).normalize()
+    if expected.empty or expected.duplicated().any() or target_count != 5:
+        raise _outer_completeness_error("outer completeness expected-date identity is invalid")
 
     def indexed(frame: pd.DataFrame) -> pd.DataFrame:
-        rows = frame.loc[:, sorted(required)].copy()
+        rows = frame.loc[frame["is_candidate_decision"].eq(True), sorted(required)].copy()
         rows["decision_as_of_trade_date"] = pd.to_datetime(
             rows["decision_as_of_trade_date"]
         ).dt.normalize()
         if rows.duplicated("decision_as_of_trade_date").any():
-            raise _outer_completeness_error("outer completeness rows duplicate a decision date")
+            raise _outer_completeness_error(
+                "outer completeness rows duplicate a candidate decision date"
+            )
+        if set(rows["decision_as_of_trade_date"]) != set(expected):
+            raise _outer_completeness_error(
+                "outer completeness candidate dates differ from frozen validation dates"
+            )
+        for column in ("active_count", "cash_slot_count"):
+            rows[column] = pd.to_numeric(rows[column], errors="coerce")
+            values = rows[column].to_numpy(float)
+            if not np.isfinite(values).all() or not np.array_equal(values, np.rint(values)):
+                raise _outer_completeness_error(
+                    "outer completeness candidate rows contain invalid slot state"
+                )
+        if (
+            (rows["active_count"] < 0).any()
+            or (rows["cash_slot_count"] < 0).any()
+            or not (rows["active_count"] + rows["cash_slot_count"]).eq(target_count).all()
+        ):
+            raise _outer_completeness_error(
+                "outer completeness candidate rows violate target-count identity"
+            )
         return rows.set_index("decision_as_of_trade_date").sort_index()
 
     gate = indexed(gate_daily)
@@ -1445,6 +1476,14 @@ def _assert_outer_daily_completeness_not_worse(
         raise _outer_completeness_error(
             "frozen liability threshold worsens outer daily active-slot or cash completeness"
         )
+    return {
+        "active_slot_coverage": float(gate["active_count"].sum() / (len(gate) * target_count)),
+        "selection_active_slot_coverage": float(
+            selection["active_count"].sum() / (len(selection) * target_count)
+        ),
+        "cash_day_count": int((gate["cash_slot_count"] > 0).sum()),
+        "selection_cash_day_count": int((selection["cash_slot_count"] > 0).sum()),
+    }
 
 
 def _reference_error(message: str, **context: Any) -> AdvisoryModelFirstError:

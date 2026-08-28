@@ -257,6 +257,7 @@ def test_outer_completeness_fails_if_any_single_day_is_worse() -> None:
             "decision_as_of_trade_date": dates,
             "active_count": [5, 4],
             "cash_slot_count": [0, 1],
+            "is_candidate_decision": [True, True],
         }
     )
     gate = pd.DataFrame(
@@ -264,11 +265,49 @@ def test_outer_completeness_fails_if_any_single_day_is_worse() -> None:
             "decision_as_of_trade_date": dates,
             "active_count": [4, 5],
             "cash_slot_count": [1, 0],
+            "is_candidate_decision": [True, True],
         }
     )
     with pytest.raises(AdvisoryModelFirstError) as exc:
-        _assert_outer_daily_completeness_not_worse(gate, selection)
+        _assert_outer_daily_completeness_not_worse(
+            gate,
+            selection,
+            expected_dates=dates,
+            target_count=5,
+        )
     assert exc.value.reason_code == "ADVISORY_P0K_OUTER_COMPLETENESS_FAILED"
+
+
+def test_outer_completeness_ignores_block_tail_duplicate_of_candidate_day() -> None:
+    dates = pd.bdate_range("2026-01-05", periods=2)
+    selection = pd.DataFrame(
+        {
+            "decision_as_of_trade_date": [dates[0], dates[1], dates[1]],
+            "active_count": [5, 2, 4],
+            "cash_slot_count": [0, 3, 1],
+            "is_candidate_decision": [True, False, True],
+        }
+    )
+    gate = pd.DataFrame(
+        {
+            "decision_as_of_trade_date": [dates[0], dates[1], dates[1]],
+            "active_count": [5, 1, 4],
+            "cash_slot_count": [0, 4, 1],
+            "is_candidate_decision": [True, False, True],
+        }
+    )
+    metrics = _assert_outer_daily_completeness_not_worse(
+        gate,
+        selection,
+        expected_dates=dates,
+        target_count=5,
+    )
+    assert metrics == {
+        "active_slot_coverage": 0.9,
+        "selection_active_slot_coverage": 0.9,
+        "cash_day_count": 1,
+        "selection_cash_day_count": 1,
+    }
 
 
 def test_pipeline_imports_only_public_shared_orchestration_signatures() -> None:
