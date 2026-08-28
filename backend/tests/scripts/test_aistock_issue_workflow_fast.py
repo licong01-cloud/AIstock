@@ -16,7 +16,7 @@ def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: 
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
 
 
-def test_merge_uses_only_github_required_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_merge_uses_stable_quality_contract_and_ignores_advisory_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
 
     def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
@@ -36,7 +36,11 @@ def test_merge_uses_only_github_required_checks(monkeypatch: pytest.MonkeyPatch)
         if args[:3] == ["gh", "pr", "checks"]:
             return _result(
                 stdout=json.dumps(
-                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
+                    [
+                        {"name": name, "state": "SUCCESS", "bucket": "pass", "workflow": "quality"}
+                        for name in workflow.MERGE_QUALITY_CHECK_CONTEXTS
+                    ]
+                    + [{"name": "advisory", "state": "FAILURE", "bucket": "fail", "workflow": "advisory"}]
                 )
             )
         if args[:3] == ["gh", "pr", "merge"]:
@@ -52,7 +56,8 @@ def test_merge_uses_only_github_required_checks(monkeypatch: pytest.MonkeyPatch)
 
     payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
 
-    assert payload["check_summary"]["passed"] == ["CI verdict"]
+    assert payload["check_summary"]["passed"] == list(workflow.MERGE_QUALITY_CHECK_CONTEXTS)
+    assert payload["check_summary"]["failed"] == []
     assert any(args[:3] == ["gh", "pr", "merge"] for args in commands)
 
 
@@ -298,15 +303,17 @@ def test_cleanup_retry_accepts_merged_pr_head_ancestry(
 ) -> None:
     head = "a" * 40
     merge_commit = "b" * 40
-    monkeypatch.setattr(
-        workflow,
-        "_verify_pr_merged",
-        lambda pr_url: {
-            "checked": True,
-            "merged": True,
-            "pr": {"headRefOid": head, "mergeCommit": {"oid": merge_commit}},
+    verified_pr_check = {
+        "checked": True,
+        "merged": True,
+        "pr": {
+            "url": "https://github.example/pull/199",
+            "headRefName": "bug/BUG-199-already-partially-cleaned",
+            "headRefOid": head,
+            "mergeCommit": {"oid": merge_commit},
         },
-    )
+    }
+    monkeypatch.setattr(workflow, "_verify_pr_merged", lambda pr_url: pytest.fail("cached PR check was reread"))
     monkeypatch.setattr(
         workflow,
         "_git_commit_is_ancestor",
@@ -318,11 +325,78 @@ def test_cleanup_retry_accepts_merged_pr_head_ancestry(
         "https://github.example/pull/199",
         False,
         cwd=tmp_path,
+        verified_pr_check=verified_pr_check,
     )
 
     assert result["verified"] is True
     assert result["method"] == "merged_pr_head_is_ancestor_of_merge_commit"
     assert result["tree_equivalence_ref"] == head
+
+
+def test_cleanup_preflight_reuses_successful_same_finalizer_fetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cached = {"status": "fetched", "command": "git fetch origin --prune", "result": _result()}
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_preflight_fetch_origin",
+        lambda root, apply: pytest.fail("successful cached fetch was repeated"),
+    )
+
+    result = workflow._cleanup_preflight_fetch_for_plan(tmp_path, apply=True, cached=cached)
+
+    assert result["status"] == "fetched"
+    assert result["reused"] is True
+
+
+def test_cleanup_pr_cache_mismatch_forces_exact_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-target"
+    pr_url = "https://github.example/pull/199"
+    head = "a" * 40
+    merge_commit = "b" * 40
+    readbacks = 0
+
+    def readback(value: str) -> dict[str, Any]:
+        nonlocal readbacks
+        readbacks += 1
+        assert value == pr_url
+        return {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": pr_url,
+                "headRefName": branch,
+                "headRefOid": head,
+                "mergeCommit": {"oid": merge_commit},
+            },
+        }
+
+    monkeypatch.setattr(workflow, "_verify_pr_merged", readback)
+    monkeypatch.setattr(workflow, "_git_commit_is_ancestor", lambda ancestor, descendant, root: True)
+
+    result = workflow._cleanup_merge_verification(
+        branch,
+        pr_url,
+        False,
+        cwd=tmp_path,
+        verified_pr_check={
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": "https://github.example/pull/200",
+                "headRefName": "bug/BUG-200-other",
+                "headRefOid": "c" * 40,
+                "mergeCommit": {"oid": "d" * 40},
+            },
+        },
+    )
+
+    assert result["verified"] is True
+    assert readbacks == 1
 
 
 def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(

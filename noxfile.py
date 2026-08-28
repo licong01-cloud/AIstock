@@ -337,11 +337,16 @@ def _managed_validation_frontend(session: nox.Session, frontend_port: str, env: 
 
 def _ensure_frontend_node_modules(session: nox.Session) -> None:
     frontend = ROOT / "frontend"
-    if (frontend / "node_modules" / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright")).exists():
+    node_modules = frontend / "node_modules"
+    playwright_entries = (
+        node_modules / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright"),
+        node_modules / "@playwright" / "test" / "cli.js",
+    )
+    if any(path.is_file() for path in playwright_entries):
         return
     if _ci_dependency_install_forbidden():
         session.error(
-            "frontend Playwright is missing from the prebuilt CI environment; "
+            "frontend Playwright entrypoint is missing from the prebuilt CI environment; "
             "CI/Nightly cannot run npm ci. Rebuild the AIstock-CI image or run "
             "an explicit local dependency bootstrap before validation."
         )
@@ -1159,14 +1164,29 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path and authoritative factor-metric contract regressions."""
-    _run_pytest(
-        session,
+    targets = [
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
         "backend/tests/quantevolver/test_factor_emit_hook.py",
+        "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
         "backend/tests/test_factor_metrics_h20_contract.py",
         "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
+    ]
+    dynamic_relation_test = (
+        ROOT
+        / "backend"
+        / "tests"
+        / "quantevolver"
+        / "test_dynamic_residual_flow_relation_v1.py"
+    )
+    if dynamic_relation_test.exists():
+        targets.append(
+            "backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py"
+        )
+    _run_pytest(
+        session,
+        *targets,
         "-q",
         "-p",
         "no:cacheprovider",

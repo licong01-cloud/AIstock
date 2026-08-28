@@ -7,11 +7,20 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 DEFAULT_REPO = "licong01-cloud/AIstock"
+GITHUB_TRANSPORT_MARKERS = (
+    "post graphql: eof",
+    "tls handshake timeout",
+    "schannel",
+    "connection reset",
+    "connection timed out",
+    "unexpected eof",
+)
 CANDIDATE_HISTORY_SCHEMA = "aistock_ci_failure_candidate_history_v1"
 NIGHTLY_STATUS_KEYS = (
     "runner_preflight",
@@ -190,6 +199,77 @@ def _issue_creation_policy(summary: dict[str, Any]) -> dict[str, Any]:
         "allowed": True,
         "reason": "ready" if diagnostic_status == "complete" else "partial_but_actionable",
         "next_command": None,
+    }
+
+
+def _github_transport_failure(value: Any) -> bool:
+    text = str(value or "").casefold()
+    return any(marker in text for marker in GITHUB_TRANSPORT_MARKERS)
+
+
+def _github_read_with_transport_retry(
+    args: list[str],
+    *,
+    timeout: int = 60,
+    attempts: int = 2,
+    provider: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    read_provider = provider or _run
+    last: dict[str, Any] = {"ok": False, "stdout": "", "stderr": "not run"}
+    for attempt in range(max(1, attempts)):
+        last = read_provider(args, timeout=timeout)
+        if last.get("ok") or not _github_transport_failure(last.get("stderr") or last.get("stdout")):
+            return {**last, "attempts": attempt + 1}
+    return {**last, "attempts": max(1, attempts)}
+
+
+def _rest_actions_run_payload(repo: str, run_id: str) -> dict[str, Any]:
+    run_result = _github_read_with_transport_retry(
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}"],
+        timeout=60,
+    )
+    jobs_result = _github_read_with_transport_retry(
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"],
+        timeout=60,
+    )
+    if not run_result.get("ok") or not jobs_result.get("ok"):
+        raise RuntimeError(
+            str(
+                run_result.get("stderr")
+                or jobs_result.get("stderr")
+                or run_result.get("stdout")
+                or jobs_result.get("stdout")
+                or "GitHub REST Actions readback failed"
+            )
+        )
+    try:
+        run = json.loads(str(run_result.get("stdout") or "{}"))
+        jobs_payload = json.loads(str(jobs_result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"GitHub REST Actions readback returned invalid JSON: {exc}") from exc
+    jobs = [item for item in jobs_payload.get("jobs") or [] if isinstance(item, dict)]
+    if int(jobs_payload.get("total_count") or len(jobs)) > len(jobs):
+        raise RuntimeError("GitHub REST Actions jobs readback exceeds the supported single page")
+    return {
+        "databaseId": run.get("id"),
+        "name": run.get("name"),
+        "workflowName": run.get("name"),
+        "displayTitle": run.get("display_title"),
+        "event": run.get("event"),
+        "headBranch": run.get("head_branch"),
+        "headSha": run.get("head_sha"),
+        "status": run.get("status"),
+        "conclusion": run.get("conclusion"),
+        "url": run.get("html_url"),
+        "jobs": [
+            {
+                "databaseId": job.get("id"),
+                "name": job.get("name"),
+                "conclusion": job.get("conclusion"),
+                "url": job.get("html_url"),
+            }
+            for job in jobs
+        ],
     }
 
 
@@ -477,7 +557,7 @@ def locate_last_green_run(
     current_run_id = str(summary.get("run_id") or "")
     if not branch or not workflow:
         return _last_green_payload(summary, status="unavailable", warning="missing branch or workflow")
-    result = run_provider(
+    result = _github_read_with_transport_retry(
         [
             "gh",
             "run",
@@ -492,17 +572,53 @@ def locate_last_green_run(
             "databaseId,workflowName,headSha,headBranch,conclusion,status,url,createdAt,displayTitle",
         ],
         timeout=120,
+        provider=run_provider,
     )
     if not result.get("ok"):
-        return _last_green_payload(
-            summary,
-            status="unavailable",
-            warning=str(result.get("stderr") or result.get("stdout") or "gh run list failed")[:240],
+        message = str(result.get("stderr") or result.get("stdout") or "gh run list failed")
+        if not _github_transport_failure(message):
+            return _last_green_payload(summary, status="unavailable", warning=message[:240])
+        encoded_branch = urllib.parse.quote(str(branch), safe="")
+        rest_result = _github_read_with_transport_retry(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/actions/runs?branch={encoded_branch}&status=success&per_page=50",
+            ],
+            timeout=120,
+            provider=run_provider,
         )
-    try:
-        runs = json.loads(str(result.get("stdout") or "[]"))
-    except json.JSONDecodeError as exc:
-        return _last_green_payload(summary, status="unavailable", warning=f"invalid gh run list JSON: {exc}")
+        if not rest_result.get("ok"):
+            return _last_green_payload(
+                summary,
+                status="unavailable",
+                warning=str(rest_result.get("stderr") or rest_result.get("stdout") or message)[:240],
+            )
+        try:
+            rest_payload = json.loads(str(rest_result.get("stdout") or "{}"))
+            rest_runs = rest_payload.get("workflow_runs") or []
+        except (json.JSONDecodeError, AttributeError) as exc:
+            return _last_green_payload(summary, status="unavailable", warning=f"invalid REST run list JSON: {exc}")
+        runs = [
+            {
+                "databaseId": run.get("id"),
+                "workflowName": run.get("name"),
+                "headSha": run.get("head_sha"),
+                "headBranch": run.get("head_branch"),
+                "conclusion": run.get("conclusion"),
+                "status": run.get("status"),
+                "url": run.get("html_url"),
+                "createdAt": run.get("created_at"),
+                "displayTitle": run.get("display_title"),
+            }
+            for run in rest_runs
+            if isinstance(run, dict)
+        ]
+    else:
+        try:
+            runs = json.loads(str(result.get("stdout") or "[]"))
+        except json.JSONDecodeError as exc:
+            return _last_green_payload(summary, status="unavailable", warning=f"invalid gh run list JSON: {exc}")
     if not isinstance(runs, list):
         return _last_green_payload(summary, status="unavailable", warning="gh run list JSON root was not a list")
     current_number = _run_id_number(current_run_id)
@@ -1549,14 +1665,23 @@ def summarize_actions_run(
     attempts = max(1, wait_attempts if wait_for_completion else 1)
     result: dict[str, Any] = {"ok": False, "stdout": "", "stderr": "run view not attempted"}
     run_payload: dict[str, Any] = {}
+    read_fallbacks: list[dict[str, Any]] = []
     for attempt in range(attempts):
-        result = _run(run_view_args, timeout=120)
-        if result.get("ok"):
-            run_payload = json.loads(str(result.get("stdout") or "{}"))
-            if not wait_for_completion or _status_value(run_payload.get("status")) == "completed":
-                break
+        result = _github_read_with_transport_retry(run_view_args, timeout=120)
+        if not result.get("ok"):
+            break
+        run_payload = json.loads(str(result.get("stdout") or "{}"))
+        if not wait_for_completion or _status_value(run_payload.get("status")) == "completed":
+            break
         if wait_for_completion and attempt + 1 < attempts:
             time.sleep(max(0.0, wait_seconds))
+    if not result.get("ok") and _github_transport_failure(result.get("stderr") or result.get("stdout")):
+        try:
+            run_payload = _rest_actions_run_payload(repo, str(run_id))
+            result = {"ok": True, "stdout": json.dumps(run_payload), "stderr": "", "source": "github_rest"}
+            read_fallbacks.append({"stage": "actions_run", "source": "github_rest"})
+        except RuntimeError as exc:
+            result = {"ok": False, "stdout": "", "stderr": str(exc), "source": "github_rest"}
     extraction_errors: list[str] = []
     if not result.get("ok"):
         extraction_errors.append(result.get("stderr") or result.get("stdout") or "gh run view failed")
@@ -1607,7 +1732,10 @@ def summarize_actions_run(
         else:
             log_result: dict[str, Any] = {"ok": False, "stdout": "", "stderr": "log fetch not attempted"}
             for attempt in range(max(1, log_attempts)):
-                log_result = _run(["gh", "run", "view", str(run_id), "--repo", repo, "--job", job_id, "--log"], timeout=180)
+                log_result = _github_read_with_transport_retry(
+                    ["gh", "run", "view", str(run_id), "--repo", repo, "--job", job_id, "--log"],
+                    timeout=180,
+                )
                 if log_result.get("ok") or not _logs_not_ready_error(log_result.get("stderr") or log_result.get("stdout")):
                     break
                 if attempt + 1 < max(1, log_attempts):
@@ -1615,7 +1743,19 @@ def summarize_actions_run(
             if log_result.get("ok"):
                 log_text = str(log_result.get("stdout") or "")
             else:
-                extraction_errors.append(f"{job.get('name')}: {log_result.get('stderr') or log_result.get('stdout')}")
+                log_error = str(log_result.get("stderr") or log_result.get("stdout") or "job log fetch failed")
+                if _github_transport_failure(log_error):
+                    rest_log = _github_read_with_transport_retry(
+                        ["gh", "api", f"repos/{repo}/actions/jobs/{job_id}/logs"],
+                        timeout=180,
+                    )
+                    if rest_log.get("ok"):
+                        log_text = str(rest_log.get("stdout") or "")
+                        read_fallbacks.append({"stage": "job_log", "source": "github_rest", "job_id": job_id})
+                    else:
+                        extraction_errors.append(f"{job.get('name')}: {rest_log.get('stderr') or rest_log.get('stdout')}")
+                else:
+                    extraction_errors.append(f"{job.get('name')}: {log_error}")
         parsed = parse_job_log(log_text, job_name=str(job.get("name") or ""), job_url=job.get("url"))
         parsed["conclusion"] = job.get("conclusion")
         parsed["database_id"] = job.get("databaseId")
@@ -1635,6 +1775,7 @@ def summarize_actions_run(
             "conclusion": run_payload.get("conclusion"),
             "failed_jobs": failed_jobs,
             "extraction_errors": extraction_errors,
+            "read_fallbacks": read_fallbacks,
         }
     )
     finalized["last_green_locator"] = locate_last_green_run(finalized, repo=repo)

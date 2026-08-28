@@ -676,6 +676,79 @@ def test_actions_run_wait_defers_issue_when_logs_not_ready(monkeypatch: pytest.M
     assert all("--job" not in call for call in calls)
 
 
+def test_actions_run_transport_failures_fall_back_to_rest_run_jobs_and_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs: object) -> dict[str, object]:
+        commands.append(args)
+        if args[:3] == ["gh", "run", "view"]:
+            return {"ok": False, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"] and args[2].endswith("/actions/runs/300"):
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "id": 300,
+                        "name": "AIstock CI",
+                        "display_title": "failure",
+                        "event": "pull_request",
+                        "head_branch": "bug/test",
+                        "head_sha": "a" * 40,
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "html_url": "https://github.example/actions/runs/300",
+                    }
+                ),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"] and "/actions/runs/300/jobs?" in args[2]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "total_count": 1,
+                        "jobs": [
+                            {
+                                "id": 9,
+                                "name": "paper_v2_l3",
+                                "conclusion": "failure",
+                                "html_url": "https://github.example/jobs/9",
+                            }
+                        ],
+                    }
+                ),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"] and args[2].endswith("/actions/jobs/9/logs"):
+            return {"ok": True, "stdout": PAPER_V2_PLAYWRIGHT_LOG, "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(summary, "_run", fake_run)
+    monkeypatch.setattr(
+        summary,
+        "locate_last_green_run",
+        lambda payload, repo: summary._last_green_payload(payload, status="not_requested"),
+    )
+
+    payload = summary.summarize_actions_run(
+        repo="licong01-cloud/AIstock",
+        run_id="300",
+        wait_for_completion=True,
+        wait_attempts=5,
+        wait_seconds=0,
+    )
+
+    assert payload["failed_jobs"][0]["error_signature"] == "LIVE_INFERENCE_PREFLIGHT_FAILED"
+    assert payload["read_fallbacks"] == [
+        {"stage": "actions_run", "source": "github_rest"},
+        {"stage": "job_log", "source": "github_rest", "job_id": "9"},
+    ]
+    assert sum(args[:3] == ["gh", "run", "view"] and "--job" not in args for args in commands) == 2
+    assert sum(args[:3] == ["gh", "run", "view"] and "--job" in args for args in commands) == 2
+
+
 def test_actions_run_defers_issue_when_job_log_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(args: list[str], **_: object) -> dict[str, object]:
         if "--job" in args:
@@ -948,6 +1021,46 @@ def test_locate_last_green_run_finds_previous_success() -> None:
     assert locator["blocking_for_issue_workflow"] is False
     assert locator["commit_range"] == "1234567890ab..abcdef123456"
     assert locator["previous_success_run"]["run_id"] == "198"
+
+
+def test_locate_last_green_run_transport_failure_uses_rest() -> None:
+    commands: list[list[str]] = []
+
+    def provider(args: list[str], **_kwargs: object) -> dict[str, object]:
+        commands.append(args)
+        if args[:3] == ["gh", "run", "list"]:
+            return {"ok": False, "stdout": "", "stderr": "TLS handshake timeout"}
+        return {
+            "ok": True,
+            "stdout": json.dumps(
+                {
+                    "workflow_runs": [
+                        {
+                            "id": 99,
+                            "name": "AIstock CI",
+                            "head_sha": "b" * 40,
+                            "head_branch": "main",
+                            "conclusion": "success",
+                            "status": "completed",
+                            "html_url": "https://github.example/actions/runs/99",
+                            "created_at": "2026-08-27T00:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            "stderr": "",
+        }
+
+    locator = summary.locate_last_green_run(
+        {"run_id": "100", "workflow": "AIstock CI", "branch": "main", "commit": "a" * 40},
+        repo="licong01-cloud/AIstock",
+        run_provider=provider,
+    )
+
+    assert locator["status"] == "found"
+    assert locator["previous_success_run"]["run_id"] == "99"
+    assert sum(args[:3] == ["gh", "run", "list"] for args in commands) == 2
+    assert commands[2][:2] == ["gh", "api"]
 
 
 def test_regression_locator_is_rendered_and_carried_to_context_pack() -> None:

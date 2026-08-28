@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
 import json
 import os
 import shutil
@@ -162,10 +163,67 @@ def _clear_directory(path: Path) -> None:
     for child in path.iterdir():
         if child.name in {".", ".."}:
             continue
-        if child.is_dir() and not child.is_symlink():
+        attributes = int(getattr(child.lstat(), "st_file_attributes", 0))
+        reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+        is_junction = bool(getattr(child, "is_junction", lambda: False)()) or bool(attributes & reparse_flag)
+        if child.is_dir() and not child.is_symlink() and not is_junction:
             shutil.rmtree(child, onerror=_clear_readonly_and_retry)
+        elif is_junction:
+            child.rmdir()
         else:
             _unlink_child(child)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _materialize_frontend_node_modules(source: Path, dest_root: Path) -> dict[str, Any]:
+    source_root = source.resolve()
+    destination = dest_root / "frontend" / "node_modules"
+    source_lock = source_root.parent / "package-lock.json"
+    destination_lock = destination.parent / "package-lock.json"
+    playwright_marker = source_root / "@playwright" / "test" / "cli.js"
+    if not source_root.is_dir():
+        _fail(f"prebuilt frontend node_modules is missing: {source_root}", code="frontend_dependencies_missing")
+    if not source_lock.is_file() or not destination_lock.is_file():
+        _fail("frontend package-lock.json is required on both dependency source and checkout", code="frontend_lock_missing")
+    source_lock_sha256 = _sha256(source_lock)
+    destination_lock_sha256 = _sha256(destination_lock)
+    if source_lock_sha256 != destination_lock_sha256:
+        _fail(
+            "prebuilt frontend node_modules does not match the checked-out package-lock.json",
+            code="frontend_lock_mismatch",
+        )
+    if not playwright_marker.is_file():
+        _fail(f"prebuilt frontend Playwright marker is missing: {playwright_marker}", code="frontend_playwright_missing")
+    if destination.exists() or destination.is_symlink():
+        _fail(f"frontend dependency destination already exists: {destination}", code="frontend_destination_exists")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        linked = _run(["cmd", "/d", "/c", "mklink", "/J", str(destination), str(source_root)], timeout=30)
+        if linked.returncode != 0:
+            _fail(
+                f"failed to create frontend node_modules junction: {linked.stderr.strip() or linked.stdout.strip()}",
+                code="frontend_link_failed",
+            )
+        link_type = "junction"
+    else:
+        destination.symlink_to(source_root, target_is_directory=True)
+        link_type = "symlink"
+    if not (destination / playwright_marker.relative_to(source_root)).is_file():
+        _fail("frontend node_modules link readback failed", code="frontend_link_readback_failed")
+    return {
+        "source": str(source_root),
+        "destination": str(destination),
+        "link_type": link_type,
+        "package_lock_sha256": source_lock_sha256,
+        "playwright_marker": str(playwright_marker),
+    }
 
 
 def _validate_destination(dest: Path, source: Path, *, allow_any_dest: bool) -> None:
@@ -256,6 +314,11 @@ def prepare_workspace(args: argparse.Namespace) -> dict[str, Any]:
     }
     if package_asset_store is not None:
         payload["package_asset_store"] = package_asset_store
+    if args.frontend_node_modules_source:
+        payload["frontend_node_modules"] = _materialize_frontend_node_modules(
+            _resolve(args.frontend_node_modules_source),
+            dest,
+        )
 
     if args.summary_json:
         requested_summary_path = Path(args.summary_json)
@@ -284,6 +347,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--github-env-file",
         help="GitHub Actions env file to append exports to; defaults to $GITHUB_ENV when present.",
+    )
+    parser.add_argument(
+        "--frontend-node-modules-source",
+        help="Prebuilt frontend/node_modules directory to link after package-lock SHA-256 verification.",
     )
     parser.add_argument("--allow-any-dest", action="store_true", help="Allow destinations outside RUNNER_WORKSPACE for local tests.")
     return parser
