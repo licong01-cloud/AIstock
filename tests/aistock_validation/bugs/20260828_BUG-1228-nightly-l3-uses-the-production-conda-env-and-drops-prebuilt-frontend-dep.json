@@ -7,6 +7,8 @@
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "scripts/ci_workflow_policy_scan.py",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
     "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "tests/aistock_validation/bugs/20260828_BUG-1228-nightly-l3-uses-the-production-conda-env-and-drops-prebuilt-frontend-dep.json",
@@ -28,6 +30,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260828-bd513299f9a6",
       "timestamp": "2026-08-28T11:24:34.227697Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Add validation harness files after live preflight showed the canonical package tree has direct Playwright CLI but no generated .bin marker; no business or dependency installation scope added.",
+      "timestamp": "2026-08-28T11:34:00Z"
     }
   ],
   "evidence_uris": [
@@ -43,6 +51,8 @@
       "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
       "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
@@ -55,6 +65,8 @@
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
         "scripts/ci_workflow_policy_scan.py",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "noxfile.py",
+        "backend/tests/test_noxfile_validation_env.py",
         "docs/standards/aistock_development_standard_v1.5_20260523.md",
         "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
@@ -144,6 +156,8 @@
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
         "scripts/ci_workflow_policy_scan.py",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "noxfile.py",
+        "backend/tests/test_noxfile_validation_env.py",
         "docs/standards/aistock_development_standard_v1.5_20260523.md",
         "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
@@ -156,6 +170,8 @@
       "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
       "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
@@ -167,6 +183,8 @@
       "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
       "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ]

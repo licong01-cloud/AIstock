@@ -751,6 +751,24 @@ rules:
     baseline_policy: block_new_and_changed_workflow
     remediation: Require PR-based main updates, provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
 
+  - rule_id: NIGHTLY-ENVIRONMENT-PARITY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-nightly-environment-parity-001
+    title: Nightly validation uses prebuilt AIstock-CI and lockfile-matched frontend dependencies
+    severity: P1
+    category: ci_efficiency
+    enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_nightly_validation_when_prebuilt_environment_or_frontend_dependencies_are_missing_or_drifted
+    checker:
+      type: external
+      command_key: ci_workflow_policy_scan
+      required_evidence:
+        - nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies
+        - self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe
+    baseline_policy: block_new_and_changed_workflow
+    remediation: Run Nightly validation in AIstock-CI, link rather than install or copy the canonical frontend dependency tree, verify package-lock SHA-256 and Playwright, and remove only the workspace link during cleanup.
+
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
     title: CI never creates a database or service and routes database validation to the existing DEV database
