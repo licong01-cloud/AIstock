@@ -1566,17 +1566,20 @@ def test_javascript_actions_use_native_node24_major_versions() -> None:
         assert refs == {expected_ref}
 
 
-def test_non_required_pr_workflows_skip_pure_bug_registry_changes() -> None:
+def test_merge_quality_workflows_publish_context_for_pure_bug_registry_changes() -> None:
     for relative_path in (
         ".github/workflows/codeql.yml",
         ".github/workflows/semgrep.yml",
         ".github/workflows/pr-quality.yml",
-        ".github/workflows/issue-auto-link.yml",
     ):
         text = Path(relative_path).read_text(encoding="utf-8")
         assert "pull_request:" in text
-        assert "paths-ignore:" in text
-        assert "- 'tests/aistock_validation/bugs/**'" in text
+        pull_request_block = text.split("  pull_request:\n", 1)[1]
+        pull_request_block = pull_request_block.split("\n  ", 1)[0]
+        assert "tests/aistock_validation/bugs/**" not in pull_request_block
+
+    issue_link_text = Path(".github/workflows/issue-auto-link.yml").read_text(encoding="utf-8")
+    assert "- 'tests/aistock_validation/bugs/**'" in issue_link_text
 
 def test_allocator_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
     allocator = tmp_path / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
