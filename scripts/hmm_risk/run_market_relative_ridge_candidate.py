@@ -30,6 +30,7 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (  # noqa:
     RL1_DEVELOPMENT_START,
     RL1_REQUEST_SCHEMA_VERSION,
     RL1_REPORT_SCHEMA_VERSION,
+    RL1_SOURCE_REVISION,
     REQUEST_SCHEMA_VERSION,
     REASON_HOLDOUT,
     REASON_INPUT_IDENTITY,
@@ -52,6 +53,11 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (  # noqa:
     validate_c012_rl1_static_request,
     validate_p2_3c_static_request,
     write_report,
+)
+from backend.services.hmm_risk.industry_pit_adapter import (  # noqa: E402
+    HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA,
+    HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA,
+    HMM_L1_CODE_PROJECTION_SCHEMA,
 )
 from backend.services.canonical_equity_pit import (  # noqa: E402
     CANONICAL_PIT_RULE_VERSION,
@@ -254,6 +260,50 @@ def _source_authority(path: Path) -> dict[str, Any]:
     return dict(source)
 
 
+def _industry_pit_authority(path: Path) -> dict[str, Any]:
+    value = _load_request(path)
+    if set(value) != {"artifact_root", "identity", "l1_projection", "research_basis"}:
+        raise RidgeCandidateError(
+            REASON_RL1_INPUT,
+            "industry PIT authority is incomplete",
+            stage="request_preparation",
+        )
+    artifact_root = Path(str(value.get("artifact_root") or ""))
+    identity = value.get("identity")
+    l1_projection = value.get("l1_projection")
+    research_basis = value.get("research_basis")
+    expected_identity_keys = {
+        "schema_version",
+        "bundle_hash",
+        "classification_candidate_hash",
+        "index_membership_candidate_hash",
+        "classification_receipt_hash",
+        "index_membership_receipt_hash",
+        "preflight_canonical_hash",
+    }
+    if (
+        not artifact_root.is_absolute()
+        or not isinstance(identity, Mapping)
+        or set(identity) != expected_identity_keys
+        or identity.get("schema_version") != HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA
+        or not isinstance(l1_projection, Mapping)
+        or l1_projection.get("schema_version") != HMM_L1_CODE_PROJECTION_SCHEMA
+        or not isinstance(research_basis, Mapping)
+        or research_basis.get("schema_version") != HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA
+    ):
+        raise RidgeCandidateError(
+            REASON_RL1_INPUT,
+            "industry PIT authority root/identity is invalid",
+            stage="request_preparation",
+        )
+    return {
+        "artifact_root": str(artifact_root.resolve()),
+        "identity": dict(identity),
+        "l1_projection": dict(l1_projection),
+        "research_basis": dict(research_basis),
+    }
+
+
 def _validate_c012_cli_output_scope(args: argparse.Namespace) -> None:
     root = args.output.resolve().parent
     file_paths = (
@@ -299,8 +349,9 @@ def _prepare_c012_rl1_request(args: argparse.Namespace) -> int:
         ):
             preflight_output_path(path, repository_root=ROOT)
         source = _source_authority(args.source_authority.resolve())
+        source["industry_pit"] = _industry_pit_authority(args.industry_pit_authority.resolve())
         source["source_end"] = RL1_DEVELOPMENT_END.isoformat()
-        source["source_revision"] = "c012-rl1-hr1-development-v1"
+        source["source_revision"] = RL1_SOURCE_REVISION
         loader_request = {
             "source": source,
             "families": [
@@ -315,7 +366,12 @@ def _prepare_c012_rl1_request(args: argparse.Namespace) -> int:
             ],
         }
         try:
-            inputs = _load_l1_source_inputs(loader_request, db_prefix=str(args.db_env_prefix), c010_formal=True)
+            inputs = _load_l1_source_inputs(
+                loader_request,
+                db_prefix=str(args.db_env_prefix),
+                c010_formal=True,
+                rotation_l1_only=True,
+            )
         except StateModelSetError as exc:
             raise RidgeCandidateError(
                 REASON_RL1_INPUT,
@@ -632,6 +688,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bundle-output", type=Path)
     parser.add_argument("--prepare-request", action="store_true")
     parser.add_argument("--source-authority", type=Path)
+    parser.add_argument("--industry-pit-authority", type=Path)
     args = parser.parse_args(argv)
 
     if args.candidate_mode == "c012-rl1":
@@ -649,9 +706,11 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("--prepare-request and --child-index are mutually exclusive")
             if args.source_authority is None:
                 parser.error("--source-authority is required with --prepare-request")
+            if args.industry_pit_authority is None:
+                parser.error("--industry-pit-authority is required with --prepare-request")
             return _prepare_c012_rl1_request(args)
-        if args.source_authority is not None:
-            parser.error("--source-authority is only valid with --prepare-request")
+        if args.source_authority is not None or args.industry_pit_authority is not None:
+            parser.error("source authority arguments are only valid with --prepare-request")
         return _run_c012_rl1(args)
     if (
         any(
@@ -663,6 +722,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.model_output,
                 args.bundle_output,
                 args.source_authority,
+                args.industry_pit_authority,
             )
         )
         or args.prepare_request
