@@ -1315,6 +1315,91 @@ def test_runtime_contract_cannot_downgrade_changed_files_or_hide_multiple_target
     assert any("multiple runtime targets" in item for item in multiple["blocking"])
 
 
+def _provisional_backend_and_worker_record(root: Path) -> dict[str, Any]:
+    planned_files = ["backend/services/example.py", "scripts/dataset_release_worker.py"]
+    record = _runtime_bug(root)
+    record["file_scope_contract"] = {
+        "schema_version": "aistock_submit_bug_file_scope_v1",
+        "changed_files": planned_files,
+        "planned_files": planned_files,
+        "changed_files_source": workflow.FILE_SCOPE_SOURCE_PLANNED_INTAKE,
+        "added_files": [],
+        "scope_files": planned_files,
+        "ownership": {},
+    }
+    record["runtime_contract"].update(
+        {
+            "inference_basis": workflow.RUNTIME_INFERENCE_PLANNED_SCOPE,
+            "provisional": True,
+            "runtime_impact": "worker_scheduler",
+            "target_id": None,
+            "target_ids": ["backend-main", "worker-scheduler"],
+        }
+    )
+    return record
+
+
+@pytest.mark.parametrize("legacy_registration", [False, True])
+def test_runtime_contract_safely_narrows_provisional_target_superset(
+    isolated_workflow_root: Path,
+    legacy_registration: bool,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _provisional_backend_and_worker_record(isolated_workflow_root)
+    if legacy_registration:
+        record["runtime_contract"].pop("inference_basis")
+        record["runtime_contract"].pop("provisional")
+        record["file_scope_contract"].pop("changed_files_source")
+        record["file_scope_contract"].pop("planned_files")
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+        fresh_process_evidence=["fresh worker import passed"],
+    )
+
+    assert contract["runtime_contract_source"] == workflow.RUNTIME_INFERENCE_ACTUAL_CHANGED_FILES
+    assert contract["runtime_impact"] == "worker_scheduler"
+    assert contract["target_id"] == "worker-scheduler"
+    assert contract["target_ids"] == ["worker-scheduler"]
+    assert contract["backend_restart_required"] is True
+    assert contract["activation_states"]["backend_restart"] == "pending_user_action"
+    assert contract["provisional_reconciliation"] == {
+        "applied": True,
+        "status": "narrowed",
+        "planned_target_ids": ["backend-main", "worker-scheduler"],
+        "actual_target_ids": ["worker-scheduler"],
+    }
+    assert contract["blocking"] == []
+
+
+def test_runtime_contract_does_not_expand_provisional_worker_target(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _provisional_backend_and_worker_record(isolated_workflow_root)
+    record["runtime_contract"].update(
+        {
+            "target_id": "worker-scheduler",
+            "target_ids": ["worker-scheduler"],
+        }
+    )
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py", "scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+        fresh_process_evidence=["fresh worker import passed"],
+    )
+
+    assert contract["provisional_reconciliation"]["applied"] is False
+    assert contract["target_ids"] == ["worker-scheduler", "backend-main"]
+    assert contract["pre_pr_ready"] is False
+    assert any("target set conflicts" in item for item in contract["blocking"])
+    assert any("multiple runtime targets" in item for item in contract["blocking"])
+
+
 def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     isolated_workflow_root: Path,
 ) -> None:
@@ -2141,6 +2226,62 @@ def test_finish_persists_fresh_process_evidence_in_bug_json_and_pr_body(
     pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
     assert "fresh_process_evidence: isolated port 8012 import smoke passed" in pr_body
     assert "Refs #199" in pr_body
+
+
+def test_finish_persists_actual_scope_after_safe_provisional_narrowing(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _provisional_backend_and_worker_record(isolated_workflow_root)
+    record["runtime_contract"]["fresh_process_evidence"] = []
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", record)
+    monkeypatch.setattr(
+        workflow,
+        "_build_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id="BUG-199"),
+    )
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/dataset_release_worker.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[],
+        plan_only=True,
+        allow_missing_evidence=False,
+        fresh_process_evidence=["fresh worker import passed"],
+    )
+
+    persisted = json.loads(issue.read_text(encoding="utf-8"))
+    assert persisted["runtime_contract"]["inference_basis"] == workflow.RUNTIME_INFERENCE_ACTUAL_CHANGED_FILES
+    assert persisted["runtime_contract"]["provisional"] is False
+    assert persisted["runtime_contract"]["planned_target_ids"] == [
+        "backend-main",
+        "worker-scheduler",
+    ]
+    assert persisted["runtime_contract"]["target_id"] == "worker-scheduler"
+    assert persisted["runtime_contract"]["target_ids"] == ["worker-scheduler"]
+    assert persisted["runtime_contract"]["fresh_process_evidence"] == [
+        "fresh worker import passed"
+    ]
+    assert persisted["file_scope_contract"]["planned_files"] == [
+        "backend/services/example.py",
+        "scripts/dataset_release_worker.py",
+    ]
+    assert persisted["file_scope_contract"]["changed_files"] == [
+        "scripts/dataset_release_worker.py"
+    ]
+    assert persisted["file_scope_contract"]["actual_changed_files"] == [
+        "scripts/dataset_release_worker.py"
+    ]
+    assert (
+        persisted["file_scope_contract"]["changed_files_source"]
+        == workflow.FILE_SCOPE_SOURCE_GIT_FINISH
+    )
+    assert payload["runtime_contract"]["blocking"] == []
+    assert payload["runtime_contract"]["activation_states"]["backend_restart"] == "pending_user_action"
 
 
 def test_post_restart_verify_is_read_only_and_writes_only_ignored_receipt(
@@ -5203,6 +5344,159 @@ def test_close_sync_rejects_declared_merge_commit_that_differs_from_verified_pr(
         )
 
 
+def test_verify_pr_merged_uses_exact_rest_readback_after_graphql_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    merge_commit = "b" * 40
+    pr_url = f"https://github.com/{workflow.GITHUB_REPO}/pull/199"
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "Post https://api.github.com/graphql: EOF",
+            "attempts": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda _pr_url: {
+            "pr_number": 199,
+            "state": "CLOSED",
+            "merged": True,
+            "merged_at": "2026-08-28T07:00:00Z",
+            "merge_commit": merge_commit,
+            "head_sha": head_sha,
+            "head_ref": "bug/BUG-199-fix",
+            "base_ref": "main",
+            "url": pr_url,
+        },
+    )
+
+    verified = workflow._verify_pr_merged(pr_url)
+
+    assert verified["checked"] is True
+    assert verified["source"] == "github_rest"
+    assert verified["pr"]["headRefOid"] == head_sha
+    assert verified["pr"]["mergeCommit"]["oid"] == merge_commit
+    assert verified["pr"]["mergedAt"] == "2026-08-28T07:00:00Z"
+    assert verified["rest_fallback"]["reason"] == "graphql_transport_failure"
+    assert verified["rest_fallback"]["graphql_attempts"] == 1
+
+
+def test_verify_pr_merged_does_not_use_rest_for_non_transport_graphql_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pr_url = f"https://github.com/{workflow.GITHUB_REPO}/pull/199"
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "HTTP 403: forbidden",
+            "attempts": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda _pr_url: pytest.fail("non-transport failures must not use REST fallback"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="403"):
+        workflow._verify_pr_merged(pr_url)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_error"),
+    [
+        ({"merged": False}, "PR is not merged"),
+        ({"head_sha": "short"}, "full head SHA"),
+        ({"merge_commit": "short"}, "full merge commit SHA"),
+        ({"merged_at": None}, "missing merged_at"),
+        ({"url": "https://github.com/example/other/pull/199"}, "REST PR identity mismatch"),
+    ],
+)
+def test_verify_pr_merged_rest_mode_fails_closed_on_incomplete_or_wrong_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, Any],
+    expected_error: str,
+) -> None:
+    pr_url = f"https://github.com/{workflow.GITHUB_REPO}/pull/199"
+    readback = {
+        "pr_number": 199,
+        "state": "CLOSED",
+        "merged": True,
+        "merged_at": "2026-08-28T07:00:00Z",
+        "merge_commit": "b" * 40,
+        "head_sha": "a" * 40,
+        "head_ref": "bug/BUG-199-fix",
+        "base_ref": "main",
+        "url": pr_url,
+    }
+    readback.update(overrides)
+    monkeypatch.setattr(workflow, "_github_pull_rest_readback", lambda _pr_url: readback)
+
+    with pytest.raises(workflow.WorkflowError, match=expected_error):
+        workflow._verify_pr_merged(pr_url, skip_github_check=True)
+
+
+def test_skip_github_check_is_exact_rest_only_mode_not_an_unverified_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    merge_commit = "b" * 40
+    pr_url = f"https://github.com/{workflow.GITHUB_REPO}/pull/199"
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: pytest.fail("explicit REST-only mode must not call GraphQL"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda _pr_url: {
+            "pr_number": 199,
+            "state": "CLOSED",
+            "merged": True,
+            "merged_at": "2026-08-28T07:00:00Z",
+            "merge_commit": merge_commit,
+            "head_sha": head_sha,
+            "head_ref": "bug/BUG-199-fix",
+            "base_ref": "main",
+            "url": pr_url,
+        },
+    )
+
+    verified = workflow._verify_pr_merged(pr_url, skip_github_check=True)
+
+    assert verified["checked"] is True
+    assert verified["rest_fallback"]["reason"] == "explicit_rest_only"
+    assert verified["rest_fallback"]["graphql_attempts"] == 0
+
+
+def test_verify_pr_merged_rest_mode_rejects_a_different_repository_before_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda _pr_url: pytest.fail("wrong-repository URLs must fail before REST readback"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="REST PR identity mismatch"):
+        workflow._verify_pr_merged(
+            "https://github.com/example/other/pull/199",
+            skip_github_check=True,
+        )
+
+
 def test_runtime_close_sync_preserves_source_fixed_time_and_uses_verification_close_time(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7264,6 +7558,11 @@ def test_submit_bug_plan_persists_changed_and_added_file_scope_contract(
     expected_contract = {
         "schema_version": "aistock_submit_bug_file_scope_v1",
         "changed_files": ["scripts/aistock_issue_workflow.py"],
+        "planned_files": [
+            "scripts/aistock_issue_workflow.py",
+            "backend/tests/scripts/test_new_workflow_contract.py",
+        ],
+        "changed_files_source": workflow.FILE_SCOPE_SOURCE_PLANNED_INTAKE,
         "added_files": ["backend/tests/scripts/test_new_workflow_contract.py"],
         "scope_files": [
             "scripts/aistock_issue_workflow.py",
@@ -7278,6 +7577,11 @@ def test_submit_bug_plan_persists_changed_and_added_file_scope_contract(
     }
     assert payload["file_scope_contract"] == expected_contract
     assert payload["record"]["file_scope_contract"] == expected_contract
+    assert (
+        payload["record"]["runtime_contract"]["inference_basis"]
+        == workflow.RUNTIME_INFERENCE_PLANNED_SCOPE
+    )
+    assert payload["record"]["runtime_contract"]["provisional"] is True
     assert set(payload["record"]["allowed_write_scope"]) >= set(expected_contract["scope_files"])
 
 
@@ -9834,12 +10138,13 @@ def test_close_sync_apply_blocks_canonical_root_pollution(
         )
 
 
-def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
+def test_close_sync_rest_only_mode_still_runs_github_issue_sync(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
     called = False
+    merge_commit = "a" * 40
 
     def fake_sync(record: dict[str, Any], evidence_payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         nonlocal called
@@ -9847,6 +10152,16 @@ def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
         return {"status": "synced"}
 
     monkeypatch.setattr(workflow, "_sync_github_issue_after_close", fake_sync)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "source": "github_rest",
+            "pr": {"mergeCommit": {"oid": merge_commit}, "mergedAt": "2026-08-28T07:00:00Z"},
+        },
+    )
     monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
     monkeypatch.setattr(
         workflow,
@@ -9861,14 +10176,14 @@ def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
         apply=True,
         allow_missing_linkage=False,
         validation_evidence=["python -m nox -s l0 -> passed"],
-        merge_commit="abc1234",
+        merge_commit=merge_commit,
         production_gates={"production_ddl_gate": "noop"},
         skip_github_check=True,
     )
 
     assert payload["workflow_gate"] == "close_synced"
-    assert payload["github_issue_sync"]["status"] == "skipped_github_check_disabled"
-    assert called is False
+    assert payload["github_issue_sync"]["status"] == "synced"
+    assert called is True
     updated = json.loads(issue.read_text(encoding="utf-8"))
     assert updated["closed_at"]
     assert updated["fixed_at"]
@@ -12496,6 +12811,7 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    merge_commit = "a" * 40
     issue = _write_json(
         isolated_workflow_root / "bug.json",
         _bug(
@@ -12530,6 +12846,21 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
         "_merged_commit_changed_files",
         lambda _commit: ["scripts/aistock_issue_workflow.py"],
     )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "source": "github_rest",
+            "pr": {"mergeCommit": {"oid": merge_commit}, "mergedAt": "2026-08-28T07:00:00Z"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_sync_github_issue_after_close",
+        lambda *args, **kwargs: {"status": "synced"},
+    )
 
     assert workflow.main([
         "close-sync",
@@ -12540,7 +12871,7 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
         "--validation-evidence",
         "python -m nox -s l0 -> passed",
         "--merge-commit",
-        "abc1234",
+        merge_commit,
         "--skip-github-check",
         "--allow-current-worktree",
         "--apply",
@@ -12549,7 +12880,7 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
     assert applied["workflow_gate"] == "close_synced"
     updated = json.loads(issue.read_text(encoding="utf-8"))
     assert updated["status"] == "fixed"
-    assert updated["fix_commit"] == "abc1234"
+    assert updated["fix_commit"] == merge_commit
     assert updated["validation_evidence"] == [
         "historical targeted test -> passed",
         "python -m nox -s l0 -> passed",
@@ -12560,6 +12891,7 @@ def test_close_sync_apply_can_create_registry_worktree(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    merge_commit = "a" * 40
     issue = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
         _bug(status="in_progress"),
@@ -12581,6 +12913,21 @@ def test_close_sync_apply_can_create_registry_worktree(
         "_merged_commit_changed_files",
         lambda _commit: ["scripts/aistock_issue_workflow.py"],
     )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "source": "github_rest",
+            "pr": {"mergeCommit": {"oid": merge_commit}, "mergedAt": "2026-08-28T07:00:00Z"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_sync_github_issue_after_close",
+        lambda *args, **kwargs: {"status": "synced"},
+    )
 
     payload = workflow.build_close_sync_plan(
         bug_id=None,
@@ -12589,7 +12936,7 @@ def test_close_sync_apply_can_create_registry_worktree(
         apply=True,
         allow_missing_linkage=False,
         validation_evidence=["python -m nox -s l0 -> passed"],
-        merge_commit="abc1234",
+        merge_commit=merge_commit,
         production_gates={"production_ddl_gate": "noop"},
         skip_github_check=True,
         create_registry_worktree=True,
@@ -12598,7 +12945,7 @@ def test_close_sync_apply_can_create_registry_worktree(
     assert payload["workflow_gate"] == "close_synced"
     assert payload["registry_root"] == str(registry)
     assert payload["registry_worktree_plan"]["created"] is True
-    assert json.loads(target.read_text(encoding="utf-8"))["fix_commit"] == "abc1234"
+    assert json.loads(target.read_text(encoding="utf-8"))["fix_commit"] == merge_commit
 
 
 def test_worktree_creation_puts_branch_option_before_path(

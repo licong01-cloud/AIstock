@@ -1352,6 +1352,25 @@ def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
     assert all("registry_sync != '1'" in str(step.get("if") or "") for step in normal_lane_steps)
 
 
+def test_pr_quality_proves_merge_base_and_boundedly_deepens_exact_pr_refs() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    detect = next(step for step in steps if step.get("name") == "Detect PR quality lane")
+    run = str(detect["run"])
+
+    assert detect["env"]["BASE_SHA"] == "${{ github.event.pull_request.base.sha || '' }}"
+    assert detect["env"]["CHECKOUT_REF"] == "${{ github.ref || '' }}"
+    assert "python scripts/ci_changed_files.py" in run
+    assert "--prepare-pr-merge-base-only" in run
+    assert '--base-sha "${BASE_SHA}"' in run
+    assert '--checkout-ref "${CHECKOUT_REF}"' in run
+    assert run.index("--prepare-pr-merge-base-only") < run.index(
+        'git diff --name-only "${BASE_COMMIT}...HEAD"'
+    )
+
+
 def test_codeql_selects_only_changed_languages() -> None:
     import yaml
 

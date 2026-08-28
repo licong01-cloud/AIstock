@@ -1,0 +1,324 @@
+{
+  "actual": "LocalSimBroker directly calls DailyTradingContextV1.model_validate and the downstream frozen-fact adapter accepts only the V1 market.stk_limit reference shape, so schema_version=daily_trading_context_v2 is rejected before broker_called.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "tests/aistock_validation/bugs/20260828_BUG-1219-localsim-broker-rejects-valid-dailytradingcontextv2-before-twap-submit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1219",
+  "closed_at": "2026-08-28T07:08:36.729522Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-28T05:33:23.287678Z",
+  "description": "LocalSimBroker directly calls DailyTradingContextV1.model_validate and the downstream frozen-fact adapter accepts only the V1 market.stk_limit reference shape, so a valid broker-specific DailyTradingContextV2 is rejected before broker_called and every order is blocked.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260828-ba033c06002f",
+      "timestamp": "2026-08-28T05:33:23.287660Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime:simrun_55fe2fbc8b833576:LOCALSIM_DAILY_TRADING_CONTEXT_INVALID"
+  ],
+  "expected": "LocalSIM accepts supported DailyTradingContextV1 and DailyTradingContextV2 carriers through the canonical parser, preserves the frozen plan-bound authority, and proceeds to TWAP submission without market-data requery or silent fallback.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/paper_trading_v2/broker/localsim.py",
+      "backend/services/paper_trading_v2/market_data.py",
+      "backend/tests/paper_trading_v2/test_localsim_backend.py",
+      "backend/tests/paper_trading_v2/test_market_data.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/paper_trading_v2/broker/localsim.py",
+        "backend/services/paper_trading_v2/market_data.py",
+        "backend/tests/paper_trading_v2/test_localsim_backend.py",
+        "backend/tests/paper_trading_v2/test_market_data.py"
+      ],
+      "impacted_modules": [
+        "paper_v2",
+        "selection_center",
+        "strategy_package"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/paper_trading_v2/broker/localsim.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/services/paper_trading_v2/market_data.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_localsim_backend.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_market_data.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/paper_trading_v2/broker/localsim.py",
+        "backend/services/paper_trading_v2/market_data.py",
+        "backend/tests/paper_trading_v2/test_localsim_backend.py",
+        "backend/tests/paper_trading_v2/test_market_data.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/paper_trading_v2/broker/localsim.py",
+      "backend/services/paper_trading_v2/market_data.py",
+      "backend/tests/paper_trading_v2/test_localsim_backend.py",
+      "backend/tests/paper_trading_v2/test_market_data.py"
+    ]
+  },
+  "first_seen_at": "2026-08-28T05:33:23.287678Z",
+  "fix_branch": null,
+  "fix_commit": "c1f97364afb31b2d9767fa6af64171cb1380664e",
+  "fixed_at": "2026-08-28T06:37:18Z",
+  "github_issue_number": 3873,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3873",
+  "last_seen_at": "2026-08-28T05:33:23.287678Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3875",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/paper_trading_v2/test_market_data.py -q",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_55fe2fbc8b833576/terminal-evidence",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/paper_trading_v2/test_localsim_backend.py backend/tests/paper_trading_v2/test_market_data.py -q -p no:cacheprovider -> 109 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1219/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1219",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_evidence",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6bbd0db7e2555c5d02d9f628e7d3e33e0dc27b2e4639981479c92b03f6129946",
+      "contract_digest": "d1892f5ee00f2dfd3722dfeb36add63106c01b4574a69a194f8d2df308225d42",
+      "expected_identity": "c1f97364afb31b2d9767fa6af64171cb1380664e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-28T07:03:04.929377Z",
+      "mode": "read_only",
+      "observed_identity": "c1f97364afb31b2d9767fa6af64171cb1380664e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "406a051b17b70999229043c1e9fa431b6c48853047b2221fe3b33f96ffd03ecd",
+      "receipt_sha256": "32ae5c0f41d954cc9e949de7c520fe1f9edc46c49ce77b0288040e7b6530c06f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "e510c0d610a163594d36a526a4c289ebbf6b738669f47f1ebde63d3870a2b867",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1219",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f2c45cc7c83d62ad",
+    "recorded_at": "2026-08-28T06:38:37.257460Z",
+    "runtime_contract_digest": "ec9214640de4ecfbe8b6841db28744885131a1f96b5247e37424fdf8ccaa1df2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "26b8f32b026e6cb3dbc19ab636316a99b8d55bdd",
+    "source_merge_commit": "c1f97364afb31b2d9767fa6af64171cb1380664e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3875",
+    "validation_evidence": [
+      "validation-receipt: id=b85969aaba634bd0 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=0d321a635d21de53 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=paper_v2_backend status=passed command=`python -m nox -s paper_v2_backend` result=`passed`",
+      "validation-receipt: id=76e9c6d15bf491e1 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    ],
+    "validation_evidence_digest": "9bb4bde067b2f7fbfcb4b4404dc026a7a6cc3297e739c8bfc7ce7fa9583a4aa3"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM broker rejects valid DailyTradingContextV2 before TWAP submit",
+  "trigger_condition": {
+    "fingerprint": "ba033c06002f5adad0ebc2cf",
+    "source_event_id": "FE-20260828-ba033c06002f"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=b85969aaba634bd0 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=0d321a635d21de53 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=paper_v2_backend status=passed command=`python -m nox -s paper_v2_backend` result=`passed`",
+    "validation-receipt: id=76e9c6d15bf491e1 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s paper_v2_backend -> passed",
+    "python -m nox -s l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "paper_v2"
+      ],
+      "plans": [
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "paper_v2"
+        ],
+        "plans": [
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

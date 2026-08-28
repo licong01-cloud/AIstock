@@ -43,15 +43,15 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          CHECKOUT_REF: ${{ github.ref || '' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
-          else
-            git fetch origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" --no-tags --depth=1
-          fi
+          python scripts/ci_changed_files.py \
+            --prepare-pr-merge-base-only \
+            --base-ref "${BASE_REF}" \
+            --base-sha "${BASE_SHA}" \
+            --checkout-ref "${CHECKOUT_REF}"
           BASE_COMMIT="origin/${BASE_REF}"
-          git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
           git diff --name-only "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/changed_files.txt
           python scripts/ci_change_classifier.py \
             --changed-files-file tmp/validation/pr_quality/changed_files.txt \

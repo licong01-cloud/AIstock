@@ -5920,9 +5920,32 @@ production DDL/DML、依赖和HMM runtime均无变化。
   production activation false，Python 工作集抽样约 0.284 GiB。
 - 2021-12-13 极小真实 writer/readback 样本仅包含四只请求股票中当日冻结 PIT 有效的 3 个机会，输出 3 assignments、1 sector fact，
   candidate hash `350af8901eb8e801da844ff8f4a74c35d62aa71b60bb3ca733d8a063de5e909a`，写入独立 X 盘新目录且未覆盖既有数据。
-- 当前源码状态：`BUG1201_P3A_SOURCE_IMPLEMENTED_MULTI_ROUND_REVIEWED_FINAL_VALIDATION_PASS_PENDING_PR`。大量 typed unavailable
-  来自上游 classification/index evidence coverage，P3A 未缩分母或伪造行业；该状态不表示 PR 已合入、backend 已重启、full candidate
-  已签核或生产数据已激活。
+- 当前源码状态：BUG-1201 / PR #3829 已由 merge commit `dab281a5` 合入并完成 backend-main post-restart verify。大量 typed
+  unavailable 来自上游 classification/index evidence coverage，P3A 未缩分母或伪造行业；该状态仍不表示 full candidate 已签核、
+  月度 dataset release 已消费 P3A 或生产数据已激活。
+
+#### 23.35.9 P3A → monthly dataset_release source binding v1（BUG-1218）
+
+- 仅 canonical `qe_hmm_full_v2` 启用该合同；legacy `qe_hmm_full_v1` 保持既有 `market.sector_data` 读取语义。v2 source freeze
+  禁止再读取 legacy `market.sector_data`，也不再要求其 refresh-audit/active-writer 证据。
+- P3A artifact 必须写入既有 allowlisted `candidate_root` 下的确定性 repo-external 路径：
+  `.sector_data_authority/<profile>/<cutoff>/full`；极小 sample 使用
+  `.sector_data_authority/<profile>/<cutoff>/sample-<sorted-symbol-set-digest>`。路径、目录和四个文件均禁止 symlink/reparse，
+  缺失、越界、scope 不符或存在任意 hash/readback 漂移时 fail closed。
+- source adapter 必须重新执行 P3A 四文件 readback，并以冻结 PIT spans × 官方交易日重算完整 opportunity count/digest；必须满足
+  `candidate.expected_opportunities == recomputed denominator` 且 opportunity digest 完全一致。不得 inner join 缩分母，也不得以
+  `sector_fact_rows` 代替 assignment denominator。
+- 只有 `status=resolved`、`alignment_state=aligned` 且引用有效 `sector_fact_row_hash` 的 assignment 才生成稀疏 `sector_data`
+  source row；`unaligned/unavailable` 不生成默认行业、neutral、前填或当前成员关系，其 typed reason/count 原样保存在 P3A source
+  receipt。因行业不可用产生的稀疏行仍由既有 static-factor coverage 合同处理，不改变 PIT 股票池、价格、停牌、ST 或退市事实。
+- `l2_code_id` 延续既有 sorted SW L2 published-index code map，以 aligned fact 的 `index_l2_code` 为映射键；classification taxonomy
+  `l2_code` 仍单独保留并验证 assignment/fact identity，不得把 `220xxx` taxonomy code 与 `801xxx.SI` index code 混入同一映射空间。
+- adapter 按日期 byte-offset 建立 O(trading-days) 小索引，每个日期只在内存保留当日 sector facts；禁止把全量 assignments/facts
+  累积到 DataFrame/list。source partition query version 与 synthetic source schema 均绑定 `candidate_hash`，因此 P3A identity 必须进入
+  source content root、component source partition identity、release fingerprint、same-cutoff probe 和 re-attestation；移动或修改
+  candidate 不能静默复用旧 identity。
+- 本 BUG 只实现 candidate-only source binding、CAS receipt/readback 与共享数据层测试；不执行 P3A/full dataset 导出，不修改或激活
+  既有 2026-07-31 数据集，不执行 DDL/DML、生产 pointer、后端/worker 进程控制，也不声称任何新数据 candidate 已发布。
 
 ### 23.36 BUG-1184 详细设计正式审核
 

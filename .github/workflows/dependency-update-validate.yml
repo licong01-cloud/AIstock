@@ -39,21 +39,10 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHECKOUT_REF: ${{ github.ref }}
         run: |
-          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
-          else
-            for attempt in 1 2 3; do
-              if git fetch --no-tags --depth=1 origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"; then
-                break
-              fi
-              if [[ "${attempt}" == "3" ]]; then
-                echo "base fetch failed after 3 attempts" >&2
-                exit 1
-              fi
-              sleep $((attempt * 2))
-            done
-          fi
+          python scripts/ci_changed_files.py --prepare-pr-merge-base-only \
+            --base-ref "${BASE_REF}" --base-sha "${BASE_SHA}" --checkout-ref "${CHECKOUT_REF}"
 
       - name: Verify prebuilt AIstock-CI tooling
         shell: powershell
