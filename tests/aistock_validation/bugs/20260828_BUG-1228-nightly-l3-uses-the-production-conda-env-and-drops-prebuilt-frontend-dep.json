@@ -43,20 +43,36 @@
   ],
   "expected": "Nightly validation must use the prebuilt AIstock-CI interpreter, verify its fingerprint, and attach a lockfile-matched prebuilt frontend dependency tree without installing or copying dependencies per run.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "noxfile.py",
+      "scripts/ci/prepare_self_hosted_workspace.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1228-nightly-l3-uses-the-production-conda-env-and-drops-prebuilt-frontend-dep.json"
+    ],
     "added_files": [],
     "changed_files": [
       ".github/workflows/nightly.yml",
-      "scripts/ci/prepare_self_hosted_workspace.py",
-      "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
-      "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-      "noxfile.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
       "backend/tests/test_noxfile_validation_env.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "noxfile.py",
+      "scripts/ci/prepare_self_hosted_workspace.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260828_BUG-1228-nightly-l3-uses-the-production-conda-env-and-drops-prebuilt-frontend-dep.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/nightly.yml",
@@ -212,10 +228,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
