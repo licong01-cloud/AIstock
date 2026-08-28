@@ -39,12 +39,18 @@
   "evidence_uris": [],
   "expected": "Unrelated or provably post-cutoff completed ingestion jobs do not invalidate a source freeze; relevant active writers and relevant at-or-before-cutoff mutations remain fail-closed and actual partition/control drift remains detected.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1238-dataset-source-freeze-retries-forever-on-unrelated-completed-ingestion-j.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/source_authority.py",
-      "backend/tests/dataset_release/test_source_authority.py"
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1238-dataset-source-freeze-retries-forever-on-unrelated-completed-ingestion-j.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -125,11 +131,15 @@
     "fresh_process_evidence": [
       "fresh isolated import backend.services.dataset_release.source_authority -> BUG1238_FRESH_PROCESS_IMPORT_OK"
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
