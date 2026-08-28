@@ -41,6 +41,18 @@
   ],
   "expected": "Every qe_hmm_full_v2 monthly candidate must consume an explicitly allowlisted repo-external P3A candidate through a shared fail-closed adapter; validate manifest/readback/hash/authority bindings; preserve denominator and typed unavailable semantics; and bind the P3A identity into source, component, and release fingerprints so same-cutoff reuse or re-attestation cannot ignore sector-authority drift.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      ".codex/skills/update-backtest-dataset/references/monthly-workflow.md",
+      "backend/services/dataset_release/sector_data_candidate_source.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_component_manifest_producer.py",
+      "backend/tests/dataset_release/test_sector_data_candidate_source.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20260828_BUG-1218-monthly-dataset-release-does-not-bind-the-p3a-dual-authority-sector-cand.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/sector_data_candidate_source.py",
       "backend/tests/dataset_release/test_sector_data_candidate_source.py"
@@ -55,6 +67,7 @@
       "configs/datasets/qe_backtest_monthly_v2.yaml",
       "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
     ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
