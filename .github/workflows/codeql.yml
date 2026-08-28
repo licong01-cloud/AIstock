@@ -3,8 +3,6 @@ name: CodeQL
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'tests/aistock_validation/bugs/**'
   push:
     branches: [main]
     paths-ignore:
@@ -222,4 +220,25 @@ jobs:
             "--checkout-path=$env:GITHUB_WORKSPACE" `
             "--wait-for-processing-timeout=120"
           if ($LASTEXITCODE -ne 0) { throw "CodeQL SARIF upload failed with exit code $LASTEXITCODE" }
+
+  codeql-verdict:
+    name: CodeQL verdict
+    needs: [docs-lite, analyze]
+    if: always()
+    runs-on: [self-hosted, Windows, aistock-ci-security]
+    timeout-minutes: 5
+    steps:
+      - name: Enforce CodeQL result
+        shell: powershell
+        env:
+          CLASSIFIER_RESULT: ${{ needs.docs-lite.result }}
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+        run: |
+          if ($env:CLASSIFIER_RESULT -ne "success") {
+            throw "CodeQL classification failed: $env:CLASSIFIER_RESULT"
+          }
+          if ($env:ANALYZE_RESULT -notin @("success", "skipped")) {
+            throw "CodeQL analysis failed: $env:ANALYZE_RESULT"
+          }
+          Write-Output "CodeQL verdict passed: classifier=$env:CLASSIFIER_RESULT analyze=$env:ANALYZE_RESULT"
 
