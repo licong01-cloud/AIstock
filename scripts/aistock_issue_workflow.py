@@ -75,6 +75,12 @@ ACTIVE_WORKFLOW_STATES = {
 }
 TERMINAL_WORKFLOW_STATES = {"merged", "close_synced", "cleanup_done", "complete"}
 NON_BLOCKING_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
+MERGE_QUALITY_CHECK_CONTEXTS = (
+    "CI verdict",
+    "CodeQL verdict",
+    "AIstock Semgrep guardrails",
+    "Context, scope, and open-source tooling dry-run",
+)
 ARTIFACT_PATH_PATTERNS = (
     ".codex_tmp",
     ".coverage",
@@ -239,6 +245,15 @@ from scripts import code_intelligence_adapter as code_intelligence  # noqa: E402
 
 class WorkflowError(ValueError):
     """Raised when the high-level AIstock issue workflow cannot proceed safely."""
+
+
+class CleanupBlockedError(WorkflowError):
+    """Raised with the completed cleanup preflight so recovery need not rebuild it."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        blocking = [str(item) for item in payload.get("blocking") or [] if str(item).strip()]
+        super().__init__("; ".join(blocking) or "cleanup preflight blocked")
 
 
 class GitHubOutcomeUnknownError(WorkflowError):
@@ -7361,10 +7376,13 @@ def build_submit_bug_plan(
         candidate_path = output_dir / "candidate.json"
         github_body_path = output_dir / "github-issue-body.md"
         bug_path = _bug_json_path(record, registry_root)
-        _add_record_allowed_scope(
-            record,
-            _repo_rel(bug_path, registry_root),
-            _repo_rel(_allocator_path(registry_root), registry_root),
+        _add_record_allowed_scope(record, _repo_rel(bug_path, registry_root))
+        if not create_fix_worktree:
+            _add_record_allowed_scope(record, _repo_rel(_allocator_path(registry_root), registry_root))
+        record["repository_allocator_persistence"] = (
+            "omitted_from_fix_pr_global_reservation_is_authoritative"
+            if create_fix_worktree
+            else "registry_intake_updates_legacy_observation"
         )
         github_result: dict[str, Any] | None = (
             {
@@ -7535,7 +7553,8 @@ def build_submit_bug_plan(
             _write_json(write_candidate_path, {"event": event, "candidate": candidate})
             _write_text(write_github_body_path, _render_github_issue_body(record, candidate))
             _write_json(write_bug_path, record)
-            _write_allocator(max(allocated_number, int(allocation_report.get("max_number") or 0)), write_root)
+            if not create_fix_worktree:
+                _write_allocator(max(allocated_number, int(allocation_report.get("max_number") or 0)), write_root)
             fix_registration_commit = (
                 _commit_bug_registration_in_fix_worktree(write_root, canonical_bug_id)
                 if create_fix_worktree and write_root != registry_root
@@ -13392,7 +13411,7 @@ def _classify_pr_checks(checks: list[dict[str, Any]]) -> dict[str, list[str]]:
 
 
 def _required_pr_check_summary(result: dict[str, Any]) -> dict[str, list[str]]:
-    """Classify only checks GitHub says are required by branch protection."""
+    """Classify the repository-owned merge-quality contract."""
     raw = str(result.get("stdout") or "").strip()
     if not raw:
         if result.get("ok"):
@@ -13433,6 +13452,54 @@ def _required_pr_check_summary(result: dict[str, Any]) -> dict[str, list[str]]:
         "non_blocking": non_blocking,
         "passed": passed,
     }
+
+
+def _normalize_merge_quality_check_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Select the stable merge contract and synthesize missing checks as pending.
+
+    ``gh pr checks`` returns every check and exits non-zero when any check fails.
+    The merge contract must neither inherit unrelated advisory failures nor rely
+    on a potentially stale branch-protection subset, so this function evaluates
+    only the repository-owned stable contexts.
+    """
+
+    raw = str(result.get("stdout") or "").strip()
+    if not raw:
+        if not result.get("ok"):
+            return None
+        parsed: Any = []
+    else:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(parsed, list):
+        return None
+    checks = [item for item in parsed if isinstance(item, dict)]
+    rows: list[dict[str, Any]] = []
+    for context in MERGE_QUALITY_CHECK_CONTEXTS:
+        matches = [item for item in checks if _check_name(item) == context]
+        if matches:
+            rows.append(matches[-1])
+        else:
+            rows.append(
+                {
+                    "name": context,
+                    "state": "pending",
+                    "bucket": "pending",
+                    "workflow": "aistock-merge-quality-contract",
+                }
+            )
+    normalized = dict(result)
+    normalized.update(
+        {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(rows),
+            "source": "github_cli_merge_quality_contract",
+        }
+    )
+    return normalized
 
 
 def _execute_workflow_command(
@@ -14224,12 +14291,35 @@ def _git_squash_head_equivalent_to_origin(head_oid: str, *, cwd: Path | None = N
     return _git_squash_head_equivalent_to_ref(head_oid, "origin/main", cwd=cwd)
 
 
+def _cleanup_verified_pr_check_matches_target(
+    value: dict[str, Any] | None,
+    *,
+    pr_url: str,
+    branch: str,
+) -> bool:
+    pr = value.get("pr") if isinstance(value, dict) else None
+    if not isinstance(pr, dict) or not value.get("checked") or not value.get("merged"):
+        return False
+    requested_url = pr_url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    observed_url = str(pr.get("url") or "").split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    head_oid = str(pr.get("headRefOid") or "").strip().lower()
+    merge_commit = str((pr.get("mergeCommit") or {}).get("oid") or "").strip().lower()
+    return bool(
+        requested_url
+        and observed_url == requested_url
+        and str(pr.get("headRefName") or "").strip() == branch
+        and _FULL_GIT_COMMIT_RE.fullmatch(head_oid)
+        and _FULL_GIT_COMMIT_RE.fullmatch(merge_commit)
+    )
+
+
 def _cleanup_merge_verification(
     branch: str,
     pr_url: str | None,
     merged: bool,
     *,
     cwd: Path | None = None,
+    verified_pr_check: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = cwd or REPO_ROOT
     payload: dict[str, Any] = {
@@ -14246,7 +14336,11 @@ def _cleanup_merge_verification(
     if merged or not pr_url:
         return payload
 
-    pr_check = _verify_pr_merged(pr_url)
+    pr_check = (
+        verified_pr_check
+        if _cleanup_verified_pr_check_matches_target(verified_pr_check, pr_url=pr_url, branch=branch)
+        else _verify_pr_merged(pr_url)
+    )
     payload["pr_check"] = pr_check
     if not pr_check.get("merged"):
         return payload
@@ -14372,6 +14466,24 @@ def _cleanup_preflight_fetch_origin(root: Path, *, apply: bool) -> dict[str, Any
         "command": "git fetch origin --prune",
         "result": result,
     }
+
+
+def _cleanup_preflight_fetch_for_plan(
+    root: Path,
+    *,
+    apply: bool,
+    cached: dict[str, Any] | None,
+) -> dict[str, Any]:
+    reusable = bool(
+        apply
+        and cached
+        and cached.get("status") == "fetched"
+        and isinstance(cached.get("result"), dict)
+        and cached["result"].get("ok")
+    )
+    if reusable and cached is not None:
+        return {**cached, "reused": True}
+    return _cleanup_preflight_fetch_origin(root, apply=apply)
 
 
 def _canonical_bug_record_snapshot(bug_id: str, root: Path | None = None) -> dict[str, Any]:
@@ -14947,15 +15059,10 @@ def _rest_required_pr_check_result(
             if name and name not in known_contexts:
                 requirements.append((name, None))
 
-    if not requirements:
-        return {
-            "ok": True,
-            "returncode": 0,
-            "stdout": "[]",
-            "stderr": "",
-            "source": "github_rest",
-            "head_sha": normalized_head,
-        }
+    known_contexts = {context for context, _ in requirements}
+    for context in MERGE_QUALITY_CHECK_CONTEXTS:
+        if context not in known_contexts:
+            requirements.append((context, None))
 
     check_runs_result = _run_transport_read_with_retry(
         ["gh", "api", f"repos/{GITHUB_REPO}/commits/{normalized_head}/check-runs?per_page=100"],
@@ -15034,18 +15141,19 @@ def _merge_required_check_result_with_transport_fallback(
     payload: dict[str, Any],
     bug_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    command = ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"]
+    command = ["gh", "pr", "checks", pr_url, "--json", "name,state,bucket,workflow"]
     result = _run_merge_read_with_retry(
         command,
         bug_id=bug_id,
         event="command:gh_pr_required_checks_before_merge",
     )
-    if result.get("ok"):
-        return result, None
+    normalized = _normalize_merge_quality_check_result(result)
+    if normalized is not None:
+        return normalized, None
     message = str(result.get("stderr") or result.get("stdout") or "required PR check query failed")
     if not _looks_like_github_transport_failure(message):
-        # ``gh pr checks --required`` may briefly return a non-zero status
-        # while GitHub has not published the required contexts yet.  Keep this
+        # ``gh pr checks`` may briefly return a non-zero status while GitHub
+        # has not published any contexts yet.  Keep this
         # fail-closed, but represent it as a pending sentinel so the bounded
         # poller can observe the next report instead of requiring a manual
         # rerun.
@@ -16332,6 +16440,8 @@ def _build_close_sync_cleanup_after_merge_plan(
     cleanup: bool,
     apply: bool,
     sync_root: bool = False,
+    verified_pr_check: dict[str, Any] | None = None,
+    preflight_fetch: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not cleanup or close_sync_pr_merge.get("workflow_gate") not in {"merged", "already_merged"}:
         return None
@@ -16349,6 +16459,8 @@ def _build_close_sync_cleanup_after_merge_plan(
         pr_url=close_sync_commit.get("pr_url") or close_sync_pr_merge.get("pr_url"),
         apply=bool(apply and close_sync_pr_merge.get("auto_merge")),
         sync_root=sync_root,
+        verified_pr_check=verified_pr_check,
+        preflight_fetch=preflight_fetch,
     )
 
 
@@ -16393,6 +16505,8 @@ def _build_cleanup_after_merge_plan_with_root_sync_deferral(
     sync_root: bool,
     source_merge_receipt: dict[str, Any] | None = None,
     source_receipt_path: str | None = None,
+    verified_pr_check: dict[str, Any] | None = None,
+    preflight_fetch: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     cleanup_kwargs: dict[str, Any] = {
         "branch": branch,
@@ -16401,6 +16515,8 @@ def _build_cleanup_after_merge_plan_with_root_sync_deferral(
         "pr_url": pr_url,
         "apply": apply,
         "sync_root": sync_root,
+        "verified_pr_check": verified_pr_check,
+        "preflight_fetch": preflight_fetch,
     }
     if source_merge_receipt is not None:
         cleanup_kwargs["source_merge_receipt"] = source_merge_receipt
@@ -16408,17 +16524,17 @@ def _build_cleanup_after_merge_plan_with_root_sync_deferral(
         cleanup_kwargs["source_receipt_path"] = source_receipt_path
     try:
         plan = build_cleanup_after_merge_plan(**cleanup_kwargs)
-    except WorkflowError as exc:
+    except CleanupBlockedError as exc:
         if not (apply and sync_root and "canonical root is dirty and not synced to origin/main" in str(exc)):
             raise
-        retry_kwargs = dict(cleanup_kwargs)
-        retry_kwargs["apply"] = False
-        plan = build_cleanup_after_merge_plan(**retry_kwargs)
+        plan = exc.payload
     deferred = _cleanup_root_sync_deferred_payload(plan, phase=phase) if sync_root else None
     if not deferred:
         return plan, None
     retry_kwargs = dict(cleanup_kwargs)
     retry_kwargs["sync_root"] = False
+    retry_kwargs["preflight_fetch"] = plan.get("pre_cleanup_fetch")
+    retry_kwargs["verified_pr_check"] = (plan.get("merge_verification") or {}).get("pr_check") or verified_pr_check
     retry = build_cleanup_after_merge_plan(**retry_kwargs)
     retry.setdefault("warnings", []).append(
         "canonical root sync deferred; cleanup retried without --sync-root to avoid blocking safe aftercare"
@@ -16441,6 +16557,8 @@ def _build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral(
     cleanup: bool,
     apply: bool,
     sync_root: bool = False,
+    verified_pr_check: dict[str, Any] | None = None,
+    preflight_fetch: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     try:
         plan = _build_close_sync_cleanup_after_merge_plan(
@@ -16450,18 +16568,13 @@ def _build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral(
             cleanup=cleanup,
             apply=apply,
             sync_root=sync_root,
+            verified_pr_check=verified_pr_check,
+            preflight_fetch=preflight_fetch,
         )
-    except WorkflowError as exc:
+    except CleanupBlockedError as exc:
         if not (apply and sync_root and "canonical root is dirty and not synced to origin/main" in str(exc)):
             raise
-        plan = _build_close_sync_cleanup_after_merge_plan(
-            bug_id=bug_id,
-            close_sync_commit=close_sync_commit,
-            close_sync_pr_merge=close_sync_pr_merge,
-            cleanup=cleanup,
-            apply=False,
-            sync_root=sync_root,
-        )
+        plan = exc.payload
     deferred = _cleanup_root_sync_deferred_payload(plan, phase="close_sync_cleanup") if sync_root else None
     if not deferred:
         return plan, None
@@ -16472,6 +16585,8 @@ def _build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral(
         cleanup=cleanup,
         apply=apply,
         sync_root=False,
+        verified_pr_check=(plan.get("merge_verification") or {}).get("pr_check") or verified_pr_check,
+        preflight_fetch=plan.get("pre_cleanup_fetch"),
     )
     if retry:
         retry.setdefault("warnings", []).append(
@@ -16776,6 +16891,7 @@ def build_merge_finalizer_plan(
                 "pr_url": source_pr_url,
                 "apply": apply,
                 "sync_root": sync_root,
+                "verified_pr_check": source_pr_check,
             }
             if source_merge_receipt:
                 cleanup_kwargs["source_merge_receipt"] = source_merge_receipt
@@ -16786,6 +16902,12 @@ def build_merge_finalizer_plan(
             )
             if cleanup_root_sync_deferred:
                 root_sync_deferrals.append(cleanup_root_sync_deferred)
+    cleanup_fetch_candidate = (cleanup_plan or {}).get("pre_cleanup_fetch")
+    shared_cleanup_fetch = (
+        cleanup_fetch_candidate
+        if isinstance(cleanup_fetch_candidate, dict) and cleanup_fetch_candidate.get("status") == "fetched"
+        else None
+    )
     close_sync_cleanup_sync_root = bool(
         sync_root
         and close_sync_pr_merge.get("workflow_gate") in {"merged", "already_merged"}
@@ -16795,6 +16917,11 @@ def build_merge_finalizer_plan(
             or not cleanup_plan.get("sync_root")
         )
     )
+    close_sync_merge_result = close_sync_pr_merge.get("merge") or {}
+    close_sync_verified_pr_check = (
+        close_sync_pr_merge.get("verified")
+        or (close_sync_merge_result.get("verified") if isinstance(close_sync_merge_result, dict) else None)
+    )
     close_sync_cleanup_plan, close_sync_root_sync_deferred = _build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral(
         bug_id=canonical_bug_id,
         close_sync_commit=close_sync_commit,
@@ -16802,6 +16929,8 @@ def build_merge_finalizer_plan(
         cleanup=cleanup,
         apply=apply,
         sync_root=close_sync_cleanup_sync_root,
+        verified_pr_check=close_sync_verified_pr_check,
+        preflight_fetch=shared_cleanup_fetch,
     )
     if close_sync_root_sync_deferred:
         root_sync_deferrals.append(close_sync_root_sync_deferred)
@@ -17751,11 +17880,17 @@ def build_cleanup_after_merge_plan(
     canonical_root: str | None = None,
     source_merge_receipt: dict[str, Any] | None = None,
     source_receipt_path: str | None = None,
+    verified_pr_check: dict[str, Any] | None = None,
+    preflight_fetch: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(canonical_root) if canonical_root else _canonical_root()
     branch_bug_match = BUG_ID_RE.search(branch)
     evidence_bug_id = bug_id or (branch_bug_match.group(0).upper() if branch_bug_match else None)
-    pre_cleanup_fetch = _cleanup_preflight_fetch_origin(root, apply=apply)
+    pre_cleanup_fetch = _cleanup_preflight_fetch_for_plan(
+        root,
+        apply=apply,
+        cached=preflight_fetch,
+    )
     current_branch = _git(["branch", "--show-current"], cwd=root, check=False)
     local_branches = set(
         _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
@@ -17779,7 +17914,13 @@ def build_cleanup_after_merge_plan(
         }
     merged_refs = set(_git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], cwd=root, check=False).splitlines())
     merged = branch in merged_refs
-    merge_verification = _cleanup_merge_verification(branch, pr_url, merged, cwd=root)
+    merge_verification = _cleanup_merge_verification(
+        branch,
+        pr_url,
+        merged,
+        cwd=root,
+        verified_pr_check=verified_pr_check,
+    )
     squash_merge_verified = bool(merge_verification["squash_merge_verified"])
     pr_check = merge_verification["pr_check"]
     tree_equivalent = bool(merge_verification["tree_equivalent_to_origin_main"])
@@ -18033,14 +18174,22 @@ def build_cleanup_after_merge_plan(
     _write_json(output_dir / f"{_slug(branch)}-cleanup-plan.json", payload)
     if apply:
         if blocking:
-            raise WorkflowError("; ".join(blocking))
+            raise CleanupBlockedError(payload)
         started = time.monotonic()
         applied: list[dict[str, Any]] = []
         if pre_cleanup_fetch.get("status") == "fetched":
             applied.append(
                 {
-                    "command": pre_cleanup_fetch.get("command") or "git fetch origin --prune",
-                    "phase": "pre_cleanup_verification",
+                    "command": (
+                        "reuse prior git fetch origin --prune receipt"
+                        if pre_cleanup_fetch.get("reused")
+                        else pre_cleanup_fetch.get("command") or "git fetch origin --prune"
+                    ),
+                    "phase": (
+                        "pre_cleanup_verification_reused"
+                        if pre_cleanup_fetch.get("reused")
+                        else "pre_cleanup_verification"
+                    ),
                     "result": pre_cleanup_fetch.get("result"),
                 }
             )
