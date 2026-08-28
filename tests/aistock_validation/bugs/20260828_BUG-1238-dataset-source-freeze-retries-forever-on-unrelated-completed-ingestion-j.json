@@ -107,8 +107,8 @@
   },
   "first_seen_at": "2026-08-28T18:48:52.943633Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c8e3be526c9381ef447b4989a5048d23d36d2e99",
+  "fixed_at": "2026-08-28T19:38:59Z",
   "github_issue_number": 3922,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3922",
   "last_seen_at": "2026-08-28T18:48:52.943633Z",
@@ -116,6 +116,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3924",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -138,6 +139,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -149,7 +151,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1238",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "095de3319f0da2a7",
+    "recorded_at": "2026-08-28T19:40:03.449426Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c8648f00b4eb20a74290a9dd0d29b379fc36bc13",
+    "source_merge_commit": "c8e3be526c9381ef447b4989a5048d23d36d2e99",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3924",
+    "validation_evidence": [
+      "validation-receipt: id=b5519f0e6517d9ea commit=c8648f00b4eb20a74290a9dd0d29b379fc36bc13 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (8 passed; ownership mapped=14/14)`",
+      "validation-receipt: id=c5ae14ff82bbb70d commit=c8648f00b4eb20a74290a9dd0d29b379fc36bc13 kind=nox plan=qlib_data_backend status=passed command=`python -m nox -s qlib_data_backend` result=`passed (20 passed)`",
+      "validation-receipt: id=d9c4c6bf8be9dbeb commit=c8648f00b4eb20a74290a9dd0d29b379fc36bc13 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_source_authority.py -q` result=`passed (54 passed)`",
+      "validation-receipt: id=e9743f353bf71612 commit=c8648f00b4eb20a74290a9dd0d29b379fc36bc13 kind=ruff plan=direct status=passed command=`python -m ruff check changed Python files; python -m py_compile changed Python files; git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "48b155dca678d421cc361815de6645d2e6c7aadfbe6cf720ddb0984693691873"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -158,6 +184,12 @@
     "fingerprint": "5e2c0f605613faf568100539",
     "source_event_id": "FE-20260828-5e2c0f605613"
   },
+  "validation_evidence": [
+    "validation-receipt: id=b5519f0e6517d9ea commit=c8648f00b4eb20a74290a9dd0d29b379fc36bc13 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (8 passed; ownership mapped=14/14)`",
+    "validation-receipt: id=c5ae14ff82bbb70d commit=c8648f00b4eb20a74290a9dd0d29b379fc36bc13 kind=nox plan=qlib_data_backend status=passed command=`python -m nox -s qlib_data_backend` result=`passed (20 passed)`",
+    "validation-receipt: id=d9c4c6bf8be9dbeb commit=c8648f00b4eb20a74290a9dd0d29b379fc36bc13 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_source_authority.py -q` result=`passed (54 passed)`",
+    "validation-receipt: id=e9743f353bf71612 commit=c8648f00b4eb20a74290a9dd0d29b379fc36bc13 kind=ruff plan=direct status=passed command=`python -m ruff check changed Python files; python -m py_compile changed Python files; git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
