@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: be3fddeda6707b6718f6f90ddbce8eb208b27173e0dcffc23402a6f0a672ca0e
+source_sha256: 6178163d0836abc66bb398d558e8f5585bc5e187e673ea34e894db45dbab67e7
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-28"
@@ -553,6 +553,8 @@ rules:
         - shared_validation_matrix
         - close_sync_compatibility_signature
         - per_issue_evidence_and_issue_sync
+        - host_wide_counter_and_permanent_reservation_remain_authoritative
+        - ordinary_fix_pr_omits_repository_allocator_single_value
     baseline_policy: manual_review_only
     remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates.
 

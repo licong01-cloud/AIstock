@@ -321,6 +321,8 @@ Nightly 的 DR snapshot/restore-readback 属于独立运维 lane，只能连接�
 
 source batch 与 close-sync batch 是同一批次的两个阶段：source batch 允许多个 BUG 共用一个源 PR，但必须保持同模块、同风险、同验证链和共享 scope；close-sync-batch 只能把这些兼容 BUG 的独立记录同步到同一个已合入 PR/merge identity，并固化每个 BUG 的逐项证据与 compatibility key。不同模块、不同风险、不同 required verification、不同 runtime impact/activation policy、不同 production/dependency gate 或已有不同源 PR 的 BUG 必须分组处理，不能用一个 close-sync PR 覆盖。`backend_restart_required=true` 或需要 post-restart identity/business-smoke receipt 的 BUG 始终单独走 `finish`/`close-sync`；`none`/`client` 等无后端重启的 BUG 只有在 compatibility signature 完全一致时才可批处理。该规则是效率优化，不减少逐 BUG 的 Issue、状态、证据和门禁。
 
+普通 `create-fix-worktree` 登记以 host-wide 原子 counter、精确 permanent reservation、GitHub Issue 和 source PR 内的 BUG JSON 作为编号权威；不得再把仓库单值 `.bug_id_allocator.json` 写入每条并发 fix PR。该 legacy allocator 只由 registry-intake/显式恢复路径维护为兼容观察值，不参与普通 source PR 的 changed files、allowed scope 或合入冲突。编号唯一性、失败恢复和终态 reservation 清理由全局账本继续 fail-closed。
+
 <a id="rule-prod-dependency-001"></a>
 ### 7.3 [PROD-DEPENDENCY-001] Production dependency gate
 

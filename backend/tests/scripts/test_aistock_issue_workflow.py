@@ -7926,6 +7926,10 @@ def test_submit_bug_fast_chain_writes_registration_into_fix_worktree(
 
     def fake_fix_worktree(**kwargs: Any) -> dict[str, Any]:
         fix_root.mkdir(parents=True)
+        _write_json(
+            fix_root / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json",
+            {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117},
+        )
         return {
             "create_worktree": kwargs["create"],
             "dry_run": kwargs["dry_run"],
@@ -7941,7 +7945,7 @@ def test_submit_bug_fast_chain_writes_registration_into_fix_worktree(
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": "?? tests/aistock_validation/bugs/bug118.json\n?? tests/aistock_validation/bugs/.bug_id_allocator.json",
+                "stdout": "?? tests/aistock_validation/bugs/bug118.json",
                 "stderr": "",
             }
         if args[:3] == ["git", "rev-parse", "--short=12"]:
@@ -7982,7 +7986,12 @@ def test_submit_bug_fast_chain_writes_registration_into_fix_worktree(
     assert payload["fix_chain"]["default_path"] == "single_fix_branch_registration_and_fix"
     assert "run --bug-id BUG-118" in payload["fix_chain"]["next_command"]
     assert (fix_root / payload["bug_json_path"]).exists()
-    assert (fix_root / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json").exists()
+    fix_allocator = fix_root / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
+    assert json.loads(fix_allocator.read_text(encoding="utf-8"))["last_allocated"] == 117
+    assert payload["record"]["repository_allocator_persistence"] == (
+        "omitted_from_fix_pr_global_reservation_is_authoritative"
+    )
+    assert "tests/aistock_validation/bugs/.bug_id_allocator.json" not in payload["record"]["allowed_write_scope"]
     assert not list(workflow.BUGS_ROOT.glob("*BUG-118*.json"))
     assert payload["fix_registration_commit"]["workflow_gate"] == "committed"
 
