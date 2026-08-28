@@ -13,6 +13,8 @@ non_runtime_source_paths:
   - scripts/cleanup_simulation_history.py
   - scripts/configure_aistock_github_runner.ps1
   - scripts/ingest_tushare_daily_basic.py
+  - scripts/localsim_failed_history_prune_core.py
+  - scripts/prune_localsim_failed_history.py
   - scripts/qlib_authoritative_bin_export.py
   - scripts/repair_announcement_event_signal_issuer_binding.py
   - scripts/seed_dataset_refresh_audit.py

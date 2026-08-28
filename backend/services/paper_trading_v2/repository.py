@@ -2970,13 +2970,35 @@ class PaperTradingV2Repository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT DISTINCT ON (symbol) portfolio_id, symbol, quantity,
-                           available_quantity, avg_cost, trade_date
-                    FROM paper_v2.positions
-                    WHERE portfolio_id = %s AND trade_date <= %s
-                    ORDER BY symbol, trade_date DESC, position_id DESC
+                    WITH latest_snapshot AS (
+                        SELECT run_id
+                        FROM paper_v2.daily_snapshots
+                        WHERE portfolio_id = %s AND trade_date <= %s
+                        ORDER BY trade_date DESC, updated_at DESC, snapshot_id DESC
+                        LIMIT 1
+                    ),
+                    latest_legacy_position_run AS (
+                        SELECT run_id
+                        FROM paper_v2.positions
+                        WHERE portfolio_id = %s AND trade_date <= %s
+                        GROUP BY run_id
+                        ORDER BY MAX(trade_date) DESC, MAX(updated_at) DESC, run_id DESC
+                        LIMIT 1
+                    ),
+                    position_authority AS (
+                        SELECT run_id FROM latest_snapshot
+                        UNION ALL
+                        SELECT run_id FROM latest_legacy_position_run
+                        WHERE NOT EXISTS (SELECT 1 FROM latest_snapshot)
+                        LIMIT 1
+                    )
+                    SELECT p.portfolio_id, p.symbol, p.quantity,
+                           p.available_quantity, p.avg_cost, p.trade_date
+                    FROM paper_v2.positions p
+                    JOIN position_authority a ON a.run_id = p.run_id
+                    ORDER BY p.symbol
                     """,
-                    (portfolio_id, before_or_on),
+                    (portfolio_id, before_or_on, portfolio_id, before_or_on),
                 )
                 rows = cur.fetchall()
         return {
@@ -4459,17 +4481,33 @@ class InMemoryPaperTradingV2Repository:
         return audit
 
     def load_latest_positions(self, portfolio_id: str, before_or_on: date) -> dict[str, PositionLot]:
-        candidates: list[PositionLot] = []
-        for positions in self.positions.values():
-            candidates.extend([pos for pos in positions if pos.portfolio_id == portfolio_id and pos.trade_date <= before_or_on])
-        by_symbol: dict[str, PositionLot] = {}
-        for pos in candidates:
-            if pos.quantity <= 0:
-                continue
-            existing = by_symbol.get(pos.symbol)
-            if existing is None or pos.trade_date >= existing.trade_date:
-                by_symbol[pos.symbol] = pos
-        return by_symbol
+        snapshot_candidates = [
+            (snapshot.snapshot_time, run_id)
+            for run_id, snapshot in self.snapshots.items()
+            if snapshot.portfolio_id == portfolio_id and snapshot.snapshot_time.date() <= before_or_on
+        ]
+        if snapshot_candidates:
+            authority_run_id = max(snapshot_candidates)[1]
+        else:
+            legacy_candidates = [
+                (max(position.trade_date for position in positions), run_id)
+                for run_id, positions in self.positions.items()
+                if positions
+                and any(
+                    position.portfolio_id == portfolio_id and position.trade_date <= before_or_on
+                    for position in positions
+                )
+            ]
+            if not legacy_candidates:
+                return {}
+            authority_run_id = max(legacy_candidates)[1]
+        return {
+            position.symbol: position
+            for position in self.positions.get(authority_run_id, [])
+            if position.portfolio_id == portfolio_id
+            and position.trade_date <= before_or_on
+            and position.quantity > 0
+        }
 
     def load_latest_cash(self, portfolio: PaperPortfolio, before_or_on: date) -> float:
         latest_cash_entry: tuple[date, datetime, float] | None = None

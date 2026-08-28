@@ -1,6 +1,13 @@
 {
-  "actual": "Production read-only evidence shows 27 historical LocalSIM FAILED_RETRYABLE rows plus terminal failures under retained package pkg_378eb9c91e104c64935404e257e932ee. Existing BUG-1099 cleanup preserves the retained package, BUG-1165 only terminalizes rows, and reset_portfolio_runs does not atomically cover the unified simulation graph. Add a governed LocalSIM-only physical-prune plan that preserves the latest healthy anchor run, current package/StrategyPackage/selection evidence/current binding and current cash-position state; deletes only explicitly classified interrupted or unrecoverable historical LocalSIM run subgraphs; validates exact referential and economic readback in DEV before digest/source-pinned production DML; never touches MiniQMT or service processes.",
+  "actual": "Production read-only evidence shows 48 historical LocalSIM CANCELLED/FAILED_RETRYABLE/FAILED_TERMINAL rows under retained package pkg_378eb9c91e104c64935404e257e932ee. Existing BUG-1099 cleanup preserves the retained package, BUG-1165 only terminalizes rows, and reset_portfolio_runs does not atomically cover the unified simulation graph. The current per-symbol latest position query also resurrects 417 positive historical positions while the latest successful anchor contains 50, so physical pruning and the next trading-day bootstrap are unsafe until one complete snapshot run becomes the sole position authority.",
   "allowed_write_scope": [
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/tests/paper_trading_v2/test_repository_position_authority.py",
+    "backend/tests/simulation_runtime/test_localsim_failed_history_prune.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "scripts/localsim_failed_history_prune_core.py",
+    "scripts/prune_localsim_failed_history.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260828_BUG-1223-localsim-retained-package-failed-history-cannot-be-physically-pruned-wit.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -13,17 +20,27 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-28T10:40:55.834798Z",
-  "description": "Production read-only evidence shows 27 historical LocalSIM FAILED_RETRYABLE rows plus terminal failures under retained package pkg_378eb9c91e104c64935404e257e932ee. Existing BUG-1099 cleanup preserves the retained package, BUG-1165 only terminalizes rows, and reset_portfolio_runs does not atomically cover the unified simulation graph. Add a governed LocalSIM-only physical-prune plan that preserves the latest healthy anchor run, current package/StrategyPackage/selection evidence/current binding and current cash-position state; deletes only explicitly classified interrupted or unrecoverable historical LocalSIM run subgraphs; validates exact referential and economic readback in DEV before digest/source-pinned production DML; never touches MiniQMT or service processes.",
+  "description": "Make the latest complete Paper v2 account snapshot run authoritative for positions, then physically prune only older LocalSIM CANCELLED/FAILED_RETRYABLE/FAILED_TERMINAL run subgraphs under an explicit retained package and latest SUCCEEDED anchor. Preserve successful LocalSIM runs, current cash/50-position state, StrategyPackage, releases, bindings, Selection evidence and all MiniQMT rows; validate DEV rollback and require digest/source-pinned production DML.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260828-a160514539f3",
       "timestamp": "2026-08-28T10:40:55.834782Z"
+    },
+    {
+      "action": "scope_expanded_after_production_readonly_evidence",
+      "actor": "codex",
+      "note": "The current repository position loader resurrects symbols across historical runs (417 positive positions versus 50 in the latest successful anchor); physical pruning must first make the latest complete snapshot run authoritative and add a LocalSIM-only digest-pinned atomic prune tool.",
+      "timestamp": "2026-08-28T10:55:00Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "production-readonly:2026-08-28 LocalSIM total=61 succeeded=13 cancelled=4 failed_retryable=27 failed_terminal=17",
+    "production-readonly:anchor simrun_55fe2fbc8b833576 positions=50 cash_after=14857144.510000",
+    "production-readonly:legacy per-symbol latest position query positive_positions=417; failed-history prune projection under old semantics=316"
+  ],
+  "expected": "The latest complete account snapshot run is the sole position authority. A governed LocalSIM-only physical-prune plan preserves the latest successful anchor, all successful runs, current cash/positions, bindings/releases, StrategyPackage, Selection evidence and all MiniQMT rows while atomically deleting only older CANCELLED/FAILED_RETRYABLE/FAILED_TERMINAL LocalSIM run subgraphs after DEV rollback validation and digest/source-pinned production authorization.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -49,31 +66,41 @@
   "last_seen_at": "2026-08-28T10:40:55.834798Z",
   "module": "simulation_runtime",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not delete any StrategyPackage, StrategyRuntimeRelease, SimulationReleaseBinding, Selection evidence, successful LocalSIM run, current anchor state, or MiniQMT row.",
+    "Do not execute production DML from the source PR; production apply is a separate merged-source, DEV-validated, digest-pinned action."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/prune_localsim_failed_history.py --target production --package-id pkg_378eb9c91e104c64935404e257e932ee --anchor-run-id simrun_55fe2fbc8b833576",
   "required_verification": [
     "l0",
+    "validation_module_registry_l0",
+    "paper_v2_backend",
     "simulation_core_l2"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "scripts/prune_localsim_failed_history.py production post_commit_readback",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "backend/services/paper_trading_v2/repository.py changes LocalSIM position authority",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_source_merge",
     "provisional": true,
-    "runtime_impact": "none",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P2",
+  "severity": "P1",
   "status": "open",
   "suspected_modules": [
     "simulation_runtime"
