@@ -17,6 +17,8 @@
 - `docs/standards/README.md` 只维护权威入口和场景路由。
 - 规则变更与对应测试在同一 PR 中提交；仅当 `.codex/**` 或 `.claude/**` 客户端入口发生变化时，合入后才由单一 owner 执行一次 `install-client` 同步。
 
+**机器目录摘要一致性：** 人类可读 Markdown 是唯一规范权威，YAML 的 `source_sha256` 只证明机器目录对应当前 Markdown。任一规范文件进入 changed-files 范围时，既有 changed-files guardrail 必须按 UTF-8/LF 规范化计算摘要并在本地 fail-closed；失败输出一次 expected digest 和修复提示。该检查前移远端既有一致性测试，不新增 rule/control、runner job、测试矩阵、人工审批或第二份规范。
+
 ## 2. 统一执行流程
 
 ### 2.1 任务分流
