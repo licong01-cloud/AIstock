@@ -167,6 +167,19 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     }
     assert advisory_payload["unmapped_code_files"] == []
 
+    p0k_payload = classifier.classify_changed_files(
+        [
+            "scripts/advisory_p0k_build_training_request.py",
+            "scripts/wsl/advisory_p0k_train.py",
+        ],
+        repo_root=tmp_path,
+    )
+    assert p0k_payload["classification"] == "targeted_ci_required"
+    assert p0k_payload["backend_required"] is True
+    assert p0k_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert p0k_payload["dev_db_required"] is False
+    assert p0k_payload["unmapped_code_files"] == []
+
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
         repo_root=tmp_path,
