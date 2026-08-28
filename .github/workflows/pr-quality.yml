@@ -3,8 +3,6 @@ name: AIstock PR Quality
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'tests/aistock_validation/bugs/**'
   workflow_dispatch:
     inputs:
       base_ref:
