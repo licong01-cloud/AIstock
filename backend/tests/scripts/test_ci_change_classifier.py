@@ -1222,8 +1222,6 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     verdict = jobs["ci-verdict"]
     expected_needs = {
         "classify-changes",
-        "static-gate",
-        "docs-lite",
         "backend-tests",
         "frontend-quality",
         "tdx-go-tests",
@@ -1236,8 +1234,8 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert verdict["if"] == "always()"
     assert set(verdict["needs"]) == expected_needs
     run = str(verdict["steps"][0]["run"])
-    assert '"classify:${CLASSIFY_RESULT}" "static:${STATIC_RESULT}"' in run
-    for lane in ("docs", "backend", "frontend", "go", "workflow", "prompt"):
+    assert 'failures+=("classify_static=${CLASSIFY_RESULT}")' in run
+    for lane in ("backend", "frontend", "go", "workflow", "prompt"):
         assert f'"{lane}:${{{lane.upper() if lane != "go" else "GO"}_RESULT}}"' in run
     assert "failure-bug-register" not in verdict["needs"]
     assert "REGISTRAR_RESULT" not in verdict["steps"][0].get("env", {})
@@ -1252,11 +1250,16 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert any(step.get("name") == "Classify CI lane" for step in classify_steps)
 
 
-def test_static_gate_uses_registry_metadata_fast_lane() -> None:
+def test_classification_job_reuses_one_checkout_for_static_and_registry_gates() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
-    static_gate_steps = workflow["jobs"]["static-gate"]["steps"]
+    jobs = workflow["jobs"]
+    assert "static-gate" not in jobs
+    assert "docs-lite" not in jobs
+    static_gate_steps = jobs["classify-changes"]["steps"]
+    assert sum("actions/checkout@" in str(step.get("uses") or "") for step in static_gate_steps) == 1
+    assert sum(step.get("name") == "Verify prebuilt AIstock-CI environment" for step in static_gate_steps) == 1
     registry_steps = [
         step
         for step in static_gate_steps
@@ -1264,9 +1267,10 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
     ]
 
     assert len(registry_steps) == 1
-    assert registry_steps[0]["if"] == "needs.classify-changes.outputs.close_sync_metadata_only == 'true'"
+    assert registry_steps[0]["if"] == "steps.classify.outputs.close_sync_metadata_only == 'true'"
     assert "scripts/bug_registry_metadata_check.py" in registry_steps[0]["run"]
     assert "--close-sync-only" in registry_steps[0]["run"]
+    assert "tmp/validation/ci_change_classifier/changed_files.txt" in registry_steps[0]["run"]
 
     nox_steps = [
         step
@@ -1274,16 +1278,12 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
         if isinstance(step, dict) and str(step.get("name") or "").startswith("nox -s ")
     ]
     assert nox_steps
-    assert all("close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps)
+    assert all("steps.classify.outputs.close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps)
     l0_step = next(step for step in nox_steps if step.get("name") == "nox -s l0 -- changed files")
-    assert "l0_changed_files.txt" in l0_step["run"]
+    assert "tmp/validation/ci_change_classifier/changed_files.txt" in l0_step["run"]
+    assert 'if [ -e "${path}" ]' in l0_step["run"]
     assert 'python -m nox -s l0 -- "${changed_files[@]}"' in l0_step["run"]
-
-    changed_files_step = next(
-        step for step in static_gate_steps if step.get("name") == "Build static-gate changed-file list"
-    )
-    assert "scripts/ci_changed_files.py" in changed_files_step["run"]
-    assert "--diff-filter ACMRT" in changed_files_step["run"]
+    assert not any(str(step.get("name") or "").startswith("Build static-gate changed-file") for step in static_gate_steps)
 
     catalog_steps = [
         step
@@ -1291,7 +1291,7 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
         if step.get("name") in {"nox -s validation_module_registry_l0", "nox -s validation_catalog_integrity"}
     ]
     assert len(catalog_steps) == 2
-    assert all("catalog_validation_required == 'true'" in str(step.get("if") or "") for step in catalog_steps)
+    assert all("steps.classify.outputs.catalog_validation_required == 'true'" in str(step.get("if") or "") for step in catalog_steps)
 
 
 def test_catalog_change_uses_catalog_gate_without_workflow_suite(tmp_path: Path) -> None:
