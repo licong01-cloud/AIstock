@@ -298,8 +298,13 @@ Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 
 
 PR base commit 已在 checkout 中且能够与当前 HEAD 证明 merge-base 时，才可直接更新本地 ref 而不执行远程请求；仅有 base 对象但浅克隆 ancestry 不完整不视为可用。确需补取时，仅对 pinned base ref 和当前 PR checkout/head ref 使用固定 3 次、短退避、有限 `--deepen` 的 bounded retry，每次补取后重新验证 merge-base，并在连续失败后以基础设施错误 fail-closed；禁止为解决该问题改成无界完整历史 checkout。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
+<a id="rule-nightly-failure-intake-001"></a>
+### 6.24 [NIGHTLY-FAILURE-INTAKE-001] Nightly 故障登记只消费已完成本地收据并按模块分组
+
+Nightly `full-summary` 在所属 Actions run 结束前，只消费 `needs.*.result` 与本 run 已落盘的 session receipt，禁止再次读取自身仍在运行的 GitHub run/job log；跨 run 的事后诊断才可读取已完成的 Actions 日志。失败 session 必须先按 test-plan module 形成结构化 failure groups：单一模块组可自动创建或更新一个 Issue；两个及以上模块组属于异构诊断，保留分组证据但禁止自动创建 Issue、分配首个 session 的模块或直接 promotion 为 BUG。人工/后续流程只能对已确认的单一根因组执行登记，避免一个大 Issue 或多个重复 Issue 掩盖真实根因。
+
 <a id="rule-ci-database-safety-001"></a>
-### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
+### 6.25 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
 
 CI workflow 不声明 `services`、启动 PostgreSQL/TimescaleDB 容器、创建临时数据库或执行 DDL/DML。需要数据库的计划必须由 changed-file classifier 标记为 `dev_db_required`，转交现有 DEV 数据库验证 lane；DEV 验证、源码 CI 和生产迁移分别记录。DEV 不可用时状态为 `blocked/pending`，禁止改用独立数据库、SQLite 替代真实契约或静默跳过。只读单元测试可使用进程内 SQLite fixture，但不冒充 DEV/生产数据库验证。
 

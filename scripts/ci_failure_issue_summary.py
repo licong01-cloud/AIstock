@@ -304,7 +304,7 @@ def _handoff_mode(summary: dict[str, Any]) -> dict[str, Any]:
             },
         }
     issue_policy = summary.get("issue_creation_policy") if isinstance(summary.get("issue_creation_policy"), dict) else {}
-    if summary.get("diagnostic_status") != "complete" and issue_policy.get("allowed") is False:
+    if issue_policy.get("allowed") is False:
         return {
             "mode": "triage_only",
             "needs_bug_json": False,
@@ -704,99 +704,6 @@ def _job_actionable_score(job: dict[str, Any]) -> int:
     if job.get("error_signature"):
         value += 10
     return value
-
-
-def _restore_nightly_identity(summary: dict[str, Any], nightly_summary: dict[str, Any]) -> dict[str, Any]:
-    for key in ("nightly_statuses", "nightly_fingerprint", "nightly_failed_stages"):
-        if key in nightly_summary:
-            summary[key] = nightly_summary[key]
-    summary["fingerprint_source"] = nightly_summary.get("nightly_fingerprint") or summary.get("fingerprint_source")
-    if nightly_summary.get("nightly_fingerprint"):
-        summary["fingerprint"] = "ci-" + hashlib.sha256(str(nightly_summary["nightly_fingerprint"]).encode("utf-8")).hexdigest()[:16]
-    return summary
-
-
-def _merge_nightly_actions_details(nightly_summary: dict[str, Any], actions_summary: dict[str, Any]) -> dict[str, Any]:
-    """Prefer compact failed-log details over status-only Nightly placeholders."""
-    concrete_jobs = [
-        job
-        for job in actions_summary.get("failed_jobs") or []
-        if job.get("failed_tests") or job.get("error_signature") or job.get("command")
-    ]
-    if not concrete_jobs:
-        extraction_errors = [str(item) for item in actions_summary.get("extraction_errors") or [] if item]
-        if extraction_errors:
-            merged = dict(nightly_summary)
-            merged["extraction_errors"] = _unique([*(nightly_summary.get("extraction_errors") or []), *extraction_errors])
-            merged["nightly_detail_enrichment"] = {
-                "source": "github_actions_failed_job_logs",
-                "workflow_gate": "warning",
-                "reason": "failed_job_log_details_unavailable",
-            }
-            merged = finalize_summary(merged)
-            merged = _restore_nightly_identity(merged, nightly_summary)
-            merged["llm_triage_advice"] = _build_nightly_llm_triage_advice(merged)
-            return merged
-        return nightly_summary
-    merged_jobs = sorted(concrete_jobs, key=_job_actionable_score, reverse=True)
-    extraction_errors = _unique(
-        [str(item) for item in [*(nightly_summary.get("extraction_errors") or []), *(actions_summary.get("extraction_errors") or [])] if item]
-    )
-    merged = dict(nightly_summary)
-    merged["failed_jobs"] = merged_jobs
-    merged["extraction_errors"] = extraction_errors
-    merged["nightly_detail_enrichment"] = {
-        "source": "github_actions_failed_job_logs",
-        "workflow_gate": "enriched",
-        "failed_job_count": len(merged_jobs),
-    }
-    enriched = finalize_summary(merged)
-    enriched = _restore_nightly_identity(enriched, nightly_summary)
-    enriched["last_green_locator"] = actions_summary.get("last_green_locator") or nightly_summary.get("last_green_locator")
-    enriched["failure_event"] = build_failure_event(enriched)
-    enriched["agent_handoff"] = build_agent_handoff(enriched)
-    enriched["llm_triage_advice"] = _build_nightly_llm_triage_advice(enriched)
-    return enriched
-
-
-def _maybe_enrich_nightly_status_from_actions(
-    nightly_summary: dict[str, Any],
-    *,
-    repo: str,
-    run_id: str | None,
-    run_url: str | None = None,
-    severity: str = "P1",
-    log_attempts: int = 1,
-    log_wait_seconds: float = 10.0,
-) -> dict[str, Any]:
-    effective_run_id = str(run_id or nightly_summary.get("run_id") or "").strip()
-    if not effective_run_id or effective_run_id.lower() in SYNTHETIC_RUN_IDS:
-        return nightly_summary
-    try:
-        actions_summary = summarize_actions_run(
-            repo=repo,
-            run_id=effective_run_id,
-            run_url=run_url or nightly_summary.get("run_url"),
-            severity=severity,
-            wait_for_completion=False,
-            log_attempts=log_attempts,
-            log_wait_seconds=log_wait_seconds,
-        )
-    except Exception as exc:
-        merged = dict(nightly_summary)
-        merged["extraction_errors"] = _unique(
-            [
-                *(nightly_summary.get("extraction_errors") or []),
-                f"failed to enrich Nightly status with failed job logs: {str(exc)[:240]}",
-            ]
-        )
-        merged["nightly_detail_enrichment"] = {
-            "source": "github_actions_failed_job_logs",
-            "workflow_gate": "warning",
-            "reason": "failed_job_log_enrichment_exception",
-        }
-        return _restore_nightly_identity(finalize_summary(merged), nightly_summary)
-    return _merge_nightly_actions_details(nightly_summary, actions_summary)
 
 
 def _github_issue_url(issue_number: int | str | None, repo: str = DEFAULT_REPO) -> str | None:
@@ -1351,6 +1258,17 @@ def _failed_nightly_sessions(payload: dict[str, Any]) -> list[str]:
     )
 
 
+def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    groups: dict[str, list[str]] = {}
+    for session in _failed_nightly_sessions(payload):
+        module = _test_plan_module_for_nox_session(session) or "validation.runner"
+        groups.setdefault(module, []).append(session)
+    return [
+        {"module": module, "sessions": sorted(set(sessions)), "session_count": len(set(sessions))}
+        for module, sessions in sorted(groups.items())
+    ]
+
+
 def _test_plan_module_for_nox_session(session: str) -> str | None:
     catalog = Path(__file__).resolve().parents[1] / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
     try:
@@ -1376,9 +1294,12 @@ def _nightly_job_from_statuses(
     *,
     run_url: str | None = None,
     failed_sessions: list[str] | None = None,
+    failure_groups: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     failed_keys = _nightly_failed_keys(statuses)
     failed_sessions = _unique(failed_sessions or [])
+    failure_groups = failure_groups or []
+    heterogeneous_sessions = len(failure_groups) > 1
     if statuses.get("runner_preflight") == "failure":
         error = "self-hosted Windows runner unavailable"
         module = "validation"
@@ -1389,10 +1310,10 @@ def _nightly_job_from_statuses(
             session_detail or ", ".join(f"{key}={statuses.get(key)}" for key in failed_keys)
         )
         module = (
-            _test_plan_module_for_nox_session(failed_sessions[0])
-            if failed_sessions
-            else "validation.runner"
-        ) or "validation.runner"
+            "validation.runner"
+            if heterogeneous_sessions
+            else ((_test_plan_module_for_nox_session(failed_sessions[0]) if failed_sessions else None) or "validation.runner")
+        )
         files = [
             ".github/workflows/nightly.yml",
             "noxfile.py",
@@ -1418,9 +1339,9 @@ def _nightly_job_from_statuses(
     return {
         "job_name": "AIstock Nightly status",
         "job_url": run_url,
-        "failed_step": failed_sessions[0] if failed_sessions else failed_keys[0] if failed_keys else "nightly_status",
-        "command": f"python -m nox -s {failed_sessions[0]}" if failed_sessions else "gh run view <run-id> --workflow nightly.yml",
-        "nox_session": failed_sessions[0] if failed_sessions else None,
+        "failed_step": None if heterogeneous_sessions else (failed_sessions[0] if failed_sessions else failed_keys[0] if failed_keys else "nightly_status"),
+        "command": None if heterogeneous_sessions else (f"python -m nox -s {failed_sessions[0]}" if failed_sessions else "gh run view <run-id> --workflow nightly.yml"),
+        "nox_session": None if heterogeneous_sessions else (failed_sessions[0] if failed_sessions else None),
         "pytest_summary": None,
         "failed_tests": [],
         "error_signature": error,
@@ -1553,10 +1474,12 @@ def summarize_nightly_status(
         )
     )
     failed_sessions = _failed_nightly_sessions(payload)
+    failure_groups = _nightly_failure_groups(payload)
     job = _nightly_job_from_statuses(
         statuses,
         run_url=effective_run_url,
         failed_sessions=failed_sessions,
+        failure_groups=failure_groups,
     )
     summary = finalize_summary(
         {
@@ -1576,6 +1499,7 @@ def summarize_nightly_status(
             "nightly_fingerprint": fingerprint,
             "nightly_failed_stages": failed_keys,
             "nightly_failed_sessions": failed_sessions,
+            "nightly_failure_groups": failure_groups,
         }
     )
     summary["fingerprint_source"] = fingerprint
@@ -1586,6 +1510,16 @@ def summarize_nightly_status(
     summary["failure_event"] = build_failure_event(summary)
     summary["agent_handoff"] = build_agent_handoff(summary)
     summary["llm_triage_advice"] = _build_nightly_llm_triage_advice(summary)
+    if len(failure_groups) > 1:
+        summary["issue_creation_policy"] = {
+            "allowed": False,
+            "reason": "nightly_heterogeneous_failures_require_group_triage",
+            "next_command": "inspect nightly_failure_groups and promote only one confirmed root-cause group",
+        }
+        summary["suspected_modules"] = ["validation.runner"]
+        summary["issue_title"] = f"P1 Nightly triage required: {len(failure_groups)} heterogeneous failure groups"
+        summary["failure_event"] = build_failure_event(summary)
+        summary["agent_handoff"] = build_agent_handoff(summary)
     return summary
 
 
@@ -2164,16 +2098,11 @@ def main(argv: list[str] | None = None) -> int:
             branch=args.branch,
             commit=args.commit,
         )
-        if args.run_id:
-            summary = _maybe_enrich_nightly_status_from_actions(
-                summary,
-                repo=args.repo,
-                run_id=args.run_id,
-                run_url=args.run_url,
-                severity=args.severity,
-                log_attempts=args.log_attempts,
-                log_wait_seconds=args.log_wait_seconds,
-            )
+        summary["nightly_detail_enrichment"] = {
+            "source": "local_completed_job_and_session_receipts",
+            "workflow_gate": "not_required",
+            "reason": "same_run_github_actions_read_prohibited",
+        }
     elif args.run_id:
         summary = summarize_actions_run(
             repo=args.repo,

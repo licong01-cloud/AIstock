@@ -751,6 +751,26 @@ rules:
     baseline_policy: block_new_and_changed_workflow
     remediation: Require PR-based main updates, provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
 
+  - rule_id: NIGHTLY-FAILURE-INTAKE-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-nightly-failure-intake-001
+    title: Nightly in-run failure intake uses completed local receipts and withholds heterogeneous auto-filing
+    severity: P1
+    category: ci_efficiency
+    enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_heterogeneous_nightly_issue_and_bug_autofiling
+    checker:
+      type: pytest
+      test_paths:
+        - backend/tests/scripts/test_ci_failure_issue_summary.py
+      required_evidence:
+        - same_run_github_actions_read_prohibited
+        - nightly_failure_groups_are_module_scoped
+        - heterogeneous_failure_groups_require_triage
+    baseline_policy: block_new_and_changed_workflow
+    remediation: Build Nightly intake from completed local receipts, retain module-scoped groups, and auto-file only a single confirmed module group; query Actions logs only after a run completes.
+
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
     title: CI never creates a database or service and routes database validation to the existing DEV database
