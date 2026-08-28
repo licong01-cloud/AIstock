@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,6 +45,80 @@ def test_runner_health_ready_with_online_self_hosted_windows_runner() -> None:
     assert payload["workflow_gate"] == "ready"
     assert payload["online_matching_runners"][0]["name"] == "aistock-win-runner"
     assert payload["blocking"] == []
+
+
+def test_runner_health_requires_distinct_fast_and_security_roles() -> None:
+    payload = health.build_runner_health_report(
+        required_roles={
+            "fast": ["self-hosted", "windows", "aistock-ci"],
+            "security": ["self-hosted", "windows", "aistock-ci-security"],
+        },
+        runners_payload={
+            "total_count": 2,
+            "runners": [
+                {
+                    "id": 10,
+                    "name": "aistock-fast",
+                    "os": "Windows",
+                    "status": "online",
+                    "busy": False,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci"},
+                    ],
+                },
+                {
+                    "id": 11,
+                    "name": "aistock-security",
+                    "os": "Windows",
+                    "status": "online",
+                    "busy": False,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci-security"},
+                    ],
+                },
+            ],
+        },
+        runs_payload={"workflow_runs": []},
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["runner_roles"]["fast"][0]["name"] == "aistock-fast"
+    assert payload["runner_roles"]["security"][0]["name"] == "aistock-security"
+
+
+def test_runner_health_rejects_one_runner_covering_both_parallel_roles() -> None:
+    payload = health.build_runner_health_report(
+        required_roles={
+            "fast": ["self-hosted", "windows", "aistock-ci"],
+            "security": ["self-hosted", "windows", "aistock-ci-security"],
+        },
+        runners_payload={
+            "total_count": 1,
+            "runners": [
+                {
+                    "id": 10,
+                    "name": "aistock-combined",
+                    "os": "Windows",
+                    "status": "online",
+                    "busy": False,
+                    "labels": [
+                        {"name": "self-hosted"},
+                        {"name": "Windows"},
+                        {"name": "aistock-ci"},
+                        {"name": "aistock-ci-security"},
+                    ],
+                }
+            ],
+        },
+        runs_payload={"workflow_runs": []},
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert any("distinct online capacity" in item for item in payload["blocking"])
 
 
 def test_runner_health_reports_stale_queued_runs() -> None:
@@ -138,3 +213,18 @@ def test_resolve_github_token_uses_gh_auth_fallback(monkeypatch) -> None:
 
     assert token == "fallback-token"
     assert source == "gh_auth_token"
+
+
+def test_resolve_github_token_reports_gh_subprocess_failure(monkeypatch) -> None:
+    for name in ("AISTOCK_RUNNER_HEALTH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+    def raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired("gh", 10)
+
+    monkeypatch.setattr(health.subprocess, "run", raise_timeout)
+
+    token, source = health.resolve_github_token()
+
+    assert token is None
+    assert source == "gh_auth_error:TimeoutExpired"

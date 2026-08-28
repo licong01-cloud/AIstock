@@ -1,7 +1,7 @@
 # AIstock 项目开发规范 v1.5
 
 > 版本：1.5
-> 更新日期：2026-08-26
+> 更新日期：2026-08-28
 > 状态：唯一人类可读开发规范
 > 权威文件：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 > 机器派生目录：`docs/standards/aistock_development_standard_v1.5_20260523.yaml`
@@ -279,6 +279,8 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 ### 6.23 [CI-ENVIRONMENT-PARITY-001] CI 预构建 Windows 环境与零安装
 
 backend、frontend、Go、workflow validation、PR quality 和安全扫描等 CI 验证必须在预构建的 Windows self-hosted runner 上执行；运行前只允许执行环境身份、版本指纹和工具可用性检查。CI 禁止 `actions/setup-*`、`pip/conda/mamba install`、`npm ci/install`、`go mod download` 以及任何隐式依赖安装。环境缺失、指纹漂移或工具缺失时必须 fail-closed 并报告 `environment_mismatch`，不回退到 GitHub-hosted Linux、生产 `AIstock` 环境或临时安装环境。该规则是执行环境约束，不增加业务测试或人工审批。
+
+Windows runner 容量使用两个隔离角色：普通 PR/模块验证使用 `aistock-ci`，CodeQL 与 Code Intelligence 使用 `aistock-ci-security`。两个角色必须对应不同的在线 runner identity、独立安装目录与独立 `_work`；只允许共享经 fingerprint/hash 校验的只读 Conda 环境、Git object mirror 和安全工具缓存，禁止复制 runner credential、工作目录或运行态日志。单机默认总并行度为 2，增加更多实例前必须重新给出 CPU、内存、磁盘与现有业务负载证据。角色拓扑只由一次快速 policy/health receipt 验证，不得拆成逐 evidence job、人工审批或新的业务门禁。
 
 CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须把本地 toolcache 路径、固定版本和 identity manifest SHA-256 纳入环境校验，并直接调用已校验的本地 `codeql.exe` 执行 `database create`、`database analyze` 和 `github upload-results`；`.github/workflows/codeql.yml` 禁止使用 `github/codeql-action`、`actions/checkout` 或其他远端 `uses:`。目录不完整、版本或 hash 漂移直接失败，禁止临时下载或每次重新解压 bundle 替代。PR 仅修改测试源和 BUG 元数据时可以跳过完整 CodeQL analyze，但只要包含业务/运行源码仍必须扫描；`push: main` 继续扫描全部变更语言以维护默认分支 Security/Code Scanning 基线。
 

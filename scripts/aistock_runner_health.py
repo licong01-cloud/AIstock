@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 DEFAULT_REPO = "licong01-cloud/AIstock"
 DEFAULT_WORKFLOW = "nightly.yml"
@@ -54,8 +54,8 @@ def resolve_github_token() -> tuple[str | None, str]:
             check=False,
             timeout=10,
         )
-    except Exception:
-        return None, "missing"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"gh_auth_error:{type(exc).__name__}"
     token = proc.stdout.strip()
     if proc.returncode == 0 and token:
         return token, "gh_auth_token"
@@ -104,6 +104,16 @@ def _matching_runners(runners: list[dict[str, Any]], required_labels: list[str])
     return matches
 
 
+def _runner_role_matches(
+    runners: list[dict[str, Any]],
+    required_roles: Mapping[str, list[str]],
+) -> dict[str, list[dict[str, Any]]]:
+    return {
+        role: _matching_runners(runners, labels)
+        for role, labels in required_roles.items()
+    }
+
+
 def _stale_queued_runs(runs: list[dict[str, Any]], *, stale_minutes: int, now: datetime) -> list[dict[str, Any]]:
     stale: list[dict[str, Any]] = []
     for run in runs:
@@ -133,6 +143,7 @@ def build_runner_health_report(
     repo: str = DEFAULT_REPO,
     workflow: str = DEFAULT_WORKFLOW,
     required_labels: list[str] | None = None,
+    required_roles: Mapping[str, list[str]] | None = None,
     stale_queued_minutes: int = 30,
     runners_payload: dict[str, Any] | None = None,
     runs_payload: dict[str, Any] | None = None,
@@ -160,6 +171,7 @@ def build_runner_health_report(
 
     runners = list(runners_payload.get("runners") or [])
     matching = _matching_runners(runners, required)
+    role_matches = _runner_role_matches(runners, required_roles or {})
     queued_runs = list(runs_payload.get("workflow_runs") or runs_payload.get("runs") or [])
     stale_runs = _stale_queued_runs(queued_runs, stale_minutes=stale_queued_minutes, now=current_time)
     blocking: list[str] = []
@@ -175,6 +187,21 @@ def build_runner_health_report(
         blocking.append(
             "no online GitHub Actions runner matches required labels: " + ", ".join(required)
         )
+    for role, matches in role_matches.items():
+        if not matches:
+            blocking.append(
+                f"no online GitHub Actions runner matches role {role}: "
+                + ", ".join((required_roles or {})[role])
+            )
+    if role_matches and all(role_matches.values()):
+        role_runner_ids = {
+            int(runner["id"])
+            for matches in role_matches.values()
+            for runner in matches
+            if runner.get("id") is not None
+        }
+        if len(role_runner_ids) < len(role_matches):
+            blocking.append("runner roles do not provide distinct online capacity")
     if stale_runs:
         warnings.append(f"{len(stale_runs)} queued {workflow} run(s) exceed {stale_queued_minutes} minutes")
     gate = "blocked" if blocking else "ready"
@@ -191,6 +218,7 @@ def build_runner_health_report(
         "all_runners_count": runners_payload.get("total_count", len(runners)),
         "all_runners": [_runner_summary(runner) for runner in runners],
         "online_matching_runners": matching,
+        "runner_roles": role_matches,
         "stale_queued_runs": stale_runs,
         "next_actions": _next_actions(gate, required),
         "production_gates": {
@@ -237,6 +265,14 @@ def render_markdown(report: dict[str, Any]) -> str:
             lines.append(f"- `{runner.get('name')}` labels={runner.get('labels')} busy={runner.get('busy')}")
     else:
         lines.append("- none")
+    lines.extend(["", "## Runner Roles"])
+    roles = report.get("runner_roles") or {}
+    if roles:
+        for role, role_matches in roles.items():
+            names = [str(item.get("name")) for item in role_matches]
+            lines.append(f"- `{role}`: `{', '.join(names) if names else 'missing'}`")
+    else:
+        lines.append("- not requested")
     lines.extend(["", "## Stale Queued Runs"])
     stale = report.get("stale_queued_runs") or []
     if stale:
@@ -272,6 +308,13 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--repo", default=DEFAULT_REPO)
     doctor.add_argument("--workflow", default=DEFAULT_WORKFLOW)
     doctor.add_argument("--required-label", action="append", default=[])
+    doctor.add_argument(
+        "--required-role",
+        action="append",
+        default=[],
+        metavar="ROLE=LABEL,LABEL",
+        help="Require one distinct online runner per named role.",
+    )
     doctor.add_argument("--stale-queued-minutes", type=int, default=30)
     doctor.add_argument("--runners-json", help="Use a local runners API payload for tests/offline dry-runs.")
     doctor.add_argument("--runs-json", help="Use a local workflow-runs API payload for tests/offline dry-runs.")
@@ -284,12 +327,20 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     token, token_source = resolve_github_token()
     required = args.required_label or ["self-hosted", "windows"]
+    required_roles: dict[str, list[str]] = {}
+    for raw in args.required_role:
+        role, separator, labels_text = raw.partition("=")
+        labels = [item.strip() for item in labels_text.split(",") if item.strip()]
+        if not separator or not role.strip() or not labels:
+            raise SystemExit(f"invalid --required-role value: {raw}")
+        required_roles[role.strip()] = labels
     runners_payload = _read_json(args.runners_json) if args.runners_json else None
     runs_payload = _read_json(args.runs_json) if args.runs_json else None
     report = build_runner_health_report(
         repo=args.repo,
         workflow=args.workflow,
         required_labels=required,
+        required_roles=required_roles,
         stale_queued_minutes=args.stale_queued_minutes,
         runners_payload=runners_payload,
         runs_payload=runs_payload,

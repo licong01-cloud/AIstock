@@ -1,6 +1,23 @@
 {
   "actual": "AIstock currently has one online Windows self-hosted runner carrying CI, CodeQL, Semgrep, PR quality and heavy scheduled lanes. Independent jobs serialize even though the host has capacity for two bounded runner instances. Implement role-specific fast/security labels, exact isolated runner provisioning and health verification without CI dependency installation, preserve one-heavy-job concurrency, and add a contract proving policy evidence stays inside one fast scanner rather than becoming independent required jobs or approvals.",
   "allowed_write_scope": [
+    ".github/workflows/code-intelligence-refresh.yml",
+    ".github/workflows/codeql.yml",
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_aistock_runner_health.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_configure_aistock_github_runner.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/test_aistock_guardrail_scan.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "scripts/aistock_runner_health.py",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/ci_workflow_policy_scan.py",
+    "scripts/ci_change_classifier.py",
+    "scripts/configure_aistock_github_runner.ps1",
     "tests/aistock_validation/bugs/20260828_BUG-1216-windows-ci-single-runner-serializes-independent-lanes-and-lacks-anti-gat.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +40,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Two distinct online Windows runner roles execute general and security lanes in isolated workspaces; provisioning is exact and hash-verified, and all policy evidence remains inside one fast scanner step rather than becoming separate jobs or approvals.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -47,15 +64,17 @@
   "last_seen_at": "2026-08-28T02:15:29.288418Z",
   "module": "validation",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not add a third runner or increase single-host concurrency above two.",
+    "Do not run business experiments, database validation, DDL, DML, or dependency installation."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/aistock_runner_health.py doctor --required-role fast=self-hosted,windows,aistock-ci --required-role security=self-hosted,windows,aistock-ci-security",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -82,15 +101,10 @@
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
-      "modules": [
-        "validation",
-        "validation_center"
-      ],
-      "plans": [
-        "validation_center_backend"
-      ],
-      "required": true,
-      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "not required; this task changes only CI runner routing, provisioning, health, and policy contracts"
     },
     "delegated_validation": {
       "receipt_default": "compact",
@@ -142,15 +156,10 @@
     "verification_budget": {
       "budget": "light",
       "deferred_nightly_verification": {
-        "modules": [
-          "validation",
-          "validation_center"
-        ],
-        "plans": [
-          "validation_center_backend"
-        ],
-        "required": true,
-        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "not required; this task changes only CI runner routing, provisioning, health, and policy contracts"
       },
       "delegated_validation": {
         "receipt_default": "compact",

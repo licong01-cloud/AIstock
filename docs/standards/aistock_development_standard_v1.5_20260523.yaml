@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: a9aaba566710a187f90c663bb3194228169b089802d372418ed7385ba3afca45
+source_sha256: ba67b574e6dc39b450477025e0e48c94408baa7b24da5fe15c57bd900c4e470c
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-27"
+updated_at: "2026-08-28"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -722,6 +722,8 @@ rules:
         - windows_self_hosted_runner
         - prebuilt_aistock_ci_environment
         - environment_fingerprint_match
+        - bounded_dual_runner_roles
+        - policy_evidence_remains_one_scanner_step
         - no_setup_actions
         - no_dependency_install_commands
         - nox_ci_install_fail_closed_guard

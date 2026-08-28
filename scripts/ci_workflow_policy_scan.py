@@ -24,6 +24,13 @@ WINDOWS_PR_WORKFLOWS = {
     "semgrep.yml",
     "dependency-update-validate.yml",
 }
+WINDOWS_PR_WORKFLOW_RUNNER_LABEL = {
+    "test.yml": "aistock-ci",
+    "pr-quality.yml": "aistock-ci",
+    "codeql.yml": "aistock-ci-security",
+    "semgrep.yml": "aistock-ci",
+    "dependency-update-validate.yml": "aistock-ci",
+}
 SUPERSEDED_RUN_WORKFLOWS = {
     "test.yml",
     "pr-quality.yml",
@@ -117,13 +124,18 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
         if path.name not in WINDOWS_PR_WORKFLOWS:
             continue
         text = path.read_text(encoding="utf-8")
-        if not re.search(r"runs-on:\s*\[self-hosted,\s*Windows,\s*aistock-ci\]", text, re.IGNORECASE):
+        expected_label = WINDOWS_PR_WORKFLOW_RUNNER_LABEL[path.name]
+        runner_re = re.compile(
+            rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
+            re.IGNORECASE,
+        )
+        if not runner_re.search(text):
             findings.append(
                 {
                     "path": path.as_posix(),
                     "line": "1",
-                    "reason": "PR validation workflow must use the prebuilt Windows AIstock-CI runner",
-                    "text": "runs-on",
+                    "reason": "PR validation workflow must use its prebuilt Windows runner role",
+                    "text": expected_label,
                 }
             )
         if path.name == "test.yml":
@@ -166,10 +178,19 @@ def build_contract_evidence(
     workflow_findings = scan_workflows(path_list)
     combined_workflow_text = "\n".join(workflow_text.values())
     reasons = {item["reason"] for item in workflow_findings}
-    windows_runner_re = re.compile(r"runs-on:\s*\[self-hosted,\s*Windows,\s*aistock-ci\]", re.IGNORECASE)
+    def uses_expected_runner(name: str) -> bool:
+        expected_label = WINDOWS_PR_WORKFLOW_RUNNER_LABEL[name]
+        return bool(
+            re.search(
+                rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
+                workflow_text.get(name, ""),
+                re.IGNORECASE,
+            )
+        )
+
     evidence = {
         "windows_self_hosted_runner": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all(windows_runner_re.search(text) for text in pr_texts),
+        and all(uses_expected_runner(name) for name in WINDOWS_PR_WORKFLOWS),
         "prebuilt_aistock_ci_environment": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
         and all("aistock-ci" in text.casefold() for text in pr_texts),
         "environment_fingerprint_match": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
@@ -273,6 +294,17 @@ def build_contract_evidence(
             "AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'" in nightly_text
             and "docker run" not in nightly_text.casefold()
             and "docker compose up" not in nightly_text.casefold()
+        ),
+        "bounded_dual_runner_roles": (
+            uses_expected_runner("codeql.yml")
+            and "runs-on: [self-hosted, Windows, aistock-ci-security]" in code_intelligence_refresh_text
+            and nightly_text.count("runs-on: [self-hosted, Windows, aistock-ci]") == 4
+            and nightly_text.count("runs-on: [self-hosted, Windows, aistock-ci-security]") == 1
+        ),
+        "policy_evidence_remains_one_scanner_step": (
+            combined_workflow_text.count("python scripts/ci_workflow_policy_scan.py") == 1
+            and "Enforce CI workflow policy" in test_text
+            and "policy-evidence:" not in combined_workflow_text
         ),
     }
     evidence["policy_scanner_environment_and_nox_contract_checks"] = all(evidence.values())

@@ -1823,9 +1823,9 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
                 "runtime target catalog non-runtime path overlaps runtime targets: "
                 f"{path_value} -> {overlapping_targets}"
             )
-        if not path_value.startswith("scripts/") or not path_value.endswith(".py"):
+        if not path_value.startswith("scripts/") or Path(path_value).suffix.casefold() not in {".py", ".ps1"}:
             raise WorkflowError(
-                "runtime target catalog non_runtime_source_paths only accepts Python operator scripts under scripts/: "
+                "runtime target catalog non_runtime_source_paths only accepts Python or PowerShell operator scripts under scripts/: "
                 f"{path_value}"
             )
         candidate = root.joinpath(*path_value.split("/"))

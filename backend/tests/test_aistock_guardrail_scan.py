@@ -191,6 +191,10 @@ def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     assert runtime_catalog["targets"]["backend-main"]["production_port"] == 8001
     assert runtime_catalog["targets"]["backend-main"]["isolated_validation_ports"] == [8011, 8012]
     assert "start_all_ai_stock.bat" in runtime_catalog["targets"]["backend-main"]["source_globs"]
+    assert {
+        "scripts/aistock_runner_health.py",
+        "scripts/configure_aistock_github_runner.ps1",
+    } <= set(runtime_catalog["non_runtime_source_paths"])
 
 
 def test_windows_backend_launcher_uses_the_aistock_interpreter_in_both_branches() -> None:
