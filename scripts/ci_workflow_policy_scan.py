@@ -38,7 +38,13 @@ SUPERSEDED_RUN_WORKFLOWS = {
     "semgrep.yml",
     "dependency-update-validate.yml",
 }
-BASE_FETCH_RETRY_WORKFLOWS = {"test.yml", "codeql.yml", "semgrep.yml", "dependency-update-validate.yml"}
+BASE_FETCH_RETRY_WORKFLOWS = {
+    "test.yml",
+    "codeql.yml",
+    "semgrep.yml",
+    "dependency-update-validate.yml",
+    "pr-quality.yml",
+}
 PR_ONLY_QUALITY_WORKFLOWS = {"test.yml", "semgrep.yml"}
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
@@ -159,6 +165,7 @@ def build_contract_evidence(
     nox_path: Path = DEFAULT_NOX_PATH,
     classifier_path: Path = Path("scripts/ci_change_classifier.py"),
     environment_verify_path: Path = Path("scripts/ci_environment_verify.py"),
+    changed_files_path: Path = Path("scripts/ci_changed_files.py"),
 ) -> dict[str, bool]:
     """Return the exact evidence booleans named by the machine standard."""
 
@@ -185,6 +192,7 @@ def build_contract_evidence(
     environment_verify_text = (
         environment_verify_path.read_text(encoding="utf-8") if environment_verify_path.exists() else ""
     )
+    changed_files_text = changed_files_path.read_text(encoding="utf-8") if changed_files_path.exists() else ""
     workflow_findings = scan_workflows(path_list)
     combined_workflow_text = "\n".join(workflow_text.values())
     reasons = {item["reason"] for item in workflow_findings}
@@ -221,9 +229,14 @@ def build_contract_evidence(
             for name in SUPERSEDED_RUN_WORKFLOWS
         ),
         "bounded_pr_base_fetch_retry": all(
-            "base fetch failed after 3 attempts" in workflow_text.get(name, "")
+            "--prepare-pr-merge-base-only" in workflow_text.get(name, "")
             for name in BASE_FETCH_RETRY_WORKFLOWS
-        ),
+        )
+        and "for index in range(max(1, int(attempts)))" in changed_files_text
+        and '"--no-write-fetch-head"' in changed_files_text
+        and 'f"--deepen={max(1, int(deepen_by))}"' in changed_files_text
+        and '"merge-base"' in changed_files_text
+        and "pinned PR base/head history preparation failed" in changed_files_text,
         "non_security_quality_lanes_run_once_on_pull_request": all(
             "pull_request:" in workflow_text.get(name, "")
             and not re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get(name, ""))

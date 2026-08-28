@@ -9,6 +9,8 @@
     "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_ci_changed_files.py",
     "scripts/ci_changed_files.py",
+    "scripts/ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
     "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "tests/aistock_validation/bugs/20260828_BUG-1222-pr-quality-shallow-checkout-trusts-base-object-without-a-merge-base.json",
