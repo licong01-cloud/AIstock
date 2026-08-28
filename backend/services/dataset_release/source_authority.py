@@ -838,6 +838,8 @@ WITH normalized_ingestion_job AS (
         job.status IN ('queued','pending','running')
         AND (job.direct_dataset IS NULL OR job.direct_dataset = ANY(%(datasets)s))
     ) OR (
+        job.status NOT IN ('queued','pending','running')
+        AND
         job.created_at >= %(start)s
         AND job.direct_dataset = ANY(%(datasets)s)
         AND CASE
@@ -2245,7 +2247,7 @@ class MonthlySourceAuthority:
             "cutoff_month_start": cutoff.replace(day=1).isoformat(),
             "source_cutoff": cutoff.isoformat(),
             "dataset_scope": datasets,
-            "completed_job_policy": "direct_dataset_at_or_before_cutoff_v1",
+            "non_active_job_policy": "direct_dataset_at_or_before_cutoff_v1",
             "active_job_policy": "relevant_or_unclassified_fail_closed_v1",
             "active_writer_count": 0,
             "rows": ordered,

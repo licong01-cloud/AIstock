@@ -1069,6 +1069,7 @@ def test_source_writer_ledger_uses_latest_data_sync_attempt_per_target() -> None
     assert "summary->>'schedule_dataset'" in sql
     assert "summary->>'dataset'" in sql
     assert "job.direct_dataset = ANY(%(datasets)s)" in sql
+    assert "job.status NOT IN ('queued','pending','running')" in sql
     assert "job.source_start::date <= %(cutoff)s" in sql
     assert "FROM relevant_ingestion_job" in sql
     assert "latest_data_sync_attempt AS" in sql
@@ -1105,7 +1106,7 @@ def test_source_writer_ledger_binds_cutoff_and_versioned_relevant_writer_policy(
     writer_evidence = provenance["writer_ledger_evidence"]
     assert writer_evidence["schema_version"] == "dataset_release_source_writer_ledger_v2"
     assert writer_evidence["source_cutoff"] == "2026-07-31"
-    assert writer_evidence["completed_job_policy"] == "direct_dataset_at_or_before_cutoff_v1"
+    assert writer_evidence["non_active_job_policy"] == "direct_dataset_at_or_before_cutoff_v1"
     assert writer_evidence["active_job_policy"] == "relevant_or_unclassified_fail_closed_v1"
 
 

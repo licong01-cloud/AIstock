@@ -15,12 +15,25 @@
   ],
   "created_at": "2026-08-28T18:48:52.943633Z",
   "description": "Three consecutive attempts failed after 2678.784, 2435.856 and 2127.771 seconds because unrelated completed ingestion jobs changed an over-broad writer-ledger digest; WAITING_SOURCE then retried indefinitely.",
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: partition reads, MVCC fingerprints, PIT authority, control brackets, and relevant writer quiescence remain unchanged; only writer-ledger relevance is scoped to the frozen source datasets and cutoff",
+    "no_silent_error": "passed: relevant active writers and unclassified active writers still fail closed, failed or cancelled relevant jobs remain in the ledger, invalid or unknown source dates remain conservatively included, and all existing partition and control drift checks remain active",
+    "no_simplified_delivery": "passed: the full source-authority regression file, the qlib_data module plan, a production read-only SQL execution, and the exact three observed drift windows were checked rather than relying on a mocked happy path",
+    "no_unrequested_gate_or_approval": "passed: the patch removes false drift from unrelated or post-cutoff work and adds no resource, approval, database, dependency, activation, or process-control gate",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260828-5e2c0f605613",
       "timestamp": "2026-08-28T18:48:52.943617Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex_app",
+      "note": "Two formal review rounds passed with no blocking findings. The final review made terminal-job semantics explicit and aligned the receipt field with the fail-closed implementation. Source-authority tests: 54 passed; qlib_data_backend: 20 passed; validation registry: 8 passed with complete ownership mapping; Ruff, py_compile, diff check, and L0 passed. Production read-only SQL execution excluded all seven unrelated rows from the three observed drift windows while retaining 2,264 relevant ledger rows; no database write, dataset export, activation, or process control occurred.",
+      "timestamp": "2026-08-28T19:15:47.0076838Z"
     }
   ],
   "evidence_uris": [],
