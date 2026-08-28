@@ -209,6 +209,8 @@ QE/RD-Agent/Qlib 产物记录 `artifact_id/type/uri/storage_tier`、hash、size/
 
 HTTP、subprocess、DB 长查询和批处理设置 timeout、取消、日志、退出码和资源释放；长任务提供 heartbeat、状态持久化与幂等恢复。
 
+PR check watch、已完成 Actions run/job/log 诊断和 last-green 定位在 GraphQL/`gh run` 遇到 TLS、EOF、schannel、连接重置或超时时，先执行固定次数重试，再改用等价 GitHub REST endpoint；PR check 绑定 REST 回读的精确 HEAD SHA，Actions jobs 超过单页上限时 fail-closed。权限、策略、输入、404 或其他非传输错误不得改写成网络恢复。REST 与 GraphQL 都失败时返回结构化 unavailable/deferred 结果，不要求重新授权、不启动第二个 workflow、不循环重试。
+
 <a id="rule-db-comment-001"></a>
 ### 6.11 [DB-COMMENT-001] 数据库语义
 
@@ -298,13 +300,8 @@ Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 
 
 PR base commit 已在 checkout 中且能够与当前 HEAD 证明 merge-base 时，才可直接更新本地 ref 而不执行远程请求；仅有 base 对象但浅克隆 ancestry 不完整不视为可用。确需补取时，仅对 pinned base ref 和当前 PR checkout/head ref 使用固定 3 次、短退避、有限 `--deepen` 的 bounded retry，每次补取后重新验证 merge-base，并在连续失败后以基础设施错误 fail-closed；禁止为解决该问题改成无界完整历史 checkout。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
-<a id="rule-github-read-resilience-001"></a>
-### 6.24 [GITHUB-READ-RESILIENCE-001] GitHub 只读路径使用有界重试与 REST 回退
-
-PR check watch、已完成 Actions run/job/log 诊断和 last-green 定位在 GraphQL/`gh run` 遇到 TLS、EOF、schannel、连接重置或超时时，先执行固定次数短重试，再改用等价 GitHub REST endpoint；PR check 必须绑定 REST 回读的精确 HEAD SHA，Actions jobs 超过单页上限时 fail-closed。权限、策略、输入、404 或其他非传输错误不得改写成网络恢复，也不得绕过质量结论。REST 与 GraphQL 都失败时返回结构化 unavailable/deferred 结果和一次诊断证据，不要求重新授权、不启动第二个 workflow、不循环重试。
-
 <a id="rule-ci-database-safety-001"></a>
-### 6.25 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
+### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
 
 CI workflow 不声明 `services`、启动 PostgreSQL/TimescaleDB 容器、创建临时数据库或执行 DDL/DML。需要数据库的计划必须由 changed-file classifier 标记为 `dev_db_required`，转交现有 DEV 数据库验证 lane；DEV 验证、源码 CI 和生产迁移分别记录。DEV 不可用时状态为 `blocked/pending`，禁止改用独立数据库、SQLite 替代真实契约或静默跳过。只读单元测试可使用进程内 SQLite fixture，但不冒充 DEV/生产数据库验证。
 
