@@ -1172,11 +1172,17 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
         jobs["backend-tests"]["strategy"]["matrix"]["session"]
         == "${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}"
     )
-    assert jobs["workflow-validation-tests"]["if"] == (
+    assert "workflow-validation-tests" not in jobs
+    verdict = jobs["ci-verdict"]
+    workflow_condition = (
         "needs.classify-changes.outputs.workflow_validation_required == 'true' && "
         "needs.classify-changes.outputs.workflow_test_targets != '[]'"
     )
-    workflow_runs = "\n".join(str(step.get("run", "")) for step in jobs["workflow-validation-tests"]["steps"])
+    workflow_validation = next(step for step in verdict["steps"] if step.get("id") == "workflow_validation")
+    workflow_policy = next(step for step in verdict["steps"] if step.get("id") == "workflow_policy")
+    assert workflow_validation["if"] == workflow_condition
+    assert workflow_policy["if"] == workflow_condition
+    workflow_runs = "\n".join(str(step.get("run", "")) for step in verdict["steps"])
     assert "WORKFLOW_TEST_TARGETS" in workflow_runs
     assert 'python -m pytest "${workflow_test_targets[@]}"' in workflow_runs
     assert "backend/tests/scripts/test_llm_provider_adapter.py \\" not in workflow_runs
@@ -1225,7 +1231,6 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
         "backend-tests",
         "frontend-quality",
         "tdx-go-tests",
-        "workflow-validation-tests",
         "prompt-evaluation",
     }
 
@@ -1233,12 +1238,17 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert sum(job.get("name") == "CI verdict" for job in jobs.values()) == 1
     assert verdict["if"] == "always()"
     assert set(verdict["needs"]) == expected_needs
-    run = str(verdict["steps"][0]["run"])
+    verdict_step = next(step for step in verdict["steps"] if step.get("name") == "Require every selected CI lane to pass")
+    run = str(verdict_step["run"])
     assert 'failures+=("classify_static=${CLASSIFY_RESULT}")' in run
-    for lane in ("backend", "frontend", "go", "workflow", "prompt"):
+    for lane in ("backend", "frontend", "go", "prompt"):
         assert f'"{lane}:${{{lane.upper() if lane != "go" else "GO"}_RESULT}}"' in run
+    assert verdict_step["env"]["WORKFLOW_TEST_RESULT"] == "${{ steps.workflow_validation.outcome }}"
+    assert verdict_step["env"]["WORKFLOW_POLICY_RESULT"] == "${{ steps.workflow_policy.outcome }}"
+    assert 'workflow_validation=${WORKFLOW_TEST_RESULT}' in run
+    assert 'workflow_policy=${WORKFLOW_POLICY_RESULT}' in run
     assert "failure-bug-register" not in verdict["needs"]
-    assert "REGISTRAR_RESULT" not in verdict["steps"][0].get("env", {})
+    assert "REGISTRAR_RESULT" not in verdict_step.get("env", {})
     assert '"registrar:' not in run
     assert 'result" != "success"' in run
     assert 'result" != "skipped"' in run

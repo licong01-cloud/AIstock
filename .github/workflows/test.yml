@@ -218,38 +218,6 @@ jobs:
           GOPROXY: off
         run: go test ./...
 
-  workflow-validation-tests:
-    name: Workflow validation fast lane (no user-backend process control)
-    needs: classify-changes
-    if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Verify prebuilt AIstock-CI environment
-        shell: powershell
-        env:
-          AISTOCK_CI_ENV_NAME: AIstock-CI
-        run: python scripts/ci_environment_verify.py
-
-      - name: Run focused workflow validation tests
-        env:
-          WORKFLOW_TEST_TARGETS: ${{ needs.classify-changes.outputs.workflow_test_targets }}
-          AISTOCK_RUNNER_PROCESS_OWNERSHIP: runner_owned_isolated_only
-          AISTOCK_USER_BACKEND_PROCESS_CONTROL: forbidden
-        run: |
-          test "${AISTOCK_USER_BACKEND_PROCESS_CONTROL}" = "forbidden"
-          python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' | tr -d '\r' > workflow_test_targets.txt
-          mapfile -t workflow_test_targets < workflow_test_targets.txt
-          python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider
-
-      - name: Enforce CI workflow policy
-        run: |
-          mkdir -p tmp/validation/ci_workflow_policy
-          python scripts/ci_workflow_policy_scan.py \
-            --output-json tmp/validation/ci_workflow_policy/receipt.json
-
   prompt-evaluation:
     name: Validation LLM prompt evaluation
     needs: classify-changes
@@ -310,20 +278,55 @@ jobs:
       - backend-tests
       - frontend-quality
       - tdx-go-tests
-      - workflow-validation-tests
       - prompt-evaluation
     if: always()
     runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 3
+    timeout-minutes: 15
     steps:
+      - name: Checkout for focused workflow validation
+        if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
+        uses: actions/checkout@v7
+
+      - name: Verify prebuilt AIstock-CI environment for workflow validation
+        if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
+
+      - name: Run focused workflow validation tests
+        id: workflow_validation
+        if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
+        env:
+          WORKFLOW_TEST_TARGETS: ${{ needs.classify-changes.outputs.workflow_test_targets }}
+          AISTOCK_RUNNER_PROCESS_OWNERSHIP: runner_owned_isolated_only
+          AISTOCK_USER_BACKEND_PROCESS_CONTROL: forbidden
+        run: |
+          test "${AISTOCK_USER_BACKEND_PROCESS_CONTROL}" = "forbidden"
+          python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' | tr -d '\r' > workflow_test_targets.txt
+          mapfile -t workflow_test_targets < workflow_test_targets.txt
+          python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider
+
+      - name: Enforce CI workflow policy
+        id: workflow_policy
+        if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
+        run: |
+          mkdir -p tmp/validation/ci_workflow_policy
+          python scripts/ci_workflow_policy_scan.py \
+            --output-json tmp/validation/ci_workflow_policy/receipt.json
+
       - name: Require every selected CI lane to pass
+        if: always()
         env:
           CLASSIFY_RESULT: ${{ needs.classify-changes.result }}
           BACKEND_RESULT: ${{ needs.backend-tests.result }}
           FRONTEND_RESULT: ${{ needs.frontend-quality.result }}
           GO_RESULT: ${{ needs.tdx-go-tests.result }}
-          WORKFLOW_RESULT: ${{ needs.workflow-validation-tests.result }}
           PROMPT_RESULT: ${{ needs.prompt-evaluation.result }}
+          WORKFLOW_REQUIRED: ${{ needs.classify-changes.outputs.workflow_validation_required }}
+          WORKFLOW_TEST_TARGETS: ${{ needs.classify-changes.outputs.workflow_test_targets }}
+          WORKFLOW_TEST_RESULT: ${{ steps.workflow_validation.outcome }}
+          WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}
           DEV_DB_REQUIRED: ${{ needs.classify-changes.outputs.dev_db_required }}
           DEV_DB_PLANS: ${{ needs.classify-changes.outputs.dev_db_plan_keys }}
         run: |
@@ -335,7 +338,6 @@ jobs:
             "backend:${BACKEND_RESULT}" \
             "frontend:${FRONTEND_RESULT}" \
             "go:${GO_RESULT}" \
-            "workflow:${WORKFLOW_RESULT}" \
             "prompt:${PROMPT_RESULT}"; do
             lane="${entry%%:*}"
             result="${entry#*:}"
@@ -343,6 +345,14 @@ jobs:
               failures+=("${lane}=${result}")
             fi
           done
+          if [[ "${WORKFLOW_REQUIRED}" = "true" && "${WORKFLOW_TEST_TARGETS}" != "[]" ]]; then
+            if [[ "${WORKFLOW_TEST_RESULT}" != "success" ]]; then
+              failures+=("workflow_validation=${WORKFLOW_TEST_RESULT}")
+            fi
+            if [[ "${WORKFLOW_POLICY_RESULT}" != "success" ]]; then
+              failures+=("workflow_policy=${WORKFLOW_POLICY_RESULT}")
+            fi
+          fi
           if [[ "${DEV_DB_REQUIRED}" = "true" ]]; then
             failures+=("dev_db=external_DEV_validation_required:${DEV_DB_PLANS}")
           fi
