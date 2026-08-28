@@ -47,12 +47,15 @@ from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.execution_algo_retirement import (
     require_execution_algo_active,
 )
+from backend.services.simulation_runtime.daily_limit_authority import parse_daily_trading_context
 from backend.services.simulation_runtime.models import (
     DailyTradingContextV1,
+    DailyTradingContextV2,
     LocalSimExecutionRuntimeStatus,
     LocalSimExecutionStateV1,
     LocalSimMarketMarkProvenance,
     LocalSimMarketMarkV1,
+    SimulationBrokerBackend,
     canonical_json_sha256,
 )
 from backend.services.trading_core.errors import (
@@ -202,7 +205,7 @@ class LocalSimBackend(BrokerBackend):
         self._runtime_run_id: str | None = None
         self._runtime_binding_id: str | None = None
         self._market_snapshot: LocalSimMarketSnapshotV1 | LocalSimMarketSnapshotV2 | None = None
-        self._daily_trading_context: DailyTradingContextV1 | None = None
+        self._daily_trading_context: DailyTradingContextV1 | DailyTradingContextV2 | None = None
 
     # ----- Read accessors used by adapter / tests -----
     @property
@@ -581,22 +584,34 @@ class LocalSimBackend(BrokerBackend):
                 )
                 return
             raise BrokerSubmitError(
-                "LocalSim realtime execution plan is missing DailyTradingContextV1",
+                "LocalSim realtime execution plan is missing its daily trading context",
                 context={
                     "reason_code": "LOCALSIM_DAILY_TRADING_CONTEXT_MISSING",
                     "plan_id": getattr(plan, "plan_id", None),
                 },
             )
         try:
-            daily_context = DailyTradingContextV1.model_validate(raw_daily_context)
+            daily_context = parse_daily_trading_context(raw_daily_context)
         except Exception as exc:
             raise BrokerSubmitError(
-                "LocalSim realtime execution plan has an invalid DailyTradingContextV1",
+                "LocalSim realtime execution plan has an invalid daily trading context",
                 context={
                     "reason_code": "LOCALSIM_DAILY_TRADING_CONTEXT_INVALID",
                     "plan_id": getattr(plan, "plan_id", None),
                 },
             ) from exc
+        if (
+            isinstance(daily_context, DailyTradingContextV2)
+            and daily_context.broker_backend is not SimulationBrokerBackend.LOCAL_SIM
+        ):
+            raise BrokerSubmitError(
+                "LocalSim realtime execution plan carries a cross-broker daily trading context",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_TRADING_CONTEXT_BROKER_CONFLICT",
+                    "plan_id": getattr(plan, "plan_id", None),
+                    "broker_backend": daily_context.broker_backend.value,
+                },
+            )
         if daily_context.trade_date != target_trade_date:
             raise BrokerSubmitError(
                 "LocalSim daily trading context trade_date conflicts with the execution plan",
@@ -1532,16 +1547,30 @@ class LocalSimBackend(BrokerBackend):
                     "trade_date": trade_date.isoformat(),
                 },
             )
-        frozen_reference = {
-            "schema_version": "daily_trading_context_reference_v1",
-            "context_id": daily_context.context_id,
-            "context_hash": daily_context.context_hash,
-            "trade_date": daily_context.trade_date.isoformat(),
-            "symbol_set_hash": daily_context.symbol_set_hash,
-            "stk_limit_row_hash": fact.stk_limit_row_hash,
-            "source": "market.stk_limit",
-            "symbol_fact": fact.canonical_payload(),
-        }
+        if isinstance(daily_context, DailyTradingContextV1):
+            frozen_reference = {
+                "schema_version": "daily_trading_context_reference_v1",
+                "context_id": daily_context.context_id,
+                "context_hash": daily_context.context_hash,
+                "trade_date": daily_context.trade_date.isoformat(),
+                "symbol_set_hash": daily_context.symbol_set_hash,
+                "stk_limit_row_hash": fact.stk_limit_row_hash,
+                "source": "market.stk_limit",
+                "symbol_fact": fact.canonical_payload(),
+            }
+        else:
+            frozen_reference = {
+                "schema_version": "daily_trading_context_reference_v2",
+                "context_id": daily_context.context_id,
+                "context_hash": daily_context.context_hash,
+                "trade_date": daily_context.trade_date.isoformat(),
+                "symbol_set_hash": daily_context.symbol_set_hash,
+                "broker_backend": daily_context.broker_backend.value,
+                "authority_state": fact.authority_state.value,
+                "limit_authority": fact.limit_authority.value,
+                "source_evidence_hash": fact.source_evidence_hash,
+                "symbol_fact": fact.canonical_payload(),
+            }
         try:
             loader_kwargs = {
                 "symbol": symbol,
