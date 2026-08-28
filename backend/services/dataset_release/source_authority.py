@@ -72,8 +72,10 @@ SOURCE_REUSE_MANIFEST_SCHEMA = "dataset_release_source_reuse_manifest_v1"
 SOURCE_REFRESH_AUDIT_RECEIPT_SCHEMA = "dataset_release_source_refresh_audit_receipt_v1"
 SOURCE_STAGE_RECEIPT_SCHEMA = "dataset_release_source_stage_receipt_v1"
 SOURCE_PARTITION_ROWS_SCHEMA = "dataset_release_source_partition_rows_v1"
-SOURCE_AUTHORITY_POLICY_VERSION = "qe_monthly_source_authority_v2"
-SOURCE_CONSISTENCY_POLICY = "partition_rr_control_bracket_writer_ledger_quiescence_v1"
+SOURCE_AUTHORITY_POLICY_VERSION = "qe_monthly_source_authority_v3"
+SOURCE_CONSISTENCY_POLICY = "partition_rr_control_bracket_relevant_writer_ledger_quiescence_v2"
+SOURCE_WRITER_LEDGER_SCHEMA = "dataset_release_source_writer_ledger_v2"
+SOURCE_WRITER_LEDGER_DIGEST_SCHEMA = "dataset_release_source_writer_ledger_digest_v2"
 SOURCE_MVCC_FINGERPRINT_SCHEMA = "dataset_release_partition_mvcc_fingerprint_v1"
 SOURCE_MONTH_CONTENT_LEAF_SCHEMA = "dataset_release_source_month_content_leaf_v1"
 # Flip only after the exact production PostgreSQL/Timescale permissions and
@@ -818,7 +820,34 @@ ORDER BY cal_date
 """
 
 _SOURCE_WRITER_LEDGER_SQL = """
-WITH latest_data_sync_attempt AS (
+WITH normalized_ingestion_job AS (
+    SELECT job_id,job_type,status,created_at,started_at,finished_at,summary,
+           COALESCE(
+               NULLIF(summary->>'actual_dataset',''),
+               NULLIF(summary->>'schedule_dataset',''),
+               NULLIF(summary->>'dataset','')
+           ) AS direct_dataset,
+           COALESCE(
+               NULLIF(summary->>'start_date',''),
+               NULLIF(summary->>'refresh_start_date','')
+           ) AS source_start
+    FROM market.ingestion_jobs
+), relevant_ingestion_job AS (
+    SELECT * FROM normalized_ingestion_job AS job
+    WHERE (
+        job.status IN ('queued','pending','running')
+        AND (job.direct_dataset IS NULL OR job.direct_dataset = ANY(%(datasets)s))
+    ) OR (
+        job.created_at >= %(start)s
+        AND job.direct_dataset = ANY(%(datasets)s)
+        AND CASE
+            WHEN job.source_start IS NULL THEN TRUE
+            WHEN job.source_start ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                THEN job.source_start::date <= %(cutoff)s
+            ELSE TRUE
+        END
+    )
+), latest_data_sync_attempt AS (
     SELECT DISTINCT ON (attempt.target_id)
            attempt.attempt_id,attempt.target_id,attempt.attempt_no,
            attempt.status,attempt.created_at,attempt.started_at,
@@ -827,6 +856,7 @@ WITH latest_data_sync_attempt AS (
     FROM market.data_sync_attempts AS attempt
     JOIN market.data_sync_targets AS target ON target.target_id=attempt.target_id
     WHERE target.dataset = ANY(%(datasets)s)
+      AND target.target_date <= %(cutoff)s
     ORDER BY attempt.target_id,attempt.attempt_no DESC,
              attempt.created_at DESC,attempt.attempt_id DESC
 )
@@ -836,8 +866,7 @@ FROM (
     SELECT 'ingestion_jobs'::text AS ledger_kind,
            job_id::text AS ledger_identity,status::text,
            created_at,started_at,finished_at,summary::text AS opaque_payload
-    FROM market.ingestion_jobs
-    WHERE created_at >= %(start)s OR status IN ('queued','pending','running')
+    FROM relevant_ingestion_job
     UNION ALL
     SELECT 'data_sync_attempts'::text AS ledger_kind,
            attempt.attempt_id::text AS ledger_identity,attempt.status::text,
@@ -2156,6 +2185,7 @@ class MonthlySourceAuthority:
                 "writer_ledger",
                 {
                     "start": cutoff.replace(day=1),
+                    "cutoff": cutoff,
                     "datasets": datasets,
                 },
                 fetch_rows=read_chunk_rows,
@@ -2210,15 +2240,19 @@ class MonthlySourceAuthority:
             ),
         )
         receipt = {
-            "schema_version": "dataset_release_source_writer_ledger_v1",
+            "schema_version": SOURCE_WRITER_LEDGER_SCHEMA,
             "platform_write_contract": ("all_source_mutations_must_record_ingestion_or_sync_ledger_v1"),
             "cutoff_month_start": cutoff.replace(day=1).isoformat(),
+            "source_cutoff": cutoff.isoformat(),
+            "dataset_scope": datasets,
+            "completed_job_policy": "direct_dataset_at_or_before_cutoff_v1",
+            "active_job_policy": "relevant_or_unclassified_fail_closed_v1",
             "active_writer_count": 0,
             "rows": ordered,
             "safety": _zero_safety(),
         }
         return (
-            digest_named_fields("dataset_release_source_writer_ledger_digest_v1", receipt),
+            digest_named_fields(SOURCE_WRITER_LEDGER_DIGEST_SCHEMA, receipt),
             receipt,
         )
 
@@ -3515,14 +3549,14 @@ def load_source_stage_receipt(
         writer_digest = ensure_sha256_text(writer_evidence["digest"], field="writer_ledger_digest")
         if (
             not isinstance(writer_evidence, Mapping)
-            or writer_evidence.get("schema_version") != "dataset_release_source_writer_ledger_v1"
+            or writer_evidence.get("schema_version") != SOURCE_WRITER_LEDGER_SCHEMA
             or writer_evidence.get("active_writer_count") != 0
             or type(writer_evidence.get("check_count")) is not int
             or writer_evidence["check_count"] < 2
         ):
             raise SourceAuditIncomplete("source writer-ledger evidence is invalid")
         writer_receipt = {key: value for key, value in writer_evidence.items() if key not in {"digest", "check_count"}}
-        if digest_named_fields("dataset_release_source_writer_ledger_digest_v1", writer_receipt) != writer_digest:
+        if digest_named_fields(SOURCE_WRITER_LEDGER_DIGEST_SCHEMA, writer_receipt) != writer_digest:
             raise SourceAuditIncomplete("source writer-ledger digest differs")
     except (KeyError, TypeError) as exc:
         raise SourceAuditIncomplete("source-stage consistency evidence is incomplete") from exc

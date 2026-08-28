@@ -1063,15 +1063,50 @@ def test_source_writer_ledger_uses_latest_data_sync_attempt_per_target() -> None
     sql = source_authority_module._SOURCE_WRITER_LEDGER_SQL
     data_sync_projection = sql.split("UNION ALL", maxsplit=1)[1]
 
-    assert "WITH latest_data_sync_attempt AS" in sql
+    assert "WITH normalized_ingestion_job AS" in sql
+    assert "relevant_ingestion_job AS" in sql
+    assert "summary->>'actual_dataset'" in sql
+    assert "summary->>'schedule_dataset'" in sql
+    assert "summary->>'dataset'" in sql
+    assert "job.direct_dataset = ANY(%(datasets)s)" in sql
+    assert "job.source_start::date <= %(cutoff)s" in sql
+    assert "FROM relevant_ingestion_job" in sql
+    assert "latest_data_sync_attempt AS" in sql
     assert "SELECT DISTINCT ON (attempt.target_id)" in sql
     assert "attempt.attempt_no" in sql
     assert "ORDER BY attempt.target_id,attempt.attempt_no DESC" in sql
+    assert "target.target_date <= %(cutoff)s" in sql
     assert "FROM latest_data_sync_attempt AS attempt" in sql
     assert "attempt.status='started'" in sql
     assert "target." not in data_sync_projection
     assert "'dataset',attempt.dataset" in data_sync_projection
     assert "'data_source',attempt.data_source" in data_sync_projection
+
+
+def test_source_writer_ledger_binds_cutoff_and_versioned_relevant_writer_policy(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    authority, cas = _authority(dataset_profile, tmp_path, fake)
+
+    frozen = authority.freeze(cutoff=date(2026, 7, 31))
+
+    writer_params = [params for query_id, params in fake.stream_params if query_id == "writer_ledger"]
+    assert len(writer_params) >= 2
+    assert all(params["cutoff"] == date(2026, 7, 31) for params in writer_params)
+    assert all(params["start"] == date(2026, 7, 1) for params in writer_params)
+    assert all(tuple(params["datasets"]) for params in writer_params)
+    assert source_authority_module.SOURCE_AUTHORITY_POLICY_VERSION == "qe_monthly_source_authority_v3"
+    assert source_authority_module.SOURCE_CONSISTENCY_POLICY.endswith(
+        "relevant_writer_ledger_quiescence_v2"
+    )
+    provenance = cas.get_json_bounded(frozen.source_provenance_ref, max_bytes=4 * 1024**2)
+    writer_evidence = provenance["writer_ledger_evidence"]
+    assert writer_evidence["schema_version"] == "dataset_release_source_writer_ledger_v2"
+    assert writer_evidence["source_cutoff"] == "2026-07-31"
+    assert writer_evidence["completed_job_policy"] == "direct_dataset_at_or_before_cutoff_v1"
+    assert writer_evidence["active_job_policy"] == "relevant_or_unclassified_fail_closed_v1"
 
 
 def test_source_freeze_still_blocks_latest_active_writer(
