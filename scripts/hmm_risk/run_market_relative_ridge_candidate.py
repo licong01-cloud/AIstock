@@ -55,9 +55,11 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (  # noqa:
     write_report,
 )
 from backend.services.hmm_risk.industry_pit_adapter import (  # noqa: E402
+    HMM_G2A_DATA_A_CONTRACT_VERSION,
     HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA,
     HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA,
     HMM_L1_CODE_PROJECTION_SCHEMA,
+    HMM_L1_CODE_PROJECTION_VERSION,
 )
 from backend.services.canonical_equity_pit import (  # noqa: E402
     CANONICAL_PIT_RULE_VERSION,
@@ -288,8 +290,21 @@ def _industry_pit_authority(path: Path) -> dict[str, Any]:
         or identity.get("schema_version") != HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA
         or not isinstance(l1_projection, Mapping)
         or l1_projection.get("schema_version") != HMM_L1_CODE_PROJECTION_SCHEMA
+        or l1_projection.get("projection_version") != HMM_L1_CODE_PROJECTION_VERSION
         or not isinstance(research_basis, Mapping)
+        or set(research_basis)
+        != {
+            "schema_version",
+            "contract_version",
+            "active_mode",
+            "historical_classification_basis",
+            "historical_non_as_known_taxonomy",
+            "forward_classification_basis",
+            "forward_non_as_known_taxonomy",
+            "canonical_hash",
+        }
         or research_basis.get("schema_version") != HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA
+        or research_basis.get("contract_version") != HMM_G2A_DATA_A_CONTRACT_VERSION
     ):
         raise RidgeCandidateError(
             REASON_RL1_INPUT,

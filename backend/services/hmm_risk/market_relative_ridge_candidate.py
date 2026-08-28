@@ -52,9 +52,11 @@ from backend.services.hmm_risk.market_relative_jump_spike import (
 )
 from backend.services.hmm_risk.state_model_set import canonical_json_bytes, canonical_sha256, sha256_bytes
 from backend.services.hmm_risk.industry_pit_adapter import (
+    HMM_G2A_DATA_A_CONTRACT_VERSION,
     HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA,
     HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA,
     HMM_L1_CODE_PROJECTION_SCHEMA,
+    HMM_L1_CODE_PROJECTION_VERSION,
 )
 
 CONTRACT_VERSION = "C-011-P2-3B-D1-D6"
@@ -2586,15 +2588,28 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
             "canonical_hash",
         }
         or l1_projection.get("schema_version") != HMM_L1_CODE_PROJECTION_SCHEMA
+        or l1_projection.get("projection_version") != HMM_L1_CODE_PROJECTION_VERSION
         or not isinstance(l1_projection.get("rows"), list)
         or len(l1_projection["rows"]) != 31
     ):
         raise _fail(REASON_RL1_INPUT, "rotation L1 industry PIT L1 projection is invalid", stage="input")
     _require_sha256(l1_projection.get("canonical_hash"), "source.industry_pit.l1_projection.canonical_hash")
     research_basis = industry_pit.get("research_basis")
+    research_basis_keys = {
+        "schema_version",
+        "contract_version",
+        "active_mode",
+        "historical_classification_basis",
+        "historical_non_as_known_taxonomy",
+        "forward_classification_basis",
+        "forward_non_as_known_taxonomy",
+        "canonical_hash",
+    }
     if (
         not isinstance(research_basis, Mapping)
+        or set(research_basis) != research_basis_keys
         or research_basis.get("schema_version") != HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA
+        or research_basis.get("contract_version") != HMM_G2A_DATA_A_CONTRACT_VERSION
         or research_basis.get("active_mode") != "historical_replay"
         or research_basis.get("historical_classification_basis") != "stable_taxonomy_backcast"
         or research_basis.get("historical_non_as_known_taxonomy") is not True

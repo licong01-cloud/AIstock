@@ -186,7 +186,7 @@ def _bind(adapter: HMMIndustryPitAdapter) -> None:
         build_l1_code_projection_authority(
             taxonomy_contract_id="sw2021_classification_catalog_v1",
             taxonomy_version="SW2021",
-            projection_version="unit-v1",
+            projection_version="sw2021_taxonomy_to_published_l1_v1",
             taxonomy_rows=[
                 {"industry_code": f"{number:02d}0000", "industry_name": f"L1-{number:02d}"} for number in range(1, 32)
             ],
@@ -207,7 +207,7 @@ def _bind(adapter: HMMIndustryPitAdapter) -> None:
 def _research_basis(*, active_mode: str = "historical_replay") -> dict[str, object]:
     body: dict[str, object] = {
         "schema_version": "hmm_risk_industry_pit_research_basis_v1",
-        "contract_version": "c013-g2a-data-a-v1",
+        "contract_version": "c013_g2a_data_a_v1",
         "active_mode": active_mode,
         "historical_classification_basis": "stable_taxonomy_backcast",
         "historical_non_as_known_taxonomy": True,
@@ -271,6 +271,7 @@ def _knowledge_unverified_bundle(tmp_path: Path) -> CandidateBundleReadback:
 
 def test_adapter_uses_classification_assignment_and_aligned_index_code_projection(tmp_path: Path) -> None:
     adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path))
+    adapter.bind_research_basis_contract(_research_basis(active_mode="forward"))
     _bind(adapter)
     projection = adapter.resolve("000001.SZ", date(2022, 1, 4))
 
@@ -288,6 +289,7 @@ def test_adapter_uses_classification_assignment_and_aligned_index_code_projectio
 
 def test_adapter_preserves_typed_unavailable_without_neutral_or_previous_fallback(tmp_path: Path) -> None:
     adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path, target_unavailable=True))
+    adapter.bind_research_basis_contract(_research_basis(active_mode="forward"))
     _bind(adapter)
     projection = adapter.resolve("000001.SZ", date(2022, 1, 4))
 
@@ -330,8 +332,25 @@ def test_forward_basis_keeps_knowledge_unverified_classification_unavailable(tmp
     assert projection.reason_code == "classification:classification_knowledge_time_unverified"
 
 
+def test_adapter_rejects_resolution_before_explicit_research_basis_binding(tmp_path: Path) -> None:
+    adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path))
+    _bind(adapter)
+
+    with pytest.raises(StateModelSetError, match="research-basis contract has not been bound"):
+        adapter.resolve("000001.SZ", date(2022, 1, 4))
+
+
+def test_adapter_rejects_rebinding_research_basis_to_a_different_mode(tmp_path: Path) -> None:
+    adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path))
+    adapter.bind_research_basis_contract(_research_basis())
+
+    with pytest.raises(StateModelSetError, match="research-basis contract cannot be rebound"):
+        adapter.bind_research_basis_contract(_research_basis(active_mode="forward"))
+
+
 def test_601d_preflight_closes_full_denominator_and_performs_no_model_work(tmp_path: Path) -> None:
     adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path, target_unavailable=True))
+    adapter.bind_research_basis_contract(_research_basis(active_mode="forward"))
     denominator = FrozenDenominator.build(
         window_start=date(2022, 1, 3),
         window_end=date(2022, 1, 4),
@@ -380,7 +399,7 @@ def test_projection_builder_rejects_name_inference_when_numeric_code_sources_dis
         build_l1_code_projection_authority(
             taxonomy_contract_id="sw2021_classification_catalog_v1",
             taxonomy_version="SW2021",
-            projection_version="unit-v1",
+            projection_version="sw2021_taxonomy_to_published_l1_v1",
             taxonomy_rows=taxonomy_rows,
             published_index_rows=published_rows,
             source_ids=("test:taxonomy", "test:index"),

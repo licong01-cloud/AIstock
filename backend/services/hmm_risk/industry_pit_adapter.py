@@ -47,6 +47,8 @@ HMM_L1_CODE_PROJECTION_SCHEMA = "hmm_risk_industry_l1_code_projection_v1"
 HMM_L1_CODE_PROJECTION_ROW_SCHEMA = "hmm_risk_industry_l1_code_projection_row_v1"
 HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA = "hmm_risk_industry_pit_research_basis_v1"
 HMM_STABLE_BACKCAST_CANDIDATE_SCHEMA = "hmm_risk_stable_taxonomy_backcast_candidate_v1"
+HMM_G2A_DATA_A_CONTRACT_VERSION = "c013_g2a_data_a_v1"
+HMM_L1_CODE_PROJECTION_VERSION = "sw2021_taxonomy_to_published_l1_v1"
 EXPECTED_PREFLIGHT_TRADING_DAYS = 601
 _CANONICAL_SW_L1_CODE = re.compile(r"^801[0-9]{3}[.]SI$")
 _TAXONOMY_CODE = re.compile(r"^[0-9]{6}$")
@@ -297,6 +299,7 @@ class HMMIndustryPitAdapter:
             not isinstance(authority, Mapping)
             or set(authority) != expected_keys
             or authority.get("schema_version") != HMM_L1_CODE_PROJECTION_SCHEMA
+            or authority.get("projection_version") != HMM_L1_CODE_PROJECTION_VERSION
             or authority.get("taxonomy_contract_id") != self.classification_resolver.receipt.taxonomy_contract_id
             or authority.get("taxonomy_version") != self.classification_resolver.receipt.taxonomy_version
         ):
@@ -383,9 +386,14 @@ class HMMIndustryPitAdapter:
                 if key in lookup and lookup[key] != value:
                     raise StateModelSetError(f"HMM industry PIT L1 projection alias conflicts: {key}")
                 lookup[key] = value
+        canonical_hash = str(authority["canonical_hash"])
+        if self._l1_projection_sha256 is not None:
+            if self._l1_projection_sha256 != canonical_hash:
+                raise StateModelSetError("HMM industry PIT L1 code projection cannot be rebound")
+            return
         self._classification_lookup = lookup
         self._constituents = constituents
-        self._l1_projection_sha256 = str(authority["canonical_hash"])
+        self._l1_projection_sha256 = canonical_hash
 
     def bind_research_basis_contract(self, authority: Mapping[str, Any]) -> None:
         expected_keys = {
@@ -402,12 +410,12 @@ class HMMIndustryPitAdapter:
             not isinstance(authority, Mapping)
             or set(authority) != expected_keys
             or authority.get("schema_version") != HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA
+            or authority.get("contract_version") != HMM_G2A_DATA_A_CONTRACT_VERSION
             or authority.get("historical_classification_basis") != ResearchBasis.STABLE_TAXONOMY_BACKCAST.value
             or authority.get("historical_non_as_known_taxonomy") is not True
             or authority.get("forward_classification_basis") != ResearchBasis.AS_PUBLISHED_PIT.value
             or authority.get("forward_non_as_known_taxonomy") is not False
             or authority.get("active_mode") not in {"historical_replay", "forward"}
-            or not str(authority.get("contract_version") or "").strip()
         ):
             raise StateModelSetError("HMM industry PIT research-basis contract is invalid")
         body = {key: value for key, value in authority.items() if key != "canonical_hash"}
@@ -416,6 +424,10 @@ class HMMIndustryPitAdapter:
             authority.get("canonical_hash"), "industry_pit.research_basis.canonical_hash"
         ):
             raise StateModelSetError("HMM industry PIT research-basis contract hash is invalid")
+        if self._research_basis_contract_sha256 is not None:
+            if self._research_basis_contract_sha256 != canonical_hash:
+                raise StateModelSetError("HMM industry PIT research-basis contract cannot be rebound")
+            return
         source_receipt = self.authority_bundle.classification_receipt
         if (
             source_receipt.research_basis is not ResearchBasis.AS_PUBLISHED_PIT
@@ -496,6 +508,13 @@ class HMMIndustryPitAdapter:
                 }
                 if authority_identity != expected_authority:
                     raise StateModelSetError("HMM stable taxonomy backcast authority identity differs")
+                if (
+                    conflict.get("industry_code") != identity.l3_code
+                    or conflict.get("lineage_hash") not in row.lineage_hashes
+                    or not set(conflict.get("source_ids") or ()).issubset(row.source_ids)
+                    or not set(conflict.get("source_hashes") or ()).issubset(row.source_hashes)
+                ):
+                    raise StateModelSetError("HMM stable taxonomy backcast conflict provenance differs")
                 unavailable_reason = None
                 conflicts = ()
             derived_intervals.append(
@@ -526,10 +545,11 @@ class HMMIndustryPitAdapter:
                 )
             )
         candidate_body = {
+            "contract_version": HMM_G2A_DATA_A_CONTRACT_VERSION,
             "source_candidate_hash": source_candidate_hash,
             "source_receipt_hash": source_receipt.receipt_hash,
             "derived_receipt_hash": derived_receipt.receipt_hash,
-            "row_hashes": [row.row_hash for row in derived_intervals],
+            "row_hashes": sorted(row.row_hash for row in derived_intervals),
         }
         self.classification_resolver = IndustryPitResolver(
             receipt=derived_receipt,
@@ -555,6 +575,8 @@ class HMMIndustryPitAdapter:
         return self._constituents
 
     def resolve(self, symbol: str, trade_date: date) -> HMMIndustryProjection:
+        if self._research_basis_contract_sha256 is None:
+            raise StateModelSetError("HMM industry PIT research-basis contract has not been bound")
         dual = resolve_dual_authority(
             classification_resolver=self.classification_resolver,
             index_membership_resolver=self.index_membership_resolver,
@@ -613,6 +635,8 @@ class HMMIndustryPitAdapter:
     def mapping_manifest(self, *, universe_key: str, source_start: date, source_end: date) -> Mapping[str, Any]:
         if self._constituents is None or self._l1_projection_sha256 is None:
             raise StateModelSetError("HMM industry PIT L1 code projection has not been bound")
+        if self._research_basis_contract_sha256 is None:
+            raise StateModelSetError("HMM industry PIT research-basis contract has not been bound")
         constituents_hash = hashlib.sha256(canonical_json_bytes(self._constituents)).hexdigest()
         return {
             "schema_version": HMM_MAPPING_MANIFEST_SCHEMA,
@@ -644,6 +668,8 @@ class HMMIndustryPitAdapter:
         *,
         expected_trading_days: int = EXPECTED_PREFLIGHT_TRADING_DAYS,
     ) -> Mapping[str, Any]:
+        if self._research_basis_contract_sha256 is None:
+            raise StateModelSetError("HMM industry PIT research-basis contract has not been bound")
         if len(denominator.trading_dates) != expected_trading_days:
             raise StateModelSetError(
                 "HMM industry PIT preflight trading-day count differs from the approved contract: "
@@ -763,7 +789,9 @@ __all__ = [
     "HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA",
     "HMM_INDUSTRY_PIT_PREFLIGHT_SCHEMA",
     "HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA",
+    "HMM_G2A_DATA_A_CONTRACT_VERSION",
     "HMM_L1_CODE_PROJECTION_SCHEMA",
+    "HMM_L1_CODE_PROJECTION_VERSION",
     "HMM_L1_CODE_PROJECTION_ROW_SCHEMA",
     "HMM_MAPPING_MANIFEST_SCHEMA",
     "HMM_STABLE_BACKCAST_CANDIDATE_SCHEMA",

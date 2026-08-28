@@ -115,7 +115,7 @@ def _l1_projection() -> Mapping[str, object]:
     return build_l1_code_projection_authority(
         taxonomy_contract_id="sw2021_classification_catalog_v1",
         taxonomy_version="SW2021",
-        projection_version="unit-v1",
+        projection_version="sw2021_taxonomy_to_published_l1_v1",
         taxonomy_rows=[
             {"industry_code": f"{index:02d}0000", "industry_name": f"L1-{index:02d}"} for index in range(1, 32)
         ],
@@ -135,7 +135,7 @@ def _l1_projection() -> Mapping[str, object]:
 def _research_basis() -> Mapping[str, object]:
     body: dict[str, object] = {
         "schema_version": "hmm_risk_industry_pit_research_basis_v1",
-        "contract_version": "c013-g2a-data-a-v1",
+        "contract_version": "c013_g2a_data_a_v1",
         "active_mode": "historical_replay",
         "historical_classification_basis": "stable_taxonomy_backcast",
         "historical_non_as_known_taxonomy": True,
