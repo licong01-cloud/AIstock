@@ -31,15 +31,22 @@
   ],
   "expected": "Normal fix PR registration must persist the BUG JSON and global reservation without modifying the repository allocator file; registry-only recovery may maintain the legacy repository observation explicitly.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/aistock_issue_workflow.py",
+    "actual_changed_files": [
       "backend/tests/scripts/test_aistock_issue_workflow.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
-      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1237-concurrent-fix-prs-conflict-on-redundant-repository-bug-allocator-state.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1237-concurrent-fix-prs-conflict-on-redundant-repository-bug-allocator-state.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -164,10 +171,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
