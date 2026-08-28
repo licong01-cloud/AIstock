@@ -97,3 +97,68 @@ def test_exact_source_hash_contract_is_frozen() -> None:
     }
     assert builder.EXPECTED_CONFLICT_SYMBOLS == 23
     assert builder.EXPECTED_CONFLICT_OPPORTUNITIES == 23_326
+
+
+def test_approved_historical_conflict_inventory_is_frozen_independently() -> None:
+    inventory = builder._approved_regression_inventory()
+
+    assert set(inventory) == {
+        "000016.SZ",
+        "000716.SZ",
+        "002481.SZ",
+        "002507.SZ",
+        "002557.SZ",
+        "002582.SZ",
+        "002597.SZ",
+        "002719.SZ",
+        "002738.SZ",
+        "003030.SZ",
+        "300699.SZ",
+        "300741.SZ",
+        "300777.SZ",
+        "300783.SZ",
+        "300858.SZ",
+        "300892.SZ",
+        "300915.SZ",
+        "300972.SZ",
+        "603020.SH",
+        "603077.SH",
+        "603697.SH",
+        "605077.SH",
+        "605300.SH",
+    }
+    assert sum(
+        row["legacy_conflict_opportunities"] for row in inventory.values()
+    ) == 23_326
+    assert {
+        row["observation_basis"] for row in inventory.values()
+    } == {"approved_c013_historical_baseline"}
+    assert all(row["diagnostic_only_not_authority_source"] for row in inventory.values())
+
+
+def test_repaired_current_conflict_inventory_is_a_non_blocking_observation() -> None:
+    observation = builder._current_legacy_conflict_observation([])
+
+    assert observation == {
+        "symbol_count": 0,
+        "opportunity_count": 0,
+        "by_symbol": {},
+        "diagnostic_only_not_authority_source": True,
+        "blocks_candidate_preparation": False,
+    }
+    assert len(builder._approved_regression_inventory()) == 23
+
+
+def test_current_conflict_observation_is_order_invariant_and_rejects_duplicates() -> None:
+    forward = builder._current_legacy_conflict_observation(
+        [("300741.SZ", 3), ("300858.SZ", 2)]
+    )
+    reverse = builder._current_legacy_conflict_observation(
+        [("300858.SZ", 2), ("300741.SZ", 3)]
+    )
+
+    assert forward == reverse
+    with pytest.raises(IndustryPitContractError, match="diagnostic is invalid"):
+        builder._current_legacy_conflict_observation(
+            [("300741.SZ", 3), ("300741.SZ", 3)]
+        )
