@@ -200,6 +200,11 @@ def build_contract_evidence(
         environment_verify_path.read_text(encoding="utf-8") if environment_verify_path.exists() else ""
     )
     changed_files_text = changed_files_path.read_text(encoding="utf-8") if changed_files_path.exists() else ""
+    ci_preparation_match = re.search(
+        r"(?ms)^  classify-changes:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n)",
+        test_text,
+    )
+    ci_preparation_text = ci_preparation_match.group("body") if ci_preparation_match else ""
     issue_workflow_text = issue_workflow_path.read_text(encoding="utf-8") if issue_workflow_path.exists() else ""
     workflow_findings = scan_workflows(path_list)
     combined_workflow_text = "\n".join(workflow_text.values())
@@ -320,6 +325,13 @@ def build_contract_evidence(
         and "The failed job logs are the authoritative PR evidence" in test_text,
         "pr_ci_no_external_artifact_action_dependency": "actions/upload-artifact@" not in test_text
         and "actions/download-artifact@" not in test_text,
+        "pr_ci_static_gate_reuses_classifier_checkout": bool(ci_preparation_text)
+        and not re.search(r"(?m)^  (?:static-gate|docs-lite):\s*$", test_text)
+        and ci_preparation_text.count("actions/checkout@v7") == 1
+        and ci_preparation_text.count("ci_environment_verify.py") == 1
+        and "Classify CI lane" in ci_preparation_text
+        and "BUG registry metadata check" in ci_preparation_text
+        and "nox -s l0 -- changed files" in ci_preparation_text,
         "pr_workflows_no_external_report_action_dependency": all(
             marker not in pr_combined
             for marker in ("actions/upload-artifact@", "actions/download-artifact@", "actions/github-script@")
