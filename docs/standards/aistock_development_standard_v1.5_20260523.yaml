@@ -668,11 +668,13 @@ rules:
         - exact_transient_roots_only_no_git_clean_or_wildcard
         - ignored_asset_tree_transients_require_exact_bounded_structural_classifier
         - single_manifest_reused_without_repeated_full_ignored_tree_scan
+        - same_finalizer_fetch_and_verified_pr_receipts_reused_without_skipping_target_preflight
+        - root_sync_deferral_reuses_blocking_payload_without_redundant_dry_run
         - manifest_unchanged_before_purge
         - path_registration_local_remote_four_state_readback
         - bare_merge_does_not_imply_cleanup
     baseline_policy: block_incomplete_cleanup_claim_only
-    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, fail closed on protected or unknown artifacts, then verify path, registration, local branch, and remote branch absence.
+    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; reuse only same-finalizer successful fetch and exact verified PR receipts, preserve per-target branch, artifact, process and four-state checks, avoid redundant dry-run rebuilds during root-sync deferral, keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, and fail closed on protected or unknown artifacts.
 
   - rule_id: BUG-RESTART-EFFECTIVE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001

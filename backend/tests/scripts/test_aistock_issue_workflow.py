@@ -11902,6 +11902,7 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
     close_sync_root = isolated_workflow_root / "registry"
     cleanup_calls: list[dict[str, Any]] = []
+    shared_fetch = {"status": "fetched", "result": {"ok": True}}
 
     monkeypatch.setattr(
         workflow,
@@ -11940,12 +11941,15 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     )
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
         cleanup_calls.append(kwargs)
-        return {
+        payload = {
             "workflow_gate": "cleanup_done",
             "branch": kwargs["branch"],
             "worktree": kwargs.get("worktree"),
             "sync_root": kwargs.get("sync_root"),
         }
+        if kwargs["branch"] == "bug/BUG-199-workflow":
+            payload["pre_cleanup_fetch"] = shared_fetch
+        return payload
 
     monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", fake_cleanup)
     monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
@@ -11969,24 +11973,13 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     assert payload["close_sync_pr_merge"]["merge_commit"] == "syncmerge123"
     assert payload["cleanup"]["workflow_gate"] == "cleanup_done"
     assert payload["close_sync_cleanup"]["workflow_gate"] == "cleanup_done"
-    assert cleanup_calls == [
-        {
-            "branch": "bug/BUG-199-workflow",
-            "bug_id": "BUG-199",
-            "worktree": str(isolated_workflow_root / "task"),
-            "pr_url": "https://github.example/pull/199",
-            "apply": True,
-            "sync_root": True,
-        },
-        {
-            "branch": "chore/BUG-199-close-sync",
-            "bug_id": "BUG-199",
-            "worktree": str(close_sync_root),
-            "pr_url": "https://github.example/pull/299",
-            "apply": True,
-            "sync_root": False,
-        },
+    assert [(call["branch"], call["apply"], call["sync_root"]) for call in cleanup_calls] == [
+        ("bug/BUG-199-workflow", True, True),
+        ("chore/BUG-199-close-sync", True, False),
     ]
+    assert cleanup_calls[0]["verified_pr_check"]["pr"]["url"] == "https://github.example/pull/199"
+    assert cleanup_calls[1]["verified_pr_check"]["pr"]["mergeCommit"]["oid"] == "syncmerge123"
+    assert cleanup_calls[1]["preflight_fetch"] is shared_fetch
 
 
 def test_merge_finalizer_apply_cleans_source_before_close_sync_pr_merge(
@@ -12058,16 +12051,11 @@ def test_merge_finalizer_apply_cleans_source_before_close_sync_pr_merge(
     assert payload["close_sync_pr_merge"]["workflow_gate"] == "ready_for_merge"
     assert payload["cleanup"]["workflow_gate"] == "cleanup_done"
     assert payload["close_sync_cleanup"] is None
-    assert cleanup_calls == [
-        {
-            "branch": "bug/BUG-199-workflow",
-            "bug_id": "BUG-199",
-            "worktree": str(isolated_workflow_root / "task"),
-            "pr_url": "https://github.example/pull/199",
-            "apply": True,
-            "sync_root": True,
-        }
-    ]
+    assert len(cleanup_calls) == 1
+    assert cleanup_calls[0]["branch"] == "bug/BUG-199-workflow"
+    assert cleanup_calls[0]["apply"] is True
+    assert cleanup_calls[0]["sync_root"] is True
+    assert cleanup_calls[0]["verified_pr_check"]["pr"]["url"] == "https://github.example/pull/199"
 
 
 def test_merge_finalizer_defers_source_cleanup_when_invoked_from_source_worktree(
@@ -12281,11 +12269,8 @@ def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
         cleanup_calls.append(kwargs)
         if kwargs.get("sync_root") and kwargs.get("apply"):
-            raise workflow.WorkflowError(
-                f"canonical root is dirty and not synced to origin/main: {isolated_workflow_root}"
-            )
-        if kwargs.get("sync_root"):
-            return {
+            raise workflow.CleanupBlockedError(
+                {
                 "workflow_gate": "blocked",
                 "branch": kwargs["branch"],
                 "worktree": kwargs.get("worktree"),
@@ -12296,7 +12281,10 @@ def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
                 "origin_equivalent_dirty_files": [],
                 "root_git": {"branch": "main", "dirty": True, "head": "old", "origin_main": "new"},
                 "blocking": [f"canonical root is dirty and not synced to origin/main: {isolated_workflow_root}"],
-            }
+                "pre_cleanup_fetch": {"status": "fetched", "result": {"ok": True}},
+                "merge_verification": {"pr_check": kwargs.get("verified_pr_check")},
+                }
+            )
         return {
             "workflow_gate": "cleanup_done",
             "branch": kwargs["branch"],
@@ -12336,12 +12324,12 @@ def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
     assert "sync_root_after_unrelated_dirty_files_are_resolved" in payload["next_actions"]
     assert [(call["sync_root"], call["apply"]) for call in cleanup_calls] == [
         (True, True),
-        (True, False),
         (False, True),
         (True, True),
-        (True, False),
         (False, True),
     ]
+    assert cleanup_calls[1]["preflight_fetch"]["status"] == "fetched"
+    assert cleanup_calls[3]["preflight_fetch"]["status"] == "fetched"
 
 
 def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(
