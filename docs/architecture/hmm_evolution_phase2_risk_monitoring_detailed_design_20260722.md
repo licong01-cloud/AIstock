@@ -6080,5 +6080,6 @@ Design Acceptance Matrix、§23.35和§24.1。审核目标是消除“首个闭�
 7. **禁止业务逻辑迁移：PASS**。C-012 estimator/feature/fold/seed/threshold、24-fit、selection、hard semantic、capability/READY和advisory-only均未改变；classification决定contributor，index membership只保留独立diagnostic/alignment。
 8. **禁止未经确认的门禁/审批：PASS**。只激活用户批准的`C-013-G2A-DATA-A`确定性合同，没有新增coverage阈值、模型淘汰、runtime人工审批或发布门禁；24-fit与PR merge仍单独授权。
 9. **反过度工程：PASS**。只增加G2-A直接需要的adapter、版本化小crosswalk、source request绑定和既有路径测试；没有新DB、registry、scheduler、通用evidence平台或历史artifact迁移。严格产品进度保持`11/17=64.71%`。
+10. **第二轮源码复审修复：PASS_AFTER_FIX**。复审发现四个可形成局部自洽但不完整权威闭包的路径：空`source_ids/source_hashes`会因空集subset语义通过historical conflict provenance；先绑定projection再切换historical basis会留下旧classification receipt的constituent；未绑定31行projection仍可返回`closure.passed=true`的preflight；仅有L1 crosswalk的adapter公共reader仍允许请求direct L2。实现已改为conflict provenance非空且逐项有效、basis切换同步刷新全部constituent receipt、preflight强制projection已绑定、adapter路径显式拒绝L2，并以6个新增RED→GREEN case覆盖。上述修复不改变historical/forward basis、股票池、C-012模型、24-fit、阈值、selection或产品能力语义，也不增加人工门禁。
 
 审核结论：`PASS_C013_G2A_DATA_A_SOURCE_AND_DESIGN_REVIEW_READY_PENDING_PR_NO_FIT_MODEL_OR_RUNTIME`。下一动作是在最终HEAD完成模块门禁和PR；PR合入后才请求24-fit授权。

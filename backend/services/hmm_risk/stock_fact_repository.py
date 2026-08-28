@@ -14,6 +14,7 @@ from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 
 from backend.services.industry_pit.candidate_builder import FrozenDenominator, UniverseSpan
+from backend.services.industry_pit.contracts import IndustryPitContractError
 
 from .state_model_set import StateModelSetError, canonical_json_bytes
 from .security_identity import SecuritySourceIdentityManifest
@@ -351,15 +352,16 @@ class PostgresStockFactReader:
                 """,
                 (self.spec.universe_key, window_end, window_start),
             )
-            spans = tuple(UniverseSpan(row[0], row[1], row[2]) for row in cursor.fetchall())
+            raw_spans = cursor.fetchall()
         try:
+            spans = tuple(UniverseSpan(row[0], row[1], row[2]) for row in raw_spans)
             return FrozenDenominator.build(
                 window_start=window_start,
                 window_end=window_end,
                 trading_dates=trading_dates,
                 universe_spans=spans,
             )
-        except Exception as exc:
+        except (IndustryPitContractError, TypeError, ValueError) as exc:
             raise StateModelSetError(f"HMM industry PIT denominator is invalid: {exc}") from exc
 
     def run_industry_pit_preflight(
@@ -1353,9 +1355,11 @@ class PostgresStockFactReader:
         _window_start: date | None = None,
         _window_end: date | None = None,
     ) -> Iterator[dict[str, Any]]:
-        self.load_classification_lookup()
         if sector_level not in {"L1", "L2"}:
             raise StateModelSetError("stock fact read level must be L1 or L2")
+        if self.industry_pit_adapter is not None and sector_level != "L1":
+            raise StateModelSetError("HMM shared industry PIT adapter supports only direct L1 stock facts")
+        self.load_classification_lookup()
         if self.industry_pit_adapter is not None and self.security_identity_manifest.alias_rows("market.daily_basic"):
             raise StateModelSetError(
                 "HMM shared industry PIT adapter cannot use the legacy combined daily-basic alias query path"
@@ -1646,9 +1650,11 @@ class PostgresStockFactReader:
     ) -> Iterator[dict[str, Any]]:
         """Yield eligible, non-suspended symbol-days missing canonical price facts."""
 
-        self.load_classification_lookup()
         if sector_level not in {"L1", "L2"}:
             raise StateModelSetError("missing-price read level must be L1 or L2")
+        if self.industry_pit_adapter is not None and sector_level != "L1":
+            raise StateModelSetError("HMM shared industry PIT adapter supports only direct L1 missing-price facts")
+        self.load_classification_lookup()
         if self.industry_pit_adapter is not None and self.security_identity_manifest.alias_rows("market.daily_basic"):
             raise StateModelSetError(
                 "HMM shared industry PIT adapter cannot use the legacy combined daily-basic alias query path"

@@ -61,6 +61,24 @@ def _require_sha256(value: Any, field: str) -> str:
     return normalized
 
 
+def _require_nonempty_provenance_sequence(
+    value: Any,
+    field: str,
+    *,
+    sha256: bool = False,
+) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or not value:
+        raise StateModelSetError(f"{field} must be a non-empty sequence")
+    normalized: list[str] = []
+    for raw in value:
+        if not isinstance(raw, str) or not raw.strip():
+            raise StateModelSetError(f"{field} contains an invalid identity")
+        normalized.append(_require_sha256(raw, field) if sha256 else raw.strip())
+    if len(set(normalized)) != len(normalized):
+        raise StateModelSetError(f"{field} contains duplicate identities")
+    return tuple(normalized)
+
+
 def _request(resolver: IndustryPitResolver, *, symbol: str, trade_date: date) -> ResolutionRequest:
     receipt = resolver.receipt
     return ResolutionRequest(
@@ -446,6 +464,12 @@ class HMMIndustryPitAdapter:
             self._active_classification_basis = ResearchBasis.AS_PUBLISHED_PIT.value
             self._active_non_as_known_taxonomy = False
             self._stable_backcast_candidate_sha256 = None
+        if self._constituents is not None:
+            active_receipt_hash = self.classification_resolver.receipt.receipt_hash
+            self._constituents = {
+                code: {**value, "classification_authority_receipt_hash": active_receipt_hash}
+                for code, value in self._constituents.items()
+            }
         self._research_basis_contract_sha256 = canonical_hash
 
     def _activate_stable_taxonomy_backcast(self) -> None:
@@ -508,11 +532,20 @@ class HMMIndustryPitAdapter:
                 }
                 if authority_identity != expected_authority:
                     raise StateModelSetError("HMM stable taxonomy backcast authority identity differs")
+                conflict_source_ids = _require_nonempty_provenance_sequence(
+                    conflict.get("source_ids"),
+                    "HMM stable taxonomy backcast conflict provenance source_ids",
+                )
+                conflict_source_hashes = _require_nonempty_provenance_sequence(
+                    conflict.get("source_hashes"),
+                    "HMM stable taxonomy backcast conflict provenance source_hashes",
+                    sha256=True,
+                )
                 if (
                     conflict.get("industry_code") != identity.l3_code
                     or conflict.get("lineage_hash") not in row.lineage_hashes
-                    or not set(conflict.get("source_ids") or ()).issubset(row.source_ids)
-                    or not set(conflict.get("source_hashes") or ()).issubset(row.source_hashes)
+                    or not set(conflict_source_ids).issubset(row.source_ids)
+                    or not set(conflict_source_hashes).issubset(row.source_hashes)
                 ):
                     raise StateModelSetError("HMM stable taxonomy backcast conflict provenance differs")
                 unavailable_reason = None
@@ -670,6 +703,8 @@ class HMMIndustryPitAdapter:
     ) -> Mapping[str, Any]:
         if self._research_basis_contract_sha256 is None:
             raise StateModelSetError("HMM industry PIT research-basis contract has not been bound")
+        if self._l1_projection_sha256 is None:
+            raise StateModelSetError("HMM industry PIT L1 code projection has not been bound")
         if len(denominator.trading_dates) != expected_trading_days:
             raise StateModelSetError(
                 "HMM industry PIT preflight trading-day count differs from the approved contract: "

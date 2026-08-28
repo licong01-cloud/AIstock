@@ -24,6 +24,7 @@ from backend.services.hmm_risk.industry_pit_adapter import (
     build_l1_code_projection_authority,
 )
 from backend.services.hmm_risk.state_model_set import StateModelSetError
+from backend.services.hmm_risk.stock_fact_repository import PostgresStockFactReader
 
 
 HASH = "a" * 64
@@ -220,7 +221,12 @@ def _research_basis(*, active_mode: str = "historical_replay") -> dict[str, obje
     }
 
 
-def _knowledge_unverified_bundle(tmp_path: Path) -> CandidateBundleReadback:
+def _knowledge_unverified_bundle(
+    tmp_path: Path,
+    *,
+    conflict_source_ids: list[str] | None = None,
+    conflict_source_hashes: list[str] | None = None,
+) -> CandidateBundleReadback:
     bundle = _bundle(tmp_path)
     first = bundle.classification_intervals[0]
     assert first.identity is not None
@@ -230,8 +236,8 @@ def _knowledge_unverified_bundle(tmp_path: Path) -> CandidateBundleReadback:
         "identity_hash": first.identity.identity_hash,
         "industry_code": first.identity.l3_code,
         "lineage_hash": HASH,
-        "source_hashes": [HASH],
-        "source_ids": ["test:source"],
+        "source_hashes": [HASH] if conflict_source_hashes is None else conflict_source_hashes,
+        "source_ids": ["test:source"] if conflict_source_ids is None else conflict_source_ids,
     }
     unavailable = make_candidate_interval(
         canonical_symbol=first.canonical_symbol,
@@ -321,6 +327,45 @@ def test_historical_backcast_resolves_unique_frozen_candidate_and_marks_non_as_k
     assert projection.as_dict()["non_as_known_taxonomy"] is True
 
 
+@pytest.mark.parametrize(
+    ("source_ids", "source_hashes"),
+    [([], [HASH]), (["test:source"], [])],
+)
+def test_historical_backcast_rejects_empty_conflict_provenance(
+    tmp_path: Path,
+    source_ids: list[str],
+    source_hashes: list[str],
+) -> None:
+    adapter = HMMIndustryPitAdapter(
+        authority_bundle=_knowledge_unverified_bundle(
+            tmp_path,
+            conflict_source_ids=source_ids,
+            conflict_source_hashes=source_hashes,
+        )
+    )
+
+    with pytest.raises(StateModelSetError, match="conflict provenance"):
+        adapter.bind_research_basis_contract(_research_basis())
+
+
+def test_binding_historical_basis_after_projection_refreshes_constituent_receipt(tmp_path: Path) -> None:
+    adapter = HMMIndustryPitAdapter(authority_bundle=_knowledge_unverified_bundle(tmp_path))
+    _bind(adapter)
+    source_receipt = adapter.authority_bundle.classification_receipt.receipt_hash
+
+    adapter.bind_research_basis_contract(_research_basis())
+    manifest = adapter.mapping_manifest(
+        universe_key="unit",
+        source_start=date(2022, 1, 3),
+        source_end=date(2022, 1, 4),
+    )
+
+    assert manifest["classification_authority_receipt_hash"] != source_receipt
+    assert {value["classification_authority_receipt_hash"] for value in adapter.constituents.values()} == {
+        manifest["classification_authority_receipt_hash"]
+    }
+
+
 def test_forward_basis_keeps_knowledge_unverified_classification_unavailable(tmp_path: Path) -> None:
     adapter = HMMIndustryPitAdapter(authority_bundle=_knowledge_unverified_bundle(tmp_path))
     adapter.bind_research_basis_contract(_research_basis(active_mode="forward"))
@@ -351,6 +396,7 @@ def test_adapter_rejects_rebinding_research_basis_to_a_different_mode(tmp_path: 
 def test_601d_preflight_closes_full_denominator_and_performs_no_model_work(tmp_path: Path) -> None:
     adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path, target_unavailable=True))
     adapter.bind_research_basis_contract(_research_basis(active_mode="forward"))
+    _bind(adapter)
     denominator = FrozenDenominator.build(
         window_start=date(2022, 1, 3),
         window_end=date(2022, 1, 4),
@@ -372,8 +418,32 @@ def test_601d_preflight_closes_full_denominator_and_performs_no_model_work(tmp_p
     assert report["d5_performed"] is False
     assert report["d6_performed"] is False
     assert report["model_or_ready_written"] is False
-    assert report["l1_code_projection_status"] == "unavailable_pending_versioned_crosswalk"
-    assert report["l1_code_projection_sha256"] is None
+    assert report["l1_code_projection_status"] == "bound"
+    assert report["l1_code_projection_sha256"] is not None
+
+
+def test_preflight_rejects_unbound_l1_projection(tmp_path: Path) -> None:
+    adapter = HMMIndustryPitAdapter(authority_bundle=_bundle(tmp_path))
+    adapter.bind_research_basis_contract(_research_basis(active_mode="forward"))
+    denominator = FrozenDenominator.build(
+        window_start=date(2022, 1, 3),
+        window_end=date(2022, 1, 4),
+        trading_dates=(date(2022, 1, 3), date(2022, 1, 4)),
+        universe_spans=(UniverseSpan("000001.SZ", date(2022, 1, 1), date(2022, 1, 5)),),
+    )
+
+    with pytest.raises(StateModelSetError, match="L1 code projection has not been bound"):
+        adapter.preflight(denominator, expected_trading_days=2)
+
+
+@pytest.mark.parametrize("method_name", ["iter_stock_fact_rows", "iter_missing_price_rows"])
+def test_shared_industry_pit_reader_rejects_l2_without_canonical_l2_projection(method_name: str) -> None:
+    reader = object.__new__(PostgresStockFactReader)
+    reader.industry_pit_adapter = object()
+
+    rows = getattr(reader, method_name)(sector_level="L2")
+    with pytest.raises(StateModelSetError, match="supports only direct L1"):
+        next(rows)
 
 
 def test_adapter_rejects_partial_31_l1_projection(tmp_path: Path) -> None:
