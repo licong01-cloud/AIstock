@@ -3,10 +3,11 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-08-28
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0K_DESIGN_READY_IMPLEMENTATION_NOT_STARTED`
+> 当前状态：`P0K_SOURCE_IMPLEMENTED_LOCAL_VERIFIED_PR_NOT_CREATED_STAGE_A_NOT_RUN`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线 shadow 推理；自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
 > 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity修复、forward evaluation、历史虚拟前向以及P0-E至P0-J Stage A源码/权威结果均已进入`main`。P0-J源码由PR #3811合入commit `5bda9091`，rank attachment修复由PR #3821合入commit `14775d01`。生产descriptor仍指向P0-D exact bundle；P0-E至P0-J均未激活、不替换baseline
 > P0-J权威结果：正式request `advselpriorresreq_3a50e2f6fd9cf43cb1f6ad3e`在首条outer path的inner block 3形成完全平坦的decreasing-isotonic prior，按预登记条件以`ADVISORY_P0J_SELECTION_PRIOR_DEGENERATE`停止；evidence-only bundle为`eb8ade9b...`，exact retry返回同identity，零trial、无winner/PBO/Stage B。该结果证明rank-to-return单调关系跨时间分区不稳定，不证明Selection全局无效
+> P0-K源码状态：contracts、single-liability public training API、train-only physical threshold selector、Selection-preserving gate、完整Stage A pipeline、单模型immutable bundle、request/WSL CLI和直接测试已在独立实现worktree完成；尚未提交源码PR、合入main或运行正式Stage A，不属于当前生产运行时能力
 > 当前生产前向状态：截至 2026-08-28 12:55，scheduler为running/thread_alive且无last_error；第一个Program有4条P0-D observation、最早成熟日为2026-09-22，第二个Program尚无模型observation。自然证据继续积累，不回填且不阻塞离线模型演进
 > 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`。源码合入不等于 descriptor 接入或 bundle 激活
 > 演进方向：P0-D历史虚拟前向已证明二分类概率不能稳定表达收益幅度；P0-E outcome weighting同样负向停止。P0-F/P0-G保留收益提升但未满足换手。P0-H把相对P0-D换手压低`0.022708`并改善MDD `0.010688`，但return head日Spearman仅`0.041731`、PBO `0.90`；P0-I改用同日grouped rank后，已完成片段的return日Spearman进一步降为`-0.002229`，且第11条path在冻结price roster上不可行而停止。P0-J进一步证明Selection rank收益单调性不能跨inner分区稳定成立。liability head在P0-H/P0-I分别达到`0.256435`/`0.236089`，是连续实验中唯一重复稳定的新增信号。P0-K因此冻结liability-only假设：不训练return head，只在train-only OOF选择物理holding-day阈值过滤高换手ENTER候选，并在eligible集合内严格保持Selection顺序；保留exact P0-D预算、shared policy和既有六项门槛。
@@ -755,7 +756,7 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 
 优先级：`P0_NOW_AFTER_P0J_PARTITION_PRIOR_INSTABILITY`。
 
-状态：`DESIGN_READY_FOR_IMPLEMENTATION`。
+状态：`SOURCE_IMPLEMENTED_LOCAL_VERIFIED_PR_NOT_CREATED_STAGE_A_NOT_RUN`。
 
 权威详细设计：
 `docs/architecture/advisory_p0k_selection_preserving_liability_gate_f2_design_20260828.md`。
@@ -770,7 +771,7 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 6. 固定CORE/CORE_HMM×3 seeds×28 paths=168；outer validation不参与threshold、rounds或roster拟合，168项完整后才按每个family/seed的28-path平均主指标选择winner，并沿用实际代码权威六项advancement。
 7. Stage A只生成immutable request/bundle和完整receipts，零API/UI/DDL/DML/runtime/descriptor/activation；负向结果禁止同结果后调参。
 
-完成判定：设计通过F2 validator和连续多轮复审后，后续独立实现须完成真实WSL 168/168或在预登记完整性失败点生成evidence-only bundle，并验证exact retry、资源、coverage、threshold、PBO、paired和advancement receipts。只有`ADVANCED_TO_STAGE_B`才允许另行设计runtime或历史回放。
+完成判定：源码已完成本地直接测试与P0-H/P0-I/P0-J/shared-policy兼容回归；尚待源码PR/CI/合入。合入后须完成真实WSL 168/168或在预登记完整性失败点生成evidence-only bundle，并验证exact retry、资源、coverage、threshold、PBO、paired和advancement receipts。只有`ADVANCED_TO_STAGE_B`才允许另行设计runtime或历史回放。
 
 ### H0：实盘单日与历史批量同核执行
 
@@ -968,7 +969,7 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 | F-167 | P0-H dual-head contracts/training/pipeline/bundle | `backend/tests/advisory_model_first/test_dual_head_output_constraint_contracts.py`; `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py`; `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py`; `backend/tests/advisory_model_first/test_dual_head_output_constraint_bundle.py` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
 | F-168 | P0-I grouped-rank contracts/training/pipeline/bundle | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_contracts.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_bundle.py` | STAGE_A_INCOMPLETE_STOP_VERIFIED | none |
 | F-169 | P0-J F2 detailed design and target implementation | `backend/tests/advisory_model_first/test_selection_prior_residual_contracts.py`; `backend/tests/advisory_model_first/test_selection_prior_residual_training.py`; `backend/tests/advisory_model_first/test_selection_prior_residual_pipeline.py`; `backend/tests/advisory_model_first/test_selection_prior_residual_bundle.py`; artifact `eb8ade9b...` | STAGE_A_INCOMPLETE_STOP_VERIFIED | none |
-| F-170 | P0-K F2 detailed design and target implementation | `backend/tests/advisory_model_first/test_selection_liability_gate_contracts.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_training.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_bundle.py` | DESIGN_READY | none |
+| F-170 | P0-K contracts/training/pipeline/bundle/request+WSL CLI；F2 detailed design | `backend/tests/advisory_model_first/test_selection_liability_gate_contracts.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_training.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_bundle.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
 | F-141 | H0 shared day business composition + two executors | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-142 | `AdvisoryPITAsOfViewV1` + historical batch source | `backend/tests/advisory_execution/test_pit_asof_view.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-143 | content-addressed runtime workspace session | `backend/tests/strategy_package/test_runtime_workspace_session.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
@@ -1125,12 +1126,13 @@ M0-M5C 的代码、真实 WSL 实验和固定日期推理已形成当前基线�
 
 下一工作严格按以下顺序执行；模型/前向与 H0 历史执行是互不阻断的两条线：
 
-1. **实现并训练 P0-K Stage A**：按已冻结F2设计只训练liability head，使用train-only OOF物理holding threshold过滤高换手ENTER候选，并在eligible集合保持Selection顺序；完成`2 family × 3 seed × 28 path`、完整性、shared-policy、P0-D/Selection配对和advancement receipt。
-2. **按结果停止或进入Stage B设计**：任何identity/coverage/threshold/CPCV完整性失败即生成有效evidence-only bundle；六项advancement任一失败即完整负面终止。全部通过才允许另行设计runtime role和`HISTORICAL_REPLAY`，不自动激活。
-3. **继续自然前向证据**：自然 observation/outcome 继续按交易日形成，不回填；历史回放用于快速开发反馈，自然 future OOS 用于最终独立确认，两者都不冒充对方。
-4. **实施 H0**：在独立后续revision以冻结v6为oracle，按H0-0至H0-6推进更广泛的batch size=1、完整44日、未来毒化、raw共享反例、chunk恢复和性能验收；实盘继续单日运行。
-5. **关闭仍阻碍 H0 的正确性 BUG**：仅修复 live triage 证明仍存在且影响业务演进的问题，不恢复历史证据固化或归档任务。
-6. **P1-A adaptive calibration**：只有forward residual成熟后执行；M4近单类binary先重审，不再重复静态校准。
-7. **P1-B / P2**：至少两个兼容策略包拥有独立真实bundle后再做跨包matched实验；长期策略包就绪后训练独立长期标签和模型。
+1. **提交并合入 P0-K 源码 PR**：先完成最终F2、Ruff/compile、direct+compatibility、ownership、guardrail、scope和CI审核；源码合入不等于模型训练或激活。
+2. **运行 P0-K 正式 Stage A**：从合入commit冻结exact request，只训练liability head，完成`2 family × 3 seed × 28 path`、逐日完整性、shared-policy、P0-D/Selection配对、PBO和advancement receipt，并执行exact retry。
+3. **按结果停止或进入StageB设计**：任何identity/coverage/threshold/CPCV完整性失败即生成有效evidence-only bundle；六项advancement任一失败即完整负面终止。全部通过才允许另行设计runtime role和`HISTORICAL_REPLAY`，不自动激活。
+4. **继续自然前向证据**：自然 observation/outcome 继续按交易日形成，不回填；历史回放用于快速开发反馈，自然 future OOS 用于最终独立确认，两者都不冒充对方。
+5. **实施 H0**：在独立后续revision以冻结v6为oracle，按H0-0至H0-6推进更广泛的batch size=1、完整44日、未来毒化、raw共享反例、chunk恢复和性能验收；实盘继续单日运行。
+6. **关闭仍阻碍 H0 的正确性 BUG**：仅修复 live triage 证明仍存在且影响业务演进的问题，不恢复历史证据固化或归档任务。
+7. **P1-A adaptive calibration**：只有forward residual成熟后执行；M4近单类binary先重审，不再重复静态校准。
+8. **P1-B / P2**：至少两个兼容策略包拥有独立真实bundle后再做跨包matched实验；长期策略包就绪后训练独立长期标签和模型。
 
 继续禁止未授权历史补账/归档、旧 batch/root 清理、通用缓存/调度平台、ModelOps、角色审批和额外门禁。Historical Range 仅按 H0 详细设计执行当前已授权验证优化；任何变更若既不能关闭 P0-A至P0-K/P1/P2 的明确模型能力，也不能满足 F-141 至 F-150 的直接性能与等价目标，不进入当前路线。
