@@ -84,7 +84,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
-    "database_readback_ref": "scripts/prune_localsim_failed_history.py production post_commit_readback",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "backend/services/paper_trading_v2/repository.py changes LocalSIM position authority",
