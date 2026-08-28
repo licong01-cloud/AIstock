@@ -172,6 +172,7 @@ def build_contract_evidence(
     classifier_path: Path = Path("scripts/ci_change_classifier.py"),
     environment_verify_path: Path = Path("scripts/ci_environment_verify.py"),
     changed_files_path: Path = Path("scripts/ci_changed_files.py"),
+    workspace_prepare_path: Path = Path("scripts/ci/prepare_self_hosted_workspace.py"),
     issue_workflow_path: Path = Path("scripts/aistock_issue_workflow.py"),
 ) -> dict[str, bool]:
     """Return the exact evidence booleans named by the machine standard."""
@@ -200,6 +201,7 @@ def build_contract_evidence(
         environment_verify_path.read_text(encoding="utf-8") if environment_verify_path.exists() else ""
     )
     changed_files_text = changed_files_path.read_text(encoding="utf-8") if changed_files_path.exists() else ""
+    workspace_prepare_text = workspace_prepare_path.read_text(encoding="utf-8") if workspace_prepare_path.exists() else ""
     ci_preparation_match = re.search(
         r"(?ms)^  classify-changes:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n)",
         test_text,
@@ -348,6 +350,25 @@ def build_contract_evidence(
             "AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'" in nightly_text
             and "docker run" not in nightly_text.casefold()
             and "docker compose up" not in nightly_text.casefold()
+        ),
+        "nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies": (
+            '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in nightly_text
+            and "Verify prebuilt AIstock-CI and frontend dependencies" in nightly_text
+            and "conda run -n AIstock-CI python scripts/ci_environment_verify.py" in nightly_text
+            and "frontend/node_modules/@playwright/test/cli.js" in nightly_text
+            and "dependency installation is prohibited in Nightly" in nightly_text
+            and "conda run -n AIstock-CI python scripts/nightly_adaptive_scheduler.py" in nightly_text
+            and "conda run -n AIstock-CI python scripts/nightly_session_runner.py" in nightly_text
+            and "conda run -n AIstock python scripts/nightly_session_runner.py" not in nightly_text
+        ),
+        "self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe": (
+            "def _materialize_frontend_node_modules" in workspace_prepare_text
+            and "frontend_lock_mismatch" in workspace_prepare_text
+            and "source_lock_sha256 != destination_lock_sha256" in workspace_prepare_text
+            and '"mklink", "/J"' in workspace_prepare_text
+            and "frontend_link_readback_failed" in workspace_prepare_text
+            and "FILE_ATTRIBUTE_REPARSE_POINT" in workspace_prepare_text
+            and "child.rmdir()" in workspace_prepare_text
         ),
         "nightly_watermark_lookup_is_repo_scoped_and_fail_closed": (
             'gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml' in nightly_text

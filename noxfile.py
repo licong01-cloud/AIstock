@@ -337,11 +337,16 @@ def _managed_validation_frontend(session: nox.Session, frontend_port: str, env: 
 
 def _ensure_frontend_node_modules(session: nox.Session) -> None:
     frontend = ROOT / "frontend"
-    if (frontend / "node_modules" / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright")).exists():
+    node_modules = frontend / "node_modules"
+    playwright_entries = (
+        node_modules / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright"),
+        node_modules / "@playwright" / "test" / "cli.js",
+    )
+    if any(path.is_file() for path in playwright_entries):
         return
     if _ci_dependency_install_forbidden():
         session.error(
-            "frontend Playwright is missing from the prebuilt CI environment; "
+            "frontend Playwright entrypoint is missing from the prebuilt CI environment; "
             "CI/Nightly cannot run npm ci. Rebuild the AIstock-CI image or run "
             "an explicit local dependency bootstrap before validation."
         )

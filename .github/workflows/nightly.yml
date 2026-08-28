@@ -253,23 +253,23 @@ jobs:
             --dest "${env:GITHUB_WORKSPACE}" `
             --expected-commit "${env:GITHUB_SHA}" `
             --repo "${env:GITHUB_REPOSITORY}" `
+            --frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules" `
             --package-asset-store-root "${env:AISTOCK_SELF_HOSTED_SOURCE}/rdagent_assets/package_assets" `
             --github-env-file "${env:GITHUB_ENV}" `
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
-      # Activates the local AIstock conda env. The runner must have conda on PATH
-      # and the AIstock env pre-built (see docs/process/mcp_server_setup_claude_code_20260510.md
-      # for env setup pointers). GitHub-hosted Linux runners can't do this.
-      - name: Sanity - conda AIstock env present
+      - name: Verify prebuilt AIstock-CI and frontend dependencies
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
         run: |
           if (-not (Get-Command conda -ErrorAction SilentlyContinue)) {
             Write-Host "::error::conda not on PATH on this self-hosted runner"
             exit 1
           }
-          $envLines = conda env list
-          if (-not ($envLines -match '^AIstock\s')) {
-            Write-Host "::error::conda env AIstock missing"
-            exit 1
+          conda run -n AIstock-CI python scripts/ci_environment_verify.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath "frontend/node_modules/@playwright/test/cli.js" -PathType Leaf)) {
+            throw "frontend/node_modules Playwright is not materialized; dependency installation is prohibited in Nightly"
           }
 
       - name: Build successful-watermark Nightly execution plan
@@ -306,7 +306,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Failed to build Nightly change window from $watermark" }
             $watermarkArgs += @("--watermark", $watermark)
           }
-          conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
+          conda run -n AIstock-CI python scripts/nightly_adaptive_scheduler.py --json `
             --provider deterministic `
             --changed-files-file $changedFile `
             --head-commit "${env:GITHUB_SHA}" `
@@ -324,7 +324,7 @@ jobs:
           QE_READ_L3_SKIP_UI: '1'
         run: |
           $outDir = "tmp/validation/nightly_l3"
-          conda run -n AIstock python scripts/nightly_session_runner.py `
+          conda run -n AIstock-CI python scripts/nightly_session_runner.py `
             --plan "$outDir/execution-plan.json" `
             --output-json "$outDir/session-results.json" `
             --output-md "$outDir/session-results.md" `

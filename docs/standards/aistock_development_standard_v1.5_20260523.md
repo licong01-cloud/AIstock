@@ -303,6 +303,8 @@ Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 
 
 PR base commit 已在 checkout 中且能够与当前 HEAD 证明 merge-base 时，才可直接更新本地 ref 而不执行远程请求；仅有 base 对象但浅克隆 ancestry 不完整不视为可用。确需补取时，仅对 pinned base ref 和当前 PR checkout/head ref 使用固定 3 次、短退避、有限 `--deepen` 的 bounded retry，每次补取后重新验证 merge-base，并在连续失败后以基础设施错误 fail-closed；禁止为解决该问题改成无界完整历史 checkout。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
+Nightly 的验证/测试 job 与 PR CI 使用同一预构建 `AIstock-CI` Conda 环境，不得调用生产 `AIstock` 环境代替测试环境；独立 DR 运维 job 仍按其授权目标使用运维环境，不受此替换。一次性 Nightly checkout 需要前端依赖时，只能在 `package-lock.json` SHA-256 一致且锁定的直接 Playwright CLI 存在后，把 canonical 预构建 `frontend/node_modules` 以目录链接挂入 workspace；禁止每轮安装、复制大型依赖树、静默跳过 UI 计划或在锁文件漂移时继续运行。清理一次性 workspace 时只删除链接本身，不得递归删除依赖源。
+
 Scheduled Nightly 必须以显式仓库参数查询最后一次成功水位，并分别检查命令退出码、JSON 解析结果和本地 commit 可用性。任一步失败或不存在成功水位时以基础设施错误 fail-closed，不得静默转换为全量执行；`--full-run` 只允许由 `workflow_dispatch` 的 `full_nightly_run=true` 明确触发。自动故障恢复不得用数十个无关 session 的全量运行代替水位读取错误。
 
 同一 PR merge tree 的 changed-file 分类、close-sync metadata 校验和静态 L0/catalog 门禁必须复用一个准备 job、一次 checkout、一次 base-ref 准备和一次环境校验；docs-lite 记录同样在该 job 内生成，不得为不被后续消费的临时记录再分配 runner job。合并 job 只消除重复初始化，不得删除、跳过或放宽原有 metadata、L0、catalog 质量结论；backend、frontend、Go、workflow、prompt 等被分类选中的独立验证 lane 和最终 `CI verdict` 继续 fail-closed。
