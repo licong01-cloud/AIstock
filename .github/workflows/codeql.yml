@@ -25,7 +25,7 @@ concurrency:
 jobs:
   docs-lite:
     name: CodeQL fast-lane no-op
-    runs-on: [self-hosted, Windows, aistock-ci]
+    runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 20
     outputs:
       docs_lite: ${{ steps.fast_lane.outputs.docs_lite }}
@@ -135,7 +135,7 @@ jobs:
     name: CodeQL (${{ matrix.language }})
     needs: docs-lite
     if: needs.docs-lite.outputs.has_languages == '1'
-    runs-on: [self-hosted, Windows, aistock-ci]
+    runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 30
     env:
       AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'

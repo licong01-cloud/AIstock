@@ -35,7 +35,7 @@ env:
 jobs:
   refresh-after-main:
     name: Refresh and publish code intelligence graphs
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 45
     defaults:
       run:

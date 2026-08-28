@@ -1650,8 +1650,15 @@ def test_runtime_catalog_non_runtime_paths_reject_future_alias_and_non_operator_
     non_operator.write_text("# not an operator-script namespace\n", encoding="utf-8")
     catalog["non_runtime_source_paths"] = ["tools/offline.py"]
     catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
-    with pytest.raises(workflow.WorkflowError, match="Python operator scripts under scripts"):
+    with pytest.raises(workflow.WorkflowError, match="Python or PowerShell operator scripts under scripts"):
         workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    powershell_operator = isolated_workflow_root / "scripts" / "configure_ci_runner.ps1"
+    powershell_operator.write_text("# offline runner provisioning\n", encoding="utf-8")
+    catalog["non_runtime_source_paths"] = ["scripts/configure_ci_runner.ps1"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    loaded = workflow._load_runtime_target_catalog(isolated_workflow_root)
+    assert loaded["non_runtime_source_paths"] == ["scripts/configure_ci_runner.ps1"]
 
     catalog_path.write_text("- not-a-mapping\n", encoding="utf-8")
     with pytest.raises(workflow.WorkflowError, match="must be a mapping"):

@@ -120,7 +120,7 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.run_dr
     # self-hosted is mandatory because the DR job needs to read the local
     # production DB at 127.0.0.1:5432; GitHub-hosted runners cannot reach it.
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 60
     defaults:
       run:
@@ -196,7 +196,7 @@ jobs:
     name: DR validation (dump validity + schema diff + retention)
     needs: dr-snapshot
     if: github.event_name != 'workflow_dispatch' || inputs.run_dr
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 15
     defaults:
       run:
@@ -239,7 +239,7 @@ jobs:
     # produce green L3/live reports.
     needs: [runner-preflight, dr-validate]
     if: always() && needs.runner-preflight.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3) && (needs.dr-validate.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.run_dr))
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 120
     defaults:
       run:
@@ -358,7 +358,7 @@ jobs:
     name: Paper v2 live catch-up (skip realtime by default)
     needs: nightly-l3
     if: github.event_name != 'workflow_dispatch' || (inputs.run_nightly_l3 && inputs.run_paper_v2_live)
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 60
     defaults:
       run:
@@ -398,7 +398,7 @@ jobs:
     concurrency:
       group: code-intelligence-refresh-main
       cancel-in-progress: false
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 45
     permissions:
       actions: read
