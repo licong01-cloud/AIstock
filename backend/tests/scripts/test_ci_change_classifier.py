@@ -1352,6 +1352,29 @@ def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
     assert all("registry_sync != '1'" in str(step.get("if") or "") for step in normal_lane_steps)
 
 
+def test_pr_quality_proves_merge_base_and_boundedly_deepens_exact_pr_refs() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    detect = next(step for step in steps if step.get("name") == "Detect PR quality lane")
+    run = str(detect["run"])
+
+    assert detect["env"]["BASE_SHA"] == "${{ github.event.pull_request.base.sha || '' }}"
+    assert detect["env"]["CHECKOUT_REF"] == "${{ github.ref || '' }}"
+    assert run.count('git merge-base "${BASE_SHA}" HEAD') >= 2
+    assert '+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}' in run
+    assert '+${CHECKOUT_REF}:refs/remotes/origin/aistock-pr-checkout' in run
+    assert "--no-write-fetch-head --deepen=64" in run
+    assert "for attempt in 1 2 3" in run
+    assert "pinned PR base/head history preparation failed after 3 attempts" in run
+    assert "pinned PR base has no merge base with HEAD" in run
+    assert run.index('git merge-base "${BASE_COMMIT}" HEAD') < run.index(
+        'git diff --name-only "${BASE_COMMIT}...HEAD"'
+    )
+    assert "--depth=1" not in run
+
+
 def test_codeql_selects_only_changed_languages() -> None:
     import yaml
 

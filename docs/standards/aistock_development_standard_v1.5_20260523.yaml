@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 33cfafceed3e05ea9d11f498353adc3e13a1640ca5117a415b23406d6186d2fe
+source_sha256: be3fddeda6707b6718f6f90ddbce8eb208b27173e0dcffc23402a6f0a672ca0e
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-28"
@@ -731,6 +731,9 @@ rules:
         - pr_quality_no_external_report_action_dependency
         - superseded_pr_runs_cancel_in_progress
         - bounded_pr_base_fetch_retry
+        - pr_base_object_requires_proven_merge_base_with_head
+        - insufficient_shallow_ancestry_fetches_only_pinned_base_and_pr_checkout_or_head_with_limited_deepen
+        - no_unbounded_full_history_checkout_for_merge_base_recovery
         - non_security_quality_lanes_run_once_on_pull_request
         - codeql_default_branch_security_scan_preserved
         - codeql_uses_hash_verified_prebuilt_bundle

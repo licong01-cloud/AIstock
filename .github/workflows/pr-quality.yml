@@ -43,15 +43,46 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          CHECKOUT_REF: ${{ github.ref || '' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
-          else
-            git fetch origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" --no-tags --depth=1
+          merge_base_ready=false
+          if [ -n "${BASE_SHA}" ] \
+            && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null \
+            && git merge-base "${BASE_SHA}" HEAD >/dev/null 2>&1; then
+            merge_base_ready=true
           fi
+          if [ "${merge_base_ready}" != "true" ]; then
+            fetch_specs=("+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}")
+            if [ -n "${CHECKOUT_REF}" ]; then
+              fetch_specs+=("+${CHECKOUT_REF}:refs/remotes/origin/aistock-pr-checkout")
+            fi
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --no-write-fetch-head --deepen=64 origin "${fetch_specs[@]}"; then
+                if [ -z "${BASE_SHA}" ]; then
+                  BASE_SHA=$(git rev-parse "refs/remotes/origin/${BASE_REF}")
+                fi
+                if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null \
+                  && git merge-base "${BASE_SHA}" HEAD >/dev/null 2>&1; then
+                  merge_base_ready=true
+                  break
+                fi
+              fi
+              if [ "${attempt}" != "3" ]; then
+                sleep $((attempt * 2))
+              fi
+            done
+          fi
+          if [ "${merge_base_ready}" != "true" ]; then
+            echo "pinned PR base/head history preparation failed after 3 attempts" >&2
+            exit 1
+          fi
+          git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"
           BASE_COMMIT="origin/${BASE_REF}"
-          git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
+          git merge-base "${BASE_COMMIT}" HEAD >/dev/null 2>&1 || {
+            echo "pinned PR base has no merge base with HEAD" >&2
+            exit 1
+          }
           git diff --name-only "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/changed_files.txt
           python scripts/ci_change_classifier.py \
             --changed-files-file tmp/validation/pr_quality/changed_files.txt \

@@ -296,7 +296,7 @@ PR CI 的评论、完整 artifact 上传和其他报告发布器属于非阻断�
 
 Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 WSL `System32\\bash.exe`）；runner wrapper 可配置只读本地 Git object mirror，并通过 `GIT_ALTERNATE_OBJECT_DIRECTORIES` 复用已验证对象。checkout 仍使用浅深度和当前 PR base SHA；仅在 mirror 缺少对象时远程补取。mirror、shell 和代理异常属于 runner 基础设施诊断，禁止转化为业务门禁或重复依赖安装。
 
-PR base commit 已在 checkout 中时直接更新本地 ref，不执行远程请求；确需补取 base ref 时使用固定 3 次、短退避的 bounded retry，并在连续失败后以基础设施错误 fail-closed。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
+PR base commit 已在 checkout 中且能够与当前 HEAD 证明 merge-base 时，才可直接更新本地 ref 而不执行远程请求；仅有 base 对象但浅克隆 ancestry 不完整不视为可用。确需补取时，仅对 pinned base ref 和当前 PR checkout/head ref 使用固定 3 次、短退避、有限 `--deepen` 的 bounded retry，每次补取后重新验证 merge-base，并在连续失败后以基础设施错误 fail-closed；禁止为解决该问题改成无界完整历史 checkout。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
 <a id="rule-ci-database-safety-001"></a>
 ### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
