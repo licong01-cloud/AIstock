@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1219",
-  "closed_at": null,
+  "closed_at": "2026-08-28T07:08:36.729522Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -143,9 +143,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1219/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1219",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_evidence",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6bbd0db7e2555c5d02d9f628e7d3e33e0dc27b2e4639981479c92b03f6129946",
+      "contract_digest": "d1892f5ee00f2dfd3722dfeb36add63106c01b4574a69a194f8d2df308225d42",
+      "expected_identity": "c1f97364afb31b2d9767fa6af64171cb1380664e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-28T07:03:04.929377Z",
+      "mode": "read_only",
+      "observed_identity": "c1f97364afb31b2d9767fa6af64171cb1380664e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "406a051b17b70999229043c1e9fa431b6c48853047b2221fe3b33f96ffd03ecd",
+      "receipt_sha256": "32ae5c0f41d954cc9e949de7c520fe1f9edc46c49ce77b0288040e7b6530c06f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "e510c0d610a163594d36a526a4c289ebbf6b738669f47f1ebde63d3870a2b867",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -178,7 +200,7 @@
     ],
     "validation_evidence_digest": "9bb4bde067b2f7fbfcb4b4404dc026a7a6cc3297e739c8bfc7ce7fa9583a4aa3"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -190,7 +212,10 @@
   "validation_evidence": [
     "validation-receipt: id=b85969aaba634bd0 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
     "validation-receipt: id=0d321a635d21de53 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=paper_v2_backend status=passed command=`python -m nox -s paper_v2_backend` result=`passed`",
-    "validation-receipt: id=76e9c6d15bf491e1 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    "validation-receipt: id=76e9c6d15bf491e1 commit=26b8f32b026e6cb3dbc19ab636316a99b8d55bdd kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s paper_v2_backend -> passed",
+    "python -m nox -s l0 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
