@@ -19,7 +19,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1218",
-  "closed_at": null,
+  "closed_at": "2026-08-28T07:45:41.090315Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -41,6 +41,18 @@
   ],
   "expected": "Every qe_hmm_full_v2 monthly candidate must consume an explicitly allowlisted repo-external P3A candidate through a shared fail-closed adapter; validate manifest/readback/hash/authority bindings; preserve denominator and typed unavailable semantics; and bind the P3A identity into source, component, and release fingerprints so same-cutoff reuse or re-attestation cannot ignore sector-authority drift.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      ".codex/skills/update-backtest-dataset/references/monthly-workflow.md",
+      "backend/services/dataset_release/sector_data_candidate_source.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_component_manifest_producer.py",
+      "backend/tests/dataset_release/test_sector_data_candidate_source.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20260828_BUG-1218-monthly-dataset-release-does-not-bind-the-p3a-dual-authority-sector-cand.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/sector_data_candidate_source.py",
       "backend/tests/dataset_release/test_sector_data_candidate_source.py"
@@ -55,6 +67,7 @@
       "configs/datasets/qe_backtest_monthly_v2.yaml",
       "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
     ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -220,8 +233,8 @@
   },
   "first_seen_at": "2026-08-28T05:01:31.647346Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b698780afcc117baba05658c85a17d36a227c35c",
+  "fixed_at": "2026-08-28T07:18:26Z",
   "github_issue_number": 3872,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3872",
   "last_seen_at": "2026-08-28T05:01:31.647346Z",
@@ -229,6 +242,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3877",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -245,8 +259,31 @@
     ],
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1218\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1218",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "90447c55274042d30083b013b599a646619e63ffe38f559f3ae47923067dfdac",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "b698780afcc117baba05658c85a17d36a227c35c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-28T07:43:37.957981Z",
+      "mode": "read_only",
+      "observed_identity": "88d3d52c4fa693e21cec44fcb8242016efd08e0d",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "eab4c78b28b950b8218d0e2dc31afdd54d3cb38d6fe2c57e836ce1c7f7237e43",
+      "receipt_sha256": "65ca7c797a24d6797df0109d2f83cf649b0a6e96648f96989be333aa60b411fb",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ec5d3b76cc19a6edc7a504b22b693c3ec06c54b9098c3ab5db91eaa3968230d7",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -256,7 +293,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1218",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c770bedf69a02c7f",
+    "recorded_at": "2026-08-28T07:25:26.489778Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4f1a9343e07f2a93b767f2c6654400d773368d2d",
+    "source_merge_commit": "b698780afcc117baba05658c85a17d36a227c35c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3877",
+    "validation_evidence": [
+      "python -m nox -s validation_module_registry_l0 -> PASS 8 passed; ownership 14/14",
+      "python -m nox -s guardrail_changed_files -> PASS staged task files=10; final L0 branch diff files=10 blocking=0",
+      "python -m nox -s qlib_data_backend -> PASS 20 passed",
+      "python -m pytest backend/tests/dataset_release/test_sector_data_candidate_source.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_component_manifest_producer.py backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_artifact_ready_build_source.py backend/tests/dataset_release/test_factor_materializer.py backend/tests/dataset_release/test_resolution_processor.py backend/tests/scripts/test_dataset_release_source_stage.py -q -> PASS 123 passed; 1 skipped"
+    ],
+    "validation_evidence_digest": "ffabc523ab52161f17fd42bb432f405ed1576d2ecc90f334d7d0d95951d6f48d"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -265,6 +326,12 @@
     "fingerprint": "5a1a469746eed36b6669b072",
     "source_event_id": "FE-20260828-5a1a469746ee"
   },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> PASS 8 passed; ownership 14/14",
+    "python -m nox -s guardrail_changed_files -> PASS staged task files=10; final L0 branch diff files=10 blocking=0",
+    "python -m nox -s qlib_data_backend -> PASS 20 passed",
+    "python -m pytest backend/tests/dataset_release/test_sector_data_candidate_source.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_component_manifest_producer.py backend/tests/dataset_release/test_artifact_ready_source.py backend/tests/dataset_release/test_artifact_ready_build_source.py backend/tests/dataset_release/test_factor_materializer.py backend/tests/dataset_release/test_resolution_processor.py backend/tests/scripts/test_dataset_release_source_stage.py -q -> PASS 123 passed; 1 skipped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
