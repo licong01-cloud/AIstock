@@ -307,7 +307,7 @@ Nightly 的验证/测试 job 与 PR CI 使用同一预构建 `AIstock-CI` Conda 
 
 Scheduled Nightly 必须以显式仓库参数查询最后一次成功水位，并分别检查命令退出码、JSON 解析结果和本地 commit 可用性。任一步失败或不存在成功水位时以基础设施错误 fail-closed，不得静默转换为全量执行；`--full-run` 只允许由 `workflow_dispatch` 的 `full_nightly_run=true` 明确触发。自动故障恢复不得用数十个无关 session 的全量运行代替水位读取错误。
 
-同一 PR merge tree 的 changed-file 分类、close-sync metadata 校验和静态 L0/catalog 门禁必须复用一个准备 job、一次 checkout、一次 base-ref 准备和一次环境校验；docs-lite 记录同样在该 job 内生成，不得为不被后续消费的临时记录再分配 runner job。合并 job 只消除重复初始化，不得删除、跳过或放宽原有 metadata、L0、catalog 质量结论；backend、frontend、Go、workflow、prompt 等被分类选中的独立验证 lane 和最终 `CI verdict` 继续 fail-closed。
+同一 PR merge tree 的 changed-file 分类、close-sync metadata 校验和静态 L0/catalog 门禁必须复用一个准备 job、一次 checkout、一次 base-ref 准备和一次环境校验；docs-lite 记录同样在该 job 内生成，不得为不被后续消费的临时记录再分配 runner job。合并 job 只消除重复初始化，不得删除、跳过或放宽原有 metadata、L0、catalog 质量结论。workflow validation 被选中时，其 focused tests、workflow policy 与最终 `CI verdict` 必须复用同一个 final job/runner allocation，并由 step outcome fail-closed 汇总；禁止再建立独立 `workflow-validation-tests` job 后重新排队 verdict。backend、frontend、Go、prompt 等其他被分类选中的验证 lane 和最终 `CI verdict` 继续 fail-closed。
 
 <a id="rule-ci-database-safety-001"></a>
 ### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证

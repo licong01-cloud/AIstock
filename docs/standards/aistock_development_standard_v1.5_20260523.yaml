@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: c234a34db2d1b1a7262ab3a6621ea65b586bacfb3241c9762c092b7dd356edc5
+source_sha256: 724fc9d34822d598137e09e0b7dec52835858d729ff1f4f9911bec1d63333c24
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-28"
@@ -759,6 +759,7 @@ rules:
         - pr_ci_no_separate_failure_publisher_job
         - pr_ci_no_external_artifact_action_dependency
         - pr_ci_static_gate_reuses_classifier_checkout
+        - pr_ci_workflow_validation_reuses_ci_verdict_runner
         - pr_workflows_no_external_report_action_dependency
         - no_linux_or_production_environment_fallback
         - windows_git_bash_shell
@@ -766,7 +767,7 @@ rules:
         - self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe
         - nightly_watermark_lookup_is_repo_scoped_and_fail_closed
     baseline_policy: block_new_and_changed_workflow
-    remediation: Require PR-based main updates and stable merge-quality contexts for CI, CodeQL, Semgrep, and PR quality; provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one preparation checkout for changed-file classification and static or close-sync gates, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
+    remediation: Require PR-based main updates and stable merge-quality contexts for CI, CodeQL, Semgrep, and PR quality; provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one preparation checkout for changed-file classification and static or close-sync gates, reuse one final runner allocation for focused workflow validation, workflow policy, and CI verdict, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
