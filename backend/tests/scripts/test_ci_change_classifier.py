@@ -221,6 +221,23 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
 
     assert qe_payload["backend_sessions"] == ["qe_read_backend"]
 
+    qe_candidate_payload = classifier.classify_changed_files(
+        [
+            "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py",
+            "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert qe_candidate_payload["classification"] == "targeted_ci_required"
+    assert qe_candidate_payload["backend_sessions"] == ["qe_read_backend"]
+    assert qe_candidate_payload["catalog_impacted_modules"] == [
+        "qe.core",
+        "qe.auto_evolution",
+        "factor_library",
+    ]
+    assert qe_candidate_payload["unmapped_code_files"] == []
+
     qe_node_health_payload = classifier.classify_changed_files(
         [
             "backend/schedulers/node_health_scheduler.py",

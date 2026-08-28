@@ -102,6 +102,7 @@ def test_inconsistent_repeated_sector_values_fail_loud() -> None:
 
 def test_non_integer_l2_code_fails_loud() -> None:
     sector, membership = _inputs()
+    membership = membership.astype({"l2_code_id": "float64"})
     membership.iloc[0, 0] = 101.5
 
     with pytest.raises(ValueError, match="integer category"):
@@ -110,6 +111,7 @@ def test_non_integer_l2_code_fails_loud() -> None:
 
 def test_non_finite_l2_code_fails_loud() -> None:
     sector, membership = _inputs()
+    membership = membership.astype({"l2_code_id": "float64"})
     membership.iloc[0, 0] = np.inf
 
     with pytest.raises(ValueError, match="integer category"):
