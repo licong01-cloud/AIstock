@@ -1315,6 +1315,91 @@ def test_runtime_contract_cannot_downgrade_changed_files_or_hide_multiple_target
     assert any("multiple runtime targets" in item for item in multiple["blocking"])
 
 
+def _provisional_backend_and_worker_record(root: Path) -> dict[str, Any]:
+    planned_files = ["backend/services/example.py", "scripts/dataset_release_worker.py"]
+    record = _runtime_bug(root)
+    record["file_scope_contract"] = {
+        "schema_version": "aistock_submit_bug_file_scope_v1",
+        "changed_files": planned_files,
+        "planned_files": planned_files,
+        "changed_files_source": workflow.FILE_SCOPE_SOURCE_PLANNED_INTAKE,
+        "added_files": [],
+        "scope_files": planned_files,
+        "ownership": {},
+    }
+    record["runtime_contract"].update(
+        {
+            "inference_basis": workflow.RUNTIME_INFERENCE_PLANNED_SCOPE,
+            "provisional": True,
+            "runtime_impact": "worker_scheduler",
+            "target_id": None,
+            "target_ids": ["backend-main", "worker-scheduler"],
+        }
+    )
+    return record
+
+
+@pytest.mark.parametrize("legacy_registration", [False, True])
+def test_runtime_contract_safely_narrows_provisional_target_superset(
+    isolated_workflow_root: Path,
+    legacy_registration: bool,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _provisional_backend_and_worker_record(isolated_workflow_root)
+    if legacy_registration:
+        record["runtime_contract"].pop("inference_basis")
+        record["runtime_contract"].pop("provisional")
+        record["file_scope_contract"].pop("changed_files_source")
+        record["file_scope_contract"].pop("planned_files")
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+        fresh_process_evidence=["fresh worker import passed"],
+    )
+
+    assert contract["runtime_contract_source"] == workflow.RUNTIME_INFERENCE_ACTUAL_CHANGED_FILES
+    assert contract["runtime_impact"] == "worker_scheduler"
+    assert contract["target_id"] == "worker-scheduler"
+    assert contract["target_ids"] == ["worker-scheduler"]
+    assert contract["backend_restart_required"] is True
+    assert contract["activation_states"]["backend_restart"] == "pending_user_action"
+    assert contract["provisional_reconciliation"] == {
+        "applied": True,
+        "status": "narrowed",
+        "planned_target_ids": ["backend-main", "worker-scheduler"],
+        "actual_target_ids": ["worker-scheduler"],
+    }
+    assert contract["blocking"] == []
+
+
+def test_runtime_contract_does_not_expand_provisional_worker_target(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _provisional_backend_and_worker_record(isolated_workflow_root)
+    record["runtime_contract"].update(
+        {
+            "target_id": "worker-scheduler",
+            "target_ids": ["worker-scheduler"],
+        }
+    )
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py", "scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+        fresh_process_evidence=["fresh worker import passed"],
+    )
+
+    assert contract["provisional_reconciliation"]["applied"] is False
+    assert contract["target_ids"] == ["worker-scheduler", "backend-main"]
+    assert contract["pre_pr_ready"] is False
+    assert any("target set conflicts" in item for item in contract["blocking"])
+    assert any("multiple runtime targets" in item for item in contract["blocking"])
+
+
 def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     isolated_workflow_root: Path,
 ) -> None:
@@ -2141,6 +2226,62 @@ def test_finish_persists_fresh_process_evidence_in_bug_json_and_pr_body(
     pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
     assert "fresh_process_evidence: isolated port 8012 import smoke passed" in pr_body
     assert "Refs #199" in pr_body
+
+
+def test_finish_persists_actual_scope_after_safe_provisional_narrowing(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _provisional_backend_and_worker_record(isolated_workflow_root)
+    record["runtime_contract"]["fresh_process_evidence"] = []
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", record)
+    monkeypatch.setattr(
+        workflow,
+        "_build_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id="BUG-199"),
+    )
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/dataset_release_worker.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[],
+        plan_only=True,
+        allow_missing_evidence=False,
+        fresh_process_evidence=["fresh worker import passed"],
+    )
+
+    persisted = json.loads(issue.read_text(encoding="utf-8"))
+    assert persisted["runtime_contract"]["inference_basis"] == workflow.RUNTIME_INFERENCE_ACTUAL_CHANGED_FILES
+    assert persisted["runtime_contract"]["provisional"] is False
+    assert persisted["runtime_contract"]["planned_target_ids"] == [
+        "backend-main",
+        "worker-scheduler",
+    ]
+    assert persisted["runtime_contract"]["target_id"] == "worker-scheduler"
+    assert persisted["runtime_contract"]["target_ids"] == ["worker-scheduler"]
+    assert persisted["runtime_contract"]["fresh_process_evidence"] == [
+        "fresh worker import passed"
+    ]
+    assert persisted["file_scope_contract"]["planned_files"] == [
+        "backend/services/example.py",
+        "scripts/dataset_release_worker.py",
+    ]
+    assert persisted["file_scope_contract"]["changed_files"] == [
+        "scripts/dataset_release_worker.py"
+    ]
+    assert persisted["file_scope_contract"]["actual_changed_files"] == [
+        "scripts/dataset_release_worker.py"
+    ]
+    assert (
+        persisted["file_scope_contract"]["changed_files_source"]
+        == workflow.FILE_SCOPE_SOURCE_GIT_FINISH
+    )
+    assert payload["runtime_contract"]["blocking"] == []
+    assert payload["runtime_contract"]["activation_states"]["backend_restart"] == "pending_user_action"
 
 
 def test_post_restart_verify_is_read_only_and_writes_only_ignored_receipt(
@@ -7264,6 +7405,11 @@ def test_submit_bug_plan_persists_changed_and_added_file_scope_contract(
     expected_contract = {
         "schema_version": "aistock_submit_bug_file_scope_v1",
         "changed_files": ["scripts/aistock_issue_workflow.py"],
+        "planned_files": [
+            "scripts/aistock_issue_workflow.py",
+            "backend/tests/scripts/test_new_workflow_contract.py",
+        ],
+        "changed_files_source": workflow.FILE_SCOPE_SOURCE_PLANNED_INTAKE,
         "added_files": ["backend/tests/scripts/test_new_workflow_contract.py"],
         "scope_files": [
             "scripts/aistock_issue_workflow.py",
@@ -7278,6 +7424,11 @@ def test_submit_bug_plan_persists_changed_and_added_file_scope_contract(
     }
     assert payload["file_scope_contract"] == expected_contract
     assert payload["record"]["file_scope_contract"] == expected_contract
+    assert (
+        payload["record"]["runtime_contract"]["inference_basis"]
+        == workflow.RUNTIME_INFERENCE_PLANNED_SCOPE
+    )
+    assert payload["record"]["runtime_contract"]["provisional"] is True
     assert set(payload["record"]["allowed_write_scope"]) >= set(expected_contract["scope_files"])
 
 

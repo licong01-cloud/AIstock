@@ -106,6 +106,10 @@ FAST_PATH_TIER_ORDER = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
 VALIDATION_RECEIPT_SCHEMA = "aistock_validation_receipt_v1"
 SOURCE_MERGE_RECEIPT_SCHEMA = "aistock_source_merge_receipt_v1"
 RUNTIME_CONTRACT_SCHEMA = "aistock_bug_runtime_contract_v1"
+RUNTIME_INFERENCE_PLANNED_SCOPE = "planned_scope"
+RUNTIME_INFERENCE_ACTUAL_CHANGED_FILES = "actual_changed_files"
+FILE_SCOPE_SOURCE_PLANNED_INTAKE = "planned_intake"
+FILE_SCOPE_SOURCE_GIT_FINISH = "git_finish"
 RUNTIME_VERIFY_RECEIPT_SCHEMA = "aistock_post_restart_verify_receipt_v1"
 RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA = "aistock_post_restart_verify_receipt_summary_v1"
 RUNTIME_TARGET_CATALOG = REPO_ROOT / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
@@ -2014,23 +2018,26 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
 
 def _record_has_file_scope_changed_files(record: dict[str, Any]) -> bool:
     contract = record.get("file_scope_contract")
-    changed = contract.get("changed_files") if isinstance(contract, dict) else None
+    changed = None
+    if isinstance(contract, dict):
+        changed = contract.get("actual_changed_files") or contract.get("changed_files")
     return isinstance(changed, list) and any(str(item).strip() for item in changed)
 
 
 def resolve_record_runtime_changed_files(record: dict[str, Any]) -> list[str]:
     """Return the authoritative changed-file list for record-based runtime inference.
 
-    Prefers ``file_scope_contract.changed_files`` (the actual changed files
-    registered for the BUG). Only legacy records without a valid non-empty
-    ``changed_files`` list fall back to ``allowed_write_scope``; the fallback
-    keeps fail-closed semantics and never downgrades ``unknown`` to ``none``.
+    Prefers ``file_scope_contract.actual_changed_files`` after finish, then the
+    legacy ``changed_files`` field. Only records without either valid non-empty
+    list fall back to ``allowed_write_scope``; the fallback keeps fail-closed
+    semantics and never downgrades ``unknown`` to ``none``.
     Normalization matches ``_classify_runtime_impact``: unify ``/``, strip
     ``./``, drop empties, dedupe, deterministic sort.
     """
     source: Iterable[Any]
     if _record_has_file_scope_changed_files(record):
-        source = (record.get("file_scope_contract") or {}).get("changed_files") or []
+        contract = record.get("file_scope_contract") or {}
+        source = contract.get("actual_changed_files") or contract.get("changed_files") or []
     else:
         source = flow._as_list(record.get("allowed_write_scope"))
     return sorted(
@@ -2040,6 +2047,59 @@ def resolve_record_runtime_changed_files(record: dict[str, Any]) -> list[str]:
             if str(item).strip()
         }
     )
+
+
+def _runtime_contract_is_provisional(record: dict[str, Any], explicit: dict[str, Any]) -> bool:
+    basis = str(explicit.get("inference_basis") or "").strip()
+    if basis:
+        return basis == RUNTIME_INFERENCE_PLANNED_SCOPE
+    file_scope = record.get("file_scope_contract")
+    if not isinstance(file_scope, dict):
+        return False
+    source = str(file_scope.get("changed_files_source") or "").strip()
+    if source:
+        return source == FILE_SCOPE_SOURCE_PLANNED_INTAKE
+    return file_scope.get("schema_version") == "aistock_submit_bug_file_scope_v1"
+
+
+def _can_reconcile_provisional_runtime_contract(
+    *,
+    explicit_impact: str,
+    inferred_impact: str,
+    planned_target_ids: list[str],
+    actual_target_ids: list[str],
+) -> bool:
+    if inferred_impact == "unknown":
+        return False
+    if not set(actual_target_ids).issubset(set(planned_target_ids)):
+        return False
+    if inferred_impact == "none":
+        return True
+    if inferred_impact in {"backend", "worker_scheduler"}:
+        return bool(actual_target_ids)
+    return inferred_impact == explicit_impact
+
+
+def _actual_file_scope_contract(record: dict[str, Any], changed_files: list[str]) -> dict[str, Any]:
+    existing = record.get("file_scope_contract")
+    contract = dict(existing) if isinstance(existing, dict) else {
+        "schema_version": "aistock_submit_bug_file_scope_v1",
+    }
+    planned = flow._unique_strings(
+        flow._as_list(contract.get("planned_files"))
+        or flow._as_list(contract.get("scope_files"))
+        or flow._as_list(contract.get("changed_files"))
+    )
+    actual = _normalize_changed_files(changed_files)
+    contract.update(
+        {
+            "planned_files": planned,
+            "changed_files": actual,
+            "actual_changed_files": actual,
+            "changed_files_source": FILE_SCOPE_SOURCE_GIT_FINISH,
+        }
+    )
+    return contract
 
 
 def _resolve_runtime_ref(value: Any, explicit: dict[str, Any]) -> str | None:
@@ -2157,30 +2217,45 @@ def build_runtime_contract(
     if explicit_impact and explicit_impact not in RUNTIME_IMPACTS:
         blocking.append(f"runtime_contract runtime_impact is invalid: {explicit_impact}")
         explicit_impact = "unknown"
-    runtime_impact = explicit_impact or inferred_impact
-    if inferred_impact != "none" and explicit_impact == "none":
-        blocking.append(
-            f"runtime_contract cannot downgrade inferred runtime impact: explicit=none inferred={inferred_impact}"
-        )
-        runtime_impact = inferred_impact
-    elif inferred_impact != "none" and explicit_impact and explicit_impact != inferred_impact:
-        blocking.append(
-            "runtime_contract impact conflicts with changed-file inference: "
-            f"explicit={explicit_impact} inferred={inferred_impact}"
-        )
-        runtime_impact = "unknown"
-    if runtime_impact not in RUNTIME_IMPACTS:
-        runtime_impact = "unknown"
     explicit_target_ids = flow._unique_strings(
         flow._as_list(explicit.get("target_ids")) + flow._as_list(explicit.get("target_id"))
     )
     inferred_target_ids = flow._unique_strings(inferred["target_ids"])
-    target_ids = flow._unique_strings(explicit_target_ids + inferred_target_ids)
-    if inferred_target_ids and explicit_target_ids and set(explicit_target_ids) != set(inferred_target_ids):
-        blocking.append(
-            "runtime_contract target set conflicts with changed-file inference: "
-            f"explicit={explicit_target_ids} inferred={inferred_target_ids}"
+    provisional = _runtime_contract_is_provisional(record, explicit)
+    reconciled = provisional and _can_reconcile_provisional_runtime_contract(
+        explicit_impact=explicit_impact,
+        inferred_impact=inferred_impact,
+        planned_target_ids=explicit_target_ids,
+        actual_target_ids=inferred_target_ids,
+    )
+    reconciliation_status = None
+    if reconciled:
+        runtime_impact = inferred_impact
+        target_ids = inferred_target_ids
+        reconciliation_status = (
+            "exact" if set(explicit_target_ids) == set(inferred_target_ids) and explicit_impact == inferred_impact else "narrowed"
         )
+    else:
+        runtime_impact = explicit_impact or inferred_impact
+        if inferred_impact != "none" and explicit_impact == "none":
+            blocking.append(
+                f"runtime_contract cannot downgrade inferred runtime impact: explicit=none inferred={inferred_impact}"
+            )
+            runtime_impact = inferred_impact
+        elif inferred_impact != "none" and explicit_impact and explicit_impact != inferred_impact:
+            blocking.append(
+                "runtime_contract impact conflicts with changed-file inference: "
+                f"explicit={explicit_impact} inferred={inferred_impact}"
+            )
+            runtime_impact = "unknown"
+        target_ids = flow._unique_strings(explicit_target_ids + inferred_target_ids)
+        if inferred_target_ids and explicit_target_ids and set(explicit_target_ids) != set(inferred_target_ids):
+            blocking.append(
+                "runtime_contract target set conflicts with changed-file inference: "
+                f"explicit={explicit_target_ids} inferred={inferred_target_ids}"
+            )
+    if runtime_impact not in RUNTIME_IMPACTS:
+        runtime_impact = "unknown"
     target_id = target_ids[0] if len(target_ids) == 1 else None
     inferred_backend_restart = inferred_impact in {"backend", "worker_scheduler"}
     backend_restart_required = inferred_backend_restart or runtime_impact in {"backend", "worker_scheduler"}
@@ -2293,7 +2368,17 @@ def build_runtime_contract(
     return {
         "schema_version": RUNTIME_CONTRACT_SCHEMA,
         "runtime_impact": runtime_impact,
-        "runtime_contract_source": "explicit" if explicit else "inferred",
+        "runtime_contract_source": (
+            RUNTIME_INFERENCE_ACTUAL_CHANGED_FILES
+            if reconciled
+            else ("explicit" if explicit else "inferred")
+        ),
+        "provisional_reconciliation": {
+            "applied": reconciled,
+            "status": reconciliation_status,
+            "planned_target_ids": explicit_target_ids,
+            "actual_target_ids": inferred_target_ids,
+        },
         "backend_restart_required": backend_restart_required,
         "backend_restart_owner": "user",
         "target_id": target_id,
@@ -7112,6 +7197,8 @@ def build_submit_bug_plan(
     scope_file_contract = {
         "schema_version": "aistock_submit_bug_file_scope_v1",
         "changed_files": normalized_changed_files,
+        "planned_files": scope_files,
+        "changed_files_source": FILE_SCOPE_SOURCE_PLANNED_INTAKE,
         "added_files": normalized_added_files,
         "scope_files": scope_files,
         "ownership": file_input_preflight["ownership"],
@@ -7234,6 +7321,8 @@ def build_submit_bug_plan(
         runtime_inference = _classify_runtime_impact(scope_files)
         record["runtime_contract"] = {
             "schema_version": RUNTIME_CONTRACT_SCHEMA,
+            "inference_basis": RUNTIME_INFERENCE_PLANNED_SCOPE,
+            "provisional": True,
             "runtime_impact": runtime_inference["runtime_impact"],
             "backend_restart_owner": "user",
             "target_id": runtime_inference["target_ids"][0] if len(runtime_inference["target_ids"]) == 1 else None,
@@ -9210,7 +9299,12 @@ def build_finish_plan(
     )
     runtime_errors = list(runtime_contract.get("blocking") or [])
     validation_evidence_errors.extend(runtime_errors)
-    if runtime_contract.get("backend_restart_required") and fresh_process_evidence and not runtime_errors:
+    reconciliation = runtime_contract.get("provisional_reconciliation") or {}
+    should_persist_runtime = not runtime_errors and (
+        (runtime_contract.get("backend_restart_required") and fresh_process_evidence)
+        or (bool(reconciliation.get("applied")) and not plan_only)
+    )
+    if should_persist_runtime:
         persisted_runtime = dict(record.get("runtime_contract") or {})
         persisted_runtime.update(
             {
@@ -9225,8 +9319,23 @@ def build_finish_plan(
                 "runtime_identity_match": runtime_contract.get("runtime_identity_match"),
             }
         )
-        if persisted_runtime != record.get("runtime_contract"):
+        persisted_file_scope = record.get("file_scope_contract")
+        if reconciliation.get("applied"):
+            persisted_runtime.update(
+                {
+                    "inference_basis": RUNTIME_INFERENCE_ACTUAL_CHANGED_FILES,
+                    "provisional": False,
+                    "planned_target_ids": reconciliation.get("planned_target_ids") or [],
+                }
+            )
+            persisted_file_scope = _actual_file_scope_contract(record, changed)
+        if (
+            persisted_runtime != record.get("runtime_contract")
+            or persisted_file_scope != record.get("file_scope_contract")
+        ):
             record = {**record, "runtime_contract": persisted_runtime}
+            if reconciliation.get("applied"):
+                record["file_scope_contract"] = persisted_file_scope
             _write_json(source_path, record)
     closure_ready = bool(evidence) and not validation_evidence_errors
     draft_ready = (
