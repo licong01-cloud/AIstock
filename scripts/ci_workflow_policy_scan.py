@@ -46,6 +46,12 @@ BASE_FETCH_RETRY_WORKFLOWS = {
     "pr-quality.yml",
 }
 PR_ONLY_QUALITY_WORKFLOWS = {"test.yml", "semgrep.yml"}
+STABLE_MERGE_QUALITY_CONTEXTS = (
+    "CI verdict",
+    "CodeQL verdict",
+    "AIstock Semgrep guardrails",
+    "Context, scope, and open-source tooling dry-run",
+)
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
     r"|\bnpm\s+(?:ci|install)\b"
@@ -167,6 +173,7 @@ def build_contract_evidence(
     environment_verify_path: Path = Path("scripts/ci_environment_verify.py"),
     changed_files_path: Path = Path("scripts/ci_changed_files.py"),
     workspace_prepare_path: Path = Path("scripts/ci/prepare_self_hosted_workspace.py"),
+    issue_workflow_path: Path = Path("scripts/aistock_issue_workflow.py"),
 ) -> dict[str, bool]:
     """Return the exact evidence booleans named by the machine standard."""
 
@@ -195,6 +202,12 @@ def build_contract_evidence(
     )
     changed_files_text = changed_files_path.read_text(encoding="utf-8") if changed_files_path.exists() else ""
     workspace_prepare_text = workspace_prepare_path.read_text(encoding="utf-8") if workspace_prepare_path.exists() else ""
+    ci_preparation_match = re.search(
+        r"(?ms)^  classify-changes:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n)",
+        test_text,
+    )
+    ci_preparation_text = ci_preparation_match.group("body") if ci_preparation_match else ""
+    issue_workflow_text = issue_workflow_path.read_text(encoding="utf-8") if issue_workflow_path.exists() else ""
     workflow_findings = scan_workflows(path_list)
     combined_workflow_text = "\n".join(workflow_text.values())
     reasons = {item["reason"] for item in workflow_findings}
@@ -243,6 +256,17 @@ def build_contract_evidence(
             "pull_request:" in workflow_text.get(name, "")
             and not re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get(name, ""))
             for name in PR_ONLY_QUALITY_WORKFLOWS
+        ),
+        "stable_merge_quality_contexts_are_always_published": (
+            "  pull_request:\n    branches: [main]\n  push:" in workflow_text.get("codeql.yml", "")
+            and "name: CodeQL verdict" in workflow_text.get("codeql.yml", "")
+            and "needs: [docs-lite, analyze]" in workflow_text.get("codeql.yml", "")
+            and "if: always()" in workflow_text.get("codeql.yml", "")
+            and "  pull_request:\n    branches: [main]\n  workflow_dispatch:" in workflow_text.get("semgrep.yml", "")
+            and "name: AIstock Semgrep guardrails" in workflow_text.get("semgrep.yml", "")
+            and "name: Context, scope, and open-source tooling dry-run" in pr_quality_text
+            and "name: CI verdict" in test_text
+            and all(f'"{context}"' in issue_workflow_text for context in STABLE_MERGE_QUALITY_CONTEXTS)
         ),
         "codeql_default_branch_security_scan_preserved": bool(
             re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get("codeql.yml", ""))
@@ -303,6 +327,13 @@ def build_contract_evidence(
         and "The failed job logs are the authoritative PR evidence" in test_text,
         "pr_ci_no_external_artifact_action_dependency": "actions/upload-artifact@" not in test_text
         and "actions/download-artifact@" not in test_text,
+        "pr_ci_static_gate_reuses_classifier_checkout": bool(ci_preparation_text)
+        and not re.search(r"(?m)^  (?:static-gate|docs-lite):\s*$", test_text)
+        and ci_preparation_text.count("actions/checkout@v7") == 1
+        and ci_preparation_text.count("ci_environment_verify.py") == 1
+        and "Classify CI lane" in ci_preparation_text
+        and "BUG registry metadata check" in ci_preparation_text
+        and "nox -s l0 -- changed files" in ci_preparation_text,
         "pr_workflows_no_external_report_action_dependency": all(
             marker not in pr_combined
             for marker in ("actions/upload-artifact@", "actions/download-artifact@", "actions/github-script@")
@@ -338,6 +369,17 @@ def build_contract_evidence(
             and "frontend_link_readback_failed" in workspace_prepare_text
             and "FILE_ATTRIBUTE_REPARSE_POINT" in workspace_prepare_text
             and "child.rmdir()" in workspace_prepare_text
+        ),
+        "nightly_watermark_lookup_is_repo_scoped_and_fail_closed": (
+            'gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml' in nightly_text
+            and 'throw "Failed to query the last successful scheduled Nightly run."' in nightly_text
+            and "ConvertFrom-Json -ErrorAction Stop" in nightly_text
+            and "No successful scheduled Nightly watermark exists" in nightly_text
+            and "Successful scheduled Nightly watermark is unavailable locally" in nightly_text
+            and 'if ($env:FULL_NIGHTLY_RUN -eq "true")' in nightly_text
+            and "-or -not $watermark" not in nightly_text
+            and "using explicit full-run fallback" not in nightly_text
+            and nightly_text.count('$extraArgs += "--full-run"') == 1
         ),
         "bounded_dual_runner_roles": (
             uses_expected_runner("codeql.yml")

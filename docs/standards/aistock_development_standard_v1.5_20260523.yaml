@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: b859a006b78c591e5d604e2f25d2e4a939ffa4c9d5dae0e468d9a67d29edfa70
+source_sha256: 051066b51bc0cc624519fb192e7e76a4e01339bf3638bc4c606892f001489ec0
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-28"
@@ -306,6 +306,11 @@ rules:
       patterns:
         - 'requests\.(?:get|post|put|delete|patch)\([^\n)]*$'
         - 'subprocess\.Popen\('
+      required_evidence:
+        - pr_check_watch_exact_head_rest_fallback
+        - actions_run_jobs_and_log_rest_fallback
+        - last_green_rest_fallback
+        - non_transport_errors_remain_fail_closed
     baseline_policy: warn_new_only
     remediation: Add timeout, cancellation, output capture, and process cleanup.
 
@@ -553,6 +558,8 @@ rules:
         - shared_validation_matrix
         - close_sync_compatibility_signature
         - per_issue_evidence_and_issue_sync
+        - host_wide_counter_and_permanent_reservation_remain_authoritative
+        - ordinary_fix_pr_omits_repository_allocator_single_value
     baseline_policy: manual_review_only
     remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates.
 
@@ -668,11 +675,13 @@ rules:
         - exact_transient_roots_only_no_git_clean_or_wildcard
         - ignored_asset_tree_transients_require_exact_bounded_structural_classifier
         - single_manifest_reused_without_repeated_full_ignored_tree_scan
+        - same_finalizer_fetch_and_verified_pr_receipts_reused_without_skipping_target_preflight
+        - root_sync_deferral_reuses_blocking_payload_without_redundant_dry_run
         - manifest_unchanged_before_purge
         - path_registration_local_remote_four_state_readback
         - bare_merge_does_not_imply_cleanup
     baseline_policy: block_incomplete_cleanup_claim_only
-    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, fail closed on protected or unknown artifacts, then verify path, registration, local branch, and remote branch absence.
+    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; reuse only same-finalizer successful fetch and exact verified PR receipts, preserve per-target branch, artifact, process and four-state checks, avoid redundant dry-run rebuilds during root-sync deferral, keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, and fail closed on protected or unknown artifacts.
 
   - rule_id: BUG-RESTART-EFFECTIVE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001
@@ -735,6 +744,7 @@ rules:
         - insufficient_shallow_ancestry_fetches_only_pinned_base_and_pr_checkout_or_head_with_limited_deepen
         - no_unbounded_full_history_checkout_for_merge_base_recovery
         - non_security_quality_lanes_run_once_on_pull_request
+        - stable_merge_quality_contexts_are_always_published
         - codeql_default_branch_security_scan_preserved
         - codeql_uses_hash_verified_prebuilt_bundle
         - codeql_remote_action_download_is_eliminated
@@ -745,13 +755,15 @@ rules:
         - javascript_actions_use_approved_native_node24_majors
         - pr_ci_no_separate_failure_publisher_job
         - pr_ci_no_external_artifact_action_dependency
+        - pr_ci_static_gate_reuses_classifier_checkout
         - pr_workflows_no_external_report_action_dependency
         - no_linux_or_production_environment_fallback
         - windows_git_bash_shell
         - nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies
         - self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe
+        - nightly_watermark_lookup_is_repo_scoped_and_fail_closed
     baseline_policy: block_new_and_changed_workflow
-    remediation: Require PR-based main updates, provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
+    remediation: Require PR-based main updates and stable merge-quality contexts for CI, CodeQL, Semgrep, and PR quality; provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one preparation checkout for changed-file classification and static or close-sync gates, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
