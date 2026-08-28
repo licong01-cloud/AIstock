@@ -40,9 +40,18 @@
   "evidence_uris": [],
   "expected": "The approved 23-symbol historical regression inventory remains frozen and fully exercised, while the current diagnostic legacy-conflict observation is recorded separately and may become zero after upstream repair without blocking valid dual-authority candidate preparation.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "scripts/build_industry_pit_candidates.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1224-c-013-industry-pit-builder-hard-blocks-repaired-legacy-conflict-inventor.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "scripts/build_industry_pit_candidates.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1224-c-013-industry-pit-builder-hard-blocks-repaired-legacy-conflict-inventor.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -86,10 +95,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
