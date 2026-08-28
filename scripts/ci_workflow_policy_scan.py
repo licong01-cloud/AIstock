@@ -318,6 +318,17 @@ def build_contract_evidence(
             and "docker run" not in nightly_text.casefold()
             and "docker compose up" not in nightly_text.casefold()
         ),
+        "nightly_watermark_lookup_is_repo_scoped_and_fail_closed": (
+            'gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml' in nightly_text
+            and 'throw "Failed to query the last successful scheduled Nightly run."' in nightly_text
+            and "ConvertFrom-Json -ErrorAction Stop" in nightly_text
+            and "No successful scheduled Nightly watermark exists" in nightly_text
+            and "Successful scheduled Nightly watermark is unavailable locally" in nightly_text
+            and 'if ($env:FULL_NIGHTLY_RUN -eq "true")' in nightly_text
+            and "-or -not $watermark" not in nightly_text
+            and "using explicit full-run fallback" not in nightly_text
+            and nightly_text.count('$extraArgs += "--full-run"') == 1
+        ),
         "bounded_dual_runner_roles": (
             uses_expected_runner("codeql.yml")
             and "runs-on: [self-hosted, Windows, aistock-ci-security]" in code_intelligence_refresh_text

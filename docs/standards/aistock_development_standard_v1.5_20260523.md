@@ -298,8 +298,13 @@ Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 
 
 PR base commit 已在 checkout 中且能够与当前 HEAD 证明 merge-base 时，才可直接更新本地 ref 而不执行远程请求；仅有 base 对象但浅克隆 ancestry 不完整不视为可用。确需补取时，仅对 pinned base ref 和当前 PR checkout/head ref 使用固定 3 次、短退避、有限 `--deepen` 的 bounded retry，每次补取后重新验证 merge-base，并在连续失败后以基础设施错误 fail-closed；禁止为解决该问题改成无界完整历史 checkout。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
+<a id="rule-nightly-selection-safety-001"></a>
+### 6.24 [NIGHTLY-SELECTION-SAFETY-001] Nightly 水位失败禁止放大为全量运行
+
+Scheduled Nightly 必须以显式仓库参数查询最后一次成功水位，并分别检查命令退出码、JSON 解析结果和本地 commit 可用性。任一步失败或不存在成功水位时以基础设施错误 fail-closed，不得静默转换为全量执行；`--full-run` 只允许由 `workflow_dispatch` 的 `full_nightly_run=true` 明确触发。自动故障恢复不得用数十个无关 session 的全量运行代替水位读取错误。
+
 <a id="rule-ci-database-safety-001"></a>
-### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
+### 6.25 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
 
 CI workflow 不声明 `services`、启动 PostgreSQL/TimescaleDB 容器、创建临时数据库或执行 DDL/DML。需要数据库的计划必须由 changed-file classifier 标记为 `dev_db_required`，转交现有 DEV 数据库验证 lane；DEV 验证、源码 CI 和生产迁移分别记录。DEV 不可用时状态为 `blocked/pending`，禁止改用独立数据库、SQLite 替代真实契约或静默跳过。只读单元测试可使用进程内 SQLite fixture，但不冒充 DEV/生产数据库验证。
 

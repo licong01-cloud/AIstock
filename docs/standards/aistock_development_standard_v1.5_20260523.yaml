@@ -751,6 +751,23 @@ rules:
     baseline_policy: block_new_and_changed_workflow
     remediation: Require PR-based main updates, provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
 
+  - rule_id: NIGHTLY-SELECTION-SAFETY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-nightly-selection-safety-001
+    title: Scheduled Nightly watermark failures must fail closed instead of expanding into a full run
+    severity: P1
+    category: ci_efficiency
+    enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_scheduled_nightly_when_successful_watermark_is_unavailable
+    checker:
+      type: external
+      command_key: ci_workflow_policy_scan
+      required_evidence:
+        - nightly_watermark_lookup_is_repo_scoped_and_fail_closed
+    baseline_policy: block_new_and_changed_workflow
+    remediation: Scope GitHub run lookup to the repository, validate command and JSON results, fail closed on missing or unavailable watermarks, and allow full Nightly only through explicit workflow_dispatch input.
+
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
     title: CI never creates a database or service and routes database validation to the existing DEV database
