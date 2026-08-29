@@ -1512,6 +1512,7 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
             ".github/workflows/nightly.yml",
             "scripts/ci_failure_issue_summary.py",
             "scripts/llm_provider_adapter.py",
+            "scripts/nightly_adaptive_scheduler.py",
             "scripts/nightly_session_runner.py",
         ],
         root=isolated_workflow_root,
@@ -1597,6 +1598,38 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_contract["backend_restart_required"] is False
     assert offline_contract["pre_pr_ready"] is True
     assert offline_contract["blocking"] == []
+
+    stale_nightly_record = _bug(
+        allowed_write_scope=["scripts/nightly_adaptive_scheduler.py"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "worker_scheduler",
+            "target_id": "worker-scheduler",
+            "target_ids": ["worker-scheduler"],
+            "persistence_basis": "git_tracked_source",
+            "fresh_process_evidence": ["stale planned evidence"],
+            "post_restart_effective_gate": "pending_user_restart",
+            "runtime_identity_match": "pending",
+        },
+    )
+    stale_nightly_record["runtime_contract"].update(
+        {
+            "inference_basis": workflow.RUNTIME_INFERENCE_PLANNED_SCOPE,
+            "provisional": True,
+        }
+    )
+    stale_nightly_contract = workflow.build_runtime_contract(
+        record=stale_nightly_record,
+        changed_files=["scripts/nightly_adaptive_scheduler.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert stale_nightly_contract["runtime_impact"] == "none"
+    assert stale_nightly_contract["backend_restart_required"] is False
+    assert stale_nightly_contract["persistence_basis"] == "not_required"
+    assert stale_nightly_contract["fresh_process_evidence"] == []
+    assert stale_nightly_contract["post_restart_effective_gate"] == "not_required"
+    assert stale_nightly_contract["runtime_identity_match"] == "not_required"
 
 
 def test_bug_1141_offline_hmm_stock_fact_repository_is_exact_and_neighbor_stays_backend(

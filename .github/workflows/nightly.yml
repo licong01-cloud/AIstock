@@ -268,8 +268,16 @@ jobs:
           }
           conda run -n AIstock-CI python scripts/ci_environment_verify.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (-not (Test-Path -LiteralPath "frontend/node_modules/@playwright/test/cli.js" -PathType Leaf)) {
-            throw "frontend/node_modules Playwright is not materialized; dependency installation is prohibited in Nightly"
+          $requiredFrontendEntrypoints = @(
+            "frontend/node_modules/@playwright/test/cli.js",
+            "frontend/node_modules/typescript/bin/tsc",
+            "frontend/node_modules/next/dist/bin/next"
+          )
+          $missingFrontendEntrypoints = @($requiredFrontendEntrypoints | Where-Object {
+            -not (Test-Path -LiteralPath $_ -PathType Leaf)
+          })
+          if ($missingFrontendEntrypoints.Count -gt 0) {
+            throw "frontend/node_modules direct entrypoints are not materialized: $($missingFrontendEntrypoints -join ', '); dependency installation is prohibited in Nightly"
           }
 
       - name: Build successful-watermark Nightly execution plan

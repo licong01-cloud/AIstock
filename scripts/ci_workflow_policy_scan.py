@@ -384,13 +384,19 @@ def build_contract_evidence(
             and "Verify prebuilt AIstock-CI and frontend dependencies" in nightly_text
             and "conda run -n AIstock-CI python scripts/ci_environment_verify.py" in nightly_text
             and "frontend/node_modules/@playwright/test/cli.js" in nightly_text
+            and "frontend/node_modules/typescript/bin/tsc" in nightly_text
+            and "frontend/node_modules/next/dist/bin/next" in nightly_text
             and "dependency installation is prohibited in Nightly" in nightly_text
+            and '"node_modules/@playwright/test/cli.js"' in nox_text
+            and '"node_modules/typescript/bin/tsc"' in nox_text
+            and '"node_modules/next/dist/bin/next"' in nox_text
             and "conda run -n AIstock-CI python scripts/nightly_adaptive_scheduler.py" in nightly_text
             and "conda run -n AIstock-CI python scripts/nightly_session_runner.py" in nightly_text
             and "conda run -n AIstock python scripts/nightly_session_runner.py" not in nightly_text
         ),
         "self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe": (
             "def _materialize_frontend_node_modules" in workspace_prepare_text
+            and "REQUIRED_FRONTEND_ENTRYPOINTS" in workspace_prepare_text
             and "frontend_lock_mismatch" in workspace_prepare_text
             and "source_lock_sha256 != destination_lock_sha256" in workspace_prepare_text
             and '"mklink", "/J"' in workspace_prepare_text

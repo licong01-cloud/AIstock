@@ -177,9 +177,11 @@ def test_prepare_workspace_links_lockfile_matched_prebuilt_frontend_dependencies
     summary_path = tmp_path / "runner" / "_temp" / "self_hosted_workspace" / "test.json"
     frontend = source / "frontend"
     node_modules = frontend / "node_modules"
+    for relative in prepare.REQUIRED_FRONTEND_ENTRYPOINTS:
+        entrypoint = node_modules / relative
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text(f"prebuilt-{relative.as_posix()}\n", encoding="utf-8")
     marker = node_modules / "@playwright" / "test" / "cli.js"
-    marker.parent.mkdir(parents=True)
-    marker.write_text("prebuilt-playwright\n", encoding="utf-8")
     (frontend / "package-lock.json").write_text('{"lockfileVersion":3}\n', encoding="utf-8")
     (source / ".gitignore").write_text("frontend/node_modules/\n", encoding="utf-8")
     _git(source, "init")
@@ -209,12 +211,15 @@ def test_prepare_workspace_links_lockfile_matched_prebuilt_frontend_dependencies
     )
 
     assert result == 0
-    assert (dest / "frontend" / "node_modules" / "@playwright" / "test" / "cli.js").read_text(encoding="utf-8") == "prebuilt-playwright\n"
+    assert (dest / "frontend" / "node_modules" / "@playwright" / "test" / "cli.js").read_text(
+        encoding="utf-8"
+    ) == "prebuilt-@playwright/test/cli.js\n"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["frontend_node_modules"]["source"] == str(node_modules.resolve())
     assert len(summary["frontend_node_modules"]["package_lock_sha256"]) == 64
+    assert len(summary["frontend_node_modules"]["direct_entrypoints"]) == 3
     prepare._clear_directory(dest)
-    assert marker.read_text(encoding="utf-8") == "prebuilt-playwright\n"
+    assert marker.read_text(encoding="utf-8") == "prebuilt-@playwright/test/cli.js\n"
 
 
 def test_frontend_dependency_link_fails_closed_on_package_lock_mismatch(tmp_path: Path) -> None:

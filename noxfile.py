@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, suppress
+import json
 import os
 import socket
 import subprocess
@@ -26,6 +27,12 @@ VALIDATION_ENV_FILE_DENYLIST = {
 VALIDATION_RUNTIME_DEFAULTS = {
     "MINIQMT_EXECUTION_RUNTIME": "event_loop",
 }
+FRONTEND_DIRECT_ENTRYPOINTS = (
+    Path("@playwright/test/cli.js"),
+    Path("typescript/bin/tsc"),
+    Path("next/dist/bin/next"),
+)
+NIGHTLY_SESSION_ARGS_FILE_ENV = "AISTOCK_NIGHTLY_SESSION_ARGS_FILE"
 
 nox.options.reuse_existing_virtualenvs = True
 nox.options.sessions = ["l0"]
@@ -338,19 +345,17 @@ def _managed_validation_frontend(session: nox.Session, frontend_port: str, env: 
 def _ensure_frontend_node_modules(session: nox.Session) -> None:
     frontend = ROOT / "frontend"
     node_modules = frontend / "node_modules"
-    playwright_entries = (
-        node_modules / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright"),
-        node_modules / "@playwright" / "test" / "cli.js",
-    )
-    if any(path.is_file() for path in playwright_entries):
+    missing_entries = [path for path in FRONTEND_DIRECT_ENTRYPOINTS if not (node_modules / path).is_file()]
+    if not missing_entries:
         return
     if _ci_dependency_install_forbidden():
         session.error(
-            "frontend Playwright entrypoint is missing from the prebuilt CI environment; "
+            "frontend direct entrypoints are missing from the prebuilt CI environment: "
+            f"{', '.join(path.as_posix() for path in missing_entries)}; "
             "CI/Nightly cannot run npm ci. Rebuild the AIstock-CI image or run "
             "an explicit local dependency bootstrap before validation."
         )
-    session.log("frontend node_modules missing Playwright; running npm ci once for validation workspace")
+    session.log("frontend node_modules is missing required direct entrypoints; running npm ci once for validation workspace")
     old_cwd = Path.cwd()
     os.chdir(frontend)
     try:
@@ -435,6 +440,15 @@ def _l0_changed_files() -> list[str]:
 def _l0_scan_paths(posargs: list[str]) -> list[str]:
     if posargs:
         return list(dict.fromkeys(path.replace("\\", "/") for path in posargs if path.strip()))
+    scope_file = os.environ.get(NIGHTLY_SESSION_ARGS_FILE_ENV)
+    if scope_file:
+        payload = json.loads(Path(scope_file).read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, list) or not all(isinstance(path, str) for path in payload):
+            raise RuntimeError(f"{NIGHTLY_SESSION_ARGS_FILE_ENV} must contain a JSON list of paths")
+        paths = list(dict.fromkeys(path.strip().replace("\\", "/") for path in payload if path.strip()))
+        if not paths:
+            raise RuntimeError(f"{NIGHTLY_SESSION_ARGS_FILE_ENV} contains no changed paths")
+        return paths
     paths = _l0_changed_files()
     if not paths:
         raise RuntimeError("l0 found no changed files; pass explicit paths when validating a clean checkout")
@@ -492,10 +506,9 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
     os.chdir(ROOT / "frontend")
     try:
         session.run(
-            "npm",
-            "run",
-            "test:e2e",
-            "--",
+            "node",
+            "node_modules/@playwright/test/cli.js",
+            "test",
             target,
             env=_env(
                 {
@@ -518,8 +531,15 @@ def frontend_type_lint(session: nox.Session) -> None:
     old_cwd = Path.cwd()
     os.chdir(ROOT / "frontend")
     try:
-        session.run("npm", "exec", "tsc", "--", "--noEmit", "--incremental", "false", external=True)
-        session.run("npm", "run", "lint", external=True)
+        session.run(
+            "node",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run("node", "node_modules/next/dist/bin/next", "lint", external=True)
     finally:
         os.chdir(old_cwd)
 
