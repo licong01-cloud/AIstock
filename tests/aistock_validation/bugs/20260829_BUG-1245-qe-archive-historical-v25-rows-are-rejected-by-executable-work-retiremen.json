@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1245",
-  "closed_at": null,
+  "closed_at": "2026-08-29T19:08:48.585885Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -133,10 +133,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1245\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1245",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "eee21d776cd9960b4e2f28a37fad6fd2c26a02858155d4d8e970ba10770daf68",
+      "contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+      "expected_identity": "4f6a3d35dded5fdb186a1a786a216554070c9560",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-29T19:05:25.614063Z",
+      "mode": "read_only",
+      "observed_identity": "4cf07c54e9df2b68fd800ec03471920999a2d43f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "265d3a0f291f8b5ba5c5fb79cf7f2a110bd3803437af3d501918b13f3680ae95",
+      "receipt_sha256": "8032d9744b11a9dee236d180fb2750853ff8c9c8b694ad78de941fce99292557",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0603005d7088c05de532dcd77bc68b88030bc67a9b935f21d7384cee04926e0b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -167,7 +189,7 @@
     ],
     "validation_evidence_digest": "686843e90f22c53ebb2234ad2d66f9829dfe7134aac9494621d2a725ac28f342"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.archive"
   ],
@@ -177,7 +199,8 @@
     "source_event_id": "FE-20260829-04185e759c76"
   },
   "validation_evidence": [
-    "head=58417011; focused=5_passed; qe_archive_backend=165_passed; validation_module_registry_l0=8_passed; guardrail_blocking=0; ownership_unmapped=0; ci_verdict=success"
+    "head=58417011; focused=5_passed; qe_archive_backend=165_passed; validation_module_registry_l0=8_passed; guardrail_blocking=0; ownership_unmapped=0; ci_verdict=success",
+    "post-restart-verify workflow_gate=verified; target=backend-main; identity_match=true; health_ref=passed; identity_ref=passed; business_smoke_ref=passed; process_control_performed=false"
   ],
   "verification_budget": {
     "budget": "standard",
