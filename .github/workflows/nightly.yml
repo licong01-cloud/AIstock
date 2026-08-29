@@ -15,7 +15,7 @@ on:
         type: boolean
         default: true
       full_nightly_run:
-        description: Explicitly run every enabled runner plan instead of the successful-watermark change window.
+        description: Explicitly run every enabled runner plan instead of the receipt-watermark retry window.
         required: false
         default: false
         type: boolean
@@ -280,7 +280,7 @@ jobs:
             throw "frontend/node_modules direct entrypoints are not materialized: $($missingFrontendEntrypoints -join ', '); dependency installation is prohibited in Nightly"
           }
 
-      - name: Build successful-watermark Nightly execution plan
+      - name: Build receipt-watermark Nightly execution plan
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_NIGHTLY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.full_nightly_run || false }}
@@ -295,24 +295,50 @@ jobs:
             $extraArgs += "--full-run"
             New-Item -ItemType File -Force -Path $changedFile | Out-Null
           } else {
-            $successfulJson = gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml --branch main --event schedule --status success --limit 1 --json headSha
-            if ($LASTEXITCODE -ne 0) { throw "Failed to query the last successful scheduled Nightly run." }
+            $priorRunsJson = gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml --branch main --event schedule --status completed --limit 10 --json databaseId,headSha,conclusion
+            if ($LASTEXITCODE -ne 0) { throw "Failed to query prior completed scheduled Nightly runs." }
             try {
-              $successful = $successfulJson | ConvertFrom-Json -ErrorAction Stop | Select-Object -First 1
+              $priorRuns = @($priorRunsJson | ConvertFrom-Json -ErrorAction Stop)
             } catch {
-              throw "Failed to parse the last successful scheduled Nightly run: $($_.Exception.Message)"
+              throw "Failed to parse prior completed scheduled Nightly runs: $($_.Exception.Message)"
             }
-            $watermark = if ($successful) { [string]$successful.headSha } else { "" }
-            if (-not $watermark) {
-              throw "No successful scheduled Nightly watermark exists; use workflow_dispatch with full_nightly_run=true for an explicit full run."
+            $retryResults = ""
+            $retryPlan = ""
+            $retryRunId = ""
+            foreach ($priorRun in $priorRuns) {
+              $candidateRunId = [string]$priorRun.databaseId
+              $candidateHead = [string]$priorRun.headSha
+              if (-not $candidateRunId -or -not $candidateHead) { continue }
+              $candidateDir = "$outDir/retry-$candidateRunId"
+              New-Item -ItemType Directory -Force -Path $candidateDir | Out-Null
+              gh run download $candidateRunId --repo "${env:GITHUB_REPOSITORY}" --name "nightly-l3-results-$candidateRunId" --dir $candidateDir
+              if ($LASTEXITCODE -ne 0) { continue }
+              $candidateResults = "$candidateDir/session-results.json"
+              $candidatePlan = "$candidateDir/execution-plan.json"
+              if ((Test-Path -LiteralPath $candidateResults -PathType Leaf) -and (Test-Path -LiteralPath $candidatePlan -PathType Leaf)) {
+                $watermark = $candidateHead
+                $retryRunId = $candidateRunId
+                $retryResults = $candidateResults
+                $retryPlan = $candidatePlan
+                break
+              }
+            }
+            if (-not $watermark -or -not $retryResults -or -not $retryPlan) {
+              throw "No prior scheduled Nightly run with a durable session receipt is available; use workflow_dispatch with full_nightly_run=true for an explicit recovery run."
             }
             git cat-file -e "$watermark^{commit}" 2>$null
             if ($LASTEXITCODE -ne 0) {
-              throw "Successful scheduled Nightly watermark is unavailable locally: $watermark"
+              throw "Receipt-bound scheduled Nightly watermark is unavailable locally: $watermark"
             }
             git diff --name-only "$watermark...${env:GITHUB_SHA}" | Set-Content -Path $changedFile -Encoding UTF8
-            if ($LASTEXITCODE -ne 0) { throw "Failed to build Nightly change window from $watermark" }
-            $watermarkArgs += @("--watermark", $watermark)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to build Nightly change window from receipt watermark $watermark" }
+            $watermarkArgs += @(
+              "--watermark", $watermark,
+              "--retry-results-json", $retryResults,
+              "--retry-plan-json", $retryPlan,
+              "--retry-source-head", $watermark
+            )
+            Write-Host "nightly_retry_source run_id=$retryRunId head=$watermark"
           }
           conda run -n AIstock-CI python scripts/nightly_adaptive_scheduler.py --json `
             --provider deterministic `

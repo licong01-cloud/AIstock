@@ -1,54 +1,84 @@
 {
-  "actual": "The filename contains scheduler and falls through to the generic script runtime heuristic, producing a false worker-scheduler restart requirement.",
+  "actual": "The workflow queries only the last globally successful scheduled run and retries the entire accumulated change window after any partial failure.",
   "allowed_write_scope": [
-    "scripts/aistock_issue_workflow.py",
-    "backend/tests/scripts/test_aistock_issue_workflow.py",
-    "tests/aistock_validation/bugs/20260829_BUG-1249-nightly-validation-scheduler-is-misclassified-as-production-worker-runti.json",
+    ".github/workflows/nightly.yml",
+    "scripts/nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "scripts/ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "tests/aistock_validation/bugs/20260829_BUG-1248-nightly-global-success-watermark-repeatedly-reruns-already-passed-sessio.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1249",
+  "bug_id": "BUG-1248",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-29T07:34:16.834547Z",
-  "description": "The filename contains scheduler and falls through to the generic script runtime heuristic, producing a false worker-scheduler restart requirement.",
+  "created_at": "2026-08-29T07:32:56.098249Z",
+  "description": "The workflow queries only the last globally successful scheduled run and retries the entire accumulated change window after any partial failure.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260829-49f911863ec3",
-      "timestamp": "2026-08-29T07:34:16.834528Z"
+      "note": "Promoted from IC-20260829-a4b1b2447f7c",
+      "timestamp": "2026-08-29T07:32:56.098233Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "All repository-owned Nightly planning and session-runner scripts are classified as offline validation tooling; changing them must not infer backend or worker runtime activation.",
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/33227976428"
+  ],
+  "expected": "Nightly resumes from the latest prior run that has a durable session receipt, reruns only that receipt's failed sessions plus plans affected by newer changed files, and fails closed if no valid retry receipt can be recovered. Explicit workflow_dispatch full-run remains the only full-matrix path.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ".github/workflows/nightly.yml",
+      "scripts/nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
-        "scripts/aistock_issue_workflow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        ".github/workflows/nightly.yml",
+        "scripts/nightly_adaptive_scheduler.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "scripts/ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
       "impacted_modules": [
         "validation.guardrails",
-        "validation.center",
         "validation.runner",
+        "validation.center",
+        "platform.config",
         "validation.module_quality",
         "tests.backend",
-        "validation.coverage"
+        "scripts",
+        "docs.standards"
       ],
       "matched_rules": [
         {
-          "file": "scripts/aistock_issue_workflow.py",
+          "file": ".github/workflows/nightly.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "scripts/nightly_adaptive_scheduler.py",
           "impact_modules": [
             "validation.center",
             "validation.runner",
@@ -59,17 +89,43 @@
           "rule_id": "validation_scripts"
         },
         {
-          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
-          "impact_modules": [
-            "validation.center",
-            "validation.runner",
-            "validation.coverage",
-            "validation.guardrails",
-            "validation.module_quality"
-          ],
+          "file": "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+          "impact_modules": [],
           "primary_module": "tests.backend",
           "risk_level": "medium",
-          "rule_id": "validation_backend_tests"
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "scripts/ci_workflow_policy_scan.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.md",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
         }
       ],
       "risk_levels": [
@@ -77,28 +133,43 @@
         "medium"
       ],
       "suggested_scope": [
-        "scripts/aistock_issue_workflow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        ".github/workflows/nightly.yml",
+        "scripts/nightly_adaptive_scheduler.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "scripts/ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ".github/workflows/nightly.yml",
+      "scripts/nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ".github/workflows/nightly.yml",
+      "scripts/nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ]
   },
-  "first_seen_at": "2026-08-29T07:34:16.834547Z",
+  "first_seen_at": "2026-08-29T07:32:56.098249Z",
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
-  "github_issue_number": 3953,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3953",
-  "last_seen_at": "2026-08-29T07:34:16.834547Z",
+  "github_issue_number": 3952,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3952",
+  "last_seen_at": "2026-08-29T07:32:56.098249Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -107,7 +178,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
-  "reproduce_command": "python scripts/aistock_issue_workflow.py run --bug-id BUG-1248 --mode plan",
+  "reproduce_command": "gh run list --workflow nightly.yml --branch main --limit 12",
   "required_verification": [
     "l0",
     "guardrail_changed_files"
@@ -117,27 +188,29 @@
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
     "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
-    "runtime_impact": "none",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P1",
+  "severity": "P2",
   "status": "open",
   "suspected_modules": [
     "validation"
   ],
-  "title": "Nightly validation scheduler is misclassified as production worker runtime",
+  "title": "Nightly global success watermark repeatedly reruns already-passed sessions after partial failure",
   "trigger_condition": {
-    "fingerprint": "49f911863ec356a1f7396038",
-    "source_event_id": "FE-20260829-49f911863ec3"
+    "fingerprint": "a4b1b2447f7c63f4d958fcf8",
+    "source_event_id": "FE-20260829-a4b1b2447f7c"
   },
   "verification_budget": {
-    "budget": "standard",
+    "budget": "light",
     "deferred_nightly_verification": {
       "modules": [],
       "plans": [],
@@ -175,7 +248,7 @@
       "guardrail_changed_files"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "30-45%"
+    "target_cost_percent_of_legacy": "25-35%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -192,7 +265,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "standard",
+      "budget": "light",
       "deferred_nightly_verification": {
         "modules": [],
         "plans": [],
@@ -230,7 +303,7 @@
         "guardrail_changed_files"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "30-45%"
+      "target_cost_percent_of_legacy": "25-35%"
     }
   }
 }

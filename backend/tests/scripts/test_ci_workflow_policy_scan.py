@@ -89,7 +89,9 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
     assert evidence["nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies"] is True
     assert evidence["self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe"] is True
-    assert evidence["nightly_watermark_lookup_is_repo_scoped_and_fail_closed"] is True
+    assert evidence["nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed"] is True
+    assert evidence["nightly_retries_failed_or_missing_sessions_plus_new_impact"] is True
+    assert evidence["nightly_change_scoped_l0_uses_explicit_receipt_paths"] is True
     assert evidence["bounded_dual_runner_roles"] is True
     assert evidence["policy_evidence_remains_one_scanner_step"] is True
     assert evidence["javascript_actions_use_approved_native_node24_majors"] is True

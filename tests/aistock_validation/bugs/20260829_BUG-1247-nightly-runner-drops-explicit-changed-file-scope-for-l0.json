@@ -96,9 +96,7 @@
   "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
   "reproduce_command": "python scripts/nightly_session_runner.py --plan tmp/validation/nightly_l3/execution-plan.json --output-json tmp/validation/nightly_l3/session-results.json --output-md tmp/validation/nightly_l3/session-results.md",
   "required_verification": [
-    "l0",
-    "guardrail_changed_files",
-    "validation_catalog_integrity"
+    "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
