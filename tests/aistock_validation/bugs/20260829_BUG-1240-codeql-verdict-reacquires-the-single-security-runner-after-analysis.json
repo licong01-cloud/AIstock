@@ -32,6 +32,15 @@
   ],
   "expected": "One CodeQL run should publish the stable CodeQL verdict from one security-runner allocation while preserving changed-language analysis, SARIF upload, main baseline scans, and fail-closed behavior.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/codeql.yml",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "tests/aistock_validation/bugs/20260829_BUG-1240-codeql-verdict-reacquires-the-single-security-runner-after-analysis.json"
+    ],
     "added_files": [],
     "changed_files": [
       ".github/workflows/codeql.yml",
@@ -39,9 +48,10 @@
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_change_classifier.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "tests/aistock_validation/bugs/20260829_BUG-1240-codeql-verdict-reacquires-the-single-security-runner-after-analysis.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/codeql.yml",
@@ -172,10 +182,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
