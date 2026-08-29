@@ -61,6 +61,7 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTExecutionRuntimeKind,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import BrokerCommandOutboxStatusV1
+from backend.services.simulation_runtime.localsim_daily_limit_authority import LocalSimDailyLimitAuthorityProvider
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
@@ -1183,20 +1184,27 @@ class ProductionSimulationRunContextProvider:
             )
             return provider.to_pre_trade_statuses(context)
 
-        loader = self._daily_trading_context_provider.load
-        signature = inspect.signature(loader)
-        accepts_kwargs = any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
+        stk_limit_attempt_loader = getattr(
+            self._daily_trading_context_provider,
+            "load_stk_limit_authority_attempt",
+            None,
         )
-        optional_kwargs: dict[str, Any] = {}
-        if binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
-            optional_kwargs = {
-                "pre_close_quote_fetcher": self._localsim_daily_pre_close_quote_fetcher,
-                "pre_close_quote_source": "TDX_REALTIME.batch_quote.pre_close",
-            }
-        if not accepts_kwargs:
-            optional_kwargs = {key: value for key, value in optional_kwargs.items() if key in signature.parameters}
-        context = loader(
+        supporting_fact_loader = getattr(self._daily_trading_context_provider, "load_supporting_facts", None)
+        if not callable(stk_limit_attempt_loader) or not callable(supporting_fact_loader):
+            raise DataUnavailableError(
+                "LocalSIM planning requires stk_limit-attempt and supporting-fact batch loaders",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_LIMIT_AUTHORITY_PROVIDER_MISSING",
+                    "binding_id": binding.binding_id,
+                    "trade_date": trade_date.isoformat(),
+                },
+            )
+        provider = LocalSimDailyLimitAuthorityProvider(
+            stk_limit_attempt_loader=stk_limit_attempt_loader,
+            supporting_fact_loader=supporting_fact_loader,
+            tdx_reference_reader=self._localsim_daily_pre_close_quote_fetcher,
+        )
+        context = provider.load(
             symbols=symbols,
             trade_date=trade_date,
             as_of_time=scheduler_time(as_of_time),
@@ -1204,9 +1212,8 @@ class ProductionSimulationRunContextProvider:
             binding_identity=f"{binding.binding_id}:{binding.binding_hash}",
             package_identity=f"{runtime_release.package_id}:{runtime_release.manifest_sha256}",
             release_identity=f"{runtime_release.release_id}:{runtime_release.release_hash}",
-            **optional_kwargs,
         )
-        return self._daily_trading_context_provider.to_pre_trade_statuses(context)
+        return provider.to_pre_trade_statuses(context)
 
     def _load_miniqmt_pre_trade_tradability(
         self,

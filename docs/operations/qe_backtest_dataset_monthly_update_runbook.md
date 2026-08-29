@@ -5,6 +5,144 @@
 详细设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`。
 低层数据公式与历史 exporter 兼容说明：`docs/analysis/qlib_backtest_dataset_export_guide_20260712.md`。
 
+## 0. 2026-09-01最高优先级执行窗
+
+本执行窗的目标是在2026-09-01凌晨开始，把独立candidate-only数据集更新到2026-08-31并形成terminal receipt。
+它不授权production activation、DB DDL/DML、node1、后端重启或cleanup。QE/HMM训练、Selection/Paper/Advisory
+消费者迁移不属于本执行窗前置。
+
+### 0.1 8月29日至30日：只闭合首次v2基线
+
+1. 冻结直接参与数据发布的source/profile/toolchain；无交集消费者提交不阻断本任务。
+2. 对BUG-1238修复后的最终runtime只提交一次五股sample：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration `
+  --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
+```
+
+历史`BLOCKED_CONTRACT` submission已经终态，不得resume。新sample失败时读取同一submission的bounded events/result，
+按typed blocker处理；禁止重复提交第二个sample。只有同合同源码BUG修复合入后，才执行一次final rerun。
+
+3. sample PASS后，复用已经存在的2026-07-31 industry full authority，生成缺失的P3A full：
+
+```powershell
+$CandidateRoot = 'X:\AIstock_dataset_candidates\backtest_dataset_candidates'
+$IndustryJul = Join-Path $CandidateRoot '.industry_pit_authority\qe_hmm_full_v2\2026-07-31\full'
+$SectorJul = Join-Path $CandidateRoot '.sector_data_authority\qe_hmm_full_v2\2026-07-31\full'
+
+rtk python scripts/build_sector_data_candidate.py `
+  --industry-candidate-root $IndustryJul `
+  --artifact-root $SectorJul `
+  --start-date 2018-08-01 `
+  --end-date 2026-07-31
+```
+
+`$SectorJul`必须是不存在的新目录；命令拒绝覆盖时不得删除或改写旧目录来重跑。
+
+4. P3A full四文件readback和完整分母闭合后，只提交一次2026-07-31 full initial migration：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration `
+  --plan pit_v2_initial_20260731_v1 --scope full --candidate-only
+```
+
+planner必须优先复用已验证2026-07-31 v1组件。不能为了流程验收强制全量重导，也不能覆盖任何既有7月数据集。
+
+### 0.2 8月31日收盘后：准备目标cutoff authority
+
+在权威交易日历和当日源数据可用后，先只读检查`market.stock_universe_pit_state`与
+`market.stock_universe_pit_spans`中`aistock_equity_pit_canonical_v2`是否ready/clean并覆盖至2026-08-31。
+industry/P3A builder会拒绝超出该覆盖的请求，不能用参数、复制7月receipt或缩短窗口绕过。
+
+如果coverage不足，必须先使用`scripts/prepare_canonical_pit_monthly.py`受控operator：默认plan-only，复用
+`StockUniversePitService.ensure_canonical_pit_universe()`，固定canonical key/rule/start/cutoff；DEV执行
+apply/readback后，可用同cutoff再次apply取得`NO_OP_VERIFIED`证明幂等；该复核是推荐证据而非新增阻断门禁。
+再由用户对production目标和2026-08-31 refresh明确授权，最后绑定同cutoff DEV成功receipt执行production apply/readback。DEV是项目规定的验证库，
+不再增加强制rollback这一非规范门禁；该调整不放宽production授权、readback或不可变receipt要求。
+该CLI由BUG-1243实现；源码合入和用户完成`backend-main`重启前，仍禁止使用临时Python one-liner、直接SQL、
+普通ST endpoint或monthly隐式写库替代。所有receipt路径必须是profile control root下`operator_receipts`的
+直接子文件，文件名不可复用。
+
+```powershell
+$ReceiptRoot = 'X:\AIstock_dataset_release_control\operator_receipts'
+
+# 1. DEV只读计划
+rtk python scripts/prepare_canonical_pit_monthly.py --database dev --mode plan `
+  --cutoff 2026-08-31 `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-plan.json')
+
+# 2. DEV apply/readback；不足时只重建canonical rolling state/spans
+rtk python scripts/prepare_canonical_pit_monthly.py --database dev --mode apply `
+  --cutoff 2026-08-31 `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-apply.json')
+
+# 3. 可选幂等复核：同cutoff再次apply应得到NO_OP_VERIFIED
+rtk python scripts/prepare_canonical_pit_monthly.py --database dev --mode apply `
+  --cutoff 2026-08-31 `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-noop.json')
+
+# 4. 用户对production目标明确授权后执行；禁止从DEV复制state/spans
+rtk python scripts/prepare_canonical_pit_monthly.py --database production --mode apply `
+  --cutoff 2026-08-31 --authorization-ref '<production-authorization-ref>' `
+  --dev-receipt (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-apply.json') `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-production-apply.json')
+```
+
+任一步出现`schema_contract_missing`、readback仍需重建、target/contract/cutoff不匹配或receipt已存在时均立即停止；
+operator不会建表、切换authority pointer、导出数据集、调用provider或控制进程。
+
+canonical PIT coverage PASS后，生成截至2026-08-31的双authority与P3A full：
+
+```powershell
+$CandidateRoot = 'X:\AIstock_dataset_candidates\backtest_dataset_candidates'
+$IndustryAug = Join-Path $CandidateRoot '.industry_pit_authority\qe_hmm_full_v2\2026-08-31\full'
+$SectorAug = Join-Path $CandidateRoot '.sector_data_authority\qe_hmm_full_v2\2026-08-31\full'
+
+rtk python scripts/build_industry_pit_candidates.py `
+  --artifact-root $IndustryAug `
+  --window-start 2018-08-01 `
+  --window-end 2026-08-31
+
+rtk python scripts/build_sector_data_candidate.py `
+  --industry-candidate-root $IndustryAug `
+  --artifact-root $SectorAug `
+  --start-date 2018-08-01 `
+  --end-date 2026-08-31
+```
+
+两条writer都使用只读数据库事务和repo-external新目录；任何typed unavailable保留在完整分母中，不以内连接、
+默认行业或删除股票缩小范围。目标目录已存在时先readback其identity；禁止覆盖或用删除目录制造重跑条件。
+
+### 0.3 9月1日00:05以后：只提交一次August monthly
+
+`monthly`使用`previous_month_last_completed_trading_day`。8月31日当天执行仍会解析到7月31日，因此必须在
+2026-09-01 00:05（Asia/Shanghai）以后提交：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
+```
+
+第一条命令只执行一次。后续仅使用同一submission/run的`status/events/receipt/log`有界读取。provider尚未发布或网络
+限流属于同一durable intent的retryable waiting；不得新建submission追赶时间。目标是在9月1日开盘前得到
+`SUCCEEDED/CANDIDATE_VALIDATED`及完整terminal receipt；时间目标不放宽数据、PIT、行业、指数、资源或验证合同。
+
+### 0.4 P0完成与停止条件
+
+只有以下全部成立才报告8月31日candidate更新完成：
+
+- effective cutoff=`2026-08-31`；
+- P1/P2A与P3A full readback、denominator和hash闭合；
+- daily/minute/PIT/ST/stk_limit/QFQ/static/H5/12-index/sector及QE/HMM producer smoke全部required PASS；
+- terminal receipt、candidate marker、catalog、release和attestation identity一致；
+- dataset-release run的production writes、pointer changes、DB writes和service controls均为0；若此前执行了获授权的
+  canonical PIT coverage DML，其DEV/production apply/readback receipt必须独立存在，不能记入monthly零写入证明或被其掩盖。
+
+如果出现新的确定性合同错误、authority冲突、内部required gap或源码BUG，保留attempt/checkpoint并停止P0执行；只登记
+一个精确owner的P1 BUG，不增加新的设计阶段、不连续提交更多sample/full/monthly。production activation继续等待独立授权。
+
 ## 1. 最短路径
 
 在当前 AIstock repo root 执行：

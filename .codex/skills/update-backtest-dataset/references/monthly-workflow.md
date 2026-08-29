@@ -20,11 +20,28 @@ authorized Worker registration/start.
 
 ## Ordinary monthly update
 
-Run once:
+Resolve the target cutoff first, then build/read back the immutable P3A sector candidate from the approved P1/P2A
+industry authority bundle. The full artifact root is deterministic:
+
+```text
+<profile.candidate_root>/.sector_data_authority/qe_hmm_full_v2/<cutoff>/full
+```
+
+Use `scripts/build_sector_data_candidate.py` with that exact new artifact root and the authority bundle whose frozen
+window ends at the same cutoff. The writer must report `PASS_CANDIDATE_ONLY`; never overwrite an existing path. This is
+a prerequisite candidate write, not production activation. This Skill must not run it during a source-code/fixture-only
+validation task, and must not substitute the old `market.sector_data` table when it is missing or invalid.
+
+After the P3A candidate exists and its four-file readback/denominator closure passes, submit once:
 
 ```powershell
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
 ```
+
+The Worker recomputes `PIT spans × official trading dates` and requires the exact P3A opportunity digest. It streams
+resolved/aligned sector rows by date, preserves typed unavailable counts in the source receipt, and binds the P3A
+candidate hash into source/component/release identities. Missing or drifted P3A input is an authority-input failure, not
+a resource gate; do not retry by bypassing the candidate, changing the stock pool, or filling a fallback industry.
 
 ## Fixed first PIT v2 migration
 

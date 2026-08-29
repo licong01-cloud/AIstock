@@ -1,0 +1,274 @@
+{
+  "actual": "Production read-only evidence shows 48 historical LocalSIM CANCELLED/FAILED_RETRYABLE/FAILED_TERMINAL rows under retained package pkg_378eb9c91e104c64935404e257e932ee. Existing BUG-1099 cleanup preserves the retained package, BUG-1165 only terminalizes rows, and reset_portfolio_runs does not atomically cover the unified simulation graph. The current per-symbol latest position query also resurrects 417 positive historical positions while the latest successful anchor contains 50, so physical pruning and the next trading-day bootstrap are unsafe until one complete snapshot run becomes the sole position authority.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/tests/paper_trading_v2/test_repository_position_authority.py",
+    "backend/tests/simulation_runtime/test_localsim_failed_history_prune.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "scripts/localsim_failed_history_prune_core.py",
+    "scripts/prune_localsim_failed_history.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260828_BUG-1223-localsim-retained-package-failed-history-cannot-be-physically-pruned-wit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1223",
+  "closed_at": "2026-08-29T05:00:20.431107Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-28T10:40:55.834798Z",
+  "description": "Make the latest complete Paper v2 account snapshot run authoritative for positions, then physically prune only older LocalSIM CANCELLED/FAILED_RETRYABLE/FAILED_TERMINAL run subgraphs under an explicit retained package and latest SUCCEEDED anchor. Preserve successful LocalSIM runs, current cash/50-position state, StrategyPackage, releases, bindings, Selection evidence and all MiniQMT rows; validate DEV rollback and require digest/source-pinned production DML.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260828-a160514539f3",
+      "timestamp": "2026-08-28T10:40:55.834782Z"
+    },
+    {
+      "action": "scope_expanded_after_production_readonly_evidence",
+      "actor": "codex",
+      "note": "The current repository position loader resurrects symbols across historical runs (417 positive positions versus 50 in the latest successful anchor); physical pruning must first make the latest complete snapshot run authoritative and add a LocalSIM-only digest-pinned atomic prune tool.",
+      "timestamp": "2026-08-28T10:55:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "production-readonly:2026-08-28 LocalSIM total=61 succeeded=13 cancelled=4 failed_retryable=27 failed_terminal=17",
+    "production-readonly:anchor simrun_55fe2fbc8b833576 positions=50 cash_after=14857144.510000",
+    "production-readonly:legacy per-symbol latest position query positive_positions=417; failed-history prune projection under old semantics=316"
+  ],
+  "expected": "The latest complete account snapshot run is the sole position authority. A governed LocalSIM-only physical-prune plan preserves the latest successful anchor, all successful runs, current cash/positions, bindings/releases, StrategyPackage, Selection evidence and all MiniQMT rows while atomically deleting only older CANCELLED/FAILED_RETRYABLE/FAILED_TERMINAL LocalSIM run subgraphs after DEV rollback validation and digest/source-pinned production authorization.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-28T10:40:55.834798Z",
+  "fix_branch": null,
+  "fix_commit": "f68036fc406554d6e6d46af9501e922bd53abd80",
+  "fixed_at": "2026-08-29T04:29:49Z",
+  "github_issue_number": 3888,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3888",
+  "last_seen_at": "2026-08-28T10:40:55.834798Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not delete any StrategyPackage, StrategyRuntimeRelease, SimulationReleaseBinding, Selection evidence, successful LocalSIM run, current anchor state, or MiniQMT row.",
+    "Do not execute production DML from the source PR; production apply is a separate merged-source, DEV-validated, digest-pinned action."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3936",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/prune_localsim_failed_history.py --target production --package-id pkg_378eb9c91e104c64935404e257e932ee --anchor-run-id simrun_55fe2fbc8b833576",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_backend",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/paper_trading_v2/test_repository_position_authority.py -q -> 3 passed; fresh pytest process loaded repository position authority"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "backend/services/paper_trading_v2/repository.py changes LocalSIM position authority",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1223-close-sync-20260829\\tmp\\issue_workflow\\BUG-1223\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1223",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5b021bc27d4e1872296985eedda40721364a174197051ad0c098a3a8c466242f",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "f68036fc406554d6e6d46af9501e922bd53abd80",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-29T04:53:44.930709Z",
+      "mode": "read_only",
+      "observed_identity": "90380772f036d89989b8113ff6740d68443b8ee0",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "63723cd5aa0d3854929774dcea225913b96153154d88168f399853e73c49b95d",
+      "receipt_sha256": "9ebb13eb6e12f72e22f02569c6f724ec9a8e1bcd3e9a10686cf696a7de85a68a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "04d1967176a92aa6e05480f6c476ccab6801facbc43f31352b1f25949ca84f7f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": true,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1223",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a431d014baee1ea3",
+    "recorded_at": "2026-08-29T04:43:29.435904Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5d7afdf8b530dd37f58722e848c190b5a9182c94",
+    "source_merge_commit": "f68036fc406554d6e6d46af9501e922bd53abd80",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3936",
+    "validation_evidence": [
+      "validation-receipt: id=41d57c067b9d4684 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14`",
+      "validation-receipt: id=f889f9f4040f1d1d commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=paper_v2_backend status=passed command=`rtk nox -s paper_v2_backend` result=`passed`",
+      "validation-receipt: id=71c602ab442b66c0 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`passed`"
+    ],
+    "validation_evidence_digest": "a484586579f21493f987a56853304ddf0992548d7bf39826c57352a0031613c7"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM retained-package failed history cannot be physically pruned without touching healthy current state",
+  "trigger_condition": {
+    "fingerprint": "a160514539f3f8e7e23bd278",
+    "source_event_id": "FE-20260828-a160514539f3"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=41d57c067b9d4684 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14`",
+    "validation-receipt: id=f889f9f4040f1d1d commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=paper_v2_backend status=passed command=`rtk nox -s paper_v2_backend` result=`passed`",
+    "validation-receipt: id=71c602ab442b66c0 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`passed`",
+    "python scripts/prune_localsim_failed_history.py production apply -> passed; transaction=committed; plan_sha256=ef30317fd0557ef642cfa9d9e7cee12588f37a1fd6665739274fb4d4e60f2f56; deleted_runs=48; post_commit_readback=passed; remaining_candidates=0; protected_sha256_match=true"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

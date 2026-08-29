@@ -36,7 +36,12 @@ from .contracts import Component
 from .errors import DatasetReleaseError, SourceManifestError
 from .index_sources import independent_postgres_connection_factory
 from .pit import FrozenPitSnapshot, freeze_pit_snapshot, require_canonical_source_snapshot
-from .profile import DatasetProfile, ResourcePolicy
+from .profile import CANONICAL_PROFILE_ID, DatasetProfile, ResourcePolicy
+from .sector_data_candidate_source import (
+    SECTOR_CANDIDATE_QUERY_VERSION,
+    SECTOR_CANDIDATE_SOURCE_SCHEMA,
+    SectorCandidateSource,
+)
 from .source_manifest import (
     CanonicalPartitionHasher,
     ColumnKind,
@@ -67,8 +72,10 @@ SOURCE_REUSE_MANIFEST_SCHEMA = "dataset_release_source_reuse_manifest_v1"
 SOURCE_REFRESH_AUDIT_RECEIPT_SCHEMA = "dataset_release_source_refresh_audit_receipt_v1"
 SOURCE_STAGE_RECEIPT_SCHEMA = "dataset_release_source_stage_receipt_v1"
 SOURCE_PARTITION_ROWS_SCHEMA = "dataset_release_source_partition_rows_v1"
-SOURCE_AUTHORITY_POLICY_VERSION = "qe_monthly_source_authority_v2"
-SOURCE_CONSISTENCY_POLICY = "partition_rr_control_bracket_writer_ledger_quiescence_v1"
+SOURCE_AUTHORITY_POLICY_VERSION = "qe_monthly_source_authority_v3"
+SOURCE_CONSISTENCY_POLICY = "partition_rr_control_bracket_relevant_writer_ledger_quiescence_v2"
+SOURCE_WRITER_LEDGER_SCHEMA = "dataset_release_source_writer_ledger_v2"
+SOURCE_WRITER_LEDGER_DIGEST_SCHEMA = "dataset_release_source_writer_ledger_digest_v2"
 SOURCE_MVCC_FINGERPRINT_SCHEMA = "dataset_release_partition_mvcc_fingerprint_v1"
 SOURCE_MONTH_CONTENT_LEAF_SCHEMA = "dataset_release_source_month_content_leaf_v1"
 # Flip only after the exact production PostgreSQL/Timescale permissions and
@@ -813,7 +820,36 @@ ORDER BY cal_date
 """
 
 _SOURCE_WRITER_LEDGER_SQL = """
-WITH latest_data_sync_attempt AS (
+WITH normalized_ingestion_job AS (
+    SELECT job_id,job_type,status,created_at,started_at,finished_at,summary,
+           COALESCE(
+               NULLIF(summary->>'actual_dataset',''),
+               NULLIF(summary->>'schedule_dataset',''),
+               NULLIF(summary->>'dataset','')
+           ) AS direct_dataset,
+           COALESCE(
+               NULLIF(summary->>'start_date',''),
+               NULLIF(summary->>'refresh_start_date','')
+           ) AS source_start
+    FROM market.ingestion_jobs
+), relevant_ingestion_job AS (
+    SELECT * FROM normalized_ingestion_job AS job
+    WHERE (
+        job.status IN ('queued','pending','running')
+        AND (job.direct_dataset IS NULL OR job.direct_dataset = ANY(%(datasets)s))
+    ) OR (
+        job.status NOT IN ('queued','pending','running')
+        AND
+        job.created_at >= %(start)s
+        AND job.direct_dataset = ANY(%(datasets)s)
+        AND CASE
+            WHEN job.source_start IS NULL THEN TRUE
+            WHEN job.source_start ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                THEN job.source_start::date <= %(cutoff)s
+            ELSE TRUE
+        END
+    )
+), latest_data_sync_attempt AS (
     SELECT DISTINCT ON (attempt.target_id)
            attempt.attempt_id,attempt.target_id,attempt.attempt_no,
            attempt.status,attempt.created_at,attempt.started_at,
@@ -822,6 +858,7 @@ WITH latest_data_sync_attempt AS (
     FROM market.data_sync_attempts AS attempt
     JOIN market.data_sync_targets AS target ON target.target_id=attempt.target_id
     WHERE target.dataset = ANY(%(datasets)s)
+      AND target.target_date <= %(cutoff)s
     ORDER BY attempt.target_id,attempt.attempt_no DESC,
              attempt.created_at DESC,attempt.attempt_id DESC
 )
@@ -831,8 +868,7 @@ FROM (
     SELECT 'ingestion_jobs'::text AS ledger_kind,
            job_id::text AS ledger_identity,status::text,
            created_at,started_at,finished_at,summary::text AS opaque_payload
-    FROM market.ingestion_jobs
-    WHERE created_at >= %(start)s OR status IN ('queued','pending','running')
+    FROM relevant_ingestion_job
     UNION ALL
     SELECT 'data_sync_attempts'::text AS ledger_kind,
            attempt.attempt_id::text AS ledger_identity,attempt.status::text,
@@ -1518,6 +1554,17 @@ class MonthlySourceAuthority:
             recheck_by_identity=recheck_by_identity,
             selected_stock_codes=selected_stock_codes,
         )
+        sector_candidate = (
+            SectorCandidateSource.load(
+                self.profile,
+                cutoff=cutoff,
+                pit_snapshot=before.pit_snapshot,
+                trading_dates=before.audit.trading_dates,
+                sample_instruments=selected_stock_codes,
+            )
+            if self.profile.profile == CANONICAL_PROFILE_ID
+            else None
+        )
         token_receipts = [f"control-before:{index}:{token}" for index, token in enumerate(before.snapshot_tokens)]
         writer_ledger_check_count = 1
         sealed: list[SealedSourcePartition] = []
@@ -1543,22 +1590,107 @@ class MonthlySourceAuthority:
                     classify_rows,
                     member_rows,
                 )
-            schema = before.schemas[query.query_id]
+            effective_query = (
+                replace(query, query_version=sector_candidate.query_version)
+                if query.query_id == "sector_data" and sector_candidate is not None
+                else query
+            )
+            schema = (
+                SourceTableSchema(
+                    sector_candidate.source_table_identity,
+                    tuple(
+                        dict.fromkeys(
+                            (
+                                *effective_query.required_columns,
+                                *effective_query.derived_value_columns,
+                            )
+                        )
+                    ),
+                    tuple(
+                        f"p3a-candidate:{sector_candidate.candidate_hash}"
+                        for _ in dict.fromkeys(
+                            (
+                                *effective_query.required_columns,
+                                *effective_query.derived_value_columns,
+                            )
+                        )
+                    ),
+                )
+                if query.query_id == "sector_data" and sector_candidate is not None
+                else before.schemas[query.query_id]
+            )
             query_rows = 0
             for partition_key, params in self._partition_requests(
-                query,
+                effective_query,
                 cutoff,
                 pit_snapshot=before.pit_snapshot,
                 selected_stock_codes=selected_stock_codes,
             ):
                 pulse()
                 audit_digest = None
-                if query.date_expression is not None:
+                if effective_query.date_expression is not None and not (
+                    query.query_id == "sector_data" and sector_candidate is not None
+                ):
                     audit_digest = before.audit.partition_digest(
-                        str(query.audit_dataset),
+                        str(effective_query.audit_dataset),
                         _as_date(params["start"]),
                         _as_date(params["end"]),
                     )
+                if query.query_id == "sector_data" and sector_candidate is not None:
+                    assert sector_enricher is not None
+                    spec = _query_partition_spec(effective_query, partition_key, schema)
+                    partition = self._seal_rows(
+                        spec=spec,
+                        rows=(
+                            {
+                                "row_key": canonical_json_bytes(
+                                    [row["ts_code"], row["trade_date"]]
+                                ).decode("utf-8"),
+                                "row_payload": canonical_json_bytes(row).decode("utf-8"),
+                            }
+                            for row in sector_candidate.iter_rows(
+                                start=_as_date(params["start"]),
+                                end=_as_date(params["end"]),
+                                l2_code_map=sector_enricher.code_map,
+                            )
+                        ),
+                        components=effective_query.components,
+                        tokens=(f"p3a-candidate:{sector_candidate.candidate_hash}",),
+                        table_schema=schema,
+                        source_order_keys=effective_query.key_columns,
+                        source_payload_columns=tuple(
+                            dict.fromkeys(
+                                (
+                                    *effective_query.key_columns,
+                                    *effective_query.value_columns,
+                                    *effective_query.derived_value_columns,
+                                )
+                            )
+                        ),
+                        source_non_null_value_columns=(effective_query.non_null_value_columns),
+                        source_partition_params_digest=digest_named_fields(
+                            "dataset_release_p3a_sector_partition_params_v1",
+                            {
+                                "candidate_hash": sector_candidate.candidate_hash,
+                                "params": dict(params),
+                            },
+                        ),
+                        checkpoint=pulse,
+                        budget=budget,
+                        max_rows=effective_query.max_partition_rows,
+                        checkpoint_interval_rows=read_chunk_rows,
+                        recheck_expectation=(
+                            _required_recheck_expectation(recheck_by_identity, spec.identity)
+                            if recheck_by_identity is not None
+                            else None
+                        ),
+                    )
+                    query_rows += partition.summary.row_count
+                    sealed.append(partition)
+                    token_receipts.append(
+                        f"partition:{partition.spec.identity}:0:p3a-candidate:{sector_candidate.candidate_hash}"
+                    )
+                    continue
                 with self._session_factory(self.profile.resource_policy) as session:
                     partition_tokens = self._session_tokens(session)
                     observed_schema = session.describe(query.query_id)
@@ -1567,10 +1699,10 @@ class MonthlySourceAuthority:
                             "source table schema changed during partition freeze",
                             context={"query_id": query.query_id},
                         )
-                    spec = _query_partition_spec(query, partition_key, schema)
+                    spec = _query_partition_spec(effective_query, partition_key, schema)
                     fingerprint = self._partition_fingerprint(
                         session,
-                        query=query,
+                        query=effective_query,
                         params=params,
                         spec=spec,
                         table_schema=schema,
@@ -1605,7 +1737,7 @@ class MonthlySourceAuthority:
                     else:
                         partition = self._seal_query_partition(
                             session,
-                            query=query,
+                            query=effective_query,
                             partition_key=partition_key,
                             params=params,
                             tokens=partition_tokens,
@@ -1657,13 +1789,13 @@ class MonthlySourceAuthority:
                             raise SourceSnapshotDriftBlocked(
                                 "source stream row count differs from MVCC fingerprint",
                                 context={
-                                    "query_id": query.query_id,
+                                    "query_id": effective_query.query_id,
                                     "partition_key": partition_key,
                                 },
                             )
                         fingerprint_plans.append(
                             _PartitionFingerprintPlan(
-                                query=query,
+                                query=effective_query,
                                 partition_key=partition_key,
                                 params=dict(params),
                                 table_schema=schema,
@@ -1683,7 +1815,7 @@ class MonthlySourceAuthority:
                     reader = CASSealedPartitionReader(
                         self.cas,
                         [partition.as_build_input()],
-                        max_partition_rows=query.max_partition_rows,
+                        max_partition_rows=effective_query.max_partition_rows,
                     )
                     target = classify_rows if query.query_id == "sw_index_classify" else member_rows
                     with reader.iter_rows(
@@ -1806,17 +1938,24 @@ class MonthlySourceAuthority:
                     "reused_partitions": len(sealed) + len(pit_partitions),
                 },
             )
-        sector_receipt_ref = self.cas.put_json(
-            sector_enricher.receipt(
-                classify_partitions=[
-                    {
-                        "identity": item.spec.identity,
-                        "content_digest": item.summary.content_digest,
-                        "rows_ref": item.rows_ref.as_dict(),
-                    }
-                    for item in sealed
-                    if item.spec.dataset == "sw_index_classify"
-                ],
+        classify_partitions = [
+            {
+                "identity": item.spec.identity,
+                "content_digest": item.summary.content_digest,
+                "rows_ref": item.rows_ref.as_dict(),
+            }
+            for item in sealed
+            if item.spec.dataset == "sw_index_classify"
+        ]
+        if sector_candidate is not None:
+            sector_candidate.verify_unchanged()
+            sector_receipt_payload = sector_candidate.receipt(
+                code_map_digest=sector_enricher.code_map_digest,
+                classify_partitions=classify_partitions,
+            )
+        else:
+            sector_receipt_payload = sector_enricher.receipt(
+                classify_partitions=classify_partitions,
                 member_partitions=[
                     {
                         "identity": item.spec.identity,
@@ -1827,7 +1966,7 @@ class MonthlySourceAuthority:
                     if item.spec.dataset == "sw_index_member"
                 ],
             )
-        )
+        sector_receipt_ref = self.cas.put_json(sector_receipt_payload)
         self.cas.verify(sector_receipt_ref)
         derived_source_receipt_refs = (sector_receipt_ref,)
         manifest_payload = {
@@ -2035,7 +2174,11 @@ class MonthlySourceAuthority:
         read_chunk_rows: int,
     ) -> tuple[str, Mapping[str, Any]]:
         datasets = sorted(
-            {str(value.audit_dataset) for value in PRODUCTION_QUERY_SPECS.values() if value.audit_dataset is not None}
+            {
+                str(value.audit_dataset)
+                for value in self._database_query_specs()
+                if value.audit_dataset is not None
+            }
         )
         rows: list[Mapping[str, Any]] = []
         active: list[Mapping[str, Any]] = []
@@ -2044,6 +2187,7 @@ class MonthlySourceAuthority:
                 "writer_ledger",
                 {
                     "start": cutoff.replace(day=1),
+                    "cutoff": cutoff,
                     "datasets": datasets,
                 },
                 fetch_rows=read_chunk_rows,
@@ -2098,15 +2242,19 @@ class MonthlySourceAuthority:
             ),
         )
         receipt = {
-            "schema_version": "dataset_release_source_writer_ledger_v1",
+            "schema_version": SOURCE_WRITER_LEDGER_SCHEMA,
             "platform_write_contract": ("all_source_mutations_must_record_ingestion_or_sync_ledger_v1"),
             "cutoff_month_start": cutoff.replace(day=1).isoformat(),
+            "source_cutoff": cutoff.isoformat(),
+            "dataset_scope": datasets,
+            "non_active_job_policy": "direct_dataset_at_or_before_cutoff_v1",
+            "active_job_policy": "relevant_or_unclassified_fail_closed_v1",
             "active_writer_count": 0,
             "rows": ordered,
             "safety": _zero_safety(),
         }
         return (
-            digest_named_fields("dataset_release_source_writer_ledger_digest_v1", receipt),
+            digest_named_fields(SOURCE_WRITER_LEDGER_DIGEST_SCHEMA, receipt),
             receipt,
         )
 
@@ -2128,9 +2276,19 @@ class MonthlySourceAuthority:
             "pit_spans",
             "refresh_audit",
             "writer_ledger",
-            *PRODUCTION_QUERY_SPECS,
+            *(value.query_id for value in self._database_query_specs()),
         )
         return {query_id: session.describe(query_id) for query_id in query_ids}
+
+    def _database_query_specs(self) -> tuple[SourceQuerySpec, ...]:
+        return tuple(
+            value
+            for value in PRODUCTION_QUERY_SPECS.values()
+            if not (
+                self.profile.profile == CANONICAL_PROFILE_ID
+                and value.query_id == "sector_data"
+            )
+        )
 
     def _freeze_refresh_audit(
         self,
@@ -2157,7 +2315,9 @@ class MonthlySourceAuthority:
         trading_dates = tuple(trading_date_values)
         if not trading_dates or trading_dates != tuple(sorted(set(trading_dates))):
             raise SourceAuditIncomplete("official trading-date audit scope is invalid")
-        dated_specs = tuple(value for value in PRODUCTION_QUERY_SPECS.values() if value.date_expression is not None)
+        dated_specs = tuple(
+            value for value in self._database_query_specs() if value.date_expression is not None
+        )
         dated = sorted({str(value.audit_dataset) for value in dated_specs})
         eligible_sources: dict[str, tuple[str, ...]] = {}
         eligible_quality: dict[str, tuple[str, ...]] = {}
@@ -3235,12 +3395,6 @@ def load_source_stage_receipt(
     if len(derived_refs) != 1:
         raise SourceAuditIncomplete("source-stage derived receipt set differs")
     sector_receipt = cas.get_json_bounded(derived_refs[0], max_bytes=MAX_SOURCE_STAGE_ARTIFACT_BYTES)
-    if (
-        not isinstance(sector_receipt, Mapping)
-        or sector_receipt.get("schema_version") != SECTOR_ENRICHMENT_SCHEMA
-        or sector_receipt.get("safety") != _zero_safety()
-    ):
-        raise SourceAuditIncomplete("source-stage sector enrichment receipt is invalid")
     expected_classify = [
         {
             "identity": item.spec.identity,
@@ -3259,11 +3413,110 @@ def load_source_stage_receipt(
         for item in partitions
         if item.spec.dataset == "sw_index_member"
     ]
-    if (
-        sector_receipt.get("classify_partitions") != expected_classify
-        or sector_receipt.get("member_partitions") != expected_member
-    ):
-        raise SourceAuditIncomplete("source-stage sector enrichment lineage differs")
+    if expected_profile == CANONICAL_PROFILE_ID:
+        required_sector_fields = {
+            "schema_version",
+            "profile",
+            "cutoff",
+            "candidate_root_id",
+            "candidate_root_relative_path",
+            "candidate_scope",
+            "candidate_hash",
+            "industry_bundle_hash",
+            "classification_authority_receipt_hash",
+            "index_membership_authority_receipt_hash",
+            "source_denominator_digest",
+            "expected_opportunities",
+            "opportunity_digest",
+            "candidate_report_canonical_hash",
+            "status_counts",
+            "alignment_counts",
+            "unavailable_by_reason",
+            "query_version",
+            "code_map_digest",
+            "classify_partitions",
+            "safety",
+        }
+        if not isinstance(sector_receipt, Mapping) or set(sector_receipt) != required_sector_fields:
+            raise SourceAuditIncomplete("source-stage P3A sector receipt schema is invalid")
+        candidate_hash = ensure_sha256_text(
+            sector_receipt.get("candidate_hash"), field="sector_candidate_hash"
+        )
+        expected_query_version = f"{SECTOR_CANDIDATE_QUERY_VERSION}:{candidate_hash}"
+        scalar_digests = (
+            "industry_bundle_hash",
+            "classification_authority_receipt_hash",
+            "index_membership_authority_receipt_hash",
+            "source_denominator_digest",
+            "opportunity_digest",
+            "candidate_report_canonical_hash",
+            "code_map_digest",
+        )
+        for field in scalar_digests:
+            ensure_sha256_text(sector_receipt.get(field), field=field)
+        counts = sector_receipt.get("status_counts")
+        alignments = sector_receipt.get("alignment_counts")
+        unavailable = sector_receipt.get("unavailable_by_reason")
+        expected_opportunities = sector_receipt.get("expected_opportunities")
+        if (
+            sector_receipt.get("schema_version") != SECTOR_CANDIDATE_SOURCE_SCHEMA
+            or sector_receipt.get("profile") != expected_profile
+            or sector_receipt.get("cutoff") != expected_cutoff.isoformat()
+            or sector_receipt.get("candidate_scope") not in {"full", "sample"}
+            or sector_receipt.get("query_version") != expected_query_version
+            or sector_receipt.get("classify_partitions") != expected_classify
+            or sector_receipt.get("safety") != _zero_safety()
+            or type(expected_opportunities) is not int
+            or expected_opportunities <= 0
+            or not isinstance(counts, Mapping)
+            or set(counts).difference({"resolved", "unaligned", "unavailable"})
+            or any(type(value) is not int or value < 0 for value in counts.values())
+            or sum(counts.values()) != expected_opportunities
+            or not isinstance(alignments, Mapping)
+            or set(alignments).difference({"aligned", "unaligned", "unavailable"})
+            or any(type(value) is not int or value < 0 for value in alignments.values())
+            or sum(alignments.values()) != expected_opportunities
+            or not isinstance(unavailable, Mapping)
+            or any(
+                re.fullmatch(r"[a-z0-9_.:-]+", str(key)) is None
+                for key in unavailable
+            )
+            or any(type(value) is not int or value < 0 for value in unavailable.values())
+            or sector_receipt.get("classification_authority_receipt_hash")
+            == sector_receipt.get("index_membership_authority_receipt_hash")
+            or profile is None
+            or sector_receipt.get("candidate_root_id") != profile.candidate_root_id
+        ):
+            raise SourceAuditIncomplete("source-stage P3A sector receipt contract differs")
+        relative_path = str(sector_receipt.get("candidate_root_relative_path") or "")
+        scope_tail = relative_path.replace("\\", "/").rsplit("/", 1)[-1]
+        expected_scope_tail = (
+            scope_tail == "full"
+            if sector_receipt.get("candidate_scope") == "full"
+            else re.fullmatch(r"sample-[0-9a-f]{64}", scope_tail) is not None
+        )
+        if (
+            not relative_path.startswith(f".sector_data_authority/{expected_profile}/{expected_cutoff.isoformat()}/")
+            or ".." in relative_path.replace("\\", "/").split("/")
+            or not expected_scope_tail
+        ):
+            raise SourceAuditIncomplete("source-stage P3A candidate binding path is invalid")
+        sector_partitions = [item for item in partitions if item.spec.dataset == "sector_data"]
+        if not sector_partitions or any(
+            not item.spec.query_version.startswith(f"{expected_query_version}:table_schema_sha256:")
+            or candidate_hash not in item.source_table_schema.table_identity
+            for item in sector_partitions
+        ):
+            raise SourceAuditIncomplete("source-stage P3A sector partition identity differs")
+    else:
+        if (
+            not isinstance(sector_receipt, Mapping)
+            or sector_receipt.get("schema_version") != SECTOR_ENRICHMENT_SCHEMA
+            or sector_receipt.get("safety") != _zero_safety()
+            or sector_receipt.get("classify_partitions") != expected_classify
+            or sector_receipt.get("member_partitions") != expected_member
+        ):
+            raise SourceAuditIncomplete("source-stage sector enrichment lineage differs")
     manifest = SourceManifest(tuple(item.summary for item in partitions))
     source_content_root = ensure_sha256_text(stage.get("source_content_root"), field="source_content_root")
     stable_provenance_root = ensure_sha256_text(
@@ -3298,14 +3551,14 @@ def load_source_stage_receipt(
         writer_digest = ensure_sha256_text(writer_evidence["digest"], field="writer_ledger_digest")
         if (
             not isinstance(writer_evidence, Mapping)
-            or writer_evidence.get("schema_version") != "dataset_release_source_writer_ledger_v1"
+            or writer_evidence.get("schema_version") != SOURCE_WRITER_LEDGER_SCHEMA
             or writer_evidence.get("active_writer_count") != 0
             or type(writer_evidence.get("check_count")) is not int
             or writer_evidence["check_count"] < 2
         ):
             raise SourceAuditIncomplete("source writer-ledger evidence is invalid")
         writer_receipt = {key: value for key, value in writer_evidence.items() if key not in {"digest", "check_count"}}
-        if digest_named_fields("dataset_release_source_writer_ledger_digest_v1", writer_receipt) != writer_digest:
+        if digest_named_fields(SOURCE_WRITER_LEDGER_DIGEST_SCHEMA, writer_receipt) != writer_digest:
             raise SourceAuditIncomplete("source writer-ledger digest differs")
     except (KeyError, TypeError) as exc:
         raise SourceAuditIncomplete("source-stage consistency evidence is incomplete") from exc

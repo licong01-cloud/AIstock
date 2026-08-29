@@ -2048,6 +2048,7 @@ def build_rotation_l1_holdout_request(
     source_payload = dict(source)
     development_source = candidate.payload.get("request_identity", {}).get("source_sha256")
     development_revision = candidate.payload.get("request_identity", {}).get("source", {}).get("source_revision")
+    development_industry_pit = candidate.payload.get("request_identity", {}).get("source", {}).get("industry_pit")
     if (
         source_payload.get("source_end") != tail_dates[-1].isoformat()
         or not isinstance(source_payload.get("source_revision"), str)
@@ -2056,6 +2057,7 @@ def build_rotation_l1_holdout_request(
         or source_payload.get("state_start") != RL1_HOLDOUT_START.isoformat()
         or source_payload.get("state_end") != RL1_HOLDOUT_END.isoformat()
         or source_payload.get("development_source_sha256") != development_source
+        or source_payload.get("industry_pit") != development_industry_pit
         or source_payload.get("source_revision") == development_revision
     ):
         raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 source revision is incomplete", stage="preflight")
@@ -2182,6 +2184,7 @@ def validate_rotation_l1_holdout_request(request: Mapping[str, Any], candidate: 
     source = holdout.get("source")
     development_source = candidate.payload.get("request_identity", {}).get("source_sha256")
     development_revision = candidate.payload.get("request_identity", {}).get("source", {}).get("source_revision")
+    development_industry_pit = candidate.payload.get("request_identity", {}).get("source", {}).get("industry_pit")
     if (
         not isinstance(source, Mapping)
         or source.get("source_end") != holdout.get("outcome_tail_end")
@@ -2192,6 +2195,7 @@ def validate_rotation_l1_holdout_request(request: Mapping[str, Any], candidate: 
         or source.get("state_start") != RL1_HOLDOUT_START.isoformat()
         or source.get("state_end") != RL1_HOLDOUT_END.isoformat()
         or source.get("development_source_sha256") != development_source
+        or source.get("industry_pit") != development_industry_pit
     ):
         raise _fail(REASON_RL1_HOLDOUT_NOT_READY, "rotation L1 source revision is invalid", stage="preflight")
     try:

@@ -748,6 +748,92 @@ class DailyTradingContextProvider:
             "suspend_facts": suspend_facts,
         }
 
+    def load_stk_limit_authority_attempt(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+    ) -> dict[str, Any]:
+        """Read one exact-symbol stk_limit attempt without converting availability gaps into corruption."""
+
+        raw_symbols = [str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()]
+        aliases = [symbol.upper() for symbol in raw_symbols]
+        if len(raw_symbols) != len(set(aliases)) or any(symbol != alias for symbol, alias in zip(raw_symbols, aliases)):
+            raise DataUnavailableError(
+                "stk_limit authority symbol set contains an alias collision",
+                context={"reason_code": "DAILY_TRADING_CONTEXT_SYMBOL_ALIAS_COLLISION"},
+            )
+        requested = tuple(sorted(aliases))
+        if not requested:
+            raise DataUnavailableError(
+                "stk_limit authority requires a non-empty exact symbol set",
+                context={"reason_code": "DAILY_TRADING_CONTEXT_SYMBOL_SET_EMPTY"},
+            )
+        try:
+            audit = self.audit_repository.require_success(dataset="stk_limit", trade_date=trade_date)
+        except DataUnavailableError as exc:
+            return {
+                "schema_version": "stk_limit_authority_attempt_v1",
+                "trade_date": trade_date.isoformat(),
+                "symbol_set": list(requested),
+                "availability": "UNAVAILABLE",
+                "unavailable_reason": exc.message,
+                "refresh_identity": None,
+                "rows": [],
+            }
+        refresh_identity = self._refresh_identity(audit)
+        if int(audit.row_count or 0) == 0:
+            return {
+                "schema_version": "stk_limit_authority_attempt_v1",
+                "trade_date": trade_date.isoformat(),
+                "symbol_set": list(requested),
+                "availability": "ZERO_ROWS",
+                "unavailable_reason": None,
+                "refresh_identity": refresh_identity,
+                "rows": [],
+            }
+        try:
+            with self.conn_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT ts_code, trade_date, pre_close, up_limit, down_limit
+                        FROM market.stk_limit
+                        WHERE ts_code = ANY(%s) AND trade_date = %s
+                        ORDER BY ts_code
+                        """,
+                        (list(requested), trade_date),
+                    )
+                    rows = list(cur.fetchall())
+        except Exception as exc:
+            return {
+                "schema_version": "stk_limit_authority_attempt_v1",
+                "trade_date": trade_date.isoformat(),
+                "symbol_set": list(requested),
+                "availability": "UNAVAILABLE",
+                "unavailable_reason": type(exc).__name__,
+                "refresh_identity": refresh_identity,
+                "rows": [],
+            }
+        return {
+            "schema_version": "stk_limit_authority_attempt_v1",
+            "trade_date": trade_date.isoformat(),
+            "symbol_set": list(requested),
+            "availability": "AVAILABLE",
+            "unavailable_reason": None,
+            "refresh_identity": refresh_identity,
+            "rows": [
+                {
+                    "symbol": row[0],
+                    "trade_date": row[1].isoformat() if isinstance(row[1], date) else row[1],
+                    "pre_close": float(row[2]) if row[2] is not None else None,
+                    "up_limit": float(row[3]) if row[3] is not None else None,
+                    "down_limit": float(row[4]) if row[4] is not None else None,
+                }
+                for row in rows
+            ],
+        }
+
     def load(
         self,
         *,
@@ -1697,6 +1783,56 @@ def fetch_tdx_realtime_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     return quotes
 
 
+def parse_tdx_reference_pre_close(
+    *,
+    symbol: str,
+    quote: Mapping[str, Any],
+    trade_date: date,
+    as_of_time: datetime,
+) -> dict[str, Any]:
+    """Validate one TDX K.Last reference and return hash-ready CNY/share evidence."""
+
+    normalized = str(symbol or "").strip().upper()
+    if normalized != symbol or not isinstance(quote, Mapping):
+        raise DataUnavailableError(
+            "TDX reference quote identity is invalid",
+            context={"reason_code": "DAILY_LIMIT_TDX_REFERENCE_INVALID", "symbol": symbol},
+        )
+    raw_quote = dict(quote)
+    kline = raw_quote.get("K") if isinstance(raw_quote.get("K"), dict) else {}
+    source_pre_close = _first_number(kline, ("Last",))
+    basis = _quote_price_basis(raw_quote, source="TDX_REALTIME.batch_quote.pre_close")
+    pre_close = (
+        source_pre_close / PRICE_UNIT_DIVISOR
+        if source_pre_close is not None and basis == "raw_li"
+        else source_pre_close
+    )
+    timestamp = _require_tdx_quote_timestamp(
+        symbol=normalized,
+        quote=raw_quote,
+        trade_date=trade_date,
+        as_of_time=as_of_time,
+        source="TDX_REALTIME.batch_quote.pre_close",
+        max_quote_age=TDX_REALTIME_QUOTE_MAX_AGE,
+    )
+    if pre_close is None or not math.isfinite(pre_close) or pre_close <= 0:
+        raise DataUnavailableError(
+            "TDX reference K.Last is missing or invalid",
+            context={"reason_code": "DAILY_LIMIT_TDX_REFERENCE_INVALID", "symbol": normalized},
+        )
+    evidence = {
+        "schema_version": "tdx_reference_pre_close_evidence_v1",
+        "source": "TDX_REALTIME.batch_quote.K.Last",
+        "symbol": normalized,
+        "trade_date": trade_date.isoformat(),
+        "quote_timestamp": timestamp.isoformat(),
+        "source_price_basis": basis,
+        "source_pre_close": source_pre_close,
+        "pre_close": pre_close,
+    }
+    return {**evidence, "evidence_hash": _canonical_json_sha256(evidence)}
+
+
 def quote_tradability_evidence(
     *,
     symbol: str,
@@ -2592,12 +2728,17 @@ class PaperV2MinuteMarketDataProvider:
                     context={"reason_code": "LOCALSIM_LIVE_DAY_FEATURES_FORBIDDEN", "symbol": symbol},
                 )
             if frozen_daily_fact is not None:
-                limit_price, suspend_status, frozen_reference, pre_close_source = self._frozen_realtime_daily_inputs(
+                (
+                    limit_price,
+                    suspend_status,
+                    frozen_reference,
+                    pre_close_source,
+                    limit_price_source,
+                ) = self._frozen_realtime_daily_inputs(
                     symbol=symbol,
                     trade_date=trade_date,
                     frozen_daily_fact=frozen_daily_fact,
                 )
-                limit_price_source = "market.stk_limit:frozen_daily_trading_context_v1"
             else:
                 # Explicit completed-day Paper v2 compatibility adapter. The
                 # scheduler-owned LocalSIM hot path never calls this method;
@@ -2739,7 +2880,13 @@ class PaperV2MinuteMarketDataProvider:
                     "trade_date": trade_date.isoformat(),
                 },
             )
-        limit_price, suspend_status, frozen_reference, pre_close_source = self._frozen_realtime_daily_inputs(
+        (
+            limit_price,
+            suspend_status,
+            frozen_reference,
+            pre_close_source,
+            limit_price_source,
+        ) = self._frozen_realtime_daily_inputs(
             symbol=symbol,
             trade_date=trade_date,
             frozen_daily_fact=frozen_daily_fact,
@@ -2764,7 +2911,7 @@ class PaperV2MinuteMarketDataProvider:
             minute_bars=observed,
             limit_price=limit_price,
             pre_close_source=pre_close_source,
-            limit_price_source="market.stk_limit:frozen_daily_trading_context_v1",
+            limit_price_source=limit_price_source,
             suspend_status=suspend_status,
             day_features=None,
         )
@@ -2785,7 +2932,7 @@ class PaperV2MinuteMarketDataProvider:
         symbol: str,
         trade_date: date,
         frozen_daily_fact: Mapping[str, Any] | None,
-    ) -> tuple[DailyLimitPrice, DailySuspendStatus, dict[str, Any], str]:
+    ) -> tuple[DailyLimitPrice, DailySuspendStatus, dict[str, Any], str, str]:
         if not isinstance(frozen_daily_fact, Mapping):
             raise DataUnavailableError(
                 "LocalSIM live minute feed requires a frozen daily trading fact",
@@ -2797,9 +2944,9 @@ class PaperV2MinuteMarketDataProvider:
             )
         reference = dict(frozen_daily_fact)
         raw_fact = reference.get("symbol_fact")
+        schema_version = reference.get("schema_version")
         if (
-            reference.get("schema_version") != "daily_trading_context_reference_v1"
-            or reference.get("source") != "market.stk_limit"
+            schema_version not in {"daily_trading_context_reference_v1", "daily_trading_context_reference_v2"}
             or not reference.get("context_id")
             or not reference.get("context_hash")
             or not isinstance(raw_fact, Mapping)
@@ -2813,9 +2960,19 @@ class PaperV2MinuteMarketDataProvider:
                 },
             )
         try:
-            from backend.services.simulation_runtime.models import DailyTradingSymbolFactV1
+            from backend.services.simulation_runtime.models import (
+                DailyTradingAuthorityStateV2,
+                DailyTradingSymbolFactV1,
+                DailyTradingSymbolFactV2,
+                SimulationBrokerBackend,
+            )
 
-            fact = DailyTradingSymbolFactV1.model_validate(dict(raw_fact))
+            if schema_version == "daily_trading_context_reference_v1":
+                if reference.get("source") != "market.stk_limit":
+                    raise ValueError("V1 daily trading reference requires market.stk_limit")
+                fact = DailyTradingSymbolFactV1.model_validate(dict(raw_fact))
+            else:
+                fact = DailyTradingSymbolFactV2.model_validate(dict(raw_fact))
         except Exception as exc:
             raise DataUnavailableError(
                 "LocalSIM frozen daily trading symbol fact is invalid",
@@ -2836,10 +2993,23 @@ class PaperV2MinuteMarketDataProvider:
                     "fact_trade_date": fact.trade_date.isoformat(),
                 },
             )
-        if (
-            reference.get("trade_date") != trade_date.isoformat()
-            or reference.get("stk_limit_row_hash") != fact.stk_limit_row_hash
-        ):
+        reference_conflict = reference.get("trade_date") != trade_date.isoformat()
+        if isinstance(fact, DailyTradingSymbolFactV1):
+            reference_conflict = reference_conflict or reference.get("stk_limit_row_hash") != fact.stk_limit_row_hash
+            pre_close_source = f"{fact.pre_close_source}:frozen_daily_trading_context_v1"
+            limit_price_source = "market.stk_limit:frozen_daily_trading_context_v1"
+        else:
+            reference_conflict = reference_conflict or (
+                reference.get("broker_backend") != SimulationBrokerBackend.LOCAL_SIM.value
+                or reference.get("authority_state") != fact.authority_state.value
+                or reference.get("limit_authority") != fact.limit_authority.value
+                or reference.get("source_evidence_hash") != fact.source_evidence_hash
+            )
+            pre_close_source = f"{fact.limit_authority.value}:frozen_daily_trading_context_v2"
+            limit_price_source = pre_close_source
+            if fact.authority_state is DailyTradingAuthorityStateV2.NO_DAILY_LIMIT:
+                limit_price_source = f"{limit_price_source}:no_daily_limit"
+        if reference_conflict:
             raise DataUnavailableError(
                 "LocalSIM frozen daily trading fact reference conflicts with its symbol fact",
                 context={
@@ -2848,7 +3018,18 @@ class PaperV2MinuteMarketDataProvider:
                     "trade_date": trade_date.isoformat(),
                 },
             )
-        pre_close_source = f"{fact.pre_close_source}:frozen_daily_trading_context_v1"
+        if (
+            isinstance(fact, DailyTradingSymbolFactV2)
+            and fact.authority_state is DailyTradingAuthorityStateV2.SYMBOL_FAILED
+        ):
+            raise DataUnavailableError(
+                "LocalSIM frozen daily trading authority is unavailable for the symbol",
+                context={
+                    "reason_code": str(fact.authority_reason_code),
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                },
+            )
         return (
             DailyLimitPrice(
                 symbol=symbol,
@@ -2867,6 +3048,7 @@ class PaperV2MinuteMarketDataProvider:
             ),
             {key: deepcopy(value) for key, value in reference.items() if key != "context"},
             pre_close_source,
+            limit_price_source,
         )
 
     def load_new_bars(

@@ -1,0 +1,416 @@
+{
+  "actual": "No controlled monthly operator exists; calling the service directly cannot produce auditable target/readback receipts, and the design's mandatory rollback would require risky core transactional refactoring not required by repository policy.",
+  "allowed_write_scope": [
+    "backend/services/stock_universe_pit_service.py",
+    "backend/tests/test_stock_universe_pit_service.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+    "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md",
+    "scripts/prepare_canonical_pit_monthly.py",
+    "backend/tests/scripts/test_prepare_canonical_pit_monthly.py",
+    "tests/aistock_validation/bugs/20260829_BUG-1243-canonical-pit-monthly-cutoff-coverage-lacks-a-controlled-dev-production.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1243",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-29T06:52:40.963066Z",
+  "description": "No controlled monthly operator exists; calling the service directly cannot produce auditable target/readback receipts, and the design's mandatory rollback would require risky core transactional refactoring not required by repository policy.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260829-9ad14be43285",
+      "timestamp": "2026-08-29T06:52:40.963050Z"
+    }
+  ],
+  "evidence_uris": [
+    "PR #3944 merge 0ef3086cf50b78bb4d0c4b2138f52ad3771d9b66; master design F-032; product design F-033"
+  ],
+  "expected": "One fixed-authority operator plans without writes, applies only to explicit DEV/production targets, verifies exact canonical cutoff coverage, writes secret-free atomic receipts outside the repo, requires successful matching DEV evidence plus explicit authorization for production apply, and proves same-cutoff idempotent NO_OP. No pointer activation or dataset export is performed.",
+  "file_scope_contract": {
+    "added_files": [
+      "scripts/prepare_canonical_pit_monthly.py",
+      "backend/tests/scripts/test_prepare_canonical_pit_monthly.py"
+    ],
+    "changed_files": [
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+      "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+      "docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/stock_universe_pit_service.py",
+        "backend/tests/test_stock_universe_pit_service.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+        "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+        "docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md",
+        "scripts/prepare_canonical_pit_monthly.py",
+        "backend/tests/scripts/test_prepare_canonical_pit_monthly.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "selection_center",
+        "qe.core",
+        "paper_v2",
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "docs.architecture",
+        "docs.operations",
+        "qlib_data",
+        "platform.api",
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/stock_universe_pit_service.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "backend/tests/test_stock_universe_pit_service.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        },
+        {
+          "file": "docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/prepare_canonical_pit_monthly.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_prepare_canonical_pit_monthly.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low",
+        "medium",
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/stock_universe_pit_service.py",
+        "backend/tests/test_stock_universe_pit_service.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+        "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+        "docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md",
+        "scripts/prepare_canonical_pit_monthly.py",
+        "backend/tests/scripts/test_prepare_canonical_pit_monthly.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+      "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+      "docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md",
+      "scripts/prepare_canonical_pit_monthly.py",
+      "backend/tests/scripts/test_prepare_canonical_pit_monthly.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+      "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+      "docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md",
+      "scripts/prepare_canonical_pit_monthly.py",
+      "backend/tests/scripts/test_prepare_canonical_pit_monthly.py"
+    ]
+  },
+  "first_seen_at": "2026-08-29T06:52:40.963066Z",
+  "fix_branch": null,
+  "fix_commit": "19814d3e109092b0705f1762da21c762244558fc",
+  "fixed_at": "2026-08-29T19:04:39Z",
+  "github_issue_number": 3947,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3947",
+  "last_seen_at": "2026-08-29T06:52:40.963066Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3955",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "data_sync_autonomy_backend",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -c import backend.services.stock_universe_pit_service; import scripts.prepare_canonical_pit_monthly -> passed in a fresh process",
+      "python scripts/prepare_canonical_pit_monthly.py --help -> passed with exit code 0",
+      "python -c import backend.services.stock_universe_pit_service; import scripts.prepare_canonical_pit_monthly -> passed",
+      "python scripts/prepare_canonical_pit_monthly.py --help -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "file_scope_catalog",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1243",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "840da6f33123c43b",
+    "recorded_at": "2026-08-29T19:05:51.486014Z",
+    "runtime_contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "bf0984fc75b13c745e2eff2e1ef38dd1d8226785",
+    "source_merge_commit": "19814d3e109092b0705f1762da21c762244558fc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3955",
+    "validation_evidence": [
+      "validation-receipt: id=d805e5796d8366b2 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=c92d2b7f7d2b2022 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed: 11 files mapped, 0 blocking findings`",
+      "validation-receipt: id=ecb455aa7bcf100b commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 tests`",
+      "validation-receipt: id=ab9c6ea74b791efc commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=data_sync_autonomy_backend status=passed command=`python -m nox -s data_sync_autonomy_backend` result=`passed: 254 passed, 1 skipped`",
+      "validation-receipt: id=3fedf0fc3286a4f1 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=qlib_data_backend status=passed command=`python -m nox -s qlib_data_backend` result=`passed: 20 tests`",
+      "validation-receipt: id=9a6b77d523c90db5 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_prepare_canonical_pit_monthly.py backend/tests/test_stock_universe_pit_service.py -q` result=`passed: 40 tests`"
+    ],
+    "validation_evidence_digest": "2e2f9e62838c38e460f10439b8e32144837cd6d83be9fa15c580db8cfe7e5c86"
+  },
+  "status": "fixed_source_pending_user_restart",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Canonical PIT monthly cutoff coverage lacks a controlled DEV/production operator",
+  "trigger_condition": {
+    "fingerprint": "9ad14be432852aea5e6c3596",
+    "source_event_id": "FE-20260829-9ad14be43285"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=d805e5796d8366b2 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=c92d2b7f7d2b2022 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed: 11 files mapped, 0 blocking findings`",
+    "validation-receipt: id=ecb455aa7bcf100b commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 tests`",
+    "validation-receipt: id=ab9c6ea74b791efc commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=data_sync_autonomy_backend status=passed command=`python -m nox -s data_sync_autonomy_backend` result=`passed: 254 passed, 1 skipped`",
+    "validation-receipt: id=3fedf0fc3286a4f1 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=qlib_data_backend status=passed command=`python -m nox -s qlib_data_backend` result=`passed: 20 tests`",
+    "validation-receipt: id=9a6b77d523c90db5 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_prepare_canonical_pit_monthly.py backend/tests/test_stock_universe_pit_service.py -q` result=`passed: 40 tests`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy",
+        "qlib_data"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy",
+          "qlib_data"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
