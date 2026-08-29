@@ -941,6 +941,87 @@ def test_daily_aggregate_loader_hashes_raw_rows_and_returns_all_l1() -> None:
     assert manifest["circ_mv_pit_boundary_crossing_count"] == 0
 
 
+def test_daily_aggregate_loader_regroups_projected_l1_rows_and_missing_prices_by_day() -> None:
+    class ProjectedReader(_FactReader):
+        def __init__(self) -> None:
+            rows = list(super().iter_stock_fact_rows())
+            self.missing_rows = []
+            projected_rows = []
+            for row in rows:
+                l1_number = int(str(row["l1_code"]).removeprefix("L1-"))
+                stock_number = int(str(row["symbol"])[2:6])
+                projected = {
+                    **row,
+                    "symbol": f"{stock_number:02d}{l1_number:04d}.SZ",
+                }
+                if stock_number == 9 and l1_number in {0, 1}:
+                    self.missing_rows.append(
+                        {
+                            **projected,
+                            "open_yuan": None,
+                            "high_yuan": None,
+                            "low_yuan": None,
+                            "close_yuan": None,
+                            "volume_shares": None,
+                            "amount_cny": None,
+                            "prev_close_yuan": None,
+                            "prev_close_5_yuan": None,
+                            "prev_close_10_yuan": None,
+                            "buy_sm_amount_cny": None,
+                            "sell_sm_amount_cny": None,
+                            "buy_elg_amount_cny": None,
+                            "sell_elg_amount_cny": None,
+                            "net_mf_amount_cny": None,
+                            "up_limit_yuan": None,
+                        }
+                    )
+                else:
+                    projected_rows.append(projected)
+            self.stock_rows = sorted(projected_rows, key=lambda row: (row["trade_date"], row["symbol"]))
+            self.missing_rows.sort(key=lambda row: (row["trade_date"], row["symbol"]))
+
+        def iter_stock_fact_rows(self):
+            return iter(self.stock_rows)
+
+        def iter_missing_price_rows(self):
+            return iter(self.missing_rows)
+
+    aggregates, manifest = subject.load_daily_aggregates(ProjectedReader())
+
+    identities = [(item.trade_date, item.l1_code) for item in aggregates]
+    assert len(aggregates) == 31
+    assert len(identities) == len(set(identities))
+    assert identities == sorted(identities)
+    assert aggregates[0].count_coverage == pytest.approx(0.9)
+    assert aggregates[1].count_coverage == pytest.approx(0.9)
+    assert manifest["raw_row_count"] == 310
+    assert manifest["missing_non_suspended_price_row_count"] == 2
+
+
+def test_daily_aggregate_loader_rejects_non_monotonic_source_dates_before_aggregation() -> None:
+    class ReversedDateReader(_FactReader):
+        def iter_stock_fact_rows(self):
+            rows = list(super().iter_stock_fact_rows())[:2]
+            yield {**rows[0], "trade_date": date(2024, 1, 3)}
+            yield {**rows[1], "trade_date": date(2024, 1, 2)}
+
+    with pytest.raises(StateModelSetError, match="hmm_risk_stock_fact_stream_order_invalid"):
+        subject.load_daily_aggregates(ReversedDateReader())
+
+
+def test_daily_aggregate_loader_rejects_incomplete_sort_identity_with_typed_reason() -> None:
+    class IncompleteIdentityReader(_FactReader):
+        def iter_stock_fact_rows(self):
+            row = next(super().iter_stock_fact_rows())
+            yield {**row, "l1_code": None}
+
+    with pytest.raises(
+        StateModelSetError,
+        match="hmm_risk_stock_fact_stream_identity_invalid: aggregate sort identity lacks l1_code",
+    ):
+        subject.load_daily_aggregates(IncompleteIdentityReader())
+
+
 def test_daily_aggregate_uses_effective_circ_mv_history_contract_identity() -> None:
     class HistoryReader(_FactReader):
         spec = _spec(circ_mv_history_start=date(2020, 7, 30))
