@@ -1416,20 +1416,21 @@ def test_codeql_selects_only_changed_languages() -> None:
 
     workflow = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
-    fast_lane = jobs["docs-lite"]
-    analyze = jobs["analyze"]
-    analyze_steps = analyze["steps"]
+    assert list(jobs) == ["codeql-verdict"]
+    verdict = jobs["codeql-verdict"]
+    verdict_steps = verdict["steps"]
     prepare_steps = [
         step
-        for job in (fast_lane, analyze)
-        for step in job["steps"]
+        for step in verdict_steps
         if step.get("name") == "Prepare exact local workspace (no remote actions)"
     ]
 
-    assert fast_lane["outputs"]["registry_sync"].endswith("steps.fast_lane.outputs.registry_sync }}")
-    assert fast_lane["outputs"]["languages"].endswith("steps.fast_lane.outputs.languages }}")
-    assert fast_lane["outputs"]["has_languages"].endswith("steps.fast_lane.outputs.has_languages }}")
-    detect_step = next(step for step in fast_lane["steps"] if step.get("name") == "Detect CodeQL fast lane")
+    assert verdict["name"] == "CodeQL verdict"
+    assert verdict["runs-on"] == ["self-hosted", "Windows", "aistock-ci-security"]
+    assert "needs" not in verdict
+    assert "strategy" not in verdict
+    detect_step = next(step for step in verdict_steps if step.get("name") == "Detect CodeQL fast lane")
+    assert detect_step["id"] == "fast_lane"
     assert "scripts/ci_change_classifier.py" in detect_step["run"]
     assert "close_sync_metadata_only" in detect_step["run"]
     assert "codeql_pr_languages" in detect_step["run"]
@@ -1437,7 +1438,7 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert detect_step["env"]["EVENT_NAME"] == "${{ github.event_name }}"
     assert "pull_request_test_only" in detect_step["run"]
     assert "PYTHON_CHANGED" not in detect_step["run"]
-    assert len(prepare_steps) == 2
+    assert len(prepare_steps) == 1
     assert all("--no-write-fetch-head" in step["run"] for step in prepare_steps)
     assert all("--depth=1" not in step["run"] for step in prepare_steps)
     assert all(step["run"].count("rev-parse --verify --quiet") == 2 for step in prepare_steps)
@@ -1447,24 +1448,30 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert all("refs/pull/$env:PR_NUMBER/merge" in step["run"] for step in prepare_steps)
     assert all("exact workspace source fetch failed after 3 attempts" in step["run"] for step in prepare_steps)
     assert all("scripts/ci/prepare_self_hosted_workspace.py" in step["run"] for step in prepare_steps)
-    assert not any("uses" in step for job in jobs.values() for step in job.get("steps", []))
+    assert not any("uses" in step for step in verdict_steps)
 
-    assert analyze["if"] == "needs.docs-lite.outputs.has_languages == '1'"
-    assert analyze["strategy"]["matrix"]["language"] == "${{ fromJson(needs.docs-lite.outputs.languages) }}"
-    assert not any(step.get("name") == "Fast-lane CodeQL no-op" for step in analyze_steps)
-    direct_analysis = next(step for step in analyze_steps if step.get("name") == "Run CodeQL CLI analysis")
-    assert direct_analysis["timeout-minutes"] == 20
-    assert direct_analysis["env"]["CODEQL_LANGUAGE"] == "${{ matrix.language }}"
+    direct_analysis = next(step for step in verdict_steps if step.get("name") == "Run CodeQL CLI analysis")
+    assert direct_analysis["if"] == "steps.fast_lane.outputs.has_languages == '1'"
+    assert direct_analysis["env"]["CODEQL_LANGUAGES"] == "${{ steps.fast_lane.outputs.languages }}"
     assert direct_analysis["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
     direct_run = direct_analysis["run"]
+    assert "$languages = @($env:CODEQL_LANGUAGES | ConvertFrom-Json)" in direct_run
+    assert "foreach ($language in $languages)" in direct_run
     assert "database create" in direct_run
     assert '"--build-mode=none"' in direct_run
     assert "database analyze" in direct_run
     assert "github upload-results" in direct_run
     assert '"--wait-for-processing-timeout=120"' in direct_run
-    assert not any("github/codeql-action/" in str(step.get("uses") or "") for step in analyze_steps)
-    assert analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_REQUIRED"] == "1"
-    assert len(analyze["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
+    assert "ci_environment_verify.py" in direct_run
+    assert not any("github/codeql-action/" in str(step.get("uses") or "") for step in verdict_steps)
+    assert direct_analysis["env"]["AISTOCK_CI_CODEQL_BUNDLE_REQUIRED"] == "1"
+    assert len(verdict["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
+
+    final_verdict = next(step for step in verdict_steps if step.get("name") == "Enforce CodeQL result")
+    assert final_verdict["if"] == "always()"
+    assert final_verdict["env"]["CLASSIFIER_RESULT"] == "${{ steps.fast_lane.outcome }}"
+    assert final_verdict["env"]["ANALYZE_RESULT"] == "${{ steps.codeql_analysis.outcome }}"
+    assert "CodeQL analysis failed" in final_verdict["run"]
 
 
 def test_codeql_pr_skips_test_only_languages_but_preserves_main_push_languages(tmp_path: Path) -> None:
@@ -1550,7 +1557,7 @@ def test_classifier_uses_prebuilt_tooling_without_install_steps() -> None:
     workflows = {
         ".github/workflows/test.yml": ("classify-changes", "Classify CI lane"),
         ".github/workflows/pr-quality.yml": ("pr-quality", "Detect PR quality lane"),
-        ".github/workflows/codeql.yml": ("docs-lite", "Detect CodeQL fast lane"),
+        ".github/workflows/codeql.yml": ("codeql-verdict", "Detect CodeQL fast lane"),
         ".github/workflows/semgrep.yml": ("semgrep", "Detect Semgrep fast lane"),
     }
     for path, (job_name, detect_name) in workflows.items():

@@ -84,6 +84,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "pr_ci_no_external_artifact_action_dependency" in evidence
     assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
     assert evidence["pr_ci_workflow_validation_reuses_ci_verdict_runner"] is True
+    assert evidence["codeql_reuses_single_security_runner_allocation"] is True
     assert "pr_workflows_no_external_report_action_dependency" in evidence
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
     assert evidence["nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies"] is True
@@ -130,6 +131,26 @@ def test_workflow_validation_runner_reacquisition_is_detected(tmp_path: Path) ->
     evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
 
     assert evidence["pr_ci_workflow_validation_reuses_ci_verdict_runner"] is False
+
+
+def test_codeql_security_runner_reacquisition_is_detected(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "codeql.yml":
+            text = text.replace(
+                "jobs:\n",
+                "jobs:\n"
+                "  analyze:\n"
+                "    runs-on: [self-hosted, Windows, aistock-ci-security]\n"
+                "    steps:\n"
+                "      - run: echo separate runner allocation\n\n",
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["codeql_reuses_single_security_runner_allocation"] is False
 
 
 def test_ci_verdict_owns_workflow_validation_and_fails_closed() -> None:
@@ -191,6 +212,7 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "policy_evidence_remains_one_scanner_step",
         "pr_ci_static_gate_reuses_classifier_checkout",
         "pr_ci_workflow_validation_reuses_ci_verdict_runner",
+        "codeql_reuses_single_security_runner_allocation",
     }
 
     assert expected <= required
