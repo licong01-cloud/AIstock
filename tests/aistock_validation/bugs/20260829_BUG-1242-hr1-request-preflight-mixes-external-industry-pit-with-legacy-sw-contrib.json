@@ -129,7 +129,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-contracts/hmm-risk-c010-a5",
     "database_readback_ref": null,
     "fresh_process_evidence": [
-      "Conda AIstock fresh process loaded commit c9e20946cb85aab0d45218c54e34ea0dc6f2aada, read the frozen C-013 authority, and resolved 002411.SZ/2022-01-04 into one C-010 opportunity under hmm_industry_pit_classification_projection; no database write or process control"
+      "Conda AIstock fresh process loaded commit c9e20946cb85aab0d45218c54e34ea0dc6f2aada, read the frozen C-013 authority, and resolved 002411.SZ/2022-01-04 into one C-010 opportunity under hmm_industry_pit_classification_projection; no database write or process control",
+      "python -m pytest frozen PIT authority/readback fix-point on commit 499d81088 -> 4 passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
