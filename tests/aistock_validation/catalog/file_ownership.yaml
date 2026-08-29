@@ -608,6 +608,16 @@ rules:
     layer: script
     risk_level: critical
     ownership_reason: Governed retained-package terminalization changes historical unified simulation run status while preserving broker and economic evidence.
+  - rule_id: localsim_failed_history_physical_prune_cli
+    priority: 98
+    include:
+      - scripts/localsim_failed_history_prune_core.py
+      - scripts/prune_localsim_failed_history.py
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2]
+    layer: script
+    risk_level: critical
+    ownership_reason: Governed LocalSIM-only physical pruning deletes failed historical run/economic subgraphs while protecting successful anchors, MiniQMT, StrategyPackage, and Selection evidence.
   - rule_id: miniqmt_execution_runtime_services
     priority: 95
     include:
