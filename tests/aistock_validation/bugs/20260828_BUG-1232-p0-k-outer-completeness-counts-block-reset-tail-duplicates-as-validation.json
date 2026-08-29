@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1232",
-  "closed_at": null,
+  "closed_at": "2026-08-29T05:03:42Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -98,8 +98,8 @@
   },
   "first_seen_at": "2026-08-28T11:50:45.357421Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a08adb05852ab10309bd6f7912452cca5bc29e84",
+  "fixed_at": "2026-08-29T05:03:42Z",
   "github_issue_number": 3903,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3903",
   "last_seen_at": "2026-08-28T11:50:45.357421Z",
@@ -107,6 +107,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3939",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -133,7 +134,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1232",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "29c4e4594188762d",
+    "recorded_at": "2026-08-29T05:04:53.764841Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fa4e9e86b807505a3902923fa8bdfee6e6fbbc59",
+    "source_merge_commit": "a08adb05852ab10309bd6f7912452cca5bc29e84",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3939",
+    "validation_evidence": [
+      "python -m pytest backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py -q -p no:cacheprovider -> 11 passed",
+      "nox -s advisory_modeling_backend -> passed; 508 passed, 16 skipped",
+      "nox -s validation_module_registry_l0 -> passed; 8 pytest passed; ownership 14/14",
+      "python -m ruff check backend/services/advisory_model_first/selection_liability_gate_pipeline.py backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py -> passed",
+      "python -m compileall -q backend/services/advisory_model_first/selection_liability_gate_pipeline.py backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "3e96345e5918fa9b13c357e1a270ac836088e38af85fb811a1c9c2a2e16a95d5"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -142,6 +169,14 @@
     "fingerprint": "f989692880fc2547ce1540a8",
     "source_event_id": "FE-20260828-f989692880fc"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py -q -p no:cacheprovider -> 11 passed",
+    "nox -s advisory_modeling_backend -> passed; 508 passed, 16 skipped",
+    "nox -s validation_module_registry_l0 -> passed; 8 pytest passed; ownership 14/14",
+    "python -m ruff check backend/services/advisory_model_first/selection_liability_gate_pipeline.py backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py -> passed",
+    "python -m compileall -q backend/services/advisory_model_first/selection_liability_gate_pipeline.py backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
