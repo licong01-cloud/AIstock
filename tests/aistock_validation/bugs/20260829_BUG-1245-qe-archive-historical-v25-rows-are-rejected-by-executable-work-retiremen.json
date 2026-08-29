@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/qe_archive/source_assembler.py",
     "backend/tests/test_qe_archive_repository_static.py",
+    "backend/tests/qe_archive/test_round3_fixes.py",
     "tests/aistock_validation/bugs/20260829_BUG-1245-qe-archive-historical-v25-rows-are-rejected-by-executable-work-retiremen.json"
   ],
   "assigned_agent": null,
@@ -21,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260829-04185e759c76",
       "timestamp": "2026-08-29T07:17:58.122451Z"
+    },
+    {
+      "action": "allowed_scope_expanded",
+      "actor": "codex",
+      "note": "Move new QE Archive retirement-boundary tests into the existing classifier-mapped qe_archive_backend file backend/tests/qe_archive/test_round3_fixes.py; keep the original nightly failing test fixture unchanged and do not modify CI/catalog files.",
+      "timestamp": "2026-08-29T08:24:30.6241053Z"
     }
   ],
   "evidence_uris": [
