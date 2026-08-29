@@ -15,6 +15,7 @@ non_runtime_source_paths:
   - scripts/ingest_tushare_daily_basic.py
   - scripts/localsim_failed_history_prune_core.py
   - scripts/prune_localsim_failed_history.py
+  - scripts/prepare_canonical_pit_monthly.py
   - scripts/qlib_authoritative_bin_export.py
   - scripts/repair_announcement_event_signal_issuer_binding.py
   - scripts/seed_dataset_refresh_audit.py
