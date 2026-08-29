@@ -1191,6 +1191,93 @@ def _c010_expected_partition_predicate_status(
     return "available" if str(candidates[0].get(code_field) or "") else "unavailable"
 
 
+def _c010_validate_frozen_industry_pit_projection_candidate(
+    candidates: Any,
+    *,
+    canonical_ts_code: str,
+    trade_date_text: str,
+    authority_identity: Mapping[str, Any],
+) -> None:
+    """Close each durable projection candidate over its frozen PIT authority and entry key."""
+
+    if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], Mapping):
+        raise StateModelSetError(
+            "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+            "frozen industry PIT projection candidate cardinality is invalid"
+        )
+    candidate = candidates[0]
+    required_fields = {
+        "status",
+        "canonical_symbol",
+        "trade_date",
+        "l1_code",
+        "l1_name",
+        "l2_code",
+        "l2_name",
+        "reason_code",
+        "classification_receipt_hash",
+        "index_membership_receipt_hash",
+        "classification_row_hashes",
+        "index_membership_row_hashes",
+        "alignment_state",
+        "classification_research_basis",
+        "non_as_known_taxonomy",
+    }
+    authority = authority_identity.get("authority")
+    if (
+        set(candidate) != required_fields
+        or not isinstance(authority, Mapping)
+        or candidate.get("canonical_symbol") != canonical_ts_code
+        or candidate.get("trade_date") != trade_date_text
+        or candidate.get("classification_receipt_hash") != authority.get("classification_authority_receipt_hash")
+        or candidate.get("index_membership_receipt_hash") != authority.get("index_membership_authority_receipt_hash")
+        or candidate.get("classification_research_basis") != authority.get("active_classification_basis")
+        or candidate.get("non_as_known_taxonomy") is not authority.get("non_as_known_taxonomy")
+        or not str(candidate.get("alignment_state") or "").strip()
+    ):
+        raise StateModelSetError(
+            "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+            "frozen industry PIT projection identity is invalid"
+        )
+    for field in ("classification_row_hashes", "index_membership_row_hashes"):
+        hashes = candidate.get(field)
+        if (
+            not isinstance(hashes, list)
+            or any(not isinstance(value, str) or not _c010_valid_sha256(value) for value in hashes)
+            or hashes != sorted(hashes)
+            or len(hashes) != len(set(hashes))
+        ):
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+                "frozen industry PIT projection lineage is invalid"
+            )
+    identity_fields = ("l1_code", "l1_name", "l2_code", "l2_name")
+    status = candidate.get("status")
+    if status == "resolved":
+        if (
+            any(not str(candidate.get(field) or "").strip() for field in identity_fields)
+            or candidate.get("reason_code") is not None
+            or not candidate["classification_row_hashes"]
+        ):
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+                "resolved frozen industry PIT projection is incomplete"
+            )
+    elif status == "unavailable":
+        if (
+            any(candidate.get(field) is not None for field in identity_fields)
+            or not str(candidate.get("reason_code") or "").strip()
+        ):
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+                "unavailable frozen industry PIT projection is inconsistent"
+            )
+    else:
+        raise StateModelSetError(
+            "hmm_risk_c010_provider_absence_domain_partition_invalid: frozen industry PIT projection status is invalid"
+        )
+
+
 def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, Any]:
     """Validate the complete P_all/P_in/P_out authority used by both writer and readback."""
 
@@ -1245,12 +1332,29 @@ def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, A
         "security_resolver_identity": "security_source_identity_manifest",
         "pit_authority_identity": "stock_universe_pit_state_and_spans",
         "price_source_identity": "market.kline_daily_raw",
-        "sw_mapping_classify_identity": "sw_index_member_and_classify_mapping",
+        "sw_mapping_classify_identity": {
+            "sw_index_member_and_classify_mapping",
+            "hmm_industry_pit_classification_projection",
+        },
     }
-    for field, expected_type in authority_type_by_field.items():
+    for field, expected_types in authority_type_by_field.items():
         authority = _c010_require_authority_identity(value.get(field), label=f"C-010 partition {field}")
-        if authority.get("authority_type") != expected_type:
+        accepted_types = {expected_types} if isinstance(expected_types, str) else expected_types
+        if authority.get("authority_type") not in accepted_types:
             raise StateModelSetError(f"C-010 partition {field} authority type is invalid")
+        if (
+            field == "sw_mapping_classify_identity"
+            and authority.get("authority_type") == "hmm_industry_pit_classification_projection"
+        ):
+            frozen_authority = authority["authority"]
+            if (
+                frozen_authority.get("schema_version") != "hmm_risk_pit_mapping_manifest_v2"
+                or not _c010_valid_sha256(frozen_authority.get("classification_authority_receipt_hash"))
+                or not _c010_valid_sha256(frozen_authority.get("index_membership_authority_receipt_hash"))
+                or not str(frozen_authority.get("active_classification_basis") or "").strip()
+                or not isinstance(frozen_authority.get("non_as_known_taxonomy"), bool)
+            ):
+                raise StateModelSetError("C-010 partition frozen industry PIT authority schema is invalid")
     entries = value.get("entries")
     if not isinstance(entries, list):
         raise StateModelSetError("C-010 provider-absence partition entries are missing")
@@ -1369,6 +1473,13 @@ def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, A
         ):
             raise StateModelSetError(
                 "hmm_risk_c010_provider_absence_domain_partition_invalid: SW predicate evidence drift"
+            )
+        if value["sw_mapping_classify_identity"]["authority_type"] == ("hmm_industry_pit_classification_projection"):
+            _c010_validate_frozen_industry_pit_projection_candidate(
+                predicates["sw_l1_identity_valid"][1].get("candidates"),
+                canonical_ts_code=canonical_ts_code,
+                trade_date_text=trade_date_text,
+                authority_identity=value["sw_mapping_classify_identity"],
             )
         if "invalid" in statuses.values():
             raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: predicate invalid")
