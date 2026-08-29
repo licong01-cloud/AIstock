@@ -28,12 +28,18 @@
   ],
   "expected": "Industry-PIT projected stock-fact rows preserve the aggregate ordering contract and produce exactly one aggregate per sector/date before feature-panel construction.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "tests/aistock_validation/bugs/20260829_BUG-1250-hr1-industry-pit-projected-stock-fact-stream-violates-aggregate-ordering.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/stock_fact_repository.py",
-      "backend/tests/hmm_risk/test_stock_fact_repository.py"
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "tests/aistock_validation/bugs/20260829_BUG-1250-hr1-industry-pit-projected-stock-fact-stream-violates-aggregate-ordering.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/stock_fact_repository.py",
@@ -101,10 +107,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
