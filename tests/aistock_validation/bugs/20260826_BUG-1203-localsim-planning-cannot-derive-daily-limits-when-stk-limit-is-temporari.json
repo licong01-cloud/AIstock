@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1203",
-  "closed_at": null,
+  "closed_at": "2026-08-29T19:35:00.360622Z",
   "closure_requirements": [
     "Keep market.stk_limit as the first LocalSIM authority and call TDX exactly once only for refresh-unavailable, legal-zero-row, requested-symbol-missing, or null-pre-close availability gaps.",
     "Reject duplicate, alias, cross-date, non-finite, non-positive, inverted-bound, unknown-board, stale-reference, and hash/reference corruption without masking them through TDX.",
@@ -255,9 +255,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1203\\post-restart-verify-20260830.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1203",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "eee21d776cd9960b4e2f28a37fad6fd2c26a02858155d4d8e970ba10770daf68",
+      "contract_digest": "ec9214640de4ecfbe8b6841db28744885131a1f96b5247e37424fdf8ccaa1df2",
+      "expected_identity": "65937d83068fa02beb0c1c173646cb4aaea5eb7a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-29T19:23:53.063623Z",
+      "mode": "read_only",
+      "observed_identity": "19814d3e109092b0705f1762da21c762244558fc",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6f1c035db4900f0f66640f8025e1dd21f6a9317609f631d042994e27e264b81e",
+      "receipt_sha256": "5159a223a7232f92b699bac4ecb0d7431ad085bb761930283dcda27b4db16a66",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "535efcc897b8a7584bc9142ca50e8ab257baaf72693e2057df0eef101ed9750c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -290,7 +312,7 @@
     ],
     "validation_evidence_digest": "1277276c13329e0f0196ae5dd2f68affeed061961aa60af5805c95e4316f20d7"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -302,7 +324,8 @@
   "validation_evidence": [
     "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14 of 14",
     "python -m nox -s simulation_core_l2 -> 695 passed, 2 skipped",
-    "python -m nox -s paper_v2_backend -> 1131 passed, 3 skipped, 2 xfailed"
+    "python -m nox -s paper_v2_backend -> 1131 passed, 3 skipped, 2 xfailed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1203 --target backend-main --expected-identity 65937d83068fa02beb0c1c173646cb4aaea5eb7a -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
