@@ -4,7 +4,7 @@
 
 - 日期：2026-08-13
 - 等级：F2（跨数据管线、QE/HMM、Selection、Paper/Simulation、StrategyPackage/Advisory 与生产激活）
-- 状态：W0～W4-B源码已合入，W4-A/W4-B已在用户重启后的生产进程完成identity、OpenAPI与只读contract smoke；W5 StrategyPackage/Advisory已完成本地实现和模块矩阵，等待最终HEAD门禁与用户提交授权；W6、真实v2 dataset candidate和生产激活均未完成/未授权
+- 状态：2026-08-29已按用户批准把“9月1日凌晨启动、完成截至2026-08-31候选更新”提升为唯一P0；数据准备/发布关键路径与消费者迁移、模型训练、生产激活解耦。W1/W2及相关发布源码已合入，最新真实W7 sample停在pre-run `BLOCKED_CONTRACT`且无run/receipt；最终一次sample、2026-07-31 v2 full基线、2026-08-31 monthly candidate和生产激活均尚未完成
 - 上位业务设计：`docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md`
 - 月更底座设计：`docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md`
 - 运维入口：`docs/operations/qe_backtest_dataset_monthly_update_runbook.md`
@@ -14,6 +14,40 @@
 
 本文是后续实施、候选构建、跨模块验收和生产切换的主控计划，不替代上述业务规则和月更底层技术设计，
 也不形成第二套数据管线或第二个股票池标准。若本文与上位业务设计冲突，必须停止实施并先修订设计。
+
+### 0.1 2026-09-01 P0交付重排
+
+用户批准的最高优先级业务结果是：在2026-09-01凌晨开始执行，将独立、不可变、candidate-only数据集更新到
+2026-08-31，并形成可签收terminal receipt。candidate build本身不包含production activation、消费者默认值切换、
+模型训练、后端重启、DDL或cleanup。若canonical PIT rolling state尚未覆盖目标cutoff，则其DEV验证、目标明确的
+production DML apply和readback是R0数据前置，但继续作为独立授权/receipt状态，不能被monthly隐式执行。
+
+本次重排把原W0～W9首次升级工程收敛为三条互不冒充的交付轨道：
+
+1. **R0 数据准备与候选发布（唯一P0）**：最终一次W7五股sample → 2026-07-31 v2 full基线 →
+   2026-08-31 canonical PIT coverage preflight/必要时独立DML refresh → industry/P3A full authority →
+   一次`monthly --candidate-only` → terminal receipt/signoff。
+2. **R1 消费者迁移（非R0前置）**：QE/HMM、Selection/Paper、StrategyPackage/Advisory继续由各owner独立开发、
+   合入和验证；只要不修改R0冻结的profile/source/materializer/validator，就不阻断candidate构建。
+3. **R2 生产激活与aftercare（R0之后、独立授权）**：distribution、pointer CAS、消费者默认值切换、重启、
+   rollback和cleanup保持原授权边界。
+
+凡本文旧段落把W3～W6消费者完成、模型训练或产品UI验收列为W7真实candidate的串行前置，均由本节取代。
+W7只等待数据发布自身的最终source commit、PIT/industry authority、profile/toolchain和Worker readiness。
+
+P0时间窗固定为：
+
+- 2026-08-29：冻结R0源码；只执行一次BUG-1238修复后的五股sample，不为失败反复创建新submission。
+- 2026-08-30：sample PASS后构建并签收2026-07-31 v2 full基线；优先复用已验证2026-07-31 v1组件。
+- 2026-08-31收盘后：等候当日权威源可用；先确认canonical PIT v2 state/spans覆盖至2026-08-31。若不足，
+  只通过已合入的受控operator完成DEV validate/rollback与另行授权的production DML apply/readback，再构建
+  同cutoff的P1/P2A industry authority和P3A full。
+- 2026-09-01 00:05（Asia/Shanghai）以后：只提交一次`monthly --candidate-only`；目标是在开盘前形成
+  `CANDIDATE_VALIDATED` terminal receipt。provider尚未发布属于同一durable intent的retryable waiting，
+  不通过重复提交、补默认值、减股票/日期/字段或绕过authority追赶时间。
+
+P0完成定义是2026-08-31 candidate及其完整receipt签收；sample PASS、源码合入、P3A构建成功或run进入执行中
+均不得单独冒充P0完成。
 
 ## 1. Background / 背景
 
@@ -36,8 +70,8 @@ QE frozen snapshot、在线rolling view、StrategyPackage和模拟盘将可能�
 4. 把后续普通月更收敛为一次 `monthly --candidate-only` 提交，由 durable planner 决定
    `REUSE/INCREMENTAL/SELECTIVE_REBUILD/FULL_REBUILD`。
 5. 将数据语义正确性、内存/磁盘安全、性能、历史复现、消费者一致性和生产激活分别建模和验收。
-6. 为每个实施阶段建立独立窗口、worktree、allowed write scope、交付物、入口门禁和退出门禁，避免多窗口
-   共同修改公共契约。
+6. 为不同写入所有权建立独立worktree和allowed write scope，但窗口边界只协调并发，不自动成为R0串行门禁；
+   candidate构建只等待其真实数据依赖和发布链source freeze。
 
 #### 2.1.2 明确禁止
 
@@ -232,22 +266,21 @@ write scope完全不重叠且共同依赖已合入main时。
 | W3-D QE/HMM Validation | 在A/B/C均合入后的最终main上验证统一身份、reproduction和隔离 | 不修改业务源码；仅运行直接测试、inventory和结构化验证 | W3 source-ready receipt，失败返回责任切片 | 不修数据、不启动实验、不把旧实验当v2证据 |
 | W4 Selection/Paper/Simulation | rolling resolver、选股/持仓退出、持久化runtime profile和模拟盘兼容 | `selection_center/**`、`paper_trading_v2/**`、`simulation_runtime/**`及其精确JSON migration/tests | 在线消费者统一binding、旧profile显式迁移和shadow能力 | 不改变订单可执行性业务语义 |
 | W5 StrategyPackage/Advisory | package manifest/projection双读契约、旧包分类、Advisory查询迁移 | `strategy_package/**`、`advisory_*`精确scope、直接测试 | v2包重新认证/重训决策和v1 reproduction隔离 | 不改写已发布旧manifest或模型资产 |
-| W6 Integration | 汇总最终main、消费者库存扫描、跨模块fixture、candidate bundle/activation envelope builder、共享inference入口 | 集成测试、inventory guard、`backend/inference_engine.py`精确scope和必要胶水；其他公共核心文件需W1交接 | final source-ready commit、无fallback共享推理和结构化receipt | 不运行生产或全量candidate |
-| W7 Candidate Build | 小样本后执行真实v2 candidate-only任务，修复数据缺口 | 只写新candidate root、control catalog、candidate-local CAS/overlay和receipt | 完整v2 candidate | 不改源码、不写生产DB、不覆盖历史candidate |
+| W6 Consumer Integration | 汇总消费者库存、跨模块fixture、activation envelope和共享inference入口；属于R1/R2 | 集成测试、inventory guard、`backend/inference_engine.py`精确scope和必要胶水；其他公共核心文件需W1交接 | consumer source-ready与activation输入 | 不作为R0候选构建前置，不运行生产或全量candidate |
+| W7 Candidate Build | 在数据发布source freeze后执行一次最终sample、2026-07-31 full基线和2026-08-31 monthly candidate | 只写新candidate root、control catalog、candidate-local CAS/overlay和receipt | 完整v2 candidate | 不等待无关消费者源码；不写生产DB、不覆盖历史candidate |
 | W8 Independent Validation | 只读审计candidate、旧数据对照、消费者shadow、性能/资源证据 | 仅validation receipt/允许的审计输出目录 | 独立PASS/FAIL与缺口清单 | 不修数据、不改candidate、不激活 |
 | W9 Activation/Aftercare | enablement部署核验、inactive分发、最终DB CAS、激活后只读核验、精确cleanup计划 | 精确migration/distribution/activation receipt；运行时动作按独立授权 | active v2与回滚证据 | 不在W8后改源码/config，不推导重启、删除或cleanup授权 |
 
 ### 5.1 并行与串行规则
 
-- W1和W2先串行合入：W2必须以W1最终公共binding为输入。
-- W3内部固定`W3-A → W3-B → W3-C → W3-D`；每个源码切片从当时最新`origin/main`开始并形成独立小PR，
-  不保留一个跨越全部QE/HMM文件的长期开发分支。
-- W4、W5可与尚未占用同文件的W3切片并行；任意共同文件转交W6单写。W3-B与W3-C虽文件互斥，仍按上述顺序
-  执行，以减少活跃业务窗口交接和最终identity漂移。
-- W6只在W3-D、W4、W5均通过或明确记录阻断后开始。
-- W7绑定W6最终commit、profile digest和toolchain SHA；W7运行期间W1-W6不得变更构建相关源码。
+- W1和W2公共数据发布binding已完成；今后的R0只绑定其最终发布源码、profile digest和toolchain SHA。
+- W3内部仍按`W3-A → W3-B → W3-C → W3-D`管理消费者自身依赖，但该顺序不阻断R0。
+- W4、W5、W6只要write scope不与R0冻结的profile/source/materializer/validator重叠，即可与W7并行；共同文件仍按
+  单写者规则交接，不通过等待所有消费者结束来规避冲突。
+- W7开始前只冻结直接参与候选构建、签收和PIT/industry authority的源码/config；无关消费者PR合入不使W7/W8
+  receipt失效。直接构建依赖发生变化才使相关receipt失效并要求重验。
 - W8可以只读观察W7，但正式签收必须绑定W7 terminal receipt和不可变candidate identity。
-- W9的DEV migration和enablement部署准备可在W6 source-ready后进行；inactive data distribution与最终CAS必须在
+- W9的DEV migration和enablement部署准备可沿R1/R2独立进行；inactive data distribution与最终CAS必须在
   W8 PASS、用户对具体migration/candidate/activation授权后执行。
 
 ### 5.2 W3短期文件租约与BUG抢占
@@ -433,7 +466,7 @@ W4-A通过只代表Selection/Simulation enablement，不代表Paper、完整W4�
 
 退出门禁：每个窗口直接测试通过、无未分类生产v1引用、无运行时默认提前切到v2。
 
-### P4 集成与小样本源码验收（W6）
+### P4 数据发布源码验收与消费者集成分流（R0/W6）
 
 1. 构建changed-file consumer inventory guard；新增消费者若绕过resolver则CI失败。
 2. 使用3～5只证券和数个关键交易日fixture覆盖正常股、IPO第251/252日、ST/摘帽、退市/吸收合并、长期停牌。
@@ -448,9 +481,15 @@ W4-A通过只代表Selection/Simulation enablement，不代表Paper、完整W4�
    lineage buckets和有界峰值内存。
 8. 运行最小本地门禁和委托跨模块验证，生成绑定最终commit的receipt。
 
-退出门禁：source-ready，不等于真实数据ready；所有生产gate仍为pending/noop。
+退出门禁：R0所需profile/source/materializer/validator及PIT/industry authority source-ready；消费者inventory、
+模型训练和产品UI可以继续处于R1，不阻断W7。source-ready不等于真实数据ready；所有生产gate仍为pending/noop。
 
 ### P5 极小真实数据候选（W7）
+
+本sample只证明真实durable pipeline能够从source resolution进入run并生成terminal receipt，不证明全量数据正确性。
+BUG-1238修复后的最终HEAD只执行一次新sample；历史terminal submission不得resume。若失败，保留同一submission的
+typed evidence，先定位同范围BUG或retryable source状态；修复合入后只允许一次final rerun，禁止用多轮不同小股票、
+重复submission或更多人工阶段替代全量验收。普通cutoff推进不运行sample。
 
 W2新增仅允许仓库白名单id的首次迁移入口，不接受任意路径/代码/日期：
 
@@ -495,7 +534,7 @@ candidate root，不写生产DB，不触碰6月30日/7月31日目录。
 - 峰值资源低于profile hard cap，swap为0，无其他进程控制。
 - 失败后只修源码或candidate-local缺口；修复合入后必须以新commit重新执行小样本，旧receipt失效。
 
-退出门禁：小样本terminal PASS并绑定最终source commit；否则不得开始全量。
+退出门禁：唯一一次final sample terminal PASS并绑定最终R0 source commit；否则不得开始2026-07-31 full。
 
 ### P6 完整v2 candidate-only构建（W7）
 
@@ -552,10 +591,12 @@ candidate root，不写生产DB，不触碰6月30日/7月31日目录。
 
 执行顺序：
 
-1. 在W7以前完成全部source/config PR；DEV migration/apply/readback和rollback验证PASS，enablement源码进入main。
+1. R0只要求W7直接构建依赖的source/config在运行前冻结。W9 activation开始前再完成全部消费者/activation
+   source/config PR、DEV migration/apply/readback和rollback验证，不反向阻断已经独立签收的candidate。
 2. 若enablement影响backend/Worker，用户在生产仍指向v1迁移态时先完成重启；只读核验新代码已加载且v1业务未变。
-3. W7形成不可变candidate bundle、W8形成绑定该bundle的独立receipt；此后禁止任何source/config修改。若发现缺陷，退回
-   W1～W6修复，并使W7/W8证据失效后重跑。
+3. W7形成不可变candidate bundle、W8形成绑定该bundle的独立receipt。此后直接影响candidate bytes、PIT/industry
+   authority、source identity或required validator的修改使W7/W8证据失效并回到对应owner修复；仅消费者/activation
+   envelope修改重做R1/R2证据，不无条件重建candidate。
 4. 用户确认具体candidate release、migration、生产target和activation；生产target preflight必须匹配candidate bundle。
 5. 执行生产DDL（若需要）并readback，但pointer仍指向v1；将v2 frozen artifact以inactive状态分发到全部计算节点，
    逐节点校验manifest和文件digest。任一节点缺失时不执行CAS。
@@ -642,7 +683,8 @@ rollback创建新的单调递增generation，并让其引用最后一个已验�
 
 每个PR先执行窗口直接测试和`git diff --check`，再由独立审核检查scope、业务语义、fail-closed、测试充分性和
 DESIGN-COMPLIANCE-001。公共契约修改不得在多个PR中并行漂移；后续窗口必须从已合入main重新创建或同步。
-W7开始后禁止新增activation源码/config PR；任何功能改动使W7/W8 receipts失效并回到P4。
+W7开始后禁止修改其直接构建依赖；无交集的activation/消费者PR可以继续。只有改变candidate bytes、PIT/industry
+authority、source identity或required validator的改动使W7/W8 receipts失效并回到P4，不能把任意功能改动扩大为全量重跑。
 
 ## 9. 审核模型
 
@@ -707,7 +749,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-004 | QE/HMM计算面从不可变manifest读取binding，不回退在线DB。 |
 | F-005 | 所有生产v1引用完成分类，unknown为零；历史identity不做全局替换。 |
 | F-006 | 每个源码切片有独立worktree、短期精确文件租约、入口/退出门禁和结构化receipt；无关实验和开发不被冻结。 |
-| F-007 | W3按A→B→C→D串行，W4/W5仅在文件互斥时并行；W7构建期间源码冻结。 |
+| F-007 | W3按A→B→C→D管理消费者自身依赖；R0只冻结直接构建依赖，无交集的W3～W6工作不得成为W7前置。 |
 | F-008 | v2 PIT覆盖252交易日、历史D/P、ST/终止as-of和exception ledger。 |
 | F-009 | planner按依赖选择复用/增量/选择性/全重建，不默认全量重新导出。 |
 | F-010 | PIT变化不会被错误降级为仅更新all.txt；完整candidate artifact graph可独立读取。 |
@@ -716,7 +758,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-013 | QE/HMM/训练普通任务拒绝归档规则，正式结果绑定release identity。 |
 | F-014 | Selection/Paper/Simulation共享rolling binding，PIT与orderable_now职责不混淆。 |
 | F-015 | StrategyPackage旧manifest不改写；v2继续运行必须重新认证或重训。 |
-| F-016 | 小样本失败修复后绑定新commit重跑，不能沿用旧receipt。 |
+| F-016 | 首次迁移只执行一次final sample；失败修复后绑定新commit进行一次final rerun，不能沿用旧receipt或循环提交。 |
 | F-017 | 全量候选只写新X盘root，不覆盖6月30日/7月31日或生产路径。 |
 | F-018 | 审核使用全量结构/digest+分层数值采样，不执行新旧逐行全量比较。 |
 | F-019 | 内存/并发/磁盘/swap硬边界和性能归一化门禁可执行且fail closed。 |
@@ -731,6 +773,8 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-028 | W3-A只复用W1/W2公共API形成中立正式consumer adapter且拒绝全部legacy；QE/HMM不得复制v2解析器或互相反向依赖。 |
 | F-029 | W3短租约允许同文件BUG优先抢占；仅目标文件需提交/交接，旧实验固定原commit且不作为v2验收。 |
 | F-030 | W3-D在A/B/C合入后的最终main验证QE/HMM identity、v1 reproduction、sample/v1拒绝和零在线DB fallback。 |
+| F-031 | 2026-09-01 P0只以R0数据依赖为关键路径；一次final sample后完成2026-07-31 full基线和2026-08-31 monthly candidate，R1消费者与R2激活不得反向阻断或冒充完成。 |
+| F-032 | 目标cutoff的canonical PIT state/spans必须先只读证明覆盖；不足时仅由受控operator在DEV验证后、经生产目标DML授权扩展并精确readback，monthly和authority builder不得隐式写库。 |
 
 ## 13. Design Acceptance Matrix / 设计验收矩阵
 
@@ -742,7 +786,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-004 | §4 D-002、§6 P3-A/W3-A；中立frozen binding adapter | `backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py` | implementation_verified | none |
 | F-005 | §6 P0/P3/P4；W0/W3/W4/W5/W6 inventory scope | planned `backend/tests/test_canonical_pit_consumer_inventory.py` | design_ready_for_review | none |
 | F-006 | §5/§5.2；各切片task card、短租约和allowed write scope | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json`；W3-B精确9文件已合入；W3-C登记11文件实际scope并释放2个候选文件 | w3b_merged_w3c_scope_verified | none |
-| F-007 | §5.1、§6；W3串行切片、W0/W6/W7 source freeze contract | artifact: `tests/aistock_validation/pit_v2/source_freeze_receipt.json` | design_ready_for_review | none |
+| F-007 | §0.1、§5.1、§6；R0直接构建依赖freeze与R1消费者分流 | artifact: `tests/aistock_validation/pit_v2/source_freeze_receipt.json`；W7 changed-file dependency inventory | design_ready_for_review | approved_by_user: consumer-only commits do not invalidate W7/W8 receipts |
 | F-008 | §6 P2/P5/P7；PIT builder与W1/W7/W8 scope | `backend/tests/test_stock_universe_pit_spans.py` | design_ready_for_review | none |
 | F-009 | §4 D-004、§6 P6；dependency planner/materializer | `backend/tests/dataset_release/test_dependency_graph.py` | design_ready_for_review | none |
 | F-010 | §6 P4/P6、§7.1；candidate manifest/validator | `backend/tests/dataset_release/test_candidate_validator.py` | design_ready_for_review | none |
@@ -751,7 +795,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-013 | §6 P3-A/P8；W3-B/C QE/HMM/训练scope | `backend/tests/quantevolver/test_canonical_pit_dataset_binding.py`；`backend/tests/hmm_data_source/test_isolation_constraints.py`；`backend/tests/test_qe_hmm_canonical_pit_integration.py` | w3b_merged_w3c_direct_tests_passed | none |
 | F-014 | §6 P3-B；W4-A Selection/Simulation runtime binding；W4-B `backend/services/paper_trading_v2/canonical_pit_control.py`及Paper profile/session/replay/day/live/readiness/router | `backend/tests/selection_center/test_canonical_pit_runtime.py`；`backend/tests/selection_center/test_risk_policy.py`；`backend/tests/simulation_runtime/test_strategy_package_selection_service.py`；`backend/tests/paper_trading_v2/test_canonical_pit_control.py`；`backend/tests/paper_trading_v2/test_runtime_profile.py`；`backend/tests/paper_trading_v2/test_session.py`；`backend/tests/paper_trading_v2/test_day_runner.py`；`backend/tests/paper_trading_v2/test_live_session.py` | w4a_merged_w4b_implementation_verified | none |
 | F-015 | §6 P3-C/P8；`strategy_package/models.py`、`canonical_pit_compatibility.py`、`advisory_input_projection.py`；Advisory historical range requirement/catalog/decision mark与model-first feature source | `backend/tests/strategy_package/test_canonical_pit_compatibility.py`；`backend/tests/strategy_package/test_advisory_input_projection.py`；`backend/tests/advisory_historical_range/test_canonical_pit_package_requirements.py`；`backend/tests/advisory_historical_range/test_r3_decision_mark_provider.py`；`backend/tests/advisory_model_first/test_realtime_feature_source.py`；`backend/tests/advisory_model_first/test_model_inference.py` | w5_implementation_verified | none |
-| F-016 | §6 P5；W6/W7 source identity contract | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | design_ready_for_review | none |
+| F-016 | §0.1、§6 P5；单次final sample与同范围typed failure contract | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json` | approved_by_user_real_execution_pending | approved_by_user: historical blocked submission is terminal and cannot be resumed |
 | F-017 | §6 P5/P6；W7/W8 path and Merkle contract | artifact: `tests/aistock_validation/pit_v2/historical_immutability_receipt.json` | design_ready_for_review | none |
 | F-018 | §6 P7；W8 audit plan | artifact: `tests/aistock_validation/pit_v2/candidate_audit_receipt.json` | design_ready_for_review | none |
 | F-019 | §7.2；resource supervisor和W7/W8 receipt | `backend/tests/dataset_release/test_synthetic_benchmark.py`；artifact: `tests/aistock_validation/pit_v2/resource_receipt.json` | design_ready_for_review | none |
@@ -766,6 +810,8 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-028 | §5/§6 P3-A W3-A；neutral formal adapter与W1/W2 API边界 | `backend/services/canonical_pit_dataset_consumer.py`；`backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py` | implementation_verified | none |
 | F-029 | §5.2；短租约、BUG抢占、dirty handoff和实验identity边界 | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json`；W3-C从`66bab73f`独立开始；PR #2770重叠文件保持只读并以独立canonical adapter完成在线generation enablement | w3b_verified_w3c_scope_registered | none |
 | F-030 | §6 P3-A W3-D；最终main统一身份和隔离矩阵 | planned `backend/tests/test_qe_hmm_canonical_pit_integration.py`；command: `python -m pytest backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py backend/tests/hmm_data_source/test_isolation_constraints.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q` | design_ready_for_review | none |
+| F-031 | §0.1、§5.1、§6 P4～P7；2026-09-01 R0关键路径与R1/R2解耦 | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json`；artifact: `tests/aistock_validation/pit_v2/candidate_audit_receipt.json`；monthly terminal receipt | approved_by_user_real_execution_pending | approved_by_user: production activation、consumer default switch和模型训练明确不在P0完成定义内 |
+| F-032 | §0.1；canonical PIT monthly coverage operator、state/spans readback与独立DML receipt | `backend/tests/scripts/test_prepare_canonical_pit_monthly.py`；DEV rollback receipt；production apply/readback receipt | approved_by_user_source_gap_pending | approved_by_user: 当前缺少正式operator CLI，必须在2026-08-31执行窗前实现合入；生产DML仍需目标明确的独立授权 |
 
 设计通过只表示可以请求用户确认进入实施；不得把`designed`状态表述为源码、真实数据或生产完成。
 
@@ -777,7 +823,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | W2 Dataset Release源码 | `merged_589678f3` |
 | W3消费者源码 | `w3_source_ready_final_main_validation_passed` |
 | W4～W6消费者/集成源码 | `w4_merged_runtime_verified_w5_implementation_verified_w6_pending` |
-| 真实小样本 | `not_run_not_authorized` |
+| 真实小样本 | `latest_blocked_pre_run_final_post_fix_sample_pending` |
 | 真实全量candidate | `not_run_not_authorized` |
 | DEV DDL/DML | `not_revalidated_in_this_design_revision` |
 | 生产DDL/DML | `pending_separate_targeted_authorization` |
@@ -811,6 +857,10 @@ survivorship limitation，不得把v1重新声明为长期权威。
 
 | 轮次 | 审核范围 | 发现 | 修订 | 状态 |
 |---|---|---|---|---|
+| Review-P0-1 | 交付颗粒度与关键路径 | W0～W9的所有权边界被误当作W7串行门禁，消费者迁移阻断候选能力 | 建立R0/R1/R2三轨；W7只冻结直接构建依赖，无交集消费者不阻断且不使receipt失效 | resolved |
+| Review-P0-2 | 日期与样本执行语义 | 8月31日晚`monthly`仍解析7月31日；多轮五股sample不能证明全量准确性 | 固定9月1日00:05后单次monthly；只保留一次post-fix final sample，全量签收使用结构闭环和分层抽样 | resolved |
+| Review-P0-3 | authority可执行性 | 8月31日industry/P3A builder要求canonical PIT state/spans已覆盖同cutoff，当前缺少正式月度coverage operator | 新增F-032：最小受控operator、DEV validate/rollback、精确production DML授权/readback；禁止临时Python/SQL或monthly隐式写库 | approved_source_gap_pending_implementation |
+| Review-P0-4 | 最终F2与安全复审 | 检查P0完成定义、消费者解耦、历史不可变、production动作和新门禁 | 32/32 Design Acceptance Index与matrix对应；P0不降低数据范围、不覆盖旧候选、不推导activation/restart/cleanup | pass_design_ready_for_pr |
 | Draft-0 | 主设计初稿 | F2解析器未识别标准章节/编号/矩阵字段 | 标准化章节、F-xxx和矩阵列 | resolved |
 | Review-1A | 架构与消费者 | registry历史不闭合、跨系统部分切换、bundle未成契约、W8后PR使证据失效；HMM-risk/持久profile/包双读/inference scope遗漏 | 改为versions+pointer+events；inactive分发后DB CAS；candidate bundle+activation envelope；取消W8后源码PR；补齐消费者scope | resolved |
 | Review-1B | 数据、资源与保留 | 阈值方向/性能gate错误；首次20260731计划不可执行；oracle过度抽样；selective-clean-full与长期lineage缺验收；retention引用证明不闭合 | 明确max/min/exact与两类性能gate；新增白名单initial-migration plan；机器oracle矩阵；F-025/F-026；引用图schema且本项目禁止历史迁移/删除 | resolved |
