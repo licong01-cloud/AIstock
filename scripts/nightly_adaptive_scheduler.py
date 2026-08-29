@@ -34,7 +34,6 @@ STATUS_FAILURE_MODULES = {
 }
 BASELINE_NIGHTLY_PLAN_KEYS = ("l0",)
 CHANGE_FILE_ONLY_PLAN_KEYS = frozenset({"l0"})
-CHANGE_FILE_ONLY_SESSIONS = frozenset({"l0"})
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go", ".sql", ".sh", ".ps1")
 
 
@@ -74,67 +73,12 @@ def collect_changed_files(
     )
 
 
-def load_retry_context(
-    *,
-    results_path: Path | None,
-    plan_path: Path | None,
-    expected_head: str | None,
-) -> dict[str, Any]:
-    if results_path is None and plan_path is None:
-        return {"failed_sessions": [], "change_scoped_files": [], "source_head": None}
-    if results_path is None or plan_path is None or not expected_head:
-        raise ValueError("Nightly retry context requires results, plan, and expected source head together")
-    results = json.loads(results_path.read_text(encoding="utf-8-sig"))
-    previous_plan = json.loads(plan_path.read_text(encoding="utf-8-sig"))
-    if not isinstance(results, list) or not all(isinstance(row, dict) for row in results):
-        raise ValueError("Nightly retry results must contain a JSON list of session rows")
-    if not isinstance(previous_plan, dict):
-        raise ValueError("Nightly retry execution plan must be a JSON object")
-    if previous_plan.get("schema_version") != "aistock_nightly_execution_plan_v1":
-        raise ValueError("Nightly retry execution plan schema is invalid")
-    source_head = str(previous_plan.get("head_commit") or "").strip()
-    if source_head != expected_head:
-        raise ValueError(f"Nightly retry plan head {source_head or 'missing'} does not match {expected_head}")
-    planned_sessions_raw = previous_plan.get("selected_sessions")
-    if not isinstance(planned_sessions_raw, list):
-        raise ValueError("Nightly retry execution plan must contain selected_sessions")
-    planned_sessions = unique_values([str(session) for session in planned_sessions_raw])
-    observed_sessions = [str(row.get("session") or "").strip() for row in results]
-    if any(not session for session in observed_sessions) or len(observed_sessions) != len(set(observed_sessions)):
-        raise ValueError("Nightly retry results contain missing or duplicate session identities")
-    unexpected_sessions = [session for session in observed_sessions if session not in planned_sessions]
-    if unexpected_sessions:
-        raise ValueError("Nightly retry results contain sessions outside the bound plan: " + ", ".join(unexpected_sessions))
-    failed_sessions = unique_values(
-        [
-            *[str(row.get("session") or "") for row in results if str(row.get("result") or "") != "success"],
-            *[session for session in planned_sessions if session not in observed_sessions],
-        ]
-    )
-    prior_changed_files = previous_plan.get("changed_files")
-    if not isinstance(prior_changed_files, list):
-        raise ValueError("Nightly retry execution plan must contain changed_files")
-    change_scoped_files = (
-        unique_values(
-            [nightly_discovery_input_pack.normalize_repo_path(str(path)) for path in prior_changed_files]
-        )
-        if CHANGE_FILE_ONLY_SESSIONS.intersection(failed_sessions)
-        else []
-    )
-    return {
-        "failed_sessions": failed_sessions,
-        "change_scoped_files": change_scoped_files,
-        "source_head": source_head,
-    }
-
-
 def build_nightly_execution_plan(
     changed_files: list[str],
     *,
     full_run: bool = False,
     watermark: str | None = None,
     head_commit: str | None = None,
-    retry_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized = unique_values([nightly_discovery_input_pack.normalize_repo_path(path) for path in changed_files])
     selection = issue_flow.select_validation(normalized)
@@ -146,9 +90,7 @@ def build_nightly_execution_plan(
         raise ValueError("unmapped executable code in Nightly change window: " + ", ".join(unmatched_code))
 
     plans = issue_flow._plans_by_key()
-    retry_context = retry_context or {}
-    retry_sessions = unique_values([str(item) for item in retry_context.get("failed_sessions") or []])
-    plan_keys = [] if full_run or not normalized else list(BASELINE_NIGHTLY_PLAN_KEYS)
+    plan_keys = [] if full_run else list(BASELINE_NIGHTLY_PLAN_KEYS)
     if full_run:
         plan_keys.extend(
             key
@@ -172,31 +114,6 @@ def build_nightly_execution_plan(
         selected_plan_keys.append(key)
         if session not in selected_sessions:
             selected_sessions.append(session)
-    enabled_sessions = {
-        str(plan.get("nox_session") or "").strip(): key
-        for key, plan in plans.items()
-        if plan.get("enabled", True) and plan.get("runner_enabled") and str(plan.get("nox_session") or "").strip()
-    }
-    unknown_retry_sessions = [session for session in retry_sessions if session not in enabled_sessions]
-    if unknown_retry_sessions:
-        raise ValueError("Nightly retry receipt contains unknown runner sessions: " + ", ".join(unknown_retry_sessions))
-    for session in retry_sessions:
-        retry_plan_key = enabled_sessions[session]
-        if retry_plan_key not in selected_plan_keys:
-            selected_plan_keys.append(retry_plan_key)
-        if session not in selected_sessions:
-            selected_sessions.append(session)
-    change_scoped_files = unique_values(
-        [
-            *[str(path) for path in retry_context.get("change_scoped_files") or []],
-            *normalized,
-        ]
-    )
-    session_positional_args = {
-        session: change_scoped_files
-        for session in selected_sessions
-        if session in CHANGE_FILE_ONLY_SESSIONS and change_scoped_files
-    }
     return {
         "schema_version": "aistock_nightly_execution_plan_v1",
         "watermark": watermark,
@@ -207,13 +124,10 @@ def build_nightly_execution_plan(
         "excluded_change_file_only_plans": sorted(CHANGE_FILE_ONLY_PLAN_KEYS) if full_run else [],
         "selected_plan_keys": selected_plan_keys,
         "selected_sessions": selected_sessions,
-        "retry_sessions": retry_sessions,
-        "retry_source_head": retry_context.get("source_head"),
-        "session_positional_args": session_positional_args,
         "impacted_modules": selection.get("impacted_modules") or [],
         "unmatched_code_files": unmatched_code,
-        "advance_change_window_on_durable_receipt": True,
-        "retry_failed_sessions_from_receipt": True,
+        "advance_watermark_on_success_only": True,
+        "retry_window_on_failure": True,
         "workflow_gate": "passed",
     }
 
@@ -473,9 +387,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-ref")
     parser.add_argument("--watermark")
     parser.add_argument("--head-commit")
-    parser.add_argument("--retry-results-json")
-    parser.add_argument("--retry-plan-json")
-    parser.add_argument("--retry-source-head")
     parser.add_argument("--full-run", action="store_true")
     parser.add_argument("--plan-selection-output")
     parser.add_argument("--status-json")
@@ -515,17 +426,11 @@ def main(argv: list[str] | None = None) -> int:
             base_ref=args.base_ref,
             root=ROOT,
         )
-        retry_context = load_retry_context(
-            results_path=Path(args.retry_results_json) if args.retry_results_json else None,
-            plan_path=Path(args.retry_plan_json) if args.retry_plan_json else None,
-            expected_head=args.retry_source_head,
-        )
         execution_plan = build_nightly_execution_plan(
             changed_files,
             full_run=args.full_run,
             watermark=args.watermark,
             head_commit=args.head_commit,
-            retry_context=retry_context,
         )
         if args.plan_selection_output:
             plan_path = Path(args.plan_selection_output)

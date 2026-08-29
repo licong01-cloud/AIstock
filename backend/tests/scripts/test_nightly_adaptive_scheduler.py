@@ -341,108 +341,8 @@ def test_nightly_execution_plan_uses_catalog_and_deduplicates_sessions() -> None
     assert plan["selected_sessions"].count("simulation_core_l2") == 1
     assert "paper_v2_l3" not in plan["selected_sessions"]
     assert plan["watermark"] == "abc123"
-    assert plan["advance_change_window_on_durable_receipt"] is True
-    assert plan["retry_failed_sessions_from_receipt"] is True
-    assert plan["session_positional_args"]["l0"] == ["backend/services/simulation_runtime/ops.py"]
-
-
-def test_nightly_execution_plan_retries_only_failed_sessions_plus_new_impact() -> None:
-    plan = scheduler.build_nightly_execution_plan(
-        ["frontend/src/app/watchlist/page.tsx"],
-        watermark="previous-head",
-        head_commit="current-head",
-        retry_context={
-            "failed_sessions": ["qe_archive_backend"],
-            "change_scoped_files": [],
-            "source_head": "previous-head",
-        },
-    )
-
-    assert "qe_archive_backend" in plan["selected_sessions"]
-    assert "watchlist_ui" in plan["selected_sessions"]
-    assert plan["retry_sessions"] == ["qe_archive_backend"]
-    assert plan["retry_source_head"] == "previous-head"
-    assert "simulation_core_l2" not in plan["retry_sessions"]
-
-
-def test_nightly_execution_plan_preserves_failed_l0_scope_without_new_changes() -> None:
-    plan = scheduler.build_nightly_execution_plan(
-        [],
-        watermark="previous-head",
-        head_commit="current-head",
-        retry_context={
-            "failed_sessions": ["l0"],
-            "change_scoped_files": ["scripts/nightly_session_runner.py"],
-            "source_head": "previous-head",
-        },
-    )
-
-    assert plan["selected_sessions"] == ["l0"]
-    assert plan["changed_files"] == []
-    assert plan["session_positional_args"]["l0"] == ["scripts/nightly_session_runner.py"]
-
-
-def test_load_retry_context_binds_results_to_previous_plan_head(tmp_path: Path) -> None:
-    results = tmp_path / "session-results.json"
-    previous_plan = tmp_path / "execution-plan.json"
-    results.write_text(
-        json.dumps(
-            [
-                {"session": "l0", "result": "failure"},
-                {"session": "watchlist_ui", "result": "success"},
-            ]
-        ),
-        encoding="utf-8",
-    )
-    previous_plan.write_text(
-        json.dumps(
-            {
-                "schema_version": "aistock_nightly_execution_plan_v1",
-                "head_commit": "previous-head",
-                "changed_files": ["noxfile.py"],
-                "selected_sessions": ["l0", "watchlist_ui"],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    context = scheduler.load_retry_context(
-        results_path=results,
-        plan_path=previous_plan,
-        expected_head="previous-head",
-    )
-
-    assert context == {
-        "failed_sessions": ["l0"],
-        "change_scoped_files": ["noxfile.py"],
-        "source_head": "previous-head",
-    }
-
-
-def test_load_retry_context_retries_planned_sessions_missing_from_partial_receipt(tmp_path: Path) -> None:
-    results = tmp_path / "session-results.json"
-    previous_plan = tmp_path / "execution-plan.json"
-    results.write_text(json.dumps([{"session": "l0", "result": "success"}]), encoding="utf-8")
-    previous_plan.write_text(
-        json.dumps(
-            {
-                "schema_version": "aistock_nightly_execution_plan_v1",
-                "head_commit": "previous-head",
-                "changed_files": ["noxfile.py"],
-                "selected_sessions": ["l0", "watchlist_ui"],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    context = scheduler.load_retry_context(
-        results_path=results,
-        plan_path=previous_plan,
-        expected_head="previous-head",
-    )
-
-    assert context["failed_sessions"] == ["watchlist_ui"]
-    assert context["change_scoped_files"] == []
+    assert plan["advance_watermark_on_success_only"] is True
+    assert plan["retry_window_on_failure"] is True
 
 
 def test_nightly_full_run_excludes_changed_file_only_plans() -> None:
@@ -525,30 +425,24 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "full_nightly_run:" in workflow
     assert dispatch["run_nightly_l3"]["default"] is True
     assert dispatch["full_nightly_run"]["default"] is False
-    assert "Build receipt-watermark Nightly execution plan" in workflow
+    assert "Build successful-watermark Nightly execution plan" in workflow
     assert '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in workflow
     assert "Verify prebuilt AIstock-CI and frontend dependencies" in workflow
     assert "conda run -n AIstock-CI python scripts/ci_environment_verify.py" in workflow
     assert "frontend/node_modules/@playwright/test/cli.js" in workflow
-    assert "frontend/node_modules/typescript/bin/tsc" in workflow
-    assert "frontend/node_modules/next/dist/bin/next" in workflow
     assert "dependency installation is prohibited in Nightly" in workflow
     assert "conda run -n AIstock-CI python scripts/nightly_adaptive_scheduler.py" in workflow
     assert "conda run -n AIstock-CI python scripts/nightly_session_runner.py" in workflow
-    assert 'gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml --branch main --event schedule --status completed' in workflow
-    assert 'if ($LASTEXITCODE -ne 0) { throw "Failed to query prior completed scheduled Nightly runs." }' in workflow
-    assert 'gh run download $candidateRunId --repo "${env:GITHUB_REPOSITORY}"' in workflow
+    assert 'gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml --branch main --event schedule --status success' in workflow
+    assert 'if ($LASTEXITCODE -ne 0) { throw "Failed to query the last successful scheduled Nightly run." }' in workflow
     assert "ConvertFrom-Json -ErrorAction Stop" in workflow
-    assert "No prior scheduled Nightly run with a durable session receipt is available" in workflow
+    assert "No successful scheduled Nightly watermark exists" in workflow
     assert 'if ($env:FULL_NIGHTLY_RUN -eq "true")' in workflow
     assert '-or -not $watermark' not in workflow
     assert "--plan-selection-output" in workflow
     assert "--fail-on-blocked" in workflow
     assert 'git cat-file -e "$watermark^{commit}"' in workflow
-    assert "Receipt-bound scheduled Nightly watermark is unavailable locally" in workflow
-    assert '"--retry-results-json", $retryResults' in workflow
-    assert '"--retry-plan-json", $retryPlan' in workflow
-    assert '"--retry-source-head", $watermark' in workflow
+    assert "Successful scheduled Nightly watermark is unavailable locally" in workflow
     assert "using explicit full-run fallback" not in workflow
     assert workflow.count('$extraArgs += "--full-run"') == 1
     assert "scripts/nightly_session_runner.py" in workflow

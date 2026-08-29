@@ -305,7 +305,7 @@ PR base commit 已在 checkout 中且能够与当前 HEAD 证明 merge-base 时�
 
 Nightly 的验证/测试 job 与 PR CI 使用同一预构建 `AIstock-CI` Conda 环境，不得调用生产 `AIstock` 环境代替测试环境；独立 DR 运维 job 仍按其授权目标使用运维环境，不受此替换。一次性 Nightly checkout 需要前端依赖时，只能在 `package-lock.json` SHA-256 一致且锁定的直接 Playwright CLI 存在后，把 canonical 预构建 `frontend/node_modules` 以目录链接挂入 workspace；禁止每轮安装、复制大型依赖树、静默跳过 UI 计划或在锁文件漂移时继续运行。清理一次性 workspace 时只删除链接本身，不得递归删除依赖源。
 
-Scheduled Nightly 必须以显式仓库参数查询最近一次具备完整 `execution-plan.json` 与 `session-results.json` 的已完成定时运行，并分别检查命令退出码、JSON 解析、receipt 与 source HEAD 绑定以及本地 commit 可用性。下一轮 change window 从该 receipt HEAD 前进，只重跑 receipt 中失败或尚未写入结果的已选 session 与新 changed files 映射出的计划；change-scoped `l0` 必须继续使用失败 receipt 的原始文件范围并合并新增范围，通过短路径 scope 文件传递，禁止在干净 checkout 上重新猜测 changed files或把大批路径展开到 Windows 命令行。任一步失败或不存在有效 receipt 时以基础设施错误 fail-closed，不得静默转换为全量执行；`--full-run` 只允许由 `workflow_dispatch` 的 `full_nightly_run=true` 明确触发。自动故障恢复不得因单个长期失败而反复运行已经通过的数十个无关 session。
+Scheduled Nightly 必须以显式仓库参数查询最后一次成功水位，并分别检查命令退出码、JSON 解析结果和本地 commit 可用性。任一步失败或不存在成功水位时以基础设施错误 fail-closed，不得静默转换为全量执行；`--full-run` 只允许由 `workflow_dispatch` 的 `full_nightly_run=true` 明确触发。自动故障恢复不得用数十个无关 session 的全量运行代替水位读取错误。
 
 同一 PR merge tree 的 changed-file 分类、close-sync metadata 校验和静态 L0/catalog 门禁必须复用一个准备 job、一次 checkout、一次 base-ref 准备和一次环境校验；docs-lite 记录同样在该 job 内生成，不得为不被后续消费的临时记录再分配 runner job。合并 job 只消除重复初始化，不得删除、跳过或放宽原有 metadata、L0、catalog 质量结论。workflow validation 被选中时，其 focused tests、workflow policy 与最终 `CI verdict` 必须复用同一个 final job/runner allocation，并由 step outcome fail-closed 汇总；禁止再建立独立 `workflow-validation-tests` job 后重新排队 verdict。backend、frontend、Go、prompt 等其他被分类选中的验证 lane 和最终 `CI verdict` 继续 fail-closed。
 

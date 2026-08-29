@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 3d1d6d6337a34184a0142f147748f93baa2ff4e4b81b19552f50592022a613ea
+source_sha256: 1ec8042bcb040f0c10dac335bcd01b8cd970c462d90b4d4e45486b34c6370ad8
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-29"
@@ -766,9 +766,7 @@ rules:
         - windows_git_bash_shell
         - nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies
         - self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe
-        - nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed
-        - nightly_retries_failed_or_missing_sessions_plus_new_impact
-        - nightly_change_scoped_l0_uses_explicit_receipt_paths
+        - nightly_watermark_lookup_is_repo_scoped_and_fail_closed
     baseline_policy: block_new_and_changed_workflow
     remediation: Require PR-based main updates and stable merge-quality contexts for CI, CodeQL, Semgrep, and PR quality; provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one preparation checkout for changed-file classification and static or close-sync gates, reuse one final runner allocation for focused workflow validation, workflow policy, and CI verdict, reuse one security-runner allocation for CodeQL classification, sequential changed-language analysis, SARIF upload, and the stable CodeQL verdict, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
 

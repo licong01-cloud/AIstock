@@ -110,7 +110,8 @@
   "reproduce_command": "python scripts/aistock_issue_workflow.py run --bug-id BUG-1248 --mode plan",
   "required_verification": [
     "l0",
-    "guardrail_changed_files"
+    "guardrail_changed_files",
+    "validation_catalog_integrity"
   ],
   "risk_area": "bug",
   "runtime_contract": {
