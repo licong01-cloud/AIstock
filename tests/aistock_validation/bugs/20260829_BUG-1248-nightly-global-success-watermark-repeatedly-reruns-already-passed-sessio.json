@@ -34,17 +34,28 @@
   ],
   "expected": "Nightly resumes from the latest prior run that has a durable session receipt, reruns only that receipt's failed sessions plus plans affected by newer changed files, and fails closed if no valid retry receipt can be recovered. Explicit workflow_dispatch full-run remains the only full-matrix path.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20260829_BUG-1248-nightly-global-success-watermark-repeatedly-reruns-already-passed-sessio.json"
+    ],
     "added_files": [],
     "changed_files": [
       ".github/workflows/nightly.yml",
-      "scripts/nightly_adaptive_scheduler.py",
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
-      "scripts/ci_workflow_policy_scan.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20260829_BUG-1248-nightly-global-success-watermark-repeatedly-reruns-already-passed-sessio.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/nightly.yml",
@@ -187,16 +198,18 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "worker-scheduler",
-    "target_ids": [
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "worker-scheduler"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
