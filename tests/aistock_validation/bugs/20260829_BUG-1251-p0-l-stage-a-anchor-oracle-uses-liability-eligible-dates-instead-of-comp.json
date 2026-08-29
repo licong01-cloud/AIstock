@@ -29,13 +29,20 @@
   ],
   "expected": "Formal Stage A keeps 385 liability-eligible dates for OOF/selection policy and uses the separately hashed 382 complete-matured dates only for anchor price and matched P0-D turnover calibration, then starts all 168 trials without PIT leakage.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py",
+      "backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py",
+      "docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md",
+      "tests/aistock_validation/bugs/20260829_BUG-1251-p0-l-stage-a-anchor-oracle-uses-liability-eligible-dates-instead-of-comp.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py",
       "backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py",
-      "docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md"
+      "docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md",
+      "tests/aistock_validation/bugs/20260829_BUG-1251-p0-l-stage-a-anchor-oracle-uses-liability-eligible-dates-instead-of-comp.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py",
@@ -119,10 +126,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
