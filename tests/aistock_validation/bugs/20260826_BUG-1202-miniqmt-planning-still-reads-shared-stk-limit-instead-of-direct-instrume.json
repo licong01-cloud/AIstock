@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1202",
-  "closed_at": null,
+  "closed_at": "2026-08-29T19:34:06.344267Z",
   "closure_requirements": [
     "Implement one bounded exact-symbol MiniQMT instrument-detail batch and strict per-symbol authority validation.",
     "Freeze DailyTradingContextV2 for MiniQMT planning and carry it through TradingRuleDecision and ExecutionPlan without querying market.stk_limit or TDX.",
@@ -244,9 +244,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1202\\post-restart-verify-20260830.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1202",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "eee21d776cd9960b4e2f28a37fad6fd2c26a02858155d4d8e970ba10770daf68",
+      "contract_digest": "ec9214640de4ecfbe8b6841db28744885131a1f96b5247e37424fdf8ccaa1df2",
+      "expected_identity": "eaf59b526753bcee3a5d4c7f62aca32cc5b09921",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-29T19:23:52.024855Z",
+      "mode": "read_only",
+      "observed_identity": "19814d3e109092b0705f1762da21c762244558fc",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6f1c035db4900f0f66640f8025e1dd21f6a9317609f631d042994e27e264b81e",
+      "receipt_sha256": "fc74f439806ef03aa47b57fe0378e20c662a5b896c3c5d56474675dfedb8b2e8",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2d7f4cd36b160997787816780701137f02e403152315e603f8bff96bcfd3dce6",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -280,7 +302,7 @@
     ],
     "validation_evidence_digest": "a0e336320889b71ac23cad75dca8a3ad7c2b584cff04e4ddd52b389009715340"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -293,7 +315,8 @@
     "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14 of 14",
     "python -m nox -s qmt_client_contract -> 3 passed",
     "python -m nox -s simulation_core_l2 -> 687 passed, 2 skipped",
-    "python -m nox -s paper_v2_backend -> 1130 passed, 3 skipped, 2 xfailed"
+    "python -m nox -s paper_v2_backend -> 1130 passed, 3 skipped, 2 xfailed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1202 --target backend-main --expected-identity eaf59b526753bcee3a5d4c7f62aca32cc5b09921 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
