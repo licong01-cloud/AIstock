@@ -129,7 +129,8 @@ request 必须绑定：
   winner `FAMILY_TURNOVER_CONSTRAINED_CORE / seed=20260817 / rounds=19 / final price=0`；
 - exact P0-D bundle/winner 和 28-path paired reference；
 - P0-H/P0-K bundle、liability label/clip/feature identity，仅作机制与兼容证据；
-- 8-block/28-path split、385/386 constraint dates、calendar、Qlib/H5/suspend roots/cutoff；
+- 8-block/28-path split、385/386 liability/shared-policy constraint dates、382/386 exact-matured
+  anchor-price calibration dates、calendar、Qlib/H5/suspend roots/cutoff；
 - repository clean tracked commit、WSL environment、输出根和 `8 GiB` RSS 上限。
 
 任何 file hash、row/date/path count、winner identity、feature schema、cutoff 或 policy identity 漂移均
@@ -156,6 +157,11 @@ inner-train matured labels 构造oracle排序，只用匹配日期的 fixed P0-D
 最小可行price，再训练fixed family/seed anchor并评分该inner-validation block。不得直接复用由完整
 outer-train labels选出的path price来评分inner-validation，否则该price已见到held-out inner label。
 full outer-train refit 则按原P0-G path-local合同只用outer-train选择price并训练，outer validation仍不可见。
+这里必须区分两个不可互换的日期角色：liability OOF、局部重排选择和 shared-policy coverage 使用排除唯一
+right-boundary 后的 385 日；P0-G shadow-price oracle 及与它匹配的 fixed P0-D turnover budget 只使用
+exact Top20 且全行为 `MATURED` 的 382 日。3 个含 `NOT_ENTERED_LIMIT_UP` 行的日期仍必须产生 anchor/liability
+prediction 并进入 shared tradability，但禁止进入依赖真实收益标签的 oracle price calibration。全局和每个
+outer path 均须分别记录两套日期的 count/hash；任一角色混用、非子集或 identity 漂移均 typed fail。
 
 逐日 `anchor_rank=1..20` 按：
 
@@ -181,8 +187,9 @@ turnover_liability_fraction_per_day
   `FAMILY_P0G_ANCHORED_LOCAL_RERANK_CORE_HMM`。
 - seeds：`20260813, 20260817, 20260823`。
 - 参数、inner-fold early stopping 和 final-rounds 规则沿用 P0-K liability head。
-- 3 个 limit-up 未入场日期仍产生 prediction 并交给 shared tradability；唯一 right-boundary 尾日不进入
-  constraint calibration，但保持 Top20 score coverage。
+- 3 个 limit-up 未入场日期仍产生 prediction 并交给 shared tradability；它们进入 385 日
+  liability/shared-policy constraint，但不进入 382 日 exact-matured anchor-price oracle；唯一
+  right-boundary 尾日不进入两者，但保持 Top20 score coverage。
 
 liability 只用于候选间相对负担，不命名为 return、take probability 或 confidence。
 
@@ -369,7 +376,8 @@ outer pipeline/paired/PBO → immutable bundle/CLI → direct tests → formal r
 
 - exact identity、row/date/path/family/seed/roster 和 terminal-state 拒绝测试；
 - future return/holding/exit 毒化不改变更早 fold 的 anchor/liability model、calibration 或 priorities；
-- limit-up 未入场行有 prediction 但不填 label，right-boundary calibration 排除保持 385/386；
+- limit-up 未入场行有 prediction 但不填 label；验证 385 日 liability/shared-policy 与 382 日
+  exact-matured anchor-price/P0-D budget 的 count/hash 分离，right-boundary 均被排除；
 - fixed P0-G family/seed/objective/rounds/reference 漂移 fail closed。
 
 ### 14.2 Local-rerank tests

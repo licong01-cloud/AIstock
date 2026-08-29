@@ -163,6 +163,15 @@ def run_p0g_anchored_liability_local_reranker_pipeline(
         expected_decision_date_count=request.expected_decision_date_count,
         expected_constraint_decision_date_count=request.expected_constraint_decision_date_count,
     )
+    anchor_price_dates, anchor_price_coverage = complete_matured_decision_dates(
+        labels,
+        expected_candidates_per_date=request.expected_candidates_per_date,
+    )
+    anchor_price_coverage = {
+        **anchor_price_coverage,
+        "role": "p0g_anchor_price_and_matched_p0d_turnover_only",
+        "complete_matured_dates_sha256": _date_index_sha256(anchor_price_dates),
+    }
     cpcv = read_policy_json(root / "cpcv_paths.json")
     paths = [item for item in cpcv["paths"] if item["status"] == "READY"]
     _verify_cpcv(request, paths, cpcv["block_by_date"])
@@ -238,6 +247,7 @@ def run_p0g_anchored_liability_local_reranker_pipeline(
     trial_rows: list[dict[str, Any]] = []
     block_rows: list[dict[str, Any]] = []
     calibration_rows: list[dict[str, Any]] = []
+    calibration_date_rows: list[dict[str, Any]] = []
     intervention_rows: list[dict[str, Any]] = []
     coverage_rows: list[dict[str, Any]] = []
     selection_by_path: dict[str, dict[str, float]] = {}
@@ -250,8 +260,15 @@ def run_p0g_anchored_liability_local_reranker_pipeline(
         train_dates = pd.DatetimeIndex(pd.to_datetime(path["train_dates"])).normalize()
         validation_dates = pd.DatetimeIndex(pd.to_datetime(path["validation_dates"])).normalize()
         validation_blocks = tuple(int(value) for value in path["validation_blocks"])
-        calibration_dates = pd.DatetimeIndex(sorted(set(train_dates) & set(eligible_dates)))
         try:
+            calibration_dates, anchor_price_calibration_dates, calibration_date_receipt = (
+                _outer_calibration_date_contract(
+                    train_dates=train_dates,
+                    liability_eligible_dates=eligible_dates,
+                    anchor_price_eligible_dates=anchor_price_dates,
+                )
+            )
+            calibration_date_rows.append({"path_id": path_id, **calibration_date_receipt})
             folds = build_inner_fold_specs(
                 labels=labels,
                 outer_train_dates=train_dates,
@@ -318,7 +335,7 @@ def run_p0g_anchored_liability_local_reranker_pipeline(
                 features=feature_result.features,
                 labels=labels,
                 train_dates=train_dates,
-                calibration_dates=calibration_dates,
+                calibration_dates=anchor_price_calibration_dates,
                 rankings=rankings,
                 block_by_date=cpcv["block_by_date"],
                 candidate_daily=candidate_daily,
@@ -579,6 +596,9 @@ def run_p0g_anchored_liability_local_reranker_pipeline(
     calibration_receipt = {
         "schema_version": "advisory_p0l_nested_calibration_v1",
         "base_coverage": base_coverage,
+        "liability_constraint_coverage": base_coverage,
+        "anchor_price_calibration_coverage": anchor_price_coverage,
+        "outer_path_date_contracts": calibration_date_rows,
         "anchor_recomputed_once_per_outer_path": True,
         "outer_trials": calibration_rows,
         "failure": failure,
@@ -855,6 +875,41 @@ def run_p0g_anchored_liability_local_reranker_pipeline(
         "resource_report": resource,
         "activated": False,
     }
+
+
+def _date_index_sha256(dates: Sequence[pd.Timestamp]) -> str:
+    normalized = pd.DatetimeIndex(pd.to_datetime(list(dates))).normalize().sort_values().unique()
+    return canonical_json_sha256([value.date().isoformat() for value in normalized])
+
+
+def _outer_calibration_date_contract(
+    *,
+    train_dates: Sequence[pd.Timestamp],
+    liability_eligible_dates: Sequence[pd.Timestamp],
+    anchor_price_eligible_dates: Sequence[pd.Timestamp],
+) -> tuple[pd.DatetimeIndex, pd.DatetimeIndex, dict[str, Any]]:
+    train = set(pd.DatetimeIndex(pd.to_datetime(list(train_dates))).normalize())
+    liability = pd.DatetimeIndex(
+        sorted(train & set(pd.DatetimeIndex(liability_eligible_dates).normalize()))
+    )
+    anchor_price = pd.DatetimeIndex(
+        sorted(train & set(pd.DatetimeIndex(anchor_price_eligible_dates).normalize()))
+    )
+    if liability.empty or anchor_price.empty or not set(anchor_price).issubset(set(liability)):
+        raise _error(
+            "P0-L outer calibration date roles are invalid",
+            "ADVISORY_P0L_CALIBRATION_DATE_CONTRACT_INVALID",
+            liability_calibration_decision_count=len(liability),
+            anchor_price_calibration_decision_count=len(anchor_price),
+        )
+    receipt = {
+        "schema_version": "advisory_p0l_outer_calibration_date_contract_v1",
+        "liability_calibration_decision_count": len(liability),
+        "liability_calibration_dates_sha256": _date_index_sha256(liability),
+        "anchor_price_calibration_decision_count": len(anchor_price),
+        "anchor_price_calibration_dates_sha256": _date_index_sha256(anchor_price),
+    }
+    return liability, anchor_price, receipt
 
 
 def _train_anchor_oof(
