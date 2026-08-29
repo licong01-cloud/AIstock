@@ -389,6 +389,65 @@ def train_final_turnover_constrained_utility(
     )
 
 
+def score_final_turnover_constrained_utility(
+    *,
+    features: pd.DataFrame,
+    model: FinalTurnoverConstrainedUtilityTrainingResult,
+    score_dates: Sequence[pd.Timestamp],
+) -> pd.DataFrame:
+    """Score a frozen P0-G refit without fitting or outer-validation early stopping."""
+    dates = set(pd.DatetimeIndex(pd.to_datetime(list(score_dates))).normalize())
+    rows = features.copy()
+    rows["decision_as_of_trade_date"] = pd.to_datetime(
+        rows["decision_as_of_trade_date"]
+    ).dt.normalize()
+    rows["target_trade_date"] = pd.to_datetime(rows["target_trade_date"]).dt.normalize()
+    rows["instrument"] = rows["instrument"].astype(str).str.upper()
+    rows = rows[rows["decision_as_of_trade_date"].isin(dates)].copy()
+    counts = rows.groupby("decision_as_of_trade_date").size()
+    if counts.empty or set(counts.index) != dates or not counts.eq(20).all():
+        raise _reference_error("exact P0-G final scoring is not exact Top20")
+    names = tuple(str(value) for value in model.feature_names)
+    if tuple(model.booster.feature_name()) != names or not set(names).issubset(rows):
+        raise _reference_error("exact P0-G final scoring feature identity is invalid")
+    matrix = rows.loc[:, names].copy()
+    for column in matrix:
+        matrix[column] = pd.to_numeric(matrix[column], errors="coerce")
+    for column in CATEGORICAL_FEATURE_COLUMNS:
+        if column not in matrix:
+            continue
+        categories = tuple(int(value) for value in model.categorical_vocabulary.get(column, ()))
+        if not categories:
+            raise _reference_error(
+                "exact P0-G final scoring categorical vocabulary is empty",
+                feature=column,
+            )
+        numeric = pd.to_numeric(matrix[column], errors="coerce")
+        unseen = numeric.notna() & ~numeric.isin(categories)
+        if unseen.any():
+            missing_indicator = f"{column}__missing"
+            if missing_indicator not in matrix:
+                raise _reference_error(
+                    "exact P0-G final scoring missing indicator is absent",
+                    feature=column,
+                )
+            matrix.loc[unseen, missing_indicator] = 1
+            numeric = numeric.mask(unseen)
+        matrix[column] = pd.Categorical(numeric, categories=categories)
+    standardized = np.asarray(model.booster.predict(matrix), dtype=float)
+    predictions = inverse_policy_utility_transform(standardized, model.transform)
+    if not np.isfinite(predictions).all():
+        raise _reference_error("exact P0-G final predictions are invalid")
+    result = rows.loc[
+        :, ["decision_as_of_trade_date", "target_trade_date", "instrument", "selection_effective_rank"]
+    ].copy()
+    result[SCORE_COLUMN] = predictions
+    result["turnover_shadow_price_bps_per_fraction"] = (
+        model.shadow_price_bps_per_fraction
+    )
+    return rank_turnover_utility_predictions(result)
+
+
 def train_fixed_p0d_reference_predictions(
     *,
     features: pd.DataFrame,

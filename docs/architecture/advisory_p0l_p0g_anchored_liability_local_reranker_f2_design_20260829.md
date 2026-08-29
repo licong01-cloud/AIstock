@@ -343,12 +343,14 @@ backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_cont
 backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_training.py
 backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py
 backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_bundle.py
+backend/services/advisory_model_first/turnover_constrained_utility_training.py
 scripts/advisory_p0l_build_training_request.py
 scripts/wsl/advisory_p0l_train.py
 backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_contracts.py
 backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py
 backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py
 backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_bundle.py
+backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py
 scripts/ci_change_classifier.py
 backend/tests/scripts/test_ci_change_classifier.py
 scripts/aistock_issue_workflow.py
@@ -464,21 +466,21 @@ liability trial；每个 trial 后释放 booster、prediction 和临时 frame。
 |---|---|---|---|---|
 | F-261 | 本文§1；P0-K receipts；P0-C matured labels | artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0k_selection_liability_gate_20260829/selection_liability_gate_bundles/fee9b561a287229d6890d478408cacfdee6ba351cf1152c81369a86cc276bbbc/advancement_receipt.json`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/policy_datasets/81e2c9bac5ce1f8e2fdc5a6174bc948dfbe984cf5028726c89ea72eb59fc69bd/candidate_episode_labels.parquet` | DESIGN_EVIDENCE_VERIFIED | none |
 | F-262 | 本文§1；P0-G advancement | artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0g_turnover_constrained_utility_20260825/turnover_constrained_utility_bundles/433ff2172295d4ccc0d0dc434dedc74a3bab6b0627ed67a2dc37f2b418df7e52/advancement_receipt.json` | DESIGN_EVIDENCE_VERIFIED | none |
-| F-263 | future contracts/request builder | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_contracts.py` | DESIGN_READY | none |
-| F-264 | future anchor OOF builder | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | DESIGN_READY | none |
-| F-265 | P0-K public liability helpers + future wrapper | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py` | DESIGN_READY | none |
-| F-266 | future local reranker | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py` | DESIGN_READY | none |
-| F-267 | existing shared policy + future priority adapter | `backend/tests/advisory_model_first/test_shadow_portfolio_policy.py`; `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | DESIGN_READY | none |
-| F-268 | future identity control | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | DESIGN_READY | none |
-| F-269 | future intervention/coverage receipt | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | DESIGN_READY | none |
-| F-270 | future train-only selector | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py` | DESIGN_READY | none |
-| F-271 | future full Stage A pipeline | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | DESIGN_READY | none |
-| F-272 | shared PBO/paired/advancement + future unique-vector guard | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | DESIGN_READY | none |
-| F-273 | future bundle publisher/loader | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_bundle.py` | DESIGN_READY | none |
-| F-274 | 本文§15；boundary assertions | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | DESIGN_READY | none |
-| F-275 | 本文§§13-14 | `backend/tests/scripts/test_aistock_feature_workflow.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md --tier F2` | DESIGN_READY | none |
-| F-276 | 本文§19 | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_bundle.py` | DESIGN_READY | none |
-| F-277 | 本文§20 | `backend/tests/scripts/test_aistock_feature_workflow.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md --tier F2` | DESIGN_READY | none |
+| F-263 | typed contracts/request builder | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_contracts.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-264 | nested fixed-anchor OOF builder + outer refit scorer | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py`; `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-265 | P0-K public liability helpers + P0-L wrapper | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-266 | deterministic adjacent local reranker | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-267 | existing shared policy + ENTER-priority-only adapter | `backend/tests/advisory_model_first/test_shadow_portfolio_policy.py`; `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-268 | named identity control and exact metric parity | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-269 | actual ENTER-set intervention and coverage comparison | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-270 | minimum feasible nonzero train-only selector | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-271 | full 2x3x28 pipeline roster and nested-fold assertions | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-272 | shared paired/advancement + unique-vector PBO guard | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-273 | immutable bundle publisher/loader/exact retry | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_bundle.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-274 | 本文§15；offline runtime-impact assertions | `backend/tests/scripts/test_aistock_issue_workflow.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-275 | 本文§§13-14 | `backend/tests/scripts/test_aistock_feature_workflow.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md --tier F2` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-276 | 本文§19 | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_bundle.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-277 | 本文§20 | `backend/tests/scripts/test_aistock_feature_workflow.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md --tier F2` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
 
 ## 19. Rollout / rollback
 
@@ -527,3 +529,12 @@ P0-C/P0-G/P0-H/P0-K bundles 均不改变、不删除、不覆盖。
   `tests/aistock_validation/config/ci_test_modules.yaml`。已改为真实权威路径：两个CLI写入
   `scripts/ci_change_classifier.py`并补定向测试，offline pipeline写入`scripts/aistock_issue_workflow.py`的
   known non-runtime集合并补运行时分类回归；避免实现后出现unmapped code或错误要求后端重启。
+- Round 9（源码因果/业务审核）：实现后逐项复核固定anchor、inner-train selector、outer one-shot和真实ENTER
+  集合。补齐P0-G `final_boost_rounds=19` typed identity；把非恒等完整性约束到最终winner，而不是任意候选；
+  final refit失败改为发布evidence-only incomplete终态。
+- Round 10（block reset/完整性审核）：发现shared replay会在候选block结束后继续排空持仓，直接拼接会重复其他
+  block日期。现改为每个block只保留自身候选决策日；outer比较只读`is_candidate_decision=true`行，并逐日要求
+  active-slot/cash不劣于anchor，禁止用聚合均值抵消单日退化。
+- Round 11（资源/交付审核）：新增P0-L专属8 GiB typed failure并把outer/final资源异常写入incomplete bundle；
+  真实P0-F/P0-G/P0-H/P0-K artifact九项共享身份只读验证一致，请求构建CLI真实artifact smoke通过；
+  `advisory_modeling_backend` 526项通过，L0/ownership/feature-workflow均通过且无需DEV DB或后端重启。
