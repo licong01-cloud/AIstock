@@ -2144,6 +2144,41 @@ def _append_aggregate(
         )
 
 
+def _iter_monotonic_trade_date_groups(
+    rows: Iterator[dict[str, Any]],
+    *,
+    source_name: str,
+) -> Iterator[tuple[date, list[dict[str, Any]]]]:
+    current_date: date | None = None
+    current_rows: list[dict[str, Any]] = []
+    for row in rows:
+        trade_date = row.get("trade_date")
+        if not isinstance(trade_date, date):
+            raise StateModelSetError(f"hmm_risk_stock_fact_stream_identity_invalid: {source_name} trade_date")
+        if current_date is not None and trade_date < current_date:
+            raise StateModelSetError(
+                f"hmm_risk_stock_fact_stream_order_invalid: {source_name} {trade_date} after {current_date}"
+            )
+        if current_date is not None and trade_date != current_date:
+            yield current_date, current_rows
+            current_rows = []
+        current_date = trade_date
+        current_rows.append(row)
+    if current_date is not None:
+        yield current_date, current_rows
+
+
+def _aggregate_row_sort_key(row: Mapping[str, Any], *, sort_code: str) -> tuple[str, str, str, str]:
+    fields = (sort_code, "symbol", "l1_code", "l2_code")
+    values = tuple(str(row.get(field) or "").strip() for field in fields)
+    missing = [field for field, value in zip(fields, values, strict=True) if not value]
+    if missing:
+        raise StateModelSetError(
+            "hmm_risk_stock_fact_stream_identity_invalid: aggregate sort identity lacks " + ",".join(missing)
+        )
+    return values
+
+
 def load_daily_aggregates(
     reader: PostgresStockFactReader,
     *,
@@ -2167,17 +2202,35 @@ def load_daily_aggregates(
         else reader.iter_missing_price_rows(sector_level=sector_level)
     )
     sort_code = "l1_code" if sector_level == "L1" else "l2_code"
-    merged_rows = heapq.merge(
-        reader.iter_stock_fact_rows()
-        if sector_level == "L1"
-        else reader.iter_stock_fact_rows(sector_level=sector_level),
-        iter(missing_rows),
-        key=lambda row: (row["trade_date"], row[sort_code], row["symbol"], row["l1_code"], row["l2_code"]),
+    stock_days = iter(
+        _iter_monotonic_trade_date_groups(
+            reader.iter_stock_fact_rows()
+            if sector_level == "L1"
+            else reader.iter_stock_fact_rows(sector_level=sector_level),
+            source_name="stock_fact",
+        )
     )
-
-    def rows_with_hash() -> Iterator[dict[str, Any]]:
-        nonlocal raw_count
-        for row in merged_rows:
+    missing_days = iter(
+        _iter_monotonic_trade_date_groups(
+            iter(missing_rows),
+            source_name="missing_price",
+        )
+    )
+    stock_day = next(stock_days, None)
+    missing_day = next(missing_days, None)
+    aggregate_identities: set[tuple[date, str]] = set()
+    while stock_day is not None or missing_day is not None:
+        trade_date = min(item[0] for item in (stock_day, missing_day) if item is not None)
+        day_rows: list[dict[str, Any]] = []
+        if stock_day is not None and stock_day[0] == trade_date:
+            day_rows.extend(stock_day[1])
+            stock_day = next(stock_days, None)
+        if missing_day is not None and missing_day[0] == trade_date:
+            day_rows.extend(missing_day[1])
+            missing_day = next(missing_days, None)
+        day_rows.sort(key=lambda row: _aggregate_row_sort_key(row, sort_code=sort_code))
+        projected_day_rows: list[dict[str, Any]] = []
+        for row in day_rows:
             _record_source_evidence(
                 row,
                 expected_circ_mv_history_start=reader.spec.effective_circ_mv_history_start,
@@ -2194,21 +2247,25 @@ def load_daily_aggregates(
                 projected = dict(row)
                 projected["l1_code"] = row["l2_code"]
                 projected["l1_name"] = row["l2_name"]
-                yield projected
+                projected_day_rows.append(projected)
             else:
-                yield row
-
-    for _, group in itertools.groupby(
-        rows_with_hash(),
-        key=lambda row: (row["trade_date"], row["l1_code"]),
-    ):
-        _append_aggregate(
-            list(group),
-            min_coverage=min_coverage,
-            sector_level=sector_level,
-            aggregates=aggregates,
-            invalid_sector_dates=invalid_sector_dates,
-        )
+                projected_day_rows.append(row)
+        for identity, group in itertools.groupby(
+            projected_day_rows,
+            key=lambda row: (row["trade_date"], str(row["l1_code"])),
+        ):
+            if identity in aggregate_identities:
+                raise StateModelSetError(
+                    f"hmm_risk_stock_fact_aggregate_identity_duplicated: {identity[1]}/{identity[0]}"
+                )
+            aggregate_identities.add(identity)
+            _append_aggregate(
+                list(group),
+                min_coverage=min_coverage,
+                sector_level=sector_level,
+                aggregates=aggregates,
+                invalid_sector_dates=invalid_sector_dates,
+            )
     if not aggregates:
         raise StateModelSetError("PostgreSQL stock-fact source produced no aggregates")
     manifest = _stock_fact_manifest(
