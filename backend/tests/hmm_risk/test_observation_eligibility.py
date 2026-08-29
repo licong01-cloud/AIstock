@@ -62,13 +62,22 @@ def _build_eligibility(
     statuses: dict[tuple[str, date], dict[str, str]] | None = None,
     minimum_availability_ratio: float = 0.9,
     formal_policy: bool = False,
+    sw_authority_type: str = "sw_index_member_and_classify_mapping",
 ):
+    sw_authority = (
+        canonical_authority_identity(
+            sw_authority_type,
+            {"schema_version": "hmm_risk_pit_mapping_manifest_v2", "manifest_hash": "f" * 64},
+        )
+        if sw_authority_type == "hmm_industry_pit_classification_projection"
+        else _authority(sw_authority_type)
+    )
     authorities = {
         "provider": _authority("provider_absence_manifest"),
         "resolver": _authority("security_source_identity_manifest"),
         "pit": _authority("stock_universe_pit_state_and_spans"),
         "price": _authority("market.kline_daily_raw"),
-        "sw": _authority("sw_index_member_and_classify_mapping"),
+        "sw": sw_authority,
     }
     predicate_evidence = {}
     for row in absences:
@@ -189,6 +198,34 @@ def _build_eligibility(
         train_end=train_end,
         minimum_availability_ratio=minimum_availability_ratio,
     )
+
+
+def test_partition_readback_accepts_explicit_frozen_industry_pit_authority() -> None:
+    start = date(2022, 1, 4)
+    result = _build_eligibility(
+        [_absence("002411.SZ", start)],
+        {"002411.SZ": (start,)},
+        train_start=start,
+        train_end=start,
+        formal_policy=True,
+        sw_authority_type="hmm_industry_pit_classification_projection",
+    )
+
+    partition = validate_c010_provider_absence_domain_partition(result.provider_absence_partition_receipt)
+    assert partition["sw_mapping_classify_identity"]["authority_type"] == ("hmm_industry_pit_classification_projection")
+
+
+def test_partition_readback_rejects_unregistered_industry_authority_type() -> None:
+    start = date(2022, 1, 4)
+    with pytest.raises(StateModelSetError, match="sw_mapping_classify_identity authority type is invalid"):
+        _build_eligibility(
+            [_absence("002411.SZ", start)],
+            {"002411.SZ": (start,)},
+            train_start=start,
+            train_end=start,
+            formal_policy=True,
+            sw_authority_type="unregistered_industry_authority",
+        )
 
 
 def test_train_only_eligibility_excludes_structural_absence_without_changing_stock_universe() -> None:

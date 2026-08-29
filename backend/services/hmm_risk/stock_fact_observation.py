@@ -1245,12 +1245,22 @@ def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, A
         "security_resolver_identity": "security_source_identity_manifest",
         "pit_authority_identity": "stock_universe_pit_state_and_spans",
         "price_source_identity": "market.kline_daily_raw",
-        "sw_mapping_classify_identity": "sw_index_member_and_classify_mapping",
+        "sw_mapping_classify_identity": {
+            "sw_index_member_and_classify_mapping",
+            "hmm_industry_pit_classification_projection",
+        },
     }
-    for field, expected_type in authority_type_by_field.items():
+    for field, expected_types in authority_type_by_field.items():
         authority = _c010_require_authority_identity(value.get(field), label=f"C-010 partition {field}")
-        if authority.get("authority_type") != expected_type:
+        accepted_types = {expected_types} if isinstance(expected_types, str) else expected_types
+        if authority.get("authority_type") not in accepted_types:
             raise StateModelSetError(f"C-010 partition {field} authority type is invalid")
+        if (
+            field == "sw_mapping_classify_identity"
+            and authority.get("authority_type") == "hmm_industry_pit_classification_projection"
+            and authority["authority"].get("schema_version") != "hmm_risk_pit_mapping_manifest_v2"
+        ):
+            raise StateModelSetError("C-010 partition frozen industry PIT authority schema is invalid")
     entries = value.get("entries")
     if not isinstance(entries, list):
         raise StateModelSetError("C-010 provider-absence partition entries are missing")

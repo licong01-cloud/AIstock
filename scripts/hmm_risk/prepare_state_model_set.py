@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 import json
@@ -633,7 +634,67 @@ def _c010_expected_opportunity_receipt(
     train_start: date,
     train_end: date,
     authority_identities: list[dict[str, Any]],
+    industry_pit_adapter: HMMIndustryPitAdapter | None = None,
+    industry_pit_denominator: Any | None = None,
 ) -> dict[str, Any]:
+    if (industry_pit_adapter is None) != (industry_pit_denominator is None):
+        raise StateModelSetError(
+            "hmm_risk_c010_expected_opportunity_missing: industry PIT adapter/denominator must be supplied together"
+        )
+    if industry_pit_adapter is not None:
+        if industry_pit_denominator.window_start != train_start or industry_pit_denominator.window_end != train_end:
+            raise StateModelSetError(
+                "hmm_risk_c010_expected_opportunity_missing: industry PIT denominator window differs"
+            )
+        result: dict[str, list[date]] = {}
+        for span in industry_pit_denominator.universe_spans:
+            span_dates = industry_pit_denominator.dates_for_span(span)
+            if not span_dates:
+                continue
+            boundaries = {0, len(span_dates)}
+            for transition in {
+                *industry_pit_adapter.classification_resolver.transition_dates(span.canonical_symbol),
+                *industry_pit_adapter.index_membership_resolver.transition_dates(span.canonical_symbol),
+            }:
+                offset = bisect_left(span_dates, transition)
+                if 0 < offset < len(span_dates):
+                    boundaries.add(offset)
+            ordered = sorted(boundaries)
+            for left, right in zip(ordered, ordered[1:]):
+                trade_date_value = span_dates[left]
+                projection = industry_pit_adapter.resolve(span.canonical_symbol, trade_date_value)
+                if (
+                    projection.canonical_symbol != span.canonical_symbol
+                    or projection.trade_date != trade_date_value
+                    or projection.status not in {"resolved", "unavailable"}
+                ):
+                    raise StateModelSetError(
+                        "hmm_risk_c010_expected_opportunity_missing: industry PIT projection identity is invalid"
+                    )
+                if projection.status == "unavailable":
+                    continue
+                if not all((projection.l1_code, projection.l1_name, projection.l2_code, projection.l2_name)):
+                    raise StateModelSetError(
+                        "hmm_risk_c010_expected_opportunity_missing: resolved industry PIT projection is incomplete"
+                    )
+                existing = result.setdefault(span.canonical_symbol, [])
+                segment = list(span_dates[left:right])
+                if set(existing).intersection(segment):
+                    raise StateModelSetError(
+                        "hmm_risk_c010_expected_opportunity_missing: industry PIT opportunity keys overlap"
+                    )
+                existing.extend(segment)
+        if not result:
+            raise StateModelSetError(
+                "hmm_risk_c010_expected_opportunity_missing: "
+                "C-010 frozen industry PIT opportunity resolution returned no rows"
+            )
+        return build_expected_opportunity_receipt(
+            {symbol: tuple(dates) for symbol, dates in result.items()},
+            train_start=train_start,
+            train_end=train_end,
+            authority_identities=authority_identities,
+        )
     with conn.cursor() as cursor:
         cursor.execute(
             f"""
@@ -712,6 +773,7 @@ def _c010_provider_absence_partition(
     train_start: date,
     train_end: date,
     formal_policy: bool,
+    industry_pit_adapter: HMMIndustryPitAdapter | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     provider_identity = canonical_authority_identity(
         "provider_absence_manifest",
@@ -740,7 +802,11 @@ def _c010_provider_absence_partition(
         },
     )
     sw_identity = canonical_authority_identity(
-        "sw_index_member_and_classify_mapping",
+        (
+            "hmm_industry_pit_classification_projection"
+            if industry_pit_adapter is not None
+            else "sw_index_member_and_classify_mapping"
+        ),
         mapping_manifest,
     )
     filtered = sorted(
@@ -779,8 +845,9 @@ def _c010_provider_absence_partition(
             }
         )
     with conn.cursor() as cursor:
-        cursor.execute(
-            f"""
+        if industry_pit_adapter is None:
+            cursor.execute(
+                f"""
             WITH {MEMBER_CLASSIFICATION_CTES}, requested AS (
               SELECT canonical_ts_code,provider_source_ts_code,price_source_ts_code,trade_date::date trade_date
               FROM jsonb_to_recordset(%s::jsonb) AS item(
@@ -811,18 +878,60 @@ def _c010_provider_absence_partition(
                        AND (member.out_date IS NULL OR member.out_date>=r.trade_date)), '[]'::jsonb)
             FROM requested r ORDER BY r.canonical_ts_code,r.trade_date
             """,
-            (
-                json.dumps(requested, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-                source_spec.universe_key,
-            ),
-        )
+                (
+                    json.dumps(requested, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    source_spec.universe_key,
+                ),
+            )
+        else:
+            cursor.execute(
+                """
+                WITH requested AS (
+                  SELECT canonical_ts_code,provider_source_ts_code,price_source_ts_code,trade_date::date trade_date
+                  FROM jsonb_to_recordset(%s::jsonb) AS item(
+                    canonical_ts_code text,provider_source_ts_code text,price_source_ts_code text,trade_date text
+                  )
+                )
+                SELECT r.canonical_ts_code,r.trade_date,
+                       COALESCE((SELECT jsonb_agg(to_jsonb(spans))
+                         FROM market.stock_universe_pit_spans spans
+                         WHERE spans.ts_code=r.canonical_ts_code AND spans.universe_key=%s
+                           AND spans.eligible_start<=r.trade_date
+                           AND (spans.eligible_end IS NULL OR spans.eligible_end>=r.trade_date)), '[]'::jsonb),
+                       COALESCE((SELECT jsonb_agg(DISTINCT to_jsonb(price))
+                         FROM market.kline_daily_raw price
+                         WHERE price.ts_code IN (r.price_source_ts_code,r.canonical_ts_code)
+                           AND price.trade_date=r.trade_date), '[]'::jsonb)
+                FROM requested r ORDER BY r.canonical_ts_code,r.trade_date
+                """,
+                (
+                    json.dumps(requested, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    source_spec.universe_key,
+                ),
+            )
         rows = cursor.fetchall()
     if len(rows) != len(filtered):
         raise StateModelSetError(
             "hmm_risk_c010_provider_absence_domain_partition_invalid: predicate query cardinality mismatch"
         )
     predicate_evidence: dict[tuple[str, date], dict[str, Any]] = {}
-    for symbol, trade_date_value, pit_rows, price_rows, mapping_rows in rows:
+    for raw_row in rows:
+        if industry_pit_adapter is None:
+            symbol, trade_date_value, pit_rows, price_rows, mapping_rows = raw_row
+            projection = None
+        else:
+            symbol, trade_date_value, pit_rows, price_rows = raw_row
+            projection = industry_pit_adapter.resolve(str(symbol), trade_date_value)
+            if (
+                projection.canonical_symbol != str(symbol)
+                or projection.trade_date != trade_date_value
+                or projection.status not in {"resolved", "unavailable"}
+            ):
+                raise StateModelSetError(
+                    "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+                    "industry PIT projection identity is invalid"
+                )
+            mapping_rows = [projection.as_dict()]
         key = (str(symbol), trade_date_value)
         resolver_receipt = resolver_receipts[key]
 
@@ -836,7 +945,17 @@ def _c010_provider_absence_partition(
         price_status = (
             "available" if len(price_candidates) == 1 else ("unavailable" if not price_candidates else "invalid")
         )
-        if not mapping_candidates:
+        if projection is not None:
+            if projection.status == "unavailable":
+                l1_status = l2_status = "unavailable"
+            elif not all((projection.l1_code, projection.l1_name, projection.l2_code, projection.l2_name)):
+                raise StateModelSetError(
+                    "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+                    "resolved industry PIT projection is incomplete"
+                )
+            else:
+                l1_status = l2_status = "available"
+        elif not mapping_candidates:
             l1_status = l2_status = "unavailable"
         elif len(mapping_candidates) != 1:
             l1_status = l2_status = "invalid"
@@ -1035,6 +1154,12 @@ def _load_l1_source_inputs(
                 train_start=train_start,
                 train_end=train_end,
                 formal_policy=c010_formal,
+                industry_pit_adapter=industry_pit_adapter,
+            )
+            industry_pit_denominator = (
+                None
+                if industry_pit_adapter is None
+                else reader.load_industry_pit_denominator(window_start=train_start, window_end=train_end)
             )
             expected_opportunity = _c010_expected_opportunity_receipt(
                 conn,
@@ -1042,6 +1167,8 @@ def _load_l1_source_inputs(
                 train_start=train_start,
                 train_end=train_end,
                 authority_identities=opportunity_authorities,
+                industry_pit_adapter=industry_pit_adapter,
+                industry_pit_denominator=industry_pit_denominator,
             )
             eligibility = build_train_only_observation_eligibility(
                 provider_absence_manifest.rows,
