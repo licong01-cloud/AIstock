@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1243",
-  "closed_at": null,
+  "closed_at": "2026-08-29T19:27:43.909613Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -248,9 +248,31 @@
     "inference_basis": "file_scope_catalog",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1243/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1243",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "eee21d776cd9960b4e2f28a37fad6fd2c26a02858155d4d8e970ba10770daf68",
+      "contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+      "expected_identity": "19814d3e109092b0705f1762da21c762244558fc",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-29T19:20:52.009676Z",
+      "mode": "read_only",
+      "observed_identity": "19814d3e109092b0705f1762da21c762244558fc",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3eb37e066fa4b9f816354981b4625a6718b1e0b172b031fe6864852928add076",
+      "receipt_sha256": "f2f6716760ce6f67926e60231d3ac8dc24355b66fa23be8e215ac54ca2ce11b3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "4f16809cb32ae6555bba4553e222254a8e830079b90711699fb25325a324896e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -286,7 +308,7 @@
     ],
     "validation_evidence_digest": "2e2f9e62838c38e460f10439b8e32144837cd6d83be9fa15c580db8cfe7e5c86"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -301,7 +323,13 @@
     "validation-receipt: id=ecb455aa7bcf100b commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 tests`",
     "validation-receipt: id=ab9c6ea74b791efc commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=data_sync_autonomy_backend status=passed command=`python -m nox -s data_sync_autonomy_backend` result=`passed: 254 passed, 1 skipped`",
     "validation-receipt: id=3fedf0fc3286a4f1 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=nox plan=qlib_data_backend status=passed command=`python -m nox -s qlib_data_backend` result=`passed: 20 tests`",
-    "validation-receipt: id=9a6b77d523c90db5 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_prepare_canonical_pit_monthly.py backend/tests/test_stock_universe_pit_service.py -q` result=`passed: 40 tests`"
+    "validation-receipt: id=9a6b77d523c90db5 commit=bf0984fc75b13c745e2eff2e1ef38dd1d8226785 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_prepare_canonical_pit_monthly.py backend/tests/test_stock_universe_pit_service.py -q` result=`passed: 40 tests`",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed: 11 files mapped, 0 blocking findings",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests",
+    "python -m nox -s data_sync_autonomy_backend -> passed: 254 passed, 1 skipped",
+    "python -m nox -s qlib_data_backend -> passed: 20 tests",
+    "python -m pytest backend/tests/scripts/test_prepare_canonical_pit_monthly.py backend/tests/test_stock_universe_pit_service.py -q -> passed: 40 tests"
   ],
   "verification_budget": {
     "budget": "standard",
