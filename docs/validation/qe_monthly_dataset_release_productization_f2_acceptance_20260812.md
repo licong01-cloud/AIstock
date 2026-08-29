@@ -9,6 +9,13 @@
 - 因此真实 2026-07-31 source scan/candidate/signoff 与真实 full-scale 性能为明确批准的后续运行时证据，不属于本源码 PR 的伪造通过项。
 - production activation、node1 distribution、DDL/DML、runtime restart、client install 与 cleanup 均为 `not_requested/not_authorized`。
 
+### 2026-08-29 P0 priority revision
+
+用户已批准把2026-09-01凌晨启动、完成截至2026-08-31的candidate-only更新设为唯一P0，并批准在设计层把
+消费者迁移与生产激活移出数据准备关键路径。本修订仍未授权真实sample/full/monthly、production DML、activation、
+重启或cleanup；F-032/F-033中的真实receipt继续由后续精确执行授权产生。设计新增的唯一源码缺口是受控canonical
+PIT monthly coverage operator，不以临时Python/SQL或monthly隐式写库替代。
+
 ## Validation receipts
 
 ### DR-F2-20260812-01 — unified isolated regression
@@ -87,6 +94,8 @@ python -m pytest -q backend/tests/test_validation_module_ownership.py backend/te
 | F-029 | backend/services/dataset_release/performance.py; synthetic_benchmark.py | validation-receipt: DR-F2-20260812-01; backend/tests/dataset_release/test_performance.py | approved_by_user | 用户明确批准: 本轮禁止真实导出，真实 full-scale 性能延后到获授权月更；synthetic gate 已验证 |
 | F-030 | docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md | validation-receipt: DR-F2-20260812-01..04; final-head F2/minimal gate; PR #3310 head/check/merge readback | verified_source_review | - |
 | F-031 | backend/services/dataset_release/component_artifact_manifest.py; canonical_lineage.py | validation-receipt: DR-F2-20260812-01; backend/tests/dataset_release/test_canonical_lineage.py | verified | - |
+| F-032 | docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md; docs/operations/qe_backtest_dataset_monthly_update_runbook.md | artifact: tests/aistock_validation/pit_v2/small_candidate_receipt.json; artifact: tests/aistock_validation/pit_v2/candidate_audit_receipt.json | approved_by_user | 用户明确批准: 2026-09-01凌晨启动截至2026-08-31的candidate-only更新为唯一P0；真实receipt仍需独立数据执行授权和实际运行 |
+| F-033 | backend/services/stock_universe_pit_service.py; planned scripts/prepare_canonical_pit_monthly.py | backend/tests/scripts/test_prepare_canonical_pit_monthly.py; DEV rollback and production readback receipts | approved_by_user | 用户明确批准: 目标cutoff数据更新为P0；operator源码尚待实现，生产DML仍保留精确目标独立授权 |
 
 ## DESIGN-COMPLIANCE-001 readback
 
