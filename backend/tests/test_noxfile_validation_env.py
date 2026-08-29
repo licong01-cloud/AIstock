@@ -194,6 +194,14 @@ def test_frontend_node_modules_install_runs_only_when_playwright_missing(
     noxfile._ensure_frontend_node_modules(DummySession())
     assert calls == []
 
+    (bin_dir / ("playwright.cmd" if os.name == "nt" else "playwright")).unlink()
+    direct_cli = frontend / "node_modules" / "@playwright" / "test" / "cli.js"
+    direct_cli.parent.mkdir(parents=True)
+    direct_cli.write_text("// pinned CLI\n", encoding="utf-8")
+
+    noxfile._ensure_frontend_node_modules(DummySession())
+    assert calls == []
+
 
 def test_terminate_process_tree_uses_taskkill_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, ...]] = []

@@ -678,6 +678,7 @@ def _load_rotation_inputs(
             c010_formal=True,
             expected_database_identity=expected_database_identity,
             source_preflight_complete=source_preflight_complete,
+            rotation_l1_only=True,
         )
     except HoldoutAcceptanceError:
         raise

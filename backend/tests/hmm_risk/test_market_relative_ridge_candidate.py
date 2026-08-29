@@ -4,6 +4,7 @@ import json
 import hashlib
 import math
 import subprocess
+from collections.abc import Mapping
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -11,8 +12,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from backend.services.dataset_release.canonical import digest_named_fields
 from backend.services.hmm_risk import market_relative_jump_spike as jump_subject
 from backend.services.hmm_risk import market_relative_ridge_candidate as subject
+from backend.services.hmm_risk.industry_pit_adapter import build_l1_code_projection_authority
 from scripts.hmm_risk import run_market_relative_ridge_candidate as cli
 
 
@@ -108,6 +111,67 @@ def _rl1_calendar() -> list[date]:
     ]
 
 
+def _l1_projection() -> Mapping[str, object]:
+    return build_l1_code_projection_authority(
+        taxonomy_contract_id="sw2021_classification_catalog_v1",
+        taxonomy_version="SW2021",
+        projection_version="sw2021_taxonomy_to_published_l1_v1",
+        taxonomy_rows=[
+            {"industry_code": f"{index:02d}0000", "industry_name": f"L1-{index:02d}"} for index in range(1, 32)
+        ],
+        published_index_rows=[
+            {
+                "industry_code": f"{index:02d}0000",
+                "industry_name": f"L1-{index:02d}",
+                "index_code": f"801{index:03d}.SI",
+            }
+            for index in range(1, 32)
+        ],
+        source_ids=("test:taxonomy", "test:index"),
+        source_hashes=("c" * 64, "d" * 64),
+    )
+
+
+def _research_basis() -> Mapping[str, object]:
+    body: dict[str, object] = {
+        "schema_version": "hmm_risk_industry_pit_research_basis_v1",
+        "contract_version": "c013_g2a_data_a_v1",
+        "active_mode": "historical_replay",
+        "historical_classification_basis": "stable_taxonomy_backcast",
+        "historical_non_as_known_taxonomy": True,
+        "forward_classification_basis": "as_published_pit",
+        "forward_non_as_known_taxonomy": False,
+    }
+    return {
+        **body,
+        "canonical_hash": digest_named_fields("hmm_risk_industry_pit_research_basis_v1", body),
+    }
+
+
+def _write_industry_pit_authority(tmp_path: Path) -> Path:
+    path = tmp_path / "industry-pit-authority.json"
+    path.write_text(
+        json.dumps(
+            {
+                "artifact_root": str((tmp_path.parent / "industry-pit-candidate").resolve()),
+                "identity": {
+                    "schema_version": "hmm_risk_industry_pit_authority_v1",
+                    "bundle_hash": "6" * 64,
+                    "classification_candidate_hash": "7" * 64,
+                    "index_membership_candidate_hash": "8" * 64,
+                    "classification_receipt_hash": "9" * 64,
+                    "index_membership_receipt_hash": "a" * 64,
+                    "preflight_canonical_hash": "b" * 64,
+                },
+                "l1_projection": _l1_projection(),
+                "research_basis": _research_basis(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> dict[str, object]:
     calendar = _rl1_calendar()
     root = (artifact_root or Path("F:/AIstock_artifacts/c012_rl1_unit")).resolve()
@@ -183,7 +247,7 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
         "source": {
             "source_start": "2020-07-30",
             "source_end": subject.RL1_DEVELOPMENT_END.isoformat(),
-            "source_revision": "unit-c012-rl1-development-v1",
+            "source_revision": subject.RL1_SOURCE_REVISION,
             "circ_mv_history_start": "2020-07-30",
             "universe_key": "unit-universe",
             "universe_rule_version": "unit-rule",
@@ -191,6 +255,20 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
             "security_identity_manifest_sha256": "4" * 64,
             "provider_absence_manifest_path": "absence.json",
             "provider_absence_manifest_sha256": "5" * 64,
+            "industry_pit": {
+                "artifact_root": "F:/AIstock_artifacts/industry_pit/unit",
+                "identity": {
+                    "schema_version": "hmm_risk_industry_pit_authority_v1",
+                    "bundle_hash": "6" * 64,
+                    "classification_candidate_hash": "7" * 64,
+                    "index_membership_candidate_hash": "8" * 64,
+                    "classification_receipt_hash": "9" * 64,
+                    "index_membership_receipt_hash": "a" * 64,
+                    "preflight_canonical_hash": "b" * 64,
+                },
+                "l1_projection": _l1_projection(),
+                "research_basis": _research_basis(),
+            },
         },
         "input_identity": {
             "dataset_manifest_sha256": "b" * 64,
@@ -1872,6 +1950,8 @@ def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
             "--prepare-request",
             "--source-authority",
             str(source_authority),
+            "--industry-pit-authority",
+            str(_write_industry_pit_authority(tmp_path)),
             "--request",
             str(request_path),
             "--output",
@@ -1962,6 +2042,8 @@ def test_c012_rl1_request_preflight_persists_safe_source_error_message(
             "--prepare-request",
             "--source-authority",
             str(source_path),
+            "--industry-pit-authority",
+            str(_write_industry_pit_authority(tmp_path)),
             "--request",
             str(tmp_path / "request.json"),
             "--output",

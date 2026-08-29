@@ -1,37 +1,37 @@
 {
-  "actual": "A recent close-sync run spent 56 seconds in classification and another 36 seconds in a second serial static job before the 11-second verdict, consuming two runner allocations and duplicate setup.",
+  "actual": "workflow-validation and CI verdict are separate ordinary-runner jobs; the observed exact-head run spent about 377 seconds waiting across those two reacquisition boundaries.",
   "allowed_write_scope": [
     ".github/workflows/test.yml",
-    "backend/tests/scripts/test_ci_change_classifier.py",
     "scripts/ci_workflow_policy_scan.py",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
     "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
-    "tests/aistock_validation/bugs/20260828_BUG-1234-aistock-ci-repeats-checkout-and-environment-setup-in-serial-classifier-a.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/20260828_BUG-1239-aistock-ci-workflow-validation-and-final-verdict-reacquire-the-ordinary.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1234",
-  "closed_at": "2026-08-28T19:02:06Z",
+  "bug_id": "BUG-1239",
+  "closed_at": "2026-08-28T21:47:55Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-28T12:17:33.039489Z",
-  "description": "A recent close-sync run spent 56 seconds in classification and another 36 seconds in a second serial static job before the 11-second verdict, consuming two runner allocations and duplicate setup.",
+  "created_at": "2026-08-28T21:18:13.739855Z",
+  "description": "workflow-validation and CI verdict are separate ordinary-runner jobs; the observed exact-head run spent about 377 seconds waiting across those two reacquisition boundaries.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260828-c09ff4926f75",
-      "timestamp": "2026-08-28T12:17:33.039475Z"
+      "note": "Promoted from IC-20260828-512e6e3f3236",
+      "timestamp": "2026-08-28T21:18:13.739840Z"
     }
   ],
   "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/actions/runs/33161620888"
+    "https://github.com/licong01-cloud/AIstock/actions/runs/33201044994",
+    "https://github.com/licong01-cloud/AIstock/pull/3907"
   ],
-  "expected": "One preparation job must classify changes and execute the selected static or close-sync metadata gate from the same checkout, while CI verdict and all fail-closed quality semantics remain unchanged.",
+  "expected": "For workflow-validation changes, the final CI verdict job performs the selected workflow validation and verdict in one runner allocation while preserving every fail-closed result, stable check context, module lane, and zero-install/Windows contract.",
   "file_scope_contract": {
     "actual_changed_files": [
       ".github/workflows/test.yml",
@@ -40,8 +40,7 @@
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "scripts/ci_workflow_policy_scan.py",
-      "tests/aistock_validation/bugs/.bug_id_allocator.json",
-      "tests/aistock_validation/bugs/20260828_BUG-1234-aistock-ci-repeats-checkout-and-environment-setup-in-serial-classifier-a.json"
+      "tests/aistock_validation/bugs/20260828_BUG-1239-aistock-ci-workflow-validation-and-final-verdict-reacquire-the-ordinary.json"
     ],
     "added_files": [],
     "changed_files": [
@@ -51,15 +50,14 @@
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "scripts/ci_workflow_policy_scan.py",
-      "tests/aistock_validation/bugs/.bug_id_allocator.json",
-      "tests/aistock_validation/bugs/20260828_BUG-1234-aistock-ci-repeats-checkout-and-environment-setup-in-serial-classifier-a.json"
+      "tests/aistock_validation/bugs/20260828_BUG-1239-aistock-ci-workflow-validation-and-final-verdict-reacquire-the-ordinary.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/test.yml",
-        "backend/tests/scripts/test_ci_change_classifier.py",
         "scripts/ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py",
         "docs/standards/aistock_development_standard_v1.5_20260523.md",
         "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
@@ -76,17 +74,6 @@
       "matched_rules": [
         {
           "file": ".github/workflows/test.yml",
-          "impact_modules": [
-            "validation.runner",
-            "validation.center",
-            "platform.config"
-          ],
-          "primary_module": "validation.guardrails",
-          "risk_level": "high",
-          "rule_id": "dev_quality_tooling"
-        },
-        {
-          "file": "backend/tests/scripts/test_ci_change_classifier.py",
           "impact_modules": [
             "validation.runner",
             "validation.center",
@@ -135,8 +122,8 @@
       ],
       "suggested_scope": [
         ".github/workflows/test.yml",
-        "backend/tests/scripts/test_ci_change_classifier.py",
         "scripts/ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py",
         "docs/standards/aistock_development_standard_v1.5_20260523.md",
         "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
@@ -145,8 +132,8 @@
     },
     "planned_files": [
       ".github/workflows/test.yml",
-      "backend/tests/scripts/test_ci_change_classifier.py",
       "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
@@ -154,29 +141,30 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       ".github/workflows/test.yml",
-      "backend/tests/scripts/test_ci_change_classifier.py",
       "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
     ]
   },
-  "first_seen_at": "2026-08-28T12:17:33.039489Z",
+  "first_seen_at": "2026-08-28T21:18:13.739855Z",
   "fix_branch": null,
-  "fix_commit": "b7a16c0a0e91d204b08b52b3c5d1cd308b7347e5",
-  "fixed_at": "2026-08-28T19:02:06Z",
-  "github_issue_number": 3906,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3906",
-  "last_seen_at": "2026-08-28T12:17:33.039489Z",
+  "fix_commit": "804113df5f155ca18635d1ea301abf5964ef9498",
+  "fixed_at": "2026-08-28T21:47:55Z",
+  "github_issue_number": 3931,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3931",
+  "last_seen_at": "2026-08-28T21:18:13.739855Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3907",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3932",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "gh api repos/licong01-cloud/AIstock/actions/runs/33161620888/jobs?per_page=100",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "gh api repos/licong01-cloud/AIstock/actions/runs/33201044994/jobs?per_page=100",
   "required_verification": [
     "l0",
     "guardrail_changed_files"
@@ -200,41 +188,43 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
   "source_merge_receipt": {
-    "bug_id": "BUG-1234",
+    "bug_id": "BUG-1239",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "21c7322563230f3b",
-    "recorded_at": "2026-08-28T19:04:40.236026Z",
+    "receipt_id": "47e88ae7854c760d",
+    "recorded_at": "2026-08-28T21:49:28.651444Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "23c9f348ee01d49236197fe0477f171c69ca4644",
-    "source_merge_commit": "b7a16c0a0e91d204b08b52b3c5d1cd308b7347e5",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3907",
+    "source_head_oid": "4a7a93b9a975948ef05473973e41c807613ef5d3",
+    "source_merge_commit": "804113df5f155ca18635d1ea301abf5964ef9498",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3932",
     "validation_evidence": [
-      "rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -> 81 passed",
-      "rtk nox -s guardrail_changed_files -- --changed-only -> passed; blocking=0; ownership=7/7",
-      "rtk nox -s validation_module_registry_l0 -> passed; 8 passed; ownership=14/14"
+      "validation-receipt: id=0b2de45496a06e5e commit=4a7a93b9a975948ef05473973e41c807613ef5d3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_workflow_policy_scan.py backend/tests/test_aistock_guardrail_scan.py -q` result=`118 passed`",
+      "validation-receipt: id=13591aa0a972e8a3 commit=4a7a93b9a975948ef05473973e41c807613ef5d3 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed, blocking=0, ownership 7/7`",
+      "validation-receipt: id=2ceade4d2ed52f64 commit=4a7a93b9a975948ef05473973e41c807613ef5d3 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed, 8 passed, ownership 14/14`",
+      "validation-receipt: id=028ed36fcbc188be commit=4a7a93b9a975948ef05473973e41c807613ef5d3 kind=workflow_smoke plan=direct status=passed command=`rtk python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1239 --module validation` result=`passed, unexpected_dirty_paths=0`"
     ],
-    "validation_evidence_digest": "19ce2cf9f411f9eacaff6a911c40ed8a0dfb399bf8382c69eb788800751adc8d"
+    "validation_evidence_digest": "474c0aac2f50942337daff8dc4b9e2bf289876e64dee0be96f483b651c8bae01"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "AIstock CI repeats checkout and environment setup in serial classifier and static gate jobs",
+  "title": "AIstock CI workflow validation and final verdict reacquire the ordinary runner separately",
   "trigger_condition": {
-    "fingerprint": "c09ff4926f753a9e9d7b1b63",
-    "source_event_id": "FE-20260828-c09ff4926f75"
+    "fingerprint": "512e6e3f3236af74e7a4ef8c",
+    "source_event_id": "FE-20260828-512e6e3f3236"
   },
   "validation_evidence": [
-    "rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -> 81 passed",
-    "rtk nox -s guardrail_changed_files -- --changed-only -> passed; blocking=0; ownership=7/7",
-    "rtk nox -s validation_module_registry_l0 -> passed; 8 passed; ownership=14/14"
+    "validation-receipt: id=0b2de45496a06e5e commit=4a7a93b9a975948ef05473973e41c807613ef5d3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_workflow_policy_scan.py backend/tests/test_aistock_guardrail_scan.py -q` result=`118 passed`",
+    "validation-receipt: id=13591aa0a972e8a3 commit=4a7a93b9a975948ef05473973e41c807613ef5d3 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed, blocking=0, ownership 7/7`",
+    "validation-receipt: id=2ceade4d2ed52f64 commit=4a7a93b9a975948ef05473973e41c807613ef5d3 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed, 8 passed, ownership 14/14`",
+    "validation-receipt: id=028ed36fcbc188be commit=4a7a93b9a975948ef05473973e41c807613ef5d3 kind=workflow_smoke plan=direct status=passed command=`rtk python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1239 --module validation` result=`passed, unexpected_dirty_paths=0`"
   ],
   "verification_budget": {
     "budget": "light",

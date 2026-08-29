@@ -80,6 +80,7 @@
 7. 执行顺序固定为：evidence finalization → ignored/process manifest → transient purge → 普通 `git worktree remove` → local branch delete → remote branch SHA 校验与 delete → 路径/注册/local/remote 四态读回。任一步失败只报告已完成状态并停止后续破坏性动作，禁止伪造 `cleanup_done`。
 8. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
 9. cleanup 对同一目标 worktree 只生成一次完整 ignored-artifact manifest；后续分类和删除复用该 manifest，并仅对实际删除的精确 roots 做漂移读回。除 manifest 漂移、路径身份变化或删除失败外，禁止重复遍历整个 ignored tree。
+10. 同一次 merge finalizer 内，source 与 close-sync cleanup 可复用已成功完成且没有中间 main 变更的 `fetch origin --prune` receipt，以及各自前序步骤已验证的精确 PR/HEAD receipt；branch remote SHA、目标 worktree、ignored-artifact、活动进程和删除后四态仍逐目标重新验证。root-sync 因 canonical root 脏而 deferred 时，直接复用首次完整阻断 payload 生成提示并执行一次 `sync_root=false` 安全重试，禁止为生成相同提示插入第二次完整 dry-run 预检。
 
 ## 3. 风险与工作量分级
 
@@ -211,6 +212,8 @@ QE/RD-Agent/Qlib 产物记录 `artifact_id/type/uri/storage_tier`、hash、size/
 
 HTTP、subprocess、DB 长查询和批处理设置 timeout、取消、日志、退出码和资源释放；长任务提供 heartbeat、状态持久化与幂等恢复。
 
+PR check watch、已完成 Actions run/job/log 诊断和 last-green 定位在 GraphQL/`gh run` 遇到 TLS、EOF、schannel、连接重置或超时时，先执行固定次数重试，再改用等价 GitHub REST endpoint；PR check 绑定 REST 回读的精确 HEAD SHA，Actions jobs 超过单页上限时 fail-closed。权限、策略、输入、404 或其他非传输错误不得改写成网络恢复。REST 与 GraphQL 都失败时返回结构化 unavailable/deferred 结果，不要求重新授权、不启动第二个 workflow、不循环重试。
+
 <a id="rule-db-comment-001"></a>
 ### 6.11 [DB-COMMENT-001] 数据库语义
 
@@ -280,7 +283,7 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 ## 7. 上下文、批处理和生产依赖
 
 <a id="rule-ci-environment-parity-001"></a>
-### 6.23 [CI-ENVIRONMENT-PARITY-001] CI 预构建 Windows 环境与零安装
+### 6.23 [CI-ENVIRONMENT-PARITY-001] CI/Nightly 高效、预构建且 fail-closed
 
 backend、frontend、Go、workflow validation、PR quality 和安全扫描等 CI 验证必须在预构建的 Windows self-hosted runner 上执行；运行前只允许执行环境身份、版本指纹和工具可用性检查。CI 禁止 `actions/setup-*`、`pip/conda/mamba install`、`npm ci/install`、`go mod download` 以及任何隐式依赖安装。环境缺失、指纹漂移或工具缺失时必须 fail-closed 并报告 `environment_mismatch`，不回退到 GitHub-hosted Linux、生产 `AIstock` 环境或临时安装环境。该规则是执行环境约束，不增加业务测试或人工审批。
 
@@ -300,7 +303,11 @@ Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 
 
 PR base commit 已在 checkout 中且能够与当前 HEAD 证明 merge-base 时，才可直接更新本地 ref 而不执行远程请求；仅有 base 对象但浅克隆 ancestry 不完整不视为可用。确需补取时，仅对 pinned base ref 和当前 PR checkout/head ref 使用固定 3 次、短退避、有限 `--deepen` 的 bounded retry，每次补取后重新验证 merge-base，并在连续失败后以基础设施错误 fail-closed；禁止为解决该问题改成无界完整历史 checkout。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
-同一 PR merge tree 的 changed-file 分类、close-sync metadata 校验和静态 L0/catalog 门禁必须复用一个准备 job、一次 checkout、一次 base-ref 准备和一次环境校验；docs-lite 记录同样在该 job 内生成，不得为不被后续消费的临时记录再分配 runner job。合并 job 只消除重复初始化，不得删除、跳过或放宽原有 metadata、L0、catalog 质量结论；backend、frontend、Go、workflow、prompt 等被分类选中的独立验证 lane 和最终 `CI verdict` 继续 fail-closed。
+Nightly 的验证/测试 job 与 PR CI 使用同一预构建 `AIstock-CI` Conda 环境，不得调用生产 `AIstock` 环境代替测试环境；独立 DR 运维 job 仍按其授权目标使用运维环境，不受此替换。一次性 Nightly checkout 需要前端依赖时，只能在 `package-lock.json` SHA-256 一致且锁定的直接 Playwright CLI 存在后，把 canonical 预构建 `frontend/node_modules` 以目录链接挂入 workspace；禁止每轮安装、复制大型依赖树、静默跳过 UI 计划或在锁文件漂移时继续运行。清理一次性 workspace 时只删除链接本身，不得递归删除依赖源。
+
+Scheduled Nightly 必须以显式仓库参数查询最后一次成功水位，并分别检查命令退出码、JSON 解析结果和本地 commit 可用性。任一步失败或不存在成功水位时以基础设施错误 fail-closed，不得静默转换为全量执行；`--full-run` 只允许由 `workflow_dispatch` 的 `full_nightly_run=true` 明确触发。自动故障恢复不得用数十个无关 session 的全量运行代替水位读取错误。
+
+同一 PR merge tree 的 changed-file 分类、close-sync metadata 校验和静态 L0/catalog 门禁必须复用一个准备 job、一次 checkout、一次 base-ref 准备和一次环境校验；docs-lite 记录同样在该 job 内生成，不得为不被后续消费的临时记录再分配 runner job。合并 job 只消除重复初始化，不得删除、跳过或放宽原有 metadata、L0、catalog 质量结论。workflow validation 被选中时，其 focused tests、workflow policy 与最终 `CI verdict` 必须复用同一个 final job/runner allocation，并由 step outcome fail-closed 汇总；禁止再建立独立 `workflow-validation-tests` job 后重新排队 verdict。backend、frontend、Go、prompt 等其他被分类选中的验证 lane 和最终 `CI verdict` 继续 fail-closed。
 
 <a id="rule-ci-database-safety-001"></a>
 ### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
@@ -324,6 +331,8 @@ Nightly 的 DR snapshot/restore-readback 属于独立运维 lane，只能连接�
 同模块、相同风险、相容 scope 和相同验证链的 issue 在安全时可优先使用一个 source batch worktree；不批处理时记录简短 split reason。Batch Context Pack 记录 issue 列表、共享文件、逐 issue 验收、提交映射、共享测试和拆分条件。
 
 source batch 与 close-sync batch 是同一批次的两个阶段：source batch 允许多个 BUG 共用一个源 PR，但必须保持同模块、同风险、同验证链和共享 scope；close-sync-batch 只能把这些兼容 BUG 的独立记录同步到同一个已合入 PR/merge identity，并固化每个 BUG 的逐项证据与 compatibility key。不同模块、不同风险、不同 required verification、不同 runtime impact/activation policy、不同 production/dependency gate 或已有不同源 PR 的 BUG 必须分组处理，不能用一个 close-sync PR 覆盖。`backend_restart_required=true` 或需要 post-restart identity/business-smoke receipt 的 BUG 始终单独走 `finish`/`close-sync`；`none`/`client` 等无后端重启的 BUG 只有在 compatibility signature 完全一致时才可批处理。该规则是效率优化，不减少逐 BUG 的 Issue、状态、证据和门禁。
+
+Nightly `full-summary` 在所属 Actions run 结束前，只消费 `needs.*.result` 与本 run 已落盘的 session receipt，禁止再次读取自身仍在运行的 GitHub run/job log；跨 run 的事后诊断才可读取已完成的 Actions 日志。失败 session 先按 test-plan module 形成结构化 failure groups：单一模块组可自动创建或更新一个 Issue；两个及以上模块组属于异构诊断，保留分组证据但禁止自动创建 Issue、分配首个 session 的模块或直接 promotion 为 BUG。后续只对已确认的单一根因组执行登记。
 
 普通 `create-fix-worktree` 登记以 host-wide 原子 counter、精确 permanent reservation、GitHub Issue 和 source PR 内的 BUG JSON 作为编号权威；不得再把仓库单值 `.bug_id_allocator.json` 写入每条并发 fix PR。该 legacy allocator 只由 registry-intake/显式恢复路径维护为兼容观察值，不参与普通 source PR 的 changed files、allowed scope 或合入冲突。编号唯一性、失败恢复和终态 reservation 清理由全局账本继续 fail-closed。
 
