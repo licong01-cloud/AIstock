@@ -1,9 +1,9 @@
 {
   "actual": "002411.SZ/2022-01-04 is PIT eligible and externally classified, but is absent from the legacy database-member opportunity ledger, causing hmm_risk_c010_contributor_receipt_mismatch before the first fit.",
   "allowed_write_scope": [
-    "backend/services/hmm_risk/industry_pit_adapter.py",
+    "backend/services/hmm_risk/stock_fact_observation.py",
     "scripts/hmm_risk/prepare_state_model_set.py",
-    "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+    "backend/tests/hmm_risk/test_observation_eligibility.py",
     "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "tests/aistock_validation/bugs/20260829_BUG-1242-hr1-request-preflight-mixes-external-industry-pit-with-legacy-sw-contrib.json"
   ],
@@ -32,17 +32,17 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/services/hmm_risk/industry_pit_adapter.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
       "scripts/hmm_risk/prepare_state_model_set.py",
-      "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+      "backend/tests/hmm_risk/test_observation_eligibility.py",
       "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
-        "backend/services/hmm_risk/industry_pit_adapter.py",
+        "backend/services/hmm_risk/stock_fact_observation.py",
         "scripts/hmm_risk/prepare_state_model_set.py",
-        "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+        "backend/tests/hmm_risk/test_observation_eligibility.py",
         "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
       ],
       "impacted_modules": [
@@ -50,7 +50,7 @@
       ],
       "matched_rules": [
         {
-          "file": "backend/services/hmm_risk/industry_pit_adapter.py",
+          "file": "backend/services/hmm_risk/stock_fact_observation.py",
           "impact_modules": [],
           "primary_module": "hmm.risk",
           "risk_level": "high",
@@ -64,7 +64,7 @@
           "rule_id": "hmm_risk_services"
         },
         {
-          "file": "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+          "file": "backend/tests/hmm_risk/test_observation_eligibility.py",
           "impact_modules": [],
           "primary_module": "hmm.risk",
           "risk_level": "high",
@@ -82,24 +82,24 @@
         "high"
       ],
       "suggested_scope": [
-        "backend/services/hmm_risk/industry_pit_adapter.py",
+        "backend/services/hmm_risk/stock_fact_observation.py",
         "scripts/hmm_risk/prepare_state_model_set.py",
-        "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+        "backend/tests/hmm_risk/test_observation_eligibility.py",
         "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/services/hmm_risk/industry_pit_adapter.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
       "scripts/hmm_risk/prepare_state_model_set.py",
-      "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+      "backend/tests/hmm_risk/test_observation_eligibility.py",
       "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/services/hmm_risk/industry_pit_adapter.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
       "scripts/hmm_risk/prepare_state_model_set.py",
-      "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+      "backend/tests/hmm_risk/test_observation_eligibility.py",
       "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
     ]
   },
@@ -126,11 +126,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-contracts/hmm-risk-c010-a5",
+    "database_readback_ref": null,
+    "fresh_process_evidence": [
+      "Conda AIstock fresh process loaded commit c9e20946cb85aab0d45218c54e34ea0dc6f2aada, read the frozen C-013 authority, and resolved 002411.SZ/2022-01-04 into one C-010 opportunity under hmm_industry_pit_classification_projection; no database write or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
