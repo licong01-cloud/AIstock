@@ -2,11 +2,13 @@
 """Build C-013 dual-authority candidates without production writes.
 
 The PostgreSQL connection is forced read-only and supplies only the frozen
-trading calendar/universe denominator plus a legacy conflict inventory.  It is
-never an industry-authority source.  Classification facts come from the four
-approved local files; index membership resolves only when a separate explicit
-evidence JSON is supplied, otherwise every missing boundary remains typed
-``membership_boundary_unavailable``.
+trading calendar/universe denominator plus a current legacy-conflict diagnostic
+observation.  It is never an industry-authority source.  The approved historical
+23-symbol regression inventory is frozen in this builder so an upstream repair
+cannot silently shrink regression coverage.  Classification facts come from the
+four approved local files; index membership resolves only when a separate
+explicit evidence JSON is supplied, otherwise every missing boundary remains
+typed ``membership_boundary_unavailable``.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from backend.services.industry_pit.contracts import (  # noqa: E402
     IndustryPitContractError,
     KnowledgeTimePolicy,
     ResearchBasis,
+    require_symbol,
 )
 from backend.services.industry_pit.resolver import IndustryPitResolver  # noqa: E402
 
@@ -57,8 +60,35 @@ EXPECTED_SOURCE_HASHES = {
     "latest_snapshot": "b242ab04e0f68357cf90772e3f15367644d3e74c08a767eb9c5edcf21467fcbb",
     "taxonomy_standard": "18fb07fafda072dad39e274371660706e21678045ae8204931958db9906faa1a",
 }
-EXPECTED_CONFLICT_SYMBOLS = 23
-EXPECTED_CONFLICT_OPPORTUNITIES = 23_326
+APPROVED_LEGACY_CONFLICT_BASELINE = (
+    ("000016.SZ", 402),
+    ("000716.SZ", 887),
+    ("002481.SZ", 1_040),
+    ("002507.SZ", 1_040),
+    ("002557.SZ", 1_373),
+    ("002582.SZ", 1_373),
+    ("002597.SZ", 1_301),
+    ("002719.SZ", 402),
+    ("002738.SZ", 1_040),
+    ("003030.SZ", 1_014),
+    ("300699.SZ", 1_040),
+    ("300741.SZ", 1_373),
+    ("300777.SZ", 1_040),
+    ("300783.SZ", 1_373),
+    ("300858.SZ", 1_124),
+    ("300892.SZ", 887),
+    ("300915.SZ", 1_038),
+    ("300972.SZ", 18),
+    ("603020.SH", 1_373),
+    ("603077.SH", 887),
+    ("603697.SH", 1_373),
+    ("605077.SH", 990),
+    ("605300.SH", 938),
+)
+EXPECTED_CONFLICT_SYMBOLS = len(APPROVED_LEGACY_CONFLICT_BASELINE)
+EXPECTED_CONFLICT_OPPORTUNITIES = sum(
+    opportunities for _, opportunities in APPROVED_LEGACY_CONFLICT_BASELINE
+)
 DEFAULT_UNIVERSE_KEY = "aistock_equity_pit_canonical_v2"
 DEFAULT_RULE_VERSION = "shsz_a_252td_st_delist_asof_v2"
 MANDATORY_REGRESSION_SYMBOLS = (
@@ -67,6 +97,42 @@ MANDATORY_REGRESSION_SYMBOLS = (
     "603020.SH",
     "605077.SH",
 )
+
+
+def _approved_regression_inventory() -> Mapping[str, Mapping[str, Any]]:
+    inventory: dict[str, Mapping[str, Any]] = {}
+    for symbol, opportunities in APPROVED_LEGACY_CONFLICT_BASELINE:
+        if symbol in inventory or opportunities <= 0:
+            raise IndustryPitContractError("approved legacy conflict baseline is invalid")
+        inventory[symbol] = {
+            "legacy_conflict_opportunities": opportunities,
+            "observation_basis": "approved_c013_historical_baseline",
+            "diagnostic_only_not_authority_source": True,
+        }
+    if len(inventory) != 23 or sum(
+        int(value["legacy_conflict_opportunities"]) for value in inventory.values()
+    ) != 23_326:
+        raise IndustryPitContractError("approved legacy conflict baseline drifted")
+    return inventory
+
+
+def _current_legacy_conflict_observation(
+    conflict_rows: list[tuple[Any, Any]],
+) -> Mapping[str, Any]:
+    by_symbol: dict[str, int] = {}
+    for raw_symbol, raw_opportunities in conflict_rows:
+        symbol = require_symbol(str(raw_symbol))
+        opportunities = int(raw_opportunities)
+        if symbol in by_symbol or opportunities <= 0:
+            raise IndustryPitContractError("current legacy conflict diagnostic is invalid")
+        by_symbol[symbol] = opportunities
+    return {
+        "symbol_count": len(by_symbol),
+        "opportunity_count": sum(by_symbol.values()),
+        "by_symbol": dict(sorted(by_symbol.items())),
+        "diagnostic_only_not_authority_source": True,
+        "blocks_candidate_preparation": False,
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -375,19 +441,8 @@ def _read_frozen_inputs(
         trading_dates=trading_dates,
         universe_spans=spans,
     )
-    conflict_inventory = {
-        row[0]: {
-            "legacy_conflict_opportunities": int(row[1]),
-            "diagnostic_only_not_authority_source": True,
-        }
-        for row in conflict_rows
-    }
-    if len(conflict_inventory) != EXPECTED_CONFLICT_SYMBOLS or sum(
-        value["legacy_conflict_opportunities"] for value in conflict_inventory.values()
-    ) != EXPECTED_CONFLICT_OPPORTUNITIES:
-        raise IndustryPitContractError(
-            "frozen 23-symbol regression inventory drifted from approved C-013 design"
-        )
+    conflict_inventory = _approved_regression_inventory()
+    current_conflict_observation = _current_legacy_conflict_observation(conflict_rows)
     state_receipt = {
         "universe_key": state[0],
         "rule_version": state[1],
@@ -399,6 +454,7 @@ def _read_frozen_inputs(
         "source_fingerprint_sha256": state[7],
         "database_access": "read_only",
         "industry_authority_source": False,
+        "current_legacy_conflict_diagnostic": current_conflict_observation,
     }
     return denominator, conflict_inventory, state_receipt
 

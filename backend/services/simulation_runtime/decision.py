@@ -37,6 +37,7 @@ from backend.services.trading_core.models import OrderIntent, OrderSide, OrderTy
 
 from .models import (
     DailyTradingContextV1,
+    DailyTradingContextV2,
     DailySelectionEvidence,
     ExecutionPathNotCanonicalError,
     ExecutionPlan,
@@ -47,6 +48,7 @@ from .models import (
     TradingRuleDecision,
     canonical_json_sha256,
 )
+from .daily_limit_authority import parse_daily_trading_context
 
 
 TRADING_RULE_SOURCE_VERSION = "a_share_board_lot_v20260504"
@@ -57,6 +59,7 @@ TRADABILITY_BLOCK_REASON_CODES = frozenset(
         "REALTIME_QUOTE_MISSING",
         "LIMIT_UP_BUY_BLOCKED",
         "LIMIT_DOWN_SELL_BLOCKED",
+        "DAILY_LIMIT_AUTHORITY_SYMBOL_UNAVAILABLE",
     }
 )
 
@@ -775,10 +778,10 @@ class ExecutionPlanCompiler:
                     },
                 )
             try:
-                context = DailyTradingContextV1.model_validate(carrier)
+                context = parse_daily_trading_context(carrier)
             except Exception as exc:
                 raise RuntimeConfigInvalidError(
-                    "LocalSIM trading decision carries an invalid DailyTradingContextV1",
+                    "simulation trading decision carries an invalid daily trading context",
                     context={
                         "reason_code": "DAILY_TRADING_CONTEXT_DECISION_REFERENCE_INVALID",
                         "binding_id": binding.binding_id,
@@ -786,17 +789,34 @@ class ExecutionPlanCompiler:
                     },
                 ) from exc
             fact = context.symbols.get(decision.symbol)
-            if (
+            common_conflict = (
                 context.trade_date != target_trade_date
                 or fact is None
                 or reference.get("context_id") != context.context_id
                 or reference.get("context_hash") != context.context_hash
-                or reference.get("source") != "market.stk_limit"
-                or reference.get("stk_limit_row_hash") != fact.stk_limit_row_hash
-                or reference.get("symbol_fact") != fact.canonical_payload()
-            ):
+                or reference.get("symbol_fact") != (fact.canonical_payload() if fact is not None else None)
+            )
+            version_conflict = False
+            if isinstance(context, DailyTradingContextV1):
+                version_conflict = (
+                    binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM
+                    or reference.get("source") != "market.stk_limit"
+                    or reference.get("stk_limit_row_hash") != (fact.stk_limit_row_hash if fact is not None else None)
+                )
+            elif isinstance(context, DailyTradingContextV2):
+                version_conflict = (
+                    context.broker_backend is not binding.broker_backend
+                    or reference.get("broker_backend") != context.broker_backend.value
+                    or reference.get("authority_state") != (fact.authority_state.value if fact is not None else None)
+                    or reference.get("limit_authority") != (fact.limit_authority.value if fact is not None else None)
+                    or reference.get("source_evidence_hash")
+                    != (fact.source_evidence_hash if fact is not None else None)
+                )
+            else:  # pragma: no cover - parser is an explicit V1/V2 discriminator.
+                version_conflict = True
+            if common_conflict or version_conflict:
                 raise RuntimeConfigInvalidError(
-                    "LocalSIM daily trading context does not close over the trading decision",
+                    "daily trading context does not close over the trading decision",
                     context={
                         "reason_code": "DAILY_TRADING_CONTEXT_DECISION_REFERENCE_CONFLICT",
                         "binding_id": binding.binding_id,
@@ -819,7 +839,7 @@ class ExecutionPlanCompiler:
             )
         if len(carriers) != 1:
             raise RuntimeConfigInvalidError(
-                "LocalSIM execution plan requires exactly one DailyTradingContextV1",
+                "simulation execution plan requires exactly one daily trading context",
                 context={
                     "reason_code": "DAILY_TRADING_CONTEXT_PLAN_IDENTITY_CONFLICT",
                     "binding_id": binding.binding_id,

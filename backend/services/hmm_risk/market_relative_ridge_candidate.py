@@ -51,6 +51,13 @@ from backend.services.hmm_risk.market_relative_jump_spike import (
     state_rows,
 )
 from backend.services.hmm_risk.state_model_set import canonical_json_bytes, canonical_sha256, sha256_bytes
+from backend.services.hmm_risk.industry_pit_adapter import (
+    HMM_G2A_DATA_A_CONTRACT_VERSION,
+    HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA,
+    HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA,
+    HMM_L1_CODE_PROJECTION_SCHEMA,
+    HMM_L1_CODE_PROJECTION_VERSION,
+)
 
 CONTRACT_VERSION = "C-011-P2-3B-D1-D6"
 ALGORITHM_VERSION = "hmm_risk_market_relative_ridge_candidate_v1"
@@ -87,6 +94,7 @@ RL1_DEVELOPMENT_START = date(2022, 1, 4)
 RL1_DEVELOPMENT_END = date(2026, 3, 31)
 RL1_HOLDOUT_START = date(2026, 4, 1)
 RL1_HOLDOUT_END = date(2026, 9, 30)
+RL1_SOURCE_REVISION = "c013-g2a-industry-pit-development-v1"
 RL1_FIXED_ALPHA = 100.0
 RL1_METRIC_COVERAGE_RATIO = 0.80
 RL1_MEDIAN_RANK_IC_MINIMUM = 0.02
@@ -2337,7 +2345,7 @@ def build_c012_rl1_replay_request(
     normalized_source = dict(source)
     normalized_source.setdefault("circ_mv_history_start", normalized_source.get("source_start"))
     normalized_source["source_end"] = RL1_DEVELOPMENT_END.isoformat()
-    normalized_source["source_revision"] = "c012-rl1-hr1-development-v1"
+    normalized_source["source_revision"] = RL1_SOURCE_REVISION
     fold_rows: list[dict[str, Any]] = []
     for name, train_start, train_end, validation_start, validation_end in RL1_FOLD_BOUNDARIES:
         train_dates = tuple(day for day in calendar if train_start <= day <= train_end)
@@ -2529,16 +2537,87 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
         "security_identity_manifest_sha256",
         "provider_absence_manifest_path",
         "provider_absence_manifest_sha256",
+        "industry_pit",
     }
     if (
         not isinstance(source, Mapping)
         or set(source) != required_source_keys
         or source.get("source_end") != RL1_DEVELOPMENT_END.isoformat()
-        or any(not isinstance(source.get(field), str) or not str(source.get(field)) for field in required_source_keys)
+        or source.get("source_revision") != RL1_SOURCE_REVISION
+        or any(
+            not isinstance(source.get(field), str) or not str(source.get(field))
+            for field in required_source_keys - {"industry_pit"}
+        )
     ):
         raise _fail(REASON_RL1_HOLDOUT, "rotation L1 source must stop at development end", stage="input")
     for field in ("security_identity_manifest_sha256", "provider_absence_manifest_sha256"):
         _require_sha256(source.get(field), f"source.{field}")
+    industry_pit = source.get("industry_pit")
+    identity_keys = {
+        "schema_version",
+        "bundle_hash",
+        "classification_candidate_hash",
+        "index_membership_candidate_hash",
+        "classification_receipt_hash",
+        "index_membership_receipt_hash",
+        "preflight_canonical_hash",
+    }
+    if (
+        not isinstance(industry_pit, Mapping)
+        or set(industry_pit) != {"artifact_root", "identity", "l1_projection", "research_basis"}
+        or not Path(str(industry_pit.get("artifact_root") or "")).is_absolute()
+        or not isinstance(industry_pit.get("identity"), Mapping)
+        or set(industry_pit["identity"]) != identity_keys
+        or industry_pit["identity"].get("schema_version") != HMM_INDUSTRY_PIT_AUTHORITY_SCHEMA
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 industry PIT authority is invalid", stage="input")
+    for field in identity_keys - {"schema_version"}:
+        _require_sha256(industry_pit["identity"].get(field), f"source.industry_pit.identity.{field}")
+    l1_projection = industry_pit.get("l1_projection")
+    if (
+        not isinstance(l1_projection, Mapping)
+        or set(l1_projection)
+        != {
+            "schema_version",
+            "projection_version",
+            "taxonomy_contract_id",
+            "taxonomy_version",
+            "source_ids",
+            "source_hashes",
+            "rows",
+            "canonical_hash",
+        }
+        or l1_projection.get("schema_version") != HMM_L1_CODE_PROJECTION_SCHEMA
+        or l1_projection.get("projection_version") != HMM_L1_CODE_PROJECTION_VERSION
+        or not isinstance(l1_projection.get("rows"), list)
+        or len(l1_projection["rows"]) != 31
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 industry PIT L1 projection is invalid", stage="input")
+    _require_sha256(l1_projection.get("canonical_hash"), "source.industry_pit.l1_projection.canonical_hash")
+    research_basis = industry_pit.get("research_basis")
+    research_basis_keys = {
+        "schema_version",
+        "contract_version",
+        "active_mode",
+        "historical_classification_basis",
+        "historical_non_as_known_taxonomy",
+        "forward_classification_basis",
+        "forward_non_as_known_taxonomy",
+        "canonical_hash",
+    }
+    if (
+        not isinstance(research_basis, Mapping)
+        or set(research_basis) != research_basis_keys
+        or research_basis.get("schema_version") != HMM_INDUSTRY_RESEARCH_BASIS_SCHEMA
+        or research_basis.get("contract_version") != HMM_G2A_DATA_A_CONTRACT_VERSION
+        or research_basis.get("active_mode") != "historical_replay"
+        or research_basis.get("historical_classification_basis") != "stable_taxonomy_backcast"
+        or research_basis.get("historical_non_as_known_taxonomy") is not True
+        or research_basis.get("forward_classification_basis") != "as_published_pit"
+        or research_basis.get("forward_non_as_known_taxonomy") is not False
+    ):
+        raise _fail(REASON_RL1_INPUT, "rotation L1 industry PIT research basis is invalid", stage="input")
+    _require_sha256(research_basis.get("canonical_hash"), "source.industry_pit.research_basis.canonical_hash")
     try:
         source_start = date.fromisoformat(str(source.get("source_start") or ""))
     except ValueError as exc:

@@ -18,7 +18,7 @@ from backend.services.paper_trading_v2.market_data import (
 )
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
-from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.simulation_runtime.models import DailyLimitAuthorityV2, canonical_json_sha256
 
 
 class FakeLimitProvider:
@@ -96,6 +96,54 @@ def frozen_daily_fact(
             "board": "MAIN",
             "lot_rule": {"min_quantity": 100, "increment": 100},
         },
+    }
+
+
+def frozen_daily_fact_v2(
+    *,
+    symbol: str = "000001.SZ",
+    trade_date: date = date(2024, 1, 2),
+    authority: DailyLimitAuthorityV2 = DailyLimitAuthorityV2.TUSHARE_STK_LIMIT,
+) -> dict:
+    fact = {
+        "symbol": symbol,
+        "trade_date": trade_date.isoformat(),
+        "authority_state": "READY",
+        "limit_authority": authority.value,
+        "has_daily_limit": True,
+        "pre_close": 10.0,
+        "up_limit": 11.0,
+        "down_limit": 9.0,
+        "price_tick": 0.01,
+        "price_basis": "raw",
+        "source_evidence_hash": "3" * 64,
+        "rule_version": None,
+        "derivation_hash": None,
+        "authority_reason_code": None,
+        "is_st": False,
+        "st_source": "market.stock_st.pit",
+        "st_evidence_hash": "4" * 64,
+        "is_suspended": False,
+        "suspend_type": None,
+        "suspend_timing": None,
+        "suspend_source": "market.suspend_d",
+        "board": "SZ_MAIN",
+        "lot_rule": {"min_quantity": 100, "increment": 100},
+    }
+    if authority is DailyLimitAuthorityV2.TDX_REFERENCE_DERIVED_V1:
+        fact["rule_version"] = "cn_a_share_price_limit_v2_20260706"
+        fact["derivation_hash"] = "5" * 64
+    return {
+        "schema_version": "daily_trading_context_reference_v2",
+        "context_id": "dtc_v2_unit",
+        "context_hash": "1" * 64,
+        "trade_date": trade_date.isoformat(),
+        "symbol_set_hash": "2" * 64,
+        "broker_backend": "local_sim",
+        "authority_state": fact["authority_state"],
+        "limit_authority": fact["limit_authority"],
+        "source_evidence_hash": fact["source_evidence_hash"],
+        "symbol_fact": fact,
     }
 
 
@@ -556,6 +604,104 @@ def test_realtime_observed_intraday_uses_frozen_stk_limit_without_derivation() -
     assert all(
         bar.limit_up == pytest.approx(10.77) and bar.limit_down == pytest.approx(9.23) for bar in result.minute_bars
     )
+
+
+@pytest.mark.parametrize(
+    ("authority", "expected_source"),
+    [
+        (
+            DailyLimitAuthorityV2.TUSHARE_STK_LIMIT,
+            "TUSHARE_STK_LIMIT:frozen_daily_trading_context_v2",
+        ),
+        (
+            DailyLimitAuthorityV2.TDX_REFERENCE_DERIVED_V1,
+            "TDX_REFERENCE_DERIVED_V1:frozen_daily_trading_context_v2",
+        ),
+    ],
+)
+def test_realtime_observed_intraday_accepts_frozen_v2_authority_without_static_queries(
+    authority: DailyLimitAuthorityV2,
+    expected_source: str,
+) -> None:
+    limit_provider = MissingLimitProvider()
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=limit_provider,  # type: ignore[arg-type]
+        previous_close_provider=FakePreviousCloseProvider(pre_close=10.0),
+        st_status_provider=FakeStStatusProvider(is_st=False),
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(5),
+        conn_factory=lambda: pytest.fail("frozen V2 LocalSIM cadence must not query the database"),
+    )
+
+    result = provider.load_observed_intraday(
+        symbol="000001.SZ",
+        trade_date=date(2024, 1, 2),
+        source=MinuteDataSource.TDX_REALTIME,
+        until_time=datetime(2024, 1, 2, 9, 33),
+        frozen_daily_fact=frozen_daily_fact_v2(authority=authority),
+    )
+
+    assert limit_provider.calls == []
+    assert result.market_context["limit_price_source"] == expected_source
+    assert result.market_context["prev_close_source"] == expected_source
+    assert result.market_context["limit_up"] == pytest.approx(11.0)
+    assert result.market_context["limit_down"] == pytest.approx(9.0)
+    assert result.market_context["daily_trading_context"]["schema_version"] == (
+        "daily_trading_context_reference_v2"
+    )
+
+
+def test_realtime_observed_intraday_rejects_cross_broker_v2_reference() -> None:
+    reference = frozen_daily_fact_v2()
+    reference["broker_backend"] = "miniqmt_sim"
+    provider = PaperV2MinuteMarketDataProvider(tdx_fetcher=lambda _symbol, _trade_date: pytest.fail())
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        provider.load_observed_intraday(
+            symbol="000001.SZ",
+            trade_date=date(2024, 1, 2),
+            source=MinuteDataSource.TDX_REALTIME,
+            until_time=datetime(2024, 1, 2, 9, 33),
+            frozen_daily_fact=reference,
+        )
+
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_DAILY_TRADING_FACT_IDENTITY_CONFLICT"
+
+
+def test_realtime_observed_intraday_accepts_v2_no_daily_limit_without_fabricating_bounds() -> None:
+    reference = frozen_daily_fact_v2()
+    fact = reference["symbol_fact"]
+    fact.update(
+        {
+            "authority_state": "NO_DAILY_LIMIT",
+            "limit_authority": "NO_DAILY_LIMIT",
+            "has_daily_limit": False,
+            "up_limit": None,
+            "down_limit": None,
+            "rule_version": "cn_a_share_price_limit_v2_20260706",
+            "authority_reason_code": "IPO_FIRST_FIVE_TRADING_DAYS_V1",
+        }
+    )
+    reference["authority_state"] = fact["authority_state"]
+    reference["limit_authority"] = fact["limit_authority"]
+    provider = PaperV2MinuteMarketDataProvider(
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(5),
+        conn_factory=lambda: pytest.fail("no-limit frozen V2 cadence must not query the database"),
+    )
+
+    result = provider.load_observed_intraday(
+        symbol="000001.SZ",
+        trade_date=date(2024, 1, 2),
+        source=MinuteDataSource.TDX_REALTIME,
+        until_time=datetime(2024, 1, 2, 9, 33),
+        frozen_daily_fact=reference,
+    )
+
+    assert result.market_context["limit_price_source"] == (
+        "NO_DAILY_LIMIT:frozen_daily_trading_context_v2:no_daily_limit"
+    )
+    assert result.market_context["limit_up"] is None
+    assert result.market_context["limit_down"] is None
+    assert all(bar.limit_up is None and bar.limit_down is None for bar in result.minute_bars)
 
 
 def test_completed_day_tdx_adapter_does_not_fallback_to_previous_close() -> None:

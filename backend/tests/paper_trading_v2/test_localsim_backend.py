@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -38,13 +38,24 @@ from backend.services.paper_trading_v2.market_data import (
     LocalSimMarketSnapshotV1,
     MinuteDataSource,
     MinuteExecutionMarketInput,
+    PaperV2MinuteMarketDataProvider,
 )
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.execution_policy import (
     compute_execution_policy_sha256,
     normalize_execution_policy_json,
 )
-from backend.services.simulation_runtime.models import LocalSimMarketMarkV1
+from backend.services.simulation_runtime.models import (
+    DAILY_LIMIT_AUTHORITY_BY_BROKER_V2,
+    DAILY_LIMIT_RESOLVER_BY_BROKER_V2,
+    DailyLimitAuthorityV2,
+    DailyTradingAuthorityStateV2,
+    DailyTradingContextSourcesV2,
+    DailyTradingContextV2,
+    DailyTradingSymbolFactV2,
+    LocalSimMarketMarkV1,
+    SimulationBrokerBackend,
+)
 from backend.services.trading_core.execution_algo_retirement import (
     ExecutionAlgoRetiredError,
 )
@@ -399,6 +410,191 @@ class ConcurrentObservedMarketDataProvider(ObservedMarketDataProvider):
         finally:
             with self._concurrency_lock:
                 self.active_read_count -= 1
+
+
+class FrozenV2ObservedMarketDataProvider(PaperV2MinuteMarketDataProvider):
+    def __init__(self, *, inputs_by_symbol: dict[str, MinuteExecutionMarketInput]) -> None:
+        self.inputs_by_symbol = inputs_by_symbol
+        self.calls: list[dict[str, Any]] = []
+
+    def load_observed_intraday(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        source: MinuteDataSource,
+        until_time: datetime,
+        require_suspend_status: bool = False,
+        require_day_features: bool = False,
+        frozen_daily_fact=None,
+    ) -> MinuteExecutionMarketInput:
+        self.calls.append(
+            {
+                "symbol": symbol,
+                "trade_date": trade_date,
+                "source": source,
+                "until_time": until_time,
+                "require_suspend_status": require_suspend_status,
+                "require_day_features": require_day_features,
+                "frozen_daily_fact": frozen_daily_fact,
+            }
+        )
+        source_input = self.inputs_by_symbol[symbol]
+        return replace(
+            source_input,
+            source=source,
+            minute_bars=[bar for bar in source_input.minute_bars if bar.bar_time <= until_time],
+            market_context={**source_input.market_context, "data_source": source.value},
+        )
+
+
+def _daily_context_v2(
+    *,
+    plan_id: str,
+    symbol: str = "000001.SZ",
+    broker_backend: SimulationBrokerBackend = SimulationBrokerBackend.LOCAL_SIM,
+) -> DailyTradingContextV2:
+    limit_authority = (
+        DailyLimitAuthorityV2.TUSHARE_STK_LIMIT
+        if broker_backend is SimulationBrokerBackend.LOCAL_SIM
+        else DailyLimitAuthorityV2.MINIQMT_INSTRUMENT_DETAIL_V1
+    )
+    fact = DailyTradingSymbolFactV2(
+        symbol=symbol,
+        trade_date=TRADE_DATE,
+        authority_state=DailyTradingAuthorityStateV2.READY,
+        limit_authority=limit_authority,
+        has_daily_limit=True,
+        pre_close=10.0,
+        up_limit=11.0,
+        down_limit=9.0,
+        price_tick=0.01,
+        source_evidence_hash="1" * 64,
+        is_st=False,
+        st_source="market.stock_st.pit",
+        st_evidence_hash="2" * 64,
+        is_suspended=False,
+        suspend_source="market.suspend_d",
+        board="SZ_MAIN",
+        lot_rule={"min_quantity": 100, "increment": 100},
+    )
+    allowed = tuple(
+        sorted(
+            DAILY_LIMIT_AUTHORITY_BY_BROKER_V2[broker_backend],
+            key=lambda value: value.value,
+        )
+    )
+    sources = DailyTradingContextSourcesV2.build(
+        resolver=DAILY_LIMIT_RESOLVER_BY_BROKER_V2[broker_backend],
+        allowed_source_kinds=allowed,
+        actual_source_kinds=(limit_authority,),
+        trade_date=TRADE_DATE,
+        read_at=datetime(2024, 1, 2, 9, 10, tzinfo=UTC),
+        rule_versions=(),
+        stock_st={"source": "market.stock_st", "batch_hash": "3" * 64},
+        suspend_d={"source": "market.suspend_d", "batch_hash": "4" * 64},
+        stk_limit=(
+            {"source": "market.stk_limit", "batch_hash": "5" * 64}
+            if broker_backend is SimulationBrokerBackend.LOCAL_SIM
+            else None
+        ),
+        miniqmt_instrument=(
+            {"source": "xtdata.get_instrument_detail", "batch_hash": "6" * 64}
+            if broker_backend is SimulationBrokerBackend.MINIQMT_SIM
+            else None
+        ),
+    )
+    return DailyTradingContextV2.build(
+        trade_date=TRADE_DATE,
+        plan_identity=plan_id,
+        binding_identity="binding_v2_unit",
+        package_identity="package_v2_unit",
+        calendar_service_snapshot_id="calendar_v2_unit",
+        captured_at=datetime(2024, 1, 2, 9, 10, tzinfo=UTC),
+        broker_backend=broker_backend,
+        sources=sources,
+        symbols={symbol: fact},
+    )
+
+
+def test_localsim_realtime_submission_accepts_daily_trading_context_v2() -> None:
+    provider = FrozenV2ObservedMarketDataProvider(
+        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=3)}
+    )
+    backend, _, _ = _build_backend(
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,  # type: ignore[arg-type]
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_twap_v2_context",
+            "policy_sha256": "sha_twap_v2_context",
+            "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 1}},
+        },
+    )
+    backend.configure_execution_runtime(run_id="run_v2_context", binding_id="binding_v2_context")
+    intent = _buy_intent(backend)
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=33)
+    plan_id = "plan_v2_context"
+    context = _daily_context_v2(plan_id=plan_id)
+
+    backend.bind_execution_plan(
+        plan=SimpleNamespace(
+            plan_id=plan_id,
+            target_trade_date=TRADE_DATE,
+            intents=(intent,),
+            plan_payload_json={
+                "daily_trading_context": context.carrier_payload(),
+                "local_sim_execution_causality": {
+                    "schema_version": "local_sim_execution_causality_v1",
+                    "eligible_bar_after": as_of.replace(hour=9, minute=30).isoformat(),
+                },
+            },
+        ),
+        as_of_time=as_of,
+    )
+    handle = backend.submit_order_intent(intent)
+
+    assert backend.query_status(handle).state == "filled"
+    assert len(provider.calls) == 1
+    reference = provider.calls[0]["frozen_daily_fact"]
+    assert reference["schema_version"] == "daily_trading_context_reference_v2"
+    assert reference["broker_backend"] == SimulationBrokerBackend.LOCAL_SIM.value
+    assert reference["limit_authority"] == DailyLimitAuthorityV2.TUSHARE_STK_LIMIT.value
+
+
+def test_localsim_realtime_submission_rejects_miniqmt_daily_trading_context_v2() -> None:
+    provider = FrozenV2ObservedMarketDataProvider(
+        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=1)}
+    )
+    backend, _, _ = _build_backend(
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,  # type: ignore[arg-type]
+    )
+    intent = _buy_intent(backend)
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31)
+    plan_id = "plan_cross_broker_v2_context"
+    context = _daily_context_v2(
+        plan_id=plan_id,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+    )
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        backend.bind_execution_plan(
+            plan=SimpleNamespace(
+                plan_id=plan_id,
+                target_trade_date=TRADE_DATE,
+                intents=(intent,),
+                plan_payload_json={
+                    "daily_trading_context": context.carrier_payload(),
+                    "local_sim_execution_causality": {
+                        "eligible_bar_after": as_of.replace(hour=9, minute=30).isoformat(),
+                    },
+                },
+            ),
+            as_of_time=as_of,
+        )
+
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_DAILY_TRADING_CONTEXT_BROKER_CONFLICT"
+    assert provider.calls == []
 
 
 def test_localsim_realtime_submission_uses_only_bars_after_plan_cursor() -> None:

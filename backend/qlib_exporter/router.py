@@ -232,12 +232,9 @@ class FieldMapExportResponse(BaseModel):
 
 # NOTE: FastAPI builds request body TypeAdapters while registering routes.
 # Ensure models are rebuilt BEFORE route decorators below.
-try:
-    DailySnapshotRequest.model_rebuild(force=True)
-    MoneyflowSnapshotRequest.model_rebuild(force=True)
-    FieldMapExportRequest.model_rebuild(force=True)
-except Exception:
-    pass
+DailySnapshotRequest.model_rebuild(force=True)
+MoneyflowSnapshotRequest.model_rebuild(force=True)
+FieldMapExportRequest.model_rebuild(force=True)
 
 
 _daily_exporter = QlibDailyExporter()
@@ -1031,7 +1028,8 @@ def _load_h5_snapshot_meta(snapshot_id: str) -> Dict[str, Any]:
         return {}
     try:
         return json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
+        # The snapshot may be removed between exists() and read_text(); malformed metadata remains loud.
         return {}
 
 
@@ -1154,7 +1152,7 @@ def _finalize_h5_incremental_pit_metadata(
     stock_universe_mode: StockUniverseMode,
     universe_key: Optional[str],
     pit_ensure: Optional[Dict[str, Any]],
-    fallback_start: date,
+    baseline_start: date,
     end: date,
 ) -> None:
     if not universe_key:
@@ -1162,7 +1160,7 @@ def _finalize_h5_incremental_pit_metadata(
     all_txt_summary = _rewrite_h5_all_txt_from_pit_if_present(
         snapshot_id=snapshot_id,
         universe_key=universe_key,
-        start=_h5_meta_start(snapshot_id, fallback_start),
+        start=_h5_meta_start(snapshot_id, baseline_start),
         end=end,
     )
     _update_h5_pit_meta(
@@ -1458,6 +1456,8 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
             universe_key=pit_universe_key,
             start=body.start,
             end=body.end,
+            feature_frequency=(dump_freq if dump_freq == MINUTE_FREQ_QLIB else None),
+            allowed_bin_root=(bin_root_path if dump_freq == MINUTE_FREQ_QLIB else None),
         )
         if not step_ok:
             raise HTTPException(status_code=500, detail=step_error or "failed to rewrite stock instruments/all.txt")
@@ -2255,8 +2255,11 @@ async def list_snapshots() -> SnapshotListResponse:
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 created_at = meta.get("generated_at")
-            except Exception:
-                pass
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"snapshot {snapshot_id} meta.json is unreadable or malformed",
+                ) from exc
 
         snapshots.append(
             SnapshotInfo(
@@ -2430,7 +2433,7 @@ async def create_minute_snapshot_incremental(body: IncrementalExportRequest) -> 
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2490,10 +2493,7 @@ class SectorDataSnapshotResponse(BaseModel):
         )
 
 
-try:
-    SectorDataSnapshotRequest.model_rebuild()
-except Exception:
-    pass
+SectorDataSnapshotRequest.model_rebuild()
 
 
 @router.post("/api/v1/qlib/snapshots/sector_data", response_model=SectorDataSnapshotResponse)
@@ -2563,7 +2563,7 @@ async def create_sector_data_incremental(body: IncrementalExportRequest) -> Incr
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2604,7 +2604,7 @@ async def create_daily_incremental(body: IncrementalExportRequest) -> Incrementa
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2640,7 +2640,7 @@ async def create_moneyflow_incremental(body: IncrementalExportRequest) -> Increm
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         _record_moneyflow_unit_contract(body.snapshot_id)
@@ -2677,7 +2677,7 @@ async def create_daily_basic_incremental(body: IncrementalExportRequest) -> Incr
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2713,7 +2713,7 @@ async def create_bak_basic_incremental(body: IncrementalExportRequest) -> Increm
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2749,7 +2749,7 @@ async def create_margin_detail_incremental(body: IncrementalExportRequest) -> In
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -2785,7 +2785,7 @@ async def create_cyq_perf_incremental(body: IncrementalExportRequest) -> Increme
             stock_universe_mode=body.stock_universe_mode,
             universe_key=pit_key,
             pit_ensure=pit_ensure,
-            fallback_start=result.start,
+            baseline_start=result.start,
             end=body.end,
         )
         return IncrementalExportResponse.from_result(result)
@@ -3032,8 +3032,11 @@ async def unified_bin_export(body: UnifiedBinExportRequest) -> UnifiedBinExportR
         (bin_dir / "meta_export.json").write_text(
             json.dumps(meta, ensure_ascii=False, default=str, indent=2), encoding="utf-8"
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"failed to persist export metadata for snapshot {body.snapshot_id}",
+        ) from exc
 
     return UnifiedBinExportResponse(
         snapshot_id=body.snapshot_id, stock_ok=dump_res.ok,
@@ -3177,6 +3180,8 @@ def _finalize_stock_dump_result(
     universe_key: Optional[str],
     start: date,
     end: date,
+    feature_frequency: Optional[str] = None,
+    allowed_bin_root: Optional[Path] = None,
 ) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
     """Rewrite stock all.txt eligibility after dump_bin and return step status."""
 
@@ -3190,6 +3195,8 @@ def _finalize_stock_dump_result(
                 universe_key=key or DEFAULT_PIT_UNIVERSE_KEY,
                 start=start,
                 end=end,
+                feature_frequency=feature_frequency,
+                allowed_bin_root=allowed_bin_root,
             )
             label = "AIstock PIT all.txt rewrite"
         else:
@@ -3465,6 +3472,8 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                         universe_key=pit_universe_key,
                         start=stock_all_txt_start or inc_start,
                         end=body.end,
+                        feature_frequency=MINUTE_FREQ_QLIB,
+                        allowed_bin_root=Path(bin_root),
                     )
                     steps.append(BinDatasetStepResult(
                         dataset="stock_minute", ok=step_ok,
@@ -3500,6 +3509,8 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
                     universe_key=pit_universe_key,
                     start=stock_all_txt_start or body.start,
                     end=body.end,
+                    feature_frequency=MINUTE_FREQ_QLIB,
+                    allowed_bin_root=Path(bin_root),
                 )
                 steps.append(BinDatasetStepResult(
                     dataset="stock_minute", ok=step_ok,
@@ -3519,6 +3530,8 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
     index_datasets = [ds for ds in body.datasets if ds not in {"stock_daily", "stock_minute"}]
     for idx_code in index_datasets:
         dataset_key = f"index_{idx_code}"
+        all_backup: Optional[bytes] = None
+        backup_captured = False
         try:
             # 确定起止日期
             if body.mode == "incremental":
@@ -3540,6 +3553,7 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
 
             # BACKUP all.txt
             all_backup = _backup_file(all_txt)
+            backup_captured = True
 
             # 导出指数 CSV
             idx_csv_dir = _export_index_to_csv_for_dump_bin(
@@ -3582,10 +3596,14 @@ async def unified_bin_export_v2(body: UnifiedBinExportRequestV2) -> UnifiedBinEx
             raise
         except Exception as exc:
             # 确保 all.txt 被恢复
-            try:
-                _restore_file(all_txt, all_backup)  # type: ignore[possibly-undefined]
-            except Exception:
-                pass
+            if backup_captured:
+                try:
+                    _restore_file(all_txt, all_backup)
+                except Exception as restore_exc:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"index export failed and instruments/all.txt restore failed for {idx_code}",
+                    ) from restore_exc
             steps.append(BinDatasetStepResult(
                 dataset=idx_code, ok=False, error=str(exc),
             ))
@@ -3762,7 +3780,7 @@ async def incremental_all(snapshot_id: str, body: IncrementalExportRequest) -> I
         stock_universe_mode=body.stock_universe_mode,
         universe_key=pit_key,
         pit_ensure=pit_ensure,
-        fallback_start=DEFAULT_ST_PIT_START_DATE,
+        baseline_start=DEFAULT_ST_PIT_START_DATE,
         end=body.end,
     )
 

@@ -1,0 +1,240 @@
+{
+  "actual": "DailyTradingContextV1 is the only carrier and enforces market.stk_limit as the common limit authority; the approved P1-A broker-specific contract does not exist.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260826_BUG-1197-simulation-broker-specific-daily-limit-authority-v2-contract-is-missing.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/models.py",
+    "backend/services/simulation_runtime/daily_limit_authority.py",
+    "backend/services/trading_core/a_share_live_limit_rule.py",
+    "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
+    "backend/tests/simulation_runtime/test_broker_limit_authority.py",
+    "backend/tests/trading_core/test_a_share_live_limit_rule.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1197",
+  "closed_at": null,
+  "closure_requirements": [
+    "Implement F-130/F-131 P1-A immutable V2 contracts, strict V1 read-only discrimination, broker/source matrix, symbol failure state and mixed-source hash closure.",
+    "Implement the versioned pure TDX live-reference A-share limit rule without adjustment-factor fabrication or runtime source wiring.",
+    "Bind the Trading Core live-reference rule and its direct test to the simulation runtime validation catalog without ambiguous or generic fallback ownership.",
+    "Run direct V2, broker-matrix and live-rule tests plus required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-26T04:50:47.126714Z",
+  "description": "F-130/F-131 P1-A from merged design PR #3812 requires broker-bound daily limit authority contracts before MiniQMT or LocalSIM resolver wiring. Current source only has DailyTradingContextV1 hard-coded to market.stk_limit and lacks V2 discriminated readback, broker/source matrix, per-symbol authority state, mixed-source hashing, and a pure TDX live-reference A-share limit rule.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260826-471b033e68d6",
+      "timestamp": "2026-08-26T04:50:47.126695Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md#10-implementation-plan--实施方案与-pr-拆分",
+    "github-pr:https://github.com/licong01-cloud/AIstock/pull/3812"
+  ],
+  "expected": "Provide immutable DailyTradingContextV2 and symbol/source contracts, strict V1 read-only discrimination, MiniQMT/LocalSIM broker authority matrix, per-symbol failure semantics, and a versioned pure live-reference rule without changing runtime routing or protected assets.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/simulation_runtime/daily_limit_authority.py",
+      "backend/services/trading_core/a_share_live_limit_rule.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
+      "backend/tests/simulation_runtime/test_broker_limit_authority.py",
+      "backend/tests/trading_core/test_a_share_live_limit_rule.py"
+    ],
+    "changed_files": [
+      "backend/services/simulation_runtime/models.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/models.py",
+      "backend/services/simulation_runtime/daily_limit_authority.py",
+      "backend/services/trading_core/a_share_live_limit_rule.py",
+      "backend/tests/simulation_runtime/test_daily_trading_context_v2.py",
+      "backend/tests/simulation_runtime/test_broker_limit_authority.py",
+      "backend/tests/trading_core/test_a_share_live_limit_rule.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ]
+  },
+  "first_seen_at": "2026-08-26T04:50:47.126714Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3813,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3813",
+  "last_seen_at": "2026-08-26T04:50:47.126714Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not wire MiniQMT or LocalSIM planning resolvers in P1-A; those remain P1-B/P1-C after this contract PR is merged.",
+    "Do not modify protected StrategyPackage, model, QE workspace, selection, HMM, database asset or runtime binding state.",
+    "Do not perform DDL/DML, dependency, config, broker or process operations.",
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -c \"from backend.services.simulation_runtime.models import DailyTradingContextV2\"",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process imported tracked DailyTradingContextV2, broker matrix and live-reference rule and passed 77 direct/V1/historical-rule compatibility cases; no backend process control.",
+      "Fresh Python process imported the tracked live-reference rule and verified it reuses the existing cn_a_share_price_limit_v2_20260706 rule identity without changing dataset_release source; no database, broker or service side effect.",
+      "Fresh pytest process loaded the tracked P1-A source and passed the 77-test direct/V1/history matrix without user-backend process control.",
+      "Fresh pytest process loaded commit 78d438dd tracked P1-A source and passed the 77-test direct/V1/history matrix without user-backend process control.",
+      "Fresh pytest process imported tracked DailyTradingContextV2, broker matrix and live-reference rule and passed 77 direct/V1/historical-rule compatibility cases; final review commit changes only task metadata and validation ownership catalog; no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_source_merge",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "Simulation broker-specific daily limit authority V2 contract is missing",
+  "trigger_condition": {
+    "fingerprint": "471b033e68d636b1d0d93a47",
+    "source_event_id": "FE-20260826-471b033e68d6"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "ready_for_fix"
+}

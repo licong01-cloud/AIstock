@@ -61,6 +61,7 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTExecutionRuntimeKind,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import BrokerCommandOutboxStatusV1
+from backend.services.simulation_runtime.localsim_daily_limit_authority import LocalSimDailyLimitAuthorityProvider
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
@@ -126,6 +127,7 @@ from .miniqmt_quote_activation import (
     MiniQMTKernelProductSyncError,
     build_miniqmt_quote_ingress_activation_from_env,
 )
+from .miniqmt_daily_limit_authority import MiniQMTDailyLimitAuthorityProvider
 from .repository import (
     SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY,
     SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY,
@@ -629,6 +631,46 @@ class ProductionSimulationRunContextProvider:
                     },
                 )
             candidate = deepcopy(raw)
+            reference = candidate.get("daily_trading_context")
+            if reference is not None:
+                if not isinstance(reference, dict) or not isinstance(reference.get("context"), dict):
+                    raise DataUnavailableError(
+                        "frozen execution plan daily trading context reference is invalid",
+                        context={
+                            "reason_code": "DAILY_TRADING_CONTEXT_DECISION_REFERENCE_INVALID",
+                            "plan_id": plan.plan_id,
+                            "symbol": decision.symbol,
+                        },
+                    )
+                try:
+                    from .daily_limit_authority import parse_daily_trading_context
+
+                    daily_context = parse_daily_trading_context(reference["context"])
+                except Exception as exc:
+                    raise DataUnavailableError(
+                        "frozen execution plan daily trading context cannot be read back",
+                        context={
+                            "reason_code": "DAILY_TRADING_CONTEXT_DECISION_REFERENCE_INVALID",
+                            "plan_id": plan.plan_id,
+                            "symbol": decision.symbol,
+                        },
+                    ) from exc
+                fact = daily_context.symbols.get(decision.symbol)
+                if (
+                    fact is None
+                    or reference.get("context_id") != daily_context.context_id
+                    or reference.get("context_hash") != daily_context.context_hash
+                    or reference.get("symbol_fact") != fact.canonical_payload()
+                    or plan.plan_payload_json.get("daily_trading_context") != daily_context.carrier_payload()
+                ):
+                    raise DataUnavailableError(
+                        "frozen execution plan daily trading context reference conflicts with plan identity",
+                        context={
+                            "reason_code": "DAILY_TRADING_CONTEXT_DECISION_REFERENCE_CONFLICT",
+                            "plan_id": plan.plan_id,
+                            "symbol": decision.symbol,
+                        },
+                    )
             previous = statuses.get(decision.symbol)
             if previous is not None and previous != candidate:
                 raise DataUnavailableError(
@@ -1102,35 +1144,67 @@ class ProductionSimulationRunContextProvider:
         as_of_time: datetime,
         calendar_service_snapshot: Mapping[str, Any],
     ) -> dict[str, dict[str, Any]]:
-        loader = self._daily_trading_context_provider.load
-        signature = inspect.signature(loader)
-        accepts_kwargs = any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
-        )
-        optional_kwargs: dict[str, Any] = {}
-        if binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
-            optional_kwargs = {
-                "pre_close_quote_fetcher": self._localsim_daily_pre_close_quote_fetcher,
-                "pre_close_quote_source": "TDX_REALTIME.batch_quote.pre_close",
-            }
-        elif binding.broker_backend is SimulationBrokerBackend.MINIQMT_SIM:
-            def fetch_miniqmt_pre_close_quotes(symbols_to_fetch: list[str]) -> dict[str, dict[str, Any]]:
-                fetcher = self._build_miniqmt_quote_fetcher(
-                    qmt_client=self._qmt_client_factory(),
-                    binding=binding,
-                    trade_date=trade_date,
+        if binding.broker_backend is SimulationBrokerBackend.MINIQMT_SIM:
+            qmt_client = self._qmt_client_factory()
+            instrument_batch_reader = getattr(qmt_client, "get_instrument_details", None)
+            supporting_fact_loader = getattr(self._daily_trading_context_provider, "load_supporting_facts", None)
+            if not callable(instrument_batch_reader) or not callable(supporting_fact_loader):
+                raise DataUnavailableError(
+                    "MiniQMT planning requires bounded instrument-detail and supporting-fact batch loaders",
+                    context={
+                        "reason_code": "MINIQMT_DAILY_LIMIT_AUTHORITY_PROVIDER_MISSING",
+                        "binding_id": binding.binding_id,
+                        "trade_date": trade_date.isoformat(),
+                    },
                 )
-                return fetcher(symbols_to_fetch)
+            from backend.services.miniqmt_execution_runtime.b0_quote_v2 import QuoteControlBindingV1
 
-            optional_kwargs = {
-                "pre_close_quote_fetcher": fetch_miniqmt_pre_close_quotes,
-                "pre_close_quote_source": f"{MINIQMT_REALTIME_QUOTE_SOURCE}.pre_close",
-            }
-        if not accepts_kwargs:
-            optional_kwargs = {
-                key: value for key, value in optional_kwargs.items() if key in signature.parameters
-            }
-        context = loader(
+            quote_control = QuoteControlBindingV1.from_binding_config(binding.binding_config_json)
+            quote_continuity_identity = canonical_json_sha256(
+                {
+                    "binding_id": binding.binding_id,
+                    "binding_hash": binding.binding_hash,
+                    "quote_control": quote_control.canonical_payload(),
+                }
+            )
+            provider = MiniQMTDailyLimitAuthorityProvider(
+                instrument_batch_reader=instrument_batch_reader,
+                supporting_fact_loader=supporting_fact_loader,
+            )
+            context = provider.load(
+                symbols=symbols,
+                trade_date=trade_date,
+                as_of_time=scheduler_time(as_of_time),
+                calendar_service_snapshot=calendar_service_snapshot,
+                binding_identity=f"{binding.binding_id}:{binding.binding_hash}",
+                package_identity=f"{runtime_release.package_id}:{runtime_release.manifest_sha256}",
+                release_identity=f"{runtime_release.release_id}:{runtime_release.release_hash}",
+                runtime_identity=(f"{binding.broker_account_id or binding.strategy_id}:{type(qmt_client).__name__}"),
+                quote_continuity_identity=quote_continuity_identity,
+            )
+            return provider.to_pre_trade_statuses(context)
+
+        stk_limit_attempt_loader = getattr(
+            self._daily_trading_context_provider,
+            "load_stk_limit_authority_attempt",
+            None,
+        )
+        supporting_fact_loader = getattr(self._daily_trading_context_provider, "load_supporting_facts", None)
+        if not callable(stk_limit_attempt_loader) or not callable(supporting_fact_loader):
+            raise DataUnavailableError(
+                "LocalSIM planning requires stk_limit-attempt and supporting-fact batch loaders",
+                context={
+                    "reason_code": "LOCALSIM_DAILY_LIMIT_AUTHORITY_PROVIDER_MISSING",
+                    "binding_id": binding.binding_id,
+                    "trade_date": trade_date.isoformat(),
+                },
+            )
+        provider = LocalSimDailyLimitAuthorityProvider(
+            stk_limit_attempt_loader=stk_limit_attempt_loader,
+            supporting_fact_loader=supporting_fact_loader,
+            tdx_reference_reader=self._localsim_daily_pre_close_quote_fetcher,
+        )
+        context = provider.load(
             symbols=symbols,
             trade_date=trade_date,
             as_of_time=scheduler_time(as_of_time),
@@ -1138,9 +1212,8 @@ class ProductionSimulationRunContextProvider:
             binding_identity=f"{binding.binding_id}:{binding.binding_hash}",
             package_identity=f"{runtime_release.package_id}:{runtime_release.manifest_sha256}",
             release_identity=f"{runtime_release.release_id}:{runtime_release.release_hash}",
-            **optional_kwargs,
         )
-        return self._daily_trading_context_provider.to_pre_trade_statuses(context)
+        return provider.to_pre_trade_statuses(context)
 
     def _load_miniqmt_pre_trade_tradability(
         self,

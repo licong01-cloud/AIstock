@@ -26,6 +26,18 @@ policies:
     validation_run_id_required: true
     cleanup_required: true
     default_ttl_hours: 72
+  existing_dev_db:
+    description: Transactional validation against the already provisioned DEV database; no database or container is created.
+    resource_mode: isolated_write
+    business_state_write: isolated
+    resource_types: [existing_dev_database]
+    allowed_db_targets: [dev_db]
+    forbidden_db_targets: [prod_db, temp_db]
+    validation_namespace_required: true
+    validation_run_id_required: true
+    transactional_rollback_required: true
+    creates_validation_resources: false
+    cleanup_required: false
   shadow_schema_small_sample:
     description: Small-sample writes into shadow schema with validation_run_id and bounded scope.
     resource_mode: isolated_write

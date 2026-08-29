@@ -13,8 +13,15 @@ from typing import Any
 
 from backend.db.pg_pool import get_conn
 from backend.services.quantevolver.runtime_contract import (
+    QE_MINUTE_RUNTIME_CONTRACT_VERSION,
     merge_qe_minute_runtime_contract,
+    normalize_qe_execution_algo,
+    normalize_qe_minute_freq,
     runtime_contract_missing,
+)
+from backend.services.trading_core.execution_algo_retirement import (
+    execution_algo_retirement_projection,
+    is_retired_execution_algo,
 )
 
 from .policy import resolve_archive_policy
@@ -97,6 +104,84 @@ TASK_COLUMNS = (
 )
 
 TERMINAL_STATUSES = ("completed", "failed", "interrupted", "cancelled")
+
+
+def _first_non_empty(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _merge_archive_runtime_contract(
+    custom_params: Mapping[str, Any] | None,
+    *,
+    config: Mapping[str, Any] | None = None,
+    execution_algo: Any = None,
+    execution_algo_params: Any = None,
+    source: str,
+) -> dict[str, Any]:
+    """Project a runtime snapshot without treating archive reads as new work.
+
+    Active algorithms keep using the executable-work runtime-contract builder.
+    Retired algorithms are handled only as historical evidence: their identity
+    is preserved, retirement is made explicit, and no active-algorithm gate is
+    bypassed by an exception handler or algorithm substitution.
+    """
+
+    merged = _ensure_mapping(custom_params)
+    cfg = _ensure_mapping(config)
+    execution_section = _ensure_mapping(cfg.get("execution"))
+    contract_missing = runtime_contract_missing(merged)
+    raw_algo = _first_non_empty(
+        execution_algo,
+        merged.get("execution_algo"),
+        cfg.get("execution_algo"),
+        execution_section.get("execution_algo"),
+        execution_section.get("algo_code"),
+    )
+    if not is_retired_execution_algo(raw_algo):
+        if not contract_missing:
+            return merged
+        return merge_qe_minute_runtime_contract(
+            merged,
+            config=cfg,
+            execution_algo=execution_algo,
+            execution_algo_params=execution_algo_params,
+            source=source,
+            allow_default_execution_algo=False,
+        )
+
+    algo = normalize_qe_execution_algo(raw_algo)
+    if algo is None:  # Defensive: is_retired_execution_algo already excludes this.
+        raise ValueError("retired archive execution algorithm cannot normalize to an empty code")
+    raw_algo_params = _first_non_empty(
+        execution_algo_params,
+        merged.get("execution_algo_params"),
+        execution_section.get("execution_algo_params"),
+        execution_section.get("algo_config"),
+        cfg.get("execution_algo_params"),
+    )
+    merged["execution_algo"] = algo
+    merged["execution_algo_params"] = _ensure_mapping(raw_algo_params)
+
+    inferred_freq = normalize_qe_minute_freq(_infer_freq(merged, cfg))
+    if contract_missing and inferred_freq in {"1min", "5min"}:
+        merged.update(
+            {
+                "runtime_mode": "minute",
+                "bar_freq": "1m" if inferred_freq == "1min" else "5m",
+                "backtest_freq": inferred_freq,
+                "runtime_contract_version": QE_MINUTE_RUNTIME_CONTRACT_VERSION,
+                "runtime_contract_source": source,
+            }
+        )
+
+    retirement = execution_algo_retirement_projection(algo)
+    retirement["historical_artifacts_readable"] = True
+    merged["execution_algo_retirement"] = retirement
+    merged["runtime_contract_historical_read_only"] = True
+    return merged
 
 
 def _merge_missing_mapping_evidence(base: Mapping[str, Any], supplement: Mapping[str, Any]) -> dict[str, Any]:
@@ -953,13 +1038,11 @@ class QEArchiveSourceAssembler:
         row = dict(row)
         metrics = _ensure_mapping(row.get("result_metrics"))
         custom_params = _ensure_mapping(row.get("custom_params"))
-        if runtime_contract_missing(custom_params):
-            custom_params = merge_qe_minute_runtime_contract(
-                custom_params,
-                config=_ensure_mapping(row.get("result_files")),
-                source="qe_archive_experiment_payload",
-                allow_default_execution_algo=False,
-            )
+        custom_params = _merge_archive_runtime_contract(
+            custom_params,
+            config=_ensure_mapping(row.get("result_files")),
+            source="qe_archive_experiment_payload",
+        )
         data_split = _ensure_mapping(row.get("data_split"))
         factor_names = _ensure_list(row.get("factor_names"))
         freq = _infer_freq(custom_params, _ensure_mapping(row.get("result_files")))
@@ -1064,15 +1147,13 @@ class QEArchiveSourceAssembler:
                     runtime_flags[key] = strategy_params[key]
                 elif key in model_params:
                     runtime_flags[key] = model_params[key]
-        if runtime_contract_missing(runtime_flags):
-            runtime_flags = merge_qe_minute_runtime_contract(
-                runtime_flags,
-                config=config_json,
-                execution_algo=task.get("execution_algo"),
-                execution_algo_params=task.get("execution_algo_params"),
-                source="qe_archive_loop_payload",
-                allow_default_execution_algo=False,
-            )
+        runtime_flags = _merge_archive_runtime_contract(
+            runtime_flags,
+            config=config_json,
+            execution_algo=task.get("execution_algo"),
+            execution_algo_params=task.get("execution_algo_params"),
+            source="qe_archive_loop_payload",
+        )
         factor_names = _extract_factors_from_config(config_json)
         if not factor_names:
             factor_names = _ensure_list(task.get("base_factor_names"))
@@ -1354,7 +1435,7 @@ def _extract_factors_from_config(config: Mapping[str, Any]) -> list[Any]:
 def _execution_context(params: Mapping[str, Any]) -> dict[str, Any]:
     execution_algo = params.get("execution_algo")
     execution_algo_params = _ensure_mapping(params.get("execution_algo_params"))
-    return {
+    context = {
         "execution_algo": execution_algo,
         "execution_algo_params": execution_algo_params,
         "filter_suspended_on_signal": params.get("filter_suspended_on_signal"),
@@ -1362,6 +1443,12 @@ def _execution_context(params: Mapping[str, Any]) -> dict[str, Any]:
         "unfilled_handler": params.get("unfilled_handler"),
         "limit_suspend_authoritative": _infer_limit_suspend_authoritative(params),
     }
+    retirement = _ensure_mapping(params.get("execution_algo_retirement"))
+    if retirement:
+        context["retirement"] = retirement
+    if params.get("runtime_contract_historical_read_only") is True:
+        context["historical_read_only"] = True
+    return context
 
 
 def _infer_freq(params: Mapping[str, Any], context: Mapping[str, Any]) -> str:
