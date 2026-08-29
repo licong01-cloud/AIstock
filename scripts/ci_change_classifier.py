@@ -231,6 +231,8 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
     "scripts/advisory_p0k_build_training_request.py": ("advisory_modeling_backend",),
     "scripts/wsl/advisory_p0k_train.py": ("advisory_modeling_backend",),
+    "scripts/advisory_p0l_build_training_request.py": ("advisory_modeling_backend",),
+    "scripts/wsl/advisory_p0l_train.py": ("advisory_modeling_backend",),
 }
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
 FRONTEND_FILES = {

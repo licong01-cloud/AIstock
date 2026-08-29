@@ -1680,6 +1680,45 @@ def test_bug_1233_p0k_offline_pipeline_is_exact_and_neighbor_stays_backend(
     assert neighboring_backend["target_ids"] == ["backend-main"]
 
 
+def test_p0l_offline_training_source_is_non_runtime_and_neighbor_stays_backend(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_contracts.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_training.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_bundle.py",
+        "backend/services/advisory_model_first/turnover_constrained_utility_training.py",
+        "scripts/advisory_p0l_build_training_request.py",
+        "scripts/wsl/advisory_p0l_train.py",
+        "backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py",
+    ]
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            }
+        ),
+        changed_files=changed_files,
+        root=isolated_workflow_root,
+    )
+    neighboring_backend = workflow._classify_runtime_impact(
+        ["backend/services/advisory_model_first/model_inference.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert inference["runtime_impact"] == "none"
+    assert inference["runtime_files"] == []
+    assert inference["target_ids"] == []
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["pre_pr_ready"] is True
+    assert neighboring_backend["runtime_impact"] == "backend"
+
+
 def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_activation(
     isolated_workflow_root: Path,
 ) -> None:

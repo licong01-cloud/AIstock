@@ -1931,6 +1931,13 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
     )
     known_non_runtime_files = {
         "backend/services/advisory_model_first/selection_liability_gate_pipeline.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_bundle.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_contracts.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_training.py",
+        "backend/services/advisory_model_first/turnover_constrained_utility_training.py",
+        "scripts/advisory_p0l_build_training_request.py",
+        "scripts/wsl/advisory_p0l_train.py",
         "backend/services/advisory_phase0b/audit_service.py",
         "backend/services/advisory_phase0b/snapshot_reader.py",
         "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
