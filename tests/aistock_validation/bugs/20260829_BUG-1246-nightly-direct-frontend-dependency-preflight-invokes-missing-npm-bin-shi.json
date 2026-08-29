@@ -4,6 +4,7 @@
     ".github/workflows/nightly.yml",
     "noxfile.py",
     "scripts/ci/prepare_self_hosted_workspace.py",
+    "scripts/ci_workflow_policy_scan.py",
     "backend/tests/test_noxfile_validation_env.py",
     "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
     "tests/aistock_validation/bugs/20260829_BUG-1246-nightly-direct-frontend-dependency-preflight-invokes-missing-npm-bin-shi.json"
@@ -24,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260829-896efb2a5465",
       "timestamp": "2026-08-29T07:30:45.718430Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Add the existing CI policy scanner so the direct Playwright, TypeScript, and Next entrypoint contract is enforced without dependency installation.",
+      "timestamp": "2026-08-29T08:10:00Z"
     }
   ],
   "evidence_uris": [
