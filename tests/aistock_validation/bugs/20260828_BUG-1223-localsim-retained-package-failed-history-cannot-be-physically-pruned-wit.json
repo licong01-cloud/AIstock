@@ -59,8 +59,8 @@
   },
   "first_seen_at": "2026-08-28T10:40:55.834798Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f68036fc406554d6e6d46af9501e922bd53abd80",
+  "fixed_at": "2026-08-29T04:29:49Z",
   "github_issue_number": 3888,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3888",
   "last_seen_at": "2026-08-28T10:40:55.834798Z",
@@ -70,6 +70,7 @@
     "Do not delete any StrategyPackage, StrategyRuntimeRelease, SimulationReleaseBinding, Selection evidence, successful LocalSIM run, current anchor state, or MiniQMT row.",
     "Do not execute production DML from the source PR; production apply is a separate merged-source, DEV-validated, digest-pinned action."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3936",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -92,7 +93,8 @@
     "inference_basis": "backend/services/paper_trading_v2/repository.py changes LocalSIM position authority",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_source_merge",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": true,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -104,7 +106,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1223",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a431d014baee1ea3",
+    "recorded_at": "2026-08-29T04:43:29.435904Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5d7afdf8b530dd37f58722e848c190b5a9182c94",
+    "source_merge_commit": "f68036fc406554d6e6d46af9501e922bd53abd80",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3936",
+    "validation_evidence": [
+      "validation-receipt: id=41d57c067b9d4684 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14`",
+      "validation-receipt: id=f889f9f4040f1d1d commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=paper_v2_backend status=passed command=`rtk nox -s paper_v2_backend` result=`passed`",
+      "validation-receipt: id=71c602ab442b66c0 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`passed`"
+    ],
+    "validation_evidence_digest": "a484586579f21493f987a56853304ddf0992548d7bf39826c57352a0031613c7"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -113,6 +138,11 @@
     "fingerprint": "a160514539f3f8e7e23bd278",
     "source_event_id": "FE-20260828-a160514539f3"
   },
+  "validation_evidence": [
+    "validation-receipt: id=41d57c067b9d4684 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14`",
+    "validation-receipt: id=f889f9f4040f1d1d commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=paper_v2_backend status=passed command=`rtk nox -s paper_v2_backend` result=`passed`",
+    "validation-receipt: id=71c602ab442b66c0 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
