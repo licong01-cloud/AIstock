@@ -349,7 +349,10 @@ backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_co
 backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py
 backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py
 backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_bundle.py
-tests/aistock_validation/config/ci_test_modules.yaml
+scripts/ci_change_classifier.py
+backend/tests/scripts/test_ci_change_classifier.py
+scripts/aistock_issue_workflow.py
+backend/tests/scripts/test_aistock_issue_workflow.py
 docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md
 ```
@@ -389,6 +392,8 @@ outer pipeline/paired/PBO → immutable bundle/CLI → direct tests → formal r
 
 - changed-file Ruff/compile、direct tests、P0-G/P0-H/P0-K/shared-policy compatibility；
 - `git diff --check`、ownership、guardrail、scope 和 CI classifier；
+- 两个新CLI必须在`DIRECT_BACKEND_PLAN_KEYS_BY_FILE`精确映射到`advisory_modeling_backend`；P0-L
+  offline pipeline必须进入issue workflow的known non-runtime source集合，并由定向测试证明不要求后端重启；
 - `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md --tier F2`；
 - 正式 Stage A 仅在源码合入后、clean tracked commit、WSL `rdagent-gpu` 执行完整 168/168；
 - broad `advisory_modeling_backend` 由 CI/Validation Center 承担，交互窗口保留直接矩阵。
@@ -518,3 +523,7 @@ P0-C/P0-G/P0-H/P0-K bundles 均不改变、不删除、不覆盖。
 - Round 7（门槛边界）：复审发现“少于两个unique block-score vector即负向停止”会把原本diagnostic-only的
   PBO私增为第七项advancement gate。现已改为只报告`DEGENERATE_NOT_INTERPRETABLE`且不输出伪数值；真实机制
   生效仍由实际ENTER非恒等性保证，收益准入严格保留既有六项。
+- Round 8（CI/运行时路由）：源码预审发现初稿引用了仓库不存在的
+  `tests/aistock_validation/config/ci_test_modules.yaml`。已改为真实权威路径：两个CLI写入
+  `scripts/ci_change_classifier.py`并补定向测试，offline pipeline写入`scripts/aistock_issue_workflow.py`的
+  known non-runtime集合并补运行时分类回归；避免实现后出现unmapped code或错误要求后端重启。
