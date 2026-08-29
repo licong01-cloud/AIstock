@@ -28,12 +28,18 @@
   ],
   "expected": "Completed historical QE rows using retired V25 algorithms remain readable and archivable with explicit retirement metadata; all new executable-work creation remains rejected.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260829_BUG-1245-qe-archive-historical-v25-rows-are-rejected-by-executable-work-retiremen.json",
       "backend/services/qe_archive/source_assembler.py",
       "backend/tests/test_qe_archive_repository_static.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260829_BUG-1245-qe-archive-historical-v25-rows-are-rejected-by-executable-work-retiremen.json",
+      "backend/services/qe_archive/source_assembler.py",
+      "backend/tests/test_qe_archive_repository_static.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/qe_archive/source_assembler.py",
@@ -107,11 +113,21 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "fresh_process_evidence": [
+      "Fresh Python process imported QEArchiveSourceAssembler, projected a completed V25_TWO_STAGE row with historical_read_only/retired metadata, and independently confirmed merge_qe_minute_runtime_contract still raises ExecutionAlgoRetiredError for new executable work -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
