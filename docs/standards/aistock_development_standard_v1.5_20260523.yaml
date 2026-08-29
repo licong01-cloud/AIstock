@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 724fc9d34822d598137e09e0b7dec52835858d729ff1f4f9911bec1d63333c24
+source_sha256: 1ec8042bcb040f0c10dac335bcd01b8cd970c462d90b4d4e45486b34c6370ad8
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-28"
+updated_at: "2026-08-29"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -751,6 +751,7 @@ rules:
         - codeql_default_branch_security_scan_preserved
         - codeql_uses_hash_verified_prebuilt_bundle
         - codeql_remote_action_download_is_eliminated
+        - codeql_reuses_single_security_runner_allocation
         - codeql_exact_local_workspace_fetch_is_bounded
         - codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push
         - code_intelligence_refresh_is_scheduled_or_manual_only
@@ -767,7 +768,7 @@ rules:
         - self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe
         - nightly_watermark_lookup_is_repo_scoped_and_fail_closed
     baseline_policy: block_new_and_changed_workflow
-    remediation: Require PR-based main updates and stable merge-quality contexts for CI, CodeQL, Semgrep, and PR quality; provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one preparation checkout for changed-file classification and static or close-sync gates, reuse one final runner allocation for focused workflow validation, workflow policy, and CI verdict, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
+    remediation: Require PR-based main updates and stable merge-quality contexts for CI, CodeQL, Semgrep, and PR quality; provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one preparation checkout for changed-file classification and static or close-sync gates, reuse one final runner allocation for focused workflow validation, workflow policy, and CI verdict, reuse one security-runner allocation for CodeQL classification, sequential changed-language analysis, SARIF upload, and the stable CodeQL verdict, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001

@@ -183,6 +183,7 @@ def build_contract_evidence(
     pr_combined = "\n".join(pr_texts)
     test_text = workflow_text.get("test.yml", "")
     pr_quality_text = workflow_text.get("pr-quality.yml", "")
+    codeql_text = workflow_text.get("codeql.yml", "")
     nightly_text = workflow_text.get("nightly.yml", "")
     code_intelligence_refresh_text = workflow_text.get("code-intelligence-refresh.yml", "")
     nightly_runner_re = re.compile(
@@ -263,10 +264,10 @@ def build_contract_evidence(
             for name in PR_ONLY_QUALITY_WORKFLOWS
         ),
         "stable_merge_quality_contexts_are_always_published": (
-            "  pull_request:\n    branches: [main]\n  push:" in workflow_text.get("codeql.yml", "")
-            and "name: CodeQL verdict" in workflow_text.get("codeql.yml", "")
-            and "needs: [docs-lite, analyze]" in workflow_text.get("codeql.yml", "")
-            and "if: always()" in workflow_text.get("codeql.yml", "")
+            "  pull_request:\n    branches: [main]\n  push:" in codeql_text
+            and bool(re.search(r"(?m)^  codeql-verdict:\s*$", codeql_text))
+            and "name: CodeQL verdict" in codeql_text
+            and "if: always()" in codeql_text
             and "  pull_request:\n    branches: [main]\n  workflow_dispatch:" in workflow_text.get("semgrep.yml", "")
             and "name: AIstock Semgrep guardrails" in workflow_text.get("semgrep.yml", "")
             and "name: Context, scope, and open-source tooling dry-run" in pr_quality_text
@@ -287,20 +288,31 @@ def build_contract_evidence(
             and "github upload-results" in workflow_text.get("codeql.yml", "")
         ),
         "codeql_remote_action_download_is_eliminated": (
-            "github/codeql-action/" not in workflow_text.get("codeql.yml", "")
-            and "actions/checkout@" not in workflow_text.get("codeql.yml", "")
-            and "uses:" not in workflow_text.get("codeql.yml", "")
-            and "- name: Run CodeQL CLI analysis\n        timeout-minutes: 20\n"
-            in workflow_text.get("codeql.yml", "")
+            "github/codeql-action/" not in codeql_text
+            and "actions/checkout@" not in codeql_text
+            and "uses:" not in codeql_text
+            and "- name: Run CodeQL CLI analysis\n        id: codeql_analysis\n"
+            in codeql_text
+        ),
+        "codeql_reuses_single_security_runner_allocation": (
+            codeql_text.count("runs-on: [self-hosted, Windows, aistock-ci-security]") == 1
+            and not re.search(r"(?m)^  (?:docs-lite|analyze):\s*$", codeql_text)
+            and "strategy:" not in codeql_text
+            and "matrix:" not in codeql_text
+            and codeql_text.count("Prepare exact local workspace (no remote actions)") == 1
+            and "CODEQL_LANGUAGES: ${{ steps.fast_lane.outputs.languages }}" in codeql_text
+            and "foreach ($language in $languages)" in codeql_text
+            and "CLASSIFIER_RESULT: ${{ steps.fast_lane.outcome }}" in codeql_text
+            and "ANALYZE_RESULT: ${{ steps.codeql_analysis.outcome }}" in codeql_text
         ),
         "codeql_exact_local_workspace_fetch_is_bounded": (
-            workflow_text.get("codeql.yml", "").count("Prepare exact local workspace (no remote actions)") == 2
-            and workflow_text.get("codeql.yml", "").count("--no-write-fetch-head") == 2
-            and workflow_text.get("codeql.yml", "").count("exact workspace source fetch failed after 3 attempts") == 2
-            and workflow_text.get("codeql.yml", "").count("refs/aistock-ci/codeql-") == 2
-            and workflow_text.get("codeql.yml", "").count("update-ref -d $cacheRef") == 2
-            and workflow_text.get("codeql.yml", "").count('$env:GIT_CONFIG_KEY_0 = "core.longpaths"') == 2
-            and "git -C $source fetch --no-tags --depth=1" not in workflow_text.get("codeql.yml", "")
+            codeql_text.count("Prepare exact local workspace (no remote actions)") == 1
+            and codeql_text.count("--no-write-fetch-head") == 1
+            and codeql_text.count("exact workspace source fetch failed after 3 attempts") == 1
+            and codeql_text.count("refs/aistock-ci/codeql-") == 1
+            and codeql_text.count("update-ref -d $cacheRef") == 1
+            and codeql_text.count('$env:GIT_CONFIG_KEY_0 = "core.longpaths"') == 1
+            and "git -C $source fetch --no-tags --depth=1" not in codeql_text
         ),
         "codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push": (
             "codeql_pr_languages" in classifier_text
