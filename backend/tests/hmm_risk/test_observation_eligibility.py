@@ -67,7 +67,14 @@ def _build_eligibility(
     sw_authority = (
         canonical_authority_identity(
             sw_authority_type,
-            {"schema_version": "hmm_risk_pit_mapping_manifest_v2", "manifest_hash": "f" * 64},
+            {
+                "schema_version": "hmm_risk_pit_mapping_manifest_v2",
+                "classification_authority_receipt_hash": "1" * 64,
+                "index_membership_authority_receipt_hash": "2" * 64,
+                "active_classification_basis": "stable_taxonomy_backcast",
+                "non_as_known_taxonomy": True,
+                "manifest_hash": "f" * 64,
+            },
         )
         if sw_authority_type == "hmm_industry_pit_classification_projection"
         else _authority(sw_authority_type)
@@ -123,6 +130,29 @@ def _build_eligibility(
             predicate_statuses["sw_l2_identity_valid"],
         }:
             sw_candidates = [{"l1_code": "801010.SI", "l2_code": "801011.SI"}] * 2
+        elif sw_authority_type == "hmm_industry_pit_classification_projection":
+            resolved = all(
+                predicate_statuses[field] == "available" for field in ("sw_l1_identity_valid", "sw_l2_identity_valid")
+            )
+            sw_candidates = [
+                {
+                    "status": "resolved" if resolved else "unavailable",
+                    "canonical_symbol": row.canonical_ts_code,
+                    "trade_date": row.trade_date.isoformat(),
+                    "l1_code": "801010.SI" if resolved else None,
+                    "l1_name": "L1" if resolved else None,
+                    "l2_code": "801011.SI" if resolved else None,
+                    "l2_name": "L2" if resolved else None,
+                    "reason_code": None if resolved else "classification:classification_unavailable",
+                    "classification_receipt_hash": "1" * 64,
+                    "index_membership_receipt_hash": "2" * 64,
+                    "classification_row_hashes": ["3" * 64] if resolved else [],
+                    "index_membership_row_hashes": [],
+                    "alignment_state": "classification_only",
+                    "classification_research_basis": "stable_taxonomy_backcast",
+                    "non_as_known_taxonomy": True,
+                }
+            ]
         else:
             sw_candidates = [
                 {
@@ -226,6 +256,34 @@ def test_partition_readback_rejects_unregistered_industry_authority_type() -> No
             formal_policy=True,
             sw_authority_type="unregistered_industry_authority",
         )
+
+
+def test_partition_readback_rejects_rehashed_frozen_projection_identity_drift() -> None:
+    start = date(2022, 1, 4)
+    result = _build_eligibility(
+        [_absence("002411.SZ", start)],
+        {"002411.SZ": (start,)},
+        train_start=start,
+        train_end=start,
+        formal_policy=True,
+        sw_authority_type="hmm_industry_pit_classification_projection",
+    )
+    tampered = deepcopy(result.provider_absence_partition_receipt)
+    entry = tampered["entries"][0]
+    for field in ("sw_l1_identity_valid", "sw_l2_identity_valid"):
+        predicate = entry[field]
+        predicate["authority_receipt"]["candidates"][0]["canonical_symbol"] = "000001.SZ"
+        predicate["authority_receipt_sha256"] = canonical_sha256(dict(predicate["authority_receipt"]))
+        predicate["receipt_sha256"] = canonical_sha256(
+            {key: value for key, value in predicate.items() if key != "receipt_sha256"}
+        )
+    entry["entry_sha256"] = canonical_sha256({key: value for key, value in entry.items() if key != "entry_sha256"})
+    tampered["receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in tampered.items() if key != "receipt_sha256"}
+    )
+
+    with pytest.raises(StateModelSetError, match="frozen industry PIT projection identity is invalid"):
+        validate_c010_provider_absence_domain_partition(tampered)
 
 
 def test_train_only_eligibility_excludes_structural_absence_without_changing_stock_universe() -> None:
