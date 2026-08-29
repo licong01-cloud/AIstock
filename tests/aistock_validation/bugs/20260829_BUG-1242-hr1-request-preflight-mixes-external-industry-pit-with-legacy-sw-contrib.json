@@ -23,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260829-f193b0982757",
       "timestamp": "2026-08-29T05:43:18.863589Z"
+    },
+    {
+      "action": "formal_review_fix",
+      "actor": "codex",
+      "note": "Closed frozen industry PIT projection candidate readback identity and lineage drift.",
+      "timestamp": "2026-08-29T07:10:42.983209Z"
     }
   ],
   "evidence_uris": [
