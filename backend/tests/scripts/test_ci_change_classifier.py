@@ -221,6 +221,23 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
 
     assert qe_payload["backend_sessions"] == ["qe_read_backend"]
 
+    qe_candidate_payload = classifier.classify_changed_files(
+        [
+            "scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py",
+            "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert qe_candidate_payload["classification"] == "targeted_ci_required"
+    assert qe_candidate_payload["backend_sessions"] == ["qe_read_backend"]
+    assert qe_candidate_payload["catalog_impacted_modules"] == [
+        "qe.core",
+        "qe.auto_evolution",
+        "factor_library",
+    ]
+    assert qe_candidate_payload["unmapped_code_files"] == []
+
     qe_node_health_payload = classifier.classify_changed_files(
         [
             "backend/schedulers/node_health_scheduler.py",
@@ -1155,11 +1172,17 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
         jobs["backend-tests"]["strategy"]["matrix"]["session"]
         == "${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}"
     )
-    assert jobs["workflow-validation-tests"]["if"] == (
+    assert "workflow-validation-tests" not in jobs
+    verdict = jobs["ci-verdict"]
+    workflow_condition = (
         "needs.classify-changes.outputs.workflow_validation_required == 'true' && "
         "needs.classify-changes.outputs.workflow_test_targets != '[]'"
     )
-    workflow_runs = "\n".join(str(step.get("run", "")) for step in jobs["workflow-validation-tests"]["steps"])
+    workflow_validation = next(step for step in verdict["steps"] if step.get("id") == "workflow_validation")
+    workflow_policy = next(step for step in verdict["steps"] if step.get("id") == "workflow_policy")
+    assert workflow_validation["if"] == workflow_condition
+    assert workflow_policy["if"] == workflow_condition
+    workflow_runs = "\n".join(str(step.get("run", "")) for step in verdict["steps"])
     assert "WORKFLOW_TEST_TARGETS" in workflow_runs
     assert 'python -m pytest "${workflow_test_targets[@]}"' in workflow_runs
     assert "backend/tests/scripts/test_llm_provider_adapter.py \\" not in workflow_runs
@@ -1205,12 +1228,9 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     verdict = jobs["ci-verdict"]
     expected_needs = {
         "classify-changes",
-        "static-gate",
-        "docs-lite",
         "backend-tests",
         "frontend-quality",
         "tdx-go-tests",
-        "workflow-validation-tests",
         "prompt-evaluation",
     }
 
@@ -1218,12 +1238,17 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert sum(job.get("name") == "CI verdict" for job in jobs.values()) == 1
     assert verdict["if"] == "always()"
     assert set(verdict["needs"]) == expected_needs
-    run = str(verdict["steps"][0]["run"])
-    assert '"classify:${CLASSIFY_RESULT}" "static:${STATIC_RESULT}"' in run
-    for lane in ("docs", "backend", "frontend", "go", "workflow", "prompt"):
+    verdict_step = next(step for step in verdict["steps"] if step.get("name") == "Require every selected CI lane to pass")
+    run = str(verdict_step["run"])
+    assert 'failures+=("classify_static=${CLASSIFY_RESULT}")' in run
+    for lane in ("backend", "frontend", "go", "prompt"):
         assert f'"{lane}:${{{lane.upper() if lane != "go" else "GO"}_RESULT}}"' in run
+    assert verdict_step["env"]["WORKFLOW_TEST_RESULT"] == "${{ steps.workflow_validation.outcome }}"
+    assert verdict_step["env"]["WORKFLOW_POLICY_RESULT"] == "${{ steps.workflow_policy.outcome }}"
+    assert 'workflow_validation=${WORKFLOW_TEST_RESULT}' in run
+    assert 'workflow_policy=${WORKFLOW_POLICY_RESULT}' in run
     assert "failure-bug-register" not in verdict["needs"]
-    assert "REGISTRAR_RESULT" not in verdict["steps"][0].get("env", {})
+    assert "REGISTRAR_RESULT" not in verdict_step.get("env", {})
     assert '"registrar:' not in run
     assert 'result" != "success"' in run
     assert 'result" != "skipped"' in run
@@ -1235,11 +1260,16 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert any(step.get("name") == "Classify CI lane" for step in classify_steps)
 
 
-def test_static_gate_uses_registry_metadata_fast_lane() -> None:
+def test_classification_job_reuses_one_checkout_for_static_and_registry_gates() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
-    static_gate_steps = workflow["jobs"]["static-gate"]["steps"]
+    jobs = workflow["jobs"]
+    assert "static-gate" not in jobs
+    assert "docs-lite" not in jobs
+    static_gate_steps = jobs["classify-changes"]["steps"]
+    assert sum("actions/checkout@" in str(step.get("uses") or "") for step in static_gate_steps) == 1
+    assert sum(step.get("name") == "Verify prebuilt AIstock-CI environment" for step in static_gate_steps) == 1
     registry_steps = [
         step
         for step in static_gate_steps
@@ -1247,9 +1277,10 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
     ]
 
     assert len(registry_steps) == 1
-    assert registry_steps[0]["if"] == "needs.classify-changes.outputs.close_sync_metadata_only == 'true'"
+    assert registry_steps[0]["if"] == "steps.classify.outputs.close_sync_metadata_only == 'true'"
     assert "scripts/bug_registry_metadata_check.py" in registry_steps[0]["run"]
     assert "--close-sync-only" in registry_steps[0]["run"]
+    assert "tmp/validation/ci_change_classifier/changed_files.txt" in registry_steps[0]["run"]
 
     nox_steps = [
         step
@@ -1257,16 +1288,12 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
         if isinstance(step, dict) and str(step.get("name") or "").startswith("nox -s ")
     ]
     assert nox_steps
-    assert all("close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps)
+    assert all("steps.classify.outputs.close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps)
     l0_step = next(step for step in nox_steps if step.get("name") == "nox -s l0 -- changed files")
-    assert "l0_changed_files.txt" in l0_step["run"]
+    assert "tmp/validation/ci_change_classifier/changed_files.txt" in l0_step["run"]
+    assert 'if [ -e "${path}" ]' in l0_step["run"]
     assert 'python -m nox -s l0 -- "${changed_files[@]}"' in l0_step["run"]
-
-    changed_files_step = next(
-        step for step in static_gate_steps if step.get("name") == "Build static-gate changed-file list"
-    )
-    assert "scripts/ci_changed_files.py" in changed_files_step["run"]
-    assert "--diff-filter ACMRT" in changed_files_step["run"]
+    assert not any(str(step.get("name") or "").startswith("Build static-gate changed-file") for step in static_gate_steps)
 
     catalog_steps = [
         step
@@ -1274,7 +1301,7 @@ def test_static_gate_uses_registry_metadata_fast_lane() -> None:
         if step.get("name") in {"nox -s validation_module_registry_l0", "nox -s validation_catalog_integrity"}
     ]
     assert len(catalog_steps) == 2
-    assert all("catalog_validation_required == 'true'" in str(step.get("if") or "") for step in catalog_steps)
+    assert all("steps.classify.outputs.catalog_validation_required == 'true'" in str(step.get("if") or "") for step in catalog_steps)
 
 
 def test_catalog_change_uses_catalog_gate_without_workflow_suite(tmp_path: Path) -> None:
@@ -1579,17 +1606,20 @@ def test_javascript_actions_use_native_node24_major_versions() -> None:
         assert refs == {expected_ref}
 
 
-def test_non_required_pr_workflows_skip_pure_bug_registry_changes() -> None:
+def test_merge_quality_workflows_publish_context_for_pure_bug_registry_changes() -> None:
     for relative_path in (
         ".github/workflows/codeql.yml",
         ".github/workflows/semgrep.yml",
         ".github/workflows/pr-quality.yml",
-        ".github/workflows/issue-auto-link.yml",
     ):
         text = Path(relative_path).read_text(encoding="utf-8")
         assert "pull_request:" in text
-        assert "paths-ignore:" in text
-        assert "- 'tests/aistock_validation/bugs/**'" in text
+        pull_request_block = text.split("  pull_request:\n", 1)[1]
+        pull_request_block = pull_request_block.split("\n  ", 1)[0]
+        assert "tests/aistock_validation/bugs/**" not in pull_request_block
+
+    issue_link_text = Path(".github/workflows/issue-auto-link.yml").read_text(encoding="utf-8")
+    assert "- 'tests/aistock_validation/bugs/**'" in issue_link_text
 
 def test_allocator_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
     allocator = tmp_path / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"

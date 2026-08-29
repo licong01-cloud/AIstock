@@ -1022,20 +1022,32 @@ def complete_c010_domain_receipts(
     *,
     trading_dates: Sequence[date],
     l1_sector_codes: Sequence[str],
-    l2_sector_codes: Sequence[str],
+    l2_sector_codes: Sequence[str] | None,
 ) -> dict[str, Any]:
     """Materialize one price-domain receipt for every frozen level/sector/date identity."""
 
     body = {key: value for key, value in dict(evidence).items() if key != "receipt_sha256"}
-    if body.get("schema_version") != C010_AGGREGATE_RECEIPT_VERSION:
+    l1_only = l2_sector_codes is None
+    expected_schema = (
+        "hmm_risk_c010_rotation_l1_feature_domain_aggregate_evidence_v1" if l1_only else C010_AGGREGATE_RECEIPT_VERSION
+    )
+    if body.get("schema_version") != expected_schema:
         raise StateModelSetError("C-010 aggregate evidence schema is invalid")
     calendar = tuple(trading_dates)
     if not calendar or tuple(sorted(set(calendar))) != calendar:
         raise StateModelSetError("C-010 aggregate receipt calendar is invalid")
-    levels = (
-        ("L1", tuple(sorted(str(value) for value in l1_sector_codes)), "l1_domain_receipts", "l1_invalid_price_domain"),
-        ("L2", tuple(sorted(str(value) for value in l2_sector_codes)), "l2_domain_receipts", "l2_invalid_price_domain"),
-    )
+    levels = [
+        ("L1", tuple(sorted(str(value) for value in l1_sector_codes)), "l1_domain_receipts", "l1_invalid_price_domain")
+    ]
+    if l2_sector_codes is not None:
+        levels.append(
+            (
+                "L2",
+                tuple(sorted(str(value) for value in l2_sector_codes)),
+                "l2_domain_receipts",
+                "l2_invalid_price_domain",
+            )
+        )
     for level, codes, valid_field, invalid_field in levels:
         expected_count = 31 if level == "L1" else 131
         if len(codes) != expected_count or len(set(codes)) != expected_count or any(not value for value in codes):

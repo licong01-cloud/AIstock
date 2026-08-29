@@ -336,6 +336,56 @@ def scan_ci_workflow_policy(files: Iterable[Path], root: Path) -> list[Finding]:
     return findings
 
 
+def scan_standard_digest_consistency(
+    files: Iterable[Path],
+    *,
+    root: Path,
+    catalog: dict[str, Any],
+    catalog_path: Path,
+) -> list[Finding]:
+    """Surface the existing sole-standard digest contract in changed-files scans."""
+
+    standard_rel = str(catalog.get("source_standard") or "").strip()
+    catalog_rel = _path_key(catalog_path, root)
+    selected = {_path_key(path, root) for path in files}
+    if not standard_rel or not ({standard_rel, catalog_rel} & selected):
+        return []
+    if not bool((catalog.get("rule_sync_policy") or {}).get("source_digest_required")):
+        return []
+    standard_path = root / standard_rel
+    if not standard_path.is_file():
+        return []
+    normalized = standard_path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    expected = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    actual = str(catalog.get("source_sha256") or "").strip().lower()
+    if actual == expected:
+        return []
+    catalog_text = catalog_path.read_text(encoding="utf-8")
+    line = next(
+        (index for index, value in enumerate(catalog_text.splitlines(), start=1) if value.startswith("source_sha256:")),
+        1,
+    )
+    rule_id = "STANDARD-SOURCE-DIGEST"
+    return [
+        Finding(
+            rule_id=rule_id,
+            title="Machine catalog must match the sole human-readable standard",
+            severity="P1",
+            category="development_standard",
+            effect="block",
+            file=catalog_rel,
+            line=line,
+            message=f"source_sha256 is stale: actual={actual or 'missing'} expected={expected}",
+            remediation=(
+                f"After completing Markdown edits, set source_sha256 to {expected}; "
+                "do not copy or replace the human-readable authority."
+            ),
+            baseline_policy="block_new_and_changed_standard",
+            fingerprint=hashlib.sha256(f"{rule_id}:{catalog_rel}:{expected}".encode("utf-8")).hexdigest()[:16],
+        )
+    ]
+
+
 def _changed_line_numbers(root: Path, paths: Iterable[Path], *, staged: bool) -> dict[str, set[int]]:
     args = ["git", "diff", "--unified=0"]
     if staged:
@@ -753,6 +803,14 @@ def main() -> int:
             findings,
             _changed_line_numbers(root, files, staged=args.staged_only),
         )
+    findings.extend(
+        scan_standard_digest_consistency(
+            files,
+            root=root,
+            catalog=catalog,
+            catalog_path=root / args.catalog,
+        )
+    )
     baseline_path = root / args.baseline_json if args.baseline_json else None
     baseline_fingerprints = load_baseline_fingerprints(baseline_path)
     findings = apply_baseline_status(findings, baseline_fingerprints)
