@@ -147,6 +147,17 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: The QE model package and frozen-dataset artifact builders form the offline computation data plane whose inputs must come from versioned frozen files and never from PostgreSQL market tables.
+  - rule_id: qe_alpha_candidate_research
+    priority: 123
+    include:
+      - scripts/qe_alpha_candidates/**
+      - backend/tests/quantevolver/test_sector_participation_gap_v2.py
+      - backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py
+    primary_module: qe.core
+    impact_modules: [qe.auto_evolution, factor_library]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: File-only QE Alpha and relation-prior candidates plus their exact direct tests form an offline research boundary; they do not enter runtime, catalog, or formal experiments merely by being source-reviewable.
   - rule_id: qe_long_trend_evaluation_phase2
     priority: 125
     include:
@@ -597,6 +608,16 @@ rules:
     layer: script
     risk_level: critical
     ownership_reason: Governed retained-package terminalization changes historical unified simulation run status while preserving broker and economic evidence.
+  - rule_id: localsim_failed_history_physical_prune_cli
+    priority: 98
+    include:
+      - scripts/localsim_failed_history_prune_core.py
+      - scripts/prune_localsim_failed_history.py
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2]
+    layer: script
+    risk_level: critical
+    ownership_reason: Governed LocalSIM-only physical pruning deletes failed historical run/economic subgraphs while protecting successful anchors, MiniQMT, StrategyPackage, and Selection evidence.
   - rule_id: miniqmt_execution_runtime_services
     priority: 95
     include:
@@ -960,10 +981,12 @@ rules:
     priority: 96
     include:
       - scripts/build_stock_universe_pit_spans.py
+      - scripts/prepare_canonical_pit_monthly.py
       - backend/services/stock_universe_pit_service.py
       - backend/routers/stock_universe.py
       - backend/tests/test_stock_universe_pit_spans.py
       - backend/tests/test_stock_universe_pit_service.py
+      - backend/tests/scripts/test_prepare_canonical_pit_monthly.py
       - backend/tests/announcements/test_title_classifier.py
       - backend/tests/test_announcement_event_schema.py
       - backend/tests/event_signal/test_st_announcement_adapter.py
@@ -980,10 +1003,12 @@ rules:
     include:
       - backend/services/sector_data_builder.py
       - backend/services/sector_data_repair.py
+      - scripts/build_sector_data_candidate.py
       - scripts/create_sw_sector_tables.py
       - backend/db/migrations/sector_data_pit_identity_*.sql
       - backend/tests/services/test_sector_data_builder.py
       - backend/tests/services/test_sector_data_repair.py
+      - backend/tests/scripts/test_build_sector_data_candidate.py
     primary_module: local_data
     impact_modules: []
     layer: data_pipeline

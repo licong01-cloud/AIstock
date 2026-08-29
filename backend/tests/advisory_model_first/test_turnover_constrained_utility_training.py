@@ -6,6 +6,7 @@ import pytest
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.feature_schema_v2 import MODEL_FEATURE_COLUMNS
+from backend.services.advisory_model_first.policy_utility_training import PolicyUtilityTransformFit
 from backend.services.advisory_model_first.turnover_constrained_utility_contracts import (
     approved_turnover_constrained_utility_families,
 )
@@ -18,9 +19,22 @@ from backend.services.advisory_model_first.turnover_constrained_utility_training
     fit_shadow_price_scale,
     rank_turnover_utility_predictions,
     select_minimum_feasible_shadow_price,
+    score_final_turnover_constrained_utility,
+    FinalTurnoverConstrainedUtilityTrainingResult,
     train_turnover_constrained_utility_trial,
     turnover_utility_feature_names,
 )
+
+
+class _ConstantBooster:
+    def __init__(self, feature_names: tuple[str, ...]) -> None:
+        self._feature_names = feature_names
+
+    def feature_name(self) -> list[str]:
+        return list(self._feature_names)
+
+    def predict(self, matrix: pd.DataFrame) -> np.ndarray:
+        return np.arange(len(matrix), dtype=float)
 
 
 def _labels() -> pd.DataFrame:
@@ -122,6 +136,42 @@ def test_turnover_utility_features_never_include_future_holding_label() -> None:
         names = turnover_utility_feature_names(family)
         assert "holding_trading_days" not in names
         assert "net_excess_return_bps" not in names
+
+
+def test_final_turnover_utility_scorer_preserves_exact_top20_identity() -> None:
+    dates = pd.bdate_range("2026-01-05", periods=2)
+    rows = []
+    for decision in dates:
+        for rank in range(1, 21):
+            rows.append(
+                {
+                    "decision_as_of_trade_date": decision,
+                    "target_trade_date": decision + pd.offsets.BDay(1),
+                    "instrument": f"S{rank:02d}",
+                    "selection_effective_rank": rank,
+                    "parent_combined_score": float(rank),
+                }
+            )
+    names = ("parent_combined_score",)
+    model = FinalTurnoverConstrainedUtilityTrainingResult(
+        booster=_ConstantBooster(names),
+        feature_names=names,
+        categorical_vocabulary={},
+        boost_rounds=11,
+        transform=PolicyUtilityTransformFit(location_bps=10.0, scale_bps=2.0),
+        shadow_price_bps_per_fraction=3.0,
+    )
+    result = score_final_turnover_constrained_utility(
+        features=pd.DataFrame(rows),
+        model=model,
+        score_dates=dates,
+    )
+    assert len(result) == 40
+    assert result.groupby("decision_as_of_trade_date").size().eq(20).all()
+    assert result.groupby("decision_as_of_trade_date")["entry_priority_rank"].apply(
+        lambda values: tuple(sorted(values)) == tuple(range(1, 21))
+    ).all()
+    assert set(result["turnover_shadow_price_bps_per_fraction"]) == {3.0}
 
 
 def test_turnover_utility_lightgbm_trial_scores_all_top20() -> None:

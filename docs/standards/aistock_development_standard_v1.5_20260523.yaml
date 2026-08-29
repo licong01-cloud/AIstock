@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 8d86142b3bb0b393271d7e32cc674634fe46b2b50a51eed8720a8d72ad8efcf0
+source_sha256: 3d1d6d6337a34184a0142f147748f93baa2ff4e4b81b19552f50592022a613ea
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-13"
+updated_at: "2026-08-29"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -306,6 +306,11 @@ rules:
       patterns:
         - 'requests\.(?:get|post|put|delete|patch)\([^\n)]*$'
         - 'subprocess\.Popen\('
+      required_evidence:
+        - pr_check_watch_exact_head_rest_fallback
+        - actions_run_jobs_and_log_rest_fallback
+        - last_green_rest_fallback
+        - non_transport_errors_remain_fail_closed
     baseline_policy: warn_new_only
     remediation: Add timeout, cancellation, output capture, and process cleanup.
 
@@ -553,6 +558,11 @@ rules:
         - shared_validation_matrix
         - close_sync_compatibility_signature
         - per_issue_evidence_and_issue_sync
+        - same_run_github_actions_read_prohibited
+        - nightly_failure_groups_are_module_scoped
+        - heterogeneous_failure_groups_require_triage
+        - host_wide_counter_and_permanent_reservation_remain_authoritative
+        - ordinary_fix_pr_omits_repository_allocator_single_value
     baseline_policy: manual_review_only
     remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates.
 
@@ -667,11 +677,14 @@ rules:
         - active_process_and_path_boundary_preflight
         - exact_transient_roots_only_no_git_clean_or_wildcard
         - ignored_asset_tree_transients_require_exact_bounded_structural_classifier
+        - single_manifest_reused_without_repeated_full_ignored_tree_scan
+        - same_finalizer_fetch_and_verified_pr_receipts_reused_without_skipping_target_preflight
+        - root_sync_deferral_reuses_blocking_payload_without_redundant_dry_run
         - manifest_unchanged_before_purge
         - path_registration_local_remote_four_state_readback
         - bare_merge_does_not_imply_cleanup
     baseline_policy: block_incomplete_cleanup_claim_only
-    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, fail closed on protected or unknown artifacts, then verify path, registration, local branch, and remote branch absence.
+    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; reuse only same-finalizer successful fetch and exact verified PR receipts, preserve per-target branch, artifact, process and four-state checks, avoid redundant dry-run rebuilds during root-sync deferral, keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, and fail closed on protected or unknown artifacts.
 
   - rule_id: BUG-RESTART-EFFECTIVE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001
@@ -705,6 +718,83 @@ rules:
     baseline_policy: block_issue_verified_until_post_restart_passed
     remediation: Keep the BUG fixed_source_pending_user_restart until the user restarts the catalog target and post-restart read-only identity and smoke evidence passes.
 
+  - rule_id: CI-ENVIRONMENT-PARITY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-environment-parity-001
+    title: CI and Nightly use prebuilt Windows tooling and bounded fail-closed execution
+    severity: P0
+    category: ci_efficiency
+    enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_ci_when_prebuilt_environment_is_missing_or_drifted
+    checker:
+      type: external
+      command_key: ci_workflow_policy_scan
+      required_evidence:
+        - windows_self_hosted_runner
+        - prebuilt_aistock_ci_environment
+        - environment_fingerprint_match
+        - bounded_dual_runner_roles
+        - policy_evidence_remains_one_scanner_step
+        - no_setup_actions
+        - no_dependency_install_commands
+        - nox_ci_install_fail_closed_guard
+        - policy_scanner_environment_and_nox_contract_checks
+        - pr_quality_no_external_report_action_dependency
+        - superseded_pr_runs_cancel_in_progress
+        - bounded_pr_base_fetch_retry
+        - pr_base_object_requires_proven_merge_base_with_head
+        - insufficient_shallow_ancestry_fetches_only_pinned_base_and_pr_checkout_or_head_with_limited_deepen
+        - no_unbounded_full_history_checkout_for_merge_base_recovery
+        - non_security_quality_lanes_run_once_on_pull_request
+        - stable_merge_quality_contexts_are_always_published
+        - codeql_default_branch_security_scan_preserved
+        - codeql_uses_hash_verified_prebuilt_bundle
+        - codeql_remote_action_download_is_eliminated
+        - codeql_reuses_single_security_runner_allocation
+        - codeql_exact_local_workspace_fetch_is_bounded
+        - codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push
+        - code_intelligence_refresh_is_scheduled_or_manual_only
+        - code_intelligence_refresh_has_no_external_artifact_action_dependency
+        - javascript_actions_use_approved_native_node24_majors
+        - pr_ci_no_separate_failure_publisher_job
+        - pr_ci_no_external_artifact_action_dependency
+        - pr_ci_static_gate_reuses_classifier_checkout
+        - pr_ci_workflow_validation_reuses_ci_verdict_runner
+        - pr_workflows_no_external_report_action_dependency
+        - no_linux_or_production_environment_fallback
+        - windows_git_bash_shell
+        - nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies
+        - self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe
+        - nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed
+        - nightly_retries_failed_or_missing_sessions_plus_new_impact
+        - nightly_change_scoped_l0_uses_explicit_receipt_paths
+    baseline_policy: block_new_and_changed_workflow
+    remediation: Require PR-based main updates and stable merge-quality contexts for CI, CodeQL, Semgrep, and PR quality; provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one preparation checkout for changed-file classification and static or close-sync gates, reuse one final runner allocation for focused workflow validation, workflow policy, and CI verdict, reuse one security-runner allocation for CodeQL classification, sequential changed-language analysis, SARIF upload, and the stable CodeQL verdict, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
+
+  - rule_id: CI-DATABASE-SAFETY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
+    title: CI never creates a database or service and routes database validation to the existing DEV database
+    severity: P0
+    category: ci_database_safety
+    enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_ci_database_service_or_unrouted_database_plan
+    checker:
+      type: external
+      command_key: ci_workflow_policy_scan
+      required_evidence:
+        - no_workflow_services
+        - no_postgres_or_timescaledb_container_creation
+        - classifier_dev_db_required_output
+        - existing_dev_database_lane_reference
+        - no_ci_ddl_or_dml
+        - no_sqlite_substitution_for_real_database_contract
+        - nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database
+    baseline_policy: block_new_and_changed_workflow
+    remediation: Mark database plans as dev_db_required and run them through the existing DEV database lane; keep CI source checks database-free.
+
 manual_review_controls:
   - control_id: DESIGN-COMPLIANCE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-compliance-001
@@ -728,6 +818,12 @@ manual_review_controls:
     title: New BUG or Issue records must be synchronized to GitHub and include github_issue_number and github_issue_url before merge.
     effect: block
     enforcement_phase: issue_lifecycle
+    required_evidence:
+      - bounded_graphql_read_with_transport_only_rest_fallback
+      - rest_readback_matches_repository_pr_head_merge_commit_and_merge_time
+      - non_transport_and_identity_failures_remain_fail_closed
+      - skip_github_check_is_verified_rest_only_not_unverified_bypass
+      - pr_read_fallback_does_not_suppress_issue_state_comment_or_label_sync
     failure_policy: block_bug_record_merge_and_close_sync
   - control_id: DESIGN-MAIN-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-main-001

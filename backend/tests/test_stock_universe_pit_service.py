@@ -788,6 +788,148 @@ def test_canonical_ensure_uses_exact_v2_scope_and_source_policy(monkeypatch) -> 
     assert captured["source_fingerprint"] == source
 
 
+def test_canonical_monthly_plan_is_readonly_and_reports_exact_rebuild_reason(monkeypatch) -> None:
+    service = StockUniversePitService()
+    state = {
+        "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+        "rule_version": CANONICAL_PIT_RULE_VERSION,
+        "scope": CANONICAL_PIT_SCOPE,
+        "start_date": dt.date(2018, 8, 1),
+        "end_date": dt.date(2026, 7, 31),
+        "status": "ready",
+        "dirty": False,
+        "source_fingerprint_sha256": "old",
+        "last_build_summary": {"validation": {}},
+    }
+    monkeypatch.setattr(
+        service,
+        "ensure_tables",
+        lambda: (_ for _ in ()).throw(AssertionError("plan must not ensure tables")),
+    )
+    monkeypatch.setattr(service, "get_status_readonly", lambda **_kwargs: state)
+    monkeypatch.setattr(
+        service,
+        "compute_source_fingerprint",
+        lambda **kwargs: {
+            "fingerprint_end_date": kwargs["end_date"].isoformat(),
+            "confirmed_delisting_events": {"row_count": 1},
+        },
+    )
+
+    result = service.plan_canonical_pit_universe(
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 8, 31),
+    )
+
+    assert result["zero_write"] is True
+    assert result["needs_rebuild"] is True
+    assert result["reason"] == "end_coverage_insufficient"
+    assert result["decision"] == "REBUILD_REQUIRED"
+    assert result["requested_end_date"] == dt.date(2026, 8, 31)
+    assert result["effective_end_date"] == dt.date(2026, 8, 31)
+
+
+def test_canonical_monthly_plan_rejects_inverted_window_before_database_access() -> None:
+    with pytest.raises(StockUniversePitError, match="end_date must be on or after"):
+        StockUniversePitService().plan_canonical_pit_universe(
+            start_date=dt.date(2026, 8, 31),
+            end_date=dt.date(2026, 8, 1),
+        )
+
+
+def test_get_status_readonly_does_not_create_state_table(monkeypatch) -> None:
+    executed: list[str] = []
+
+    class Cursor:
+        def __init__(self):
+            self.calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params=None):
+            executed.append(sql)
+            self.calls += 1
+
+        def fetchone(self):
+            if self.calls == 1:
+                return {
+                    "state_table": "market.stock_universe_pit_state",
+                    "spans_table": "market.stock_universe_pit_spans",
+                    "events_table": "market.stock_universe_pit_events",
+                }
+            return {
+                "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+                "status": "ready",
+                "dirty": False,
+            }
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return Cursor()
+
+    service = StockUniversePitService()
+    monkeypatch.setattr(
+        service,
+        "ensure_tables",
+        lambda: (_ for _ in ()).throw(AssertionError("readonly status must not ensure tables")),
+    )
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", lambda: Connection())
+
+    result = service.get_status_readonly(universe_key=CANONICAL_PIT_UNIVERSE_KEY)
+
+    assert result["status"] == "ready"
+    assert all("CREATE " not in sql.upper() and "INSERT " not in sql.upper() for sql in executed)
+
+
+def test_get_status_readonly_reports_missing_schema_without_creating_it(monkeypatch) -> None:
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _sql, _params=None):
+            return None
+
+        def fetchone(self):
+            return {
+                "state_table": "market.stock_universe_pit_state",
+                "spans_table": None,
+                "events_table": "market.stock_universe_pit_events",
+            }
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return Cursor()
+
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", lambda: Connection())
+
+    result = StockUniversePitService().get_status_readonly(
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY
+    )
+
+    assert result["status"] == "missing"
+    assert result["reason"] == "schema_contract_missing"
+    assert result["missing_tables"] == ["spans_table"]
+
+
 def test_canonical_rebuild_passes_exact_builder_contract(monkeypatch) -> None:
     service = StockUniversePitService()
     captured: dict[str, object] = {}

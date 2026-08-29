@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -26,6 +27,20 @@ def test_l0_scan_paths_use_explicit_scope_without_git(monkeypatch: pytest.Monkey
     assert noxfile._l0_scan_paths(["scripts\\issue_flow.py", "scripts/issue_flow.py"]) == [
         "scripts/issue_flow.py"
     ]
+
+
+def test_l0_scan_paths_use_nightly_scope_file_without_git(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    scope_file = tmp_path / "l0-scope.json"
+    scope_file.write_text(
+        json.dumps(["scripts\\issue_flow.py", "backend/tests/test_example.py"]),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_ARGS_FILE_ENV, str(scope_file))
+    monkeypatch.setattr(noxfile.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("git should not run"))
+
+    assert noxfile._l0_scan_paths([]) == ["scripts/issue_flow.py", "backend/tests/test_example.py"]
 
 
 def test_l0_scan_paths_default_to_branch_and_worktree_changes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,7 +177,7 @@ def test_managed_backend_refuses_production_port() -> None:
             pass
 
 
-def test_frontend_node_modules_install_runs_only_when_playwright_missing(
+def test_frontend_node_modules_install_runs_only_when_direct_entrypoints_are_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     frontend = tmp_path / "frontend"
@@ -171,6 +186,8 @@ def test_frontend_node_modules_install_runs_only_when_playwright_missing(
     caller_cwd.mkdir()
     monkeypatch.chdir(caller_cwd)
     monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("AISTOCK_CI_INSTALL_FORBIDDEN", raising=False)
     calls: list[tuple[tuple[str, ...], Path, dict[str, object]]] = []
 
     class DummySession:
@@ -185,12 +202,49 @@ def test_frontend_node_modules_install_runs_only_when_playwright_missing(
     assert Path.cwd() == caller_cwd
 
     calls.clear()
-    bin_dir = frontend / "node_modules" / ".bin"
-    bin_dir.mkdir(parents=True)
-    (bin_dir / ("playwright.cmd" if os.name == "nt" else "playwright")).write_text("", encoding="utf-8")
+    for relative in noxfile.FRONTEND_DIRECT_ENTRYPOINTS:
+        direct_cli = frontend / "node_modules" / relative
+        direct_cli.parent.mkdir(parents=True, exist_ok=True)
+        direct_cli.write_text("// pinned CLI\n", encoding="utf-8")
 
     noxfile._ensure_frontend_node_modules(DummySession())
     assert calls == []
+
+
+def test_frontend_sessions_invoke_direct_entrypoints_without_npm_bin_shims(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    for relative in noxfile.FRONTEND_DIRECT_ENTRYPOINTS:
+        entrypoint = frontend / "node_modules" / relative
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text("// pinned CLI\n", encoding="utf-8")
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    class DummySession:
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+    noxfile.frontend_type_lint(DummySession())  # type: ignore[arg-type]
+    noxfile._run_mocked_frontend_target(DummySession(), "tests/watchlist")  # type: ignore[arg-type]
+
+    assert calls[0] == (
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "--incremental",
+        "false",
+    )
+    assert calls[1] == ("node", "node_modules/next/dist/bin/next", "lint")
+    assert calls[2][:4] == (
+        "node",
+        "node_modules/@playwright/test/cli.js",
+        "test",
+        "tests/watchlist",
+    )
+    assert all(command[0] != "npm" for command in calls)
 
 
 def test_terminate_process_tree_uses_taskkill_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:

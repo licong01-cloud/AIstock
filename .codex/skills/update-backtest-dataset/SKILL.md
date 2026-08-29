@@ -32,6 +32,10 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 r
 ```
 
 `qe_hmm_full_v2` 是 future canonical candidate profile；`qe_hmm_full_v1` 只保留既有 release 的复现与只读重验。
+提交 v2 monthly/initial-migration 前，必须先按目标 cutoff 构建并 readback 对应的 P3A sector candidate；正式 full 路径固定为
+`<candidate_root>/.sector_data_authority/qe_hmm_full_v2/<cutoff>/full`，sample 路径使用排序股票集 digest。缺失、scope/denominator/hash
+不一致时 source freeze fail closed；不得回退 `market.sector_data`、默认行业或手工复制临时文件。具体顺序见
+`references/monthly-workflow.md`。
 源码交付不等于 runtime activation，未完成 v2 全量验证和独立激活授权前不得把 production 默认值切到 v2。
 `initial-migration` 不是普通月更参数化捷径：plan id、canonical plan digest、固定 `2026-07-31` cutoff、
 sample instruments/event windows 和 candidate-only safety 必须同时由 control service、Worker resolution reader 与

@@ -1,0 +1,261 @@
+{
+  "actual": "scripts/build_industry_pit_candidates.py requires the diagnostic legacy conflict inventory to remain exactly 23 symbols and 23,326 opportunities. The current repaired market.sw_index_member inventory is zero in both the approved historical window and the 2018-08-01..2026-07-31 target window, while the query is explicitly diagnostic-only and not an authority source. This stale equality blocks valid P1/P2A candidate preparation despite fixed local source hashes, explicit 8-row index evidence, frozen PIT readiness, denominator closure, and mandatory dual-authority regressions. Retain the observed diagnostic inventory in receipts without treating historical nonzero counts as permanent authority truth; keep all actual authority and fail-closed gates unchanged.",
+  "allowed_write_scope": [
+    "backend/tests/scripts/test_build_industry_pit_candidates.py",
+    "scripts/build_industry_pit_candidates.py",
+    "tests/aistock_validation/bugs/20260828_BUG-1224-c-013-industry-pit-builder-hard-blocks-repaired-legacy-conflict-inventor.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1224",
+  "closed_at": "2026-08-28T12:40:06Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-28T11:05:10.818828Z",
+  "description": "scripts/build_industry_pit_candidates.py requires the diagnostic legacy conflict inventory to remain exactly 23 symbols and 23,326 opportunities. The current repaired market.sw_index_member inventory is zero in both the approved historical window and the 2018-08-01..2026-07-31 target window, while the query is explicitly diagnostic-only and not an authority source. This stale equality blocks valid P1/P2A candidate preparation despite fixed local source hashes, explicit 8-row index evidence, frozen PIT readiness, denominator closure, and mandatory dual-authority regressions. Retain the observed diagnostic inventory in receipts without treating historical nonzero counts as permanent authority truth; keep all actual authority and fail-closed gates unchanged.",
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: the approved 23-symbol historical regression baseline and all dual-authority, denominator, source-hash, PIT-state, and mandatory-symbol contracts remain unchanged; only the explicitly non-authoritative current diagnostic observation is separated",
+    "no_silent_error": "passed: current observations remain canonical receipt evidence, duplicate or invalid observations fail closed, and no empty observation is presented as industry authority",
+    "no_simplified_delivery": "passed: the full 23-symbol regression inventory and the complete 8,040,020-opportunity target-window dry-run were exercised rather than a four-symbol or sample-only substitute",
+    "no_unrequested_gate_or_approval": "passed: the stale diagnostic equality gate is removed and no new approval, runtime, database, dependency, or resource gate is added",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260828-4ee15989b77b",
+      "timestamp": "2026-08-28T11:05:10.818807Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex_app",
+      "note": "Two review rounds passed with no blocking findings. The full 2018-08-01..2026-07-31 read-only dry-run closed all 8,040,020 opportunities, preserved all 23 approved historical regression symbols, recorded the repaired current zero-conflict observation, and performed zero database or candidate writes. Related tests: 38 passed; data_sync_autonomy_backend: 254 passed, 1 skipped; Ruff, py_compile, diff check, validation registry L0, and L0 passed.",
+      "timestamp": "2026-08-28T11:41:31.5690288Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The approved 23-symbol historical regression inventory remains frozen and fully exercised, while the current diagnostic legacy-conflict observation is recorded separately and may become zero after upstream repair without blocking valid dual-authority candidate preparation.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "scripts/build_industry_pit_candidates.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1224-c-013-industry-pit-builder-hard-blocks-repaired-legacy-conflict-inventor.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "scripts/build_industry_pit_candidates.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1224-c-013-industry-pit-builder-hard-blocks-repaired-legacy-conflict-inventor.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "scripts/build_industry_pit_candidates.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1224-c-013-industry-pit-builder-hard-blocks-repaired-legacy-conflict-inventor.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "scripts/build_industry_pit_candidates.py",
+      "tests/aistock_validation/bugs/20260828_BUG-1224-c-013-industry-pit-builder-hard-blocks-repaired-legacy-conflict-inventor.json"
+    ]
+  },
+  "first_seen_at": "2026-08-28T11:05:10.818828Z",
+  "fix_branch": null,
+  "fix_commit": "f5512a24774b8180e0dd3f6d5f49d2853b7e1133",
+  "fixed_at": "2026-08-28T12:40:06Z",
+  "github_issue_number": 3890,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3890",
+  "last_seen_at": "2026-08-28T11:05:10.818828Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3902",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/build_industry_pit_candidates.py --source-root C:\\Users\\lc999\\Downloads\\SwClass --catalog C:\\Users\\lc999\\Downloads\\SwClass\\SwClassCode_2021.xls --classification-history C:\\Users\\lc999\\Downloads\\SwClass\\StockClassifyUse_stock.xls --latest-snapshot C:\\Users\\lc999\\Downloads\\SwClass\\最新个股申万行业分类(完整版-截至7月末).xlsx --taxonomy-standard C:\\Users\\lc999\\Downloads\\SwClass\\SwClassStd2021.pdf --index-membership-evidence X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\.industry_pit_authority\\source_evidence\\sw-index-membership-2021-switch-v1\\index_membership_evidence.json --artifact-root X:\\AIstock_dataset_candidates\\backtest_dataset_candidates\\.industry_pit_authority --db-env-file F:\\Dev\\AIstock\\.env --window-start 2018-08-01 --window-end 2026-07-31 --dry-run",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1224",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8b59a30007048d64",
+    "recorded_at": "2026-08-28T12:42:13.815485Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "382b3e96cc332adccbb14f19fcb70ef192c3f05e",
+    "source_merge_commit": "f5512a24774b8180e0dd3f6d5f49d2853b7e1133",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3902",
+    "validation_evidence": [
+      "validation-receipt: id=466ea350982a7a61 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/industry_pit backend/tests/scripts/test_build_industry_pit_candidates.py -q -p no:cacheprovider` result=`38 passed`",
+      "validation-receipt: id=583b737179aac8d3 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=ruff plan=direct status=passed command=`python -m ruff check changed Python files` result=`passed`",
+      "validation-receipt: id=04cfed8fcfdfa147 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=compile plan=direct status=passed command=`python -m py_compile changed Python files` result=`passed`",
+      "validation-receipt: id=ba8293e19d466823 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=f87d6f68dd2cb95b commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=nox plan=data_sync_autonomy_backend status=passed command=`python -m nox -s data_sync_autonomy_backend` result=`254 passed, 1 skipped`",
+      "validation-receipt: id=82d20535566ea794 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "289fd8eee3897de1db6f75b471f7657b2be2cb6e52c6106ed083d96a1ef289c6"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "C-013 industry PIT builder hard-blocks repaired legacy conflict inventory",
+  "trigger_condition": {
+    "fingerprint": "4ee15989b77bbc94a9bb63be",
+    "source_event_id": "FE-20260828-4ee15989b77b"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=466ea350982a7a61 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/industry_pit backend/tests/scripts/test_build_industry_pit_candidates.py -q -p no:cacheprovider` result=`38 passed`",
+    "validation-receipt: id=583b737179aac8d3 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=ruff plan=direct status=passed command=`python -m ruff check changed Python files` result=`passed`",
+    "validation-receipt: id=04cfed8fcfdfa147 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=compile plan=direct status=passed command=`python -m py_compile changed Python files` result=`passed`",
+    "validation-receipt: id=ba8293e19d466823 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=f87d6f68dd2cb95b commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=nox plan=data_sync_autonomy_backend status=passed command=`python -m nox -s data_sync_autonomy_backend` result=`254 passed, 1 skipped`",
+    "validation-receipt: id=82d20535566ea794 commit=382b3e96cc332adccbb14f19fcb70ef192c3f05e kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "ready_for_fix"
+}
