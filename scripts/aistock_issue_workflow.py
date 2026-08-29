@@ -1959,6 +1959,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/dataset_release_control_store.py",
         "scripts/update_backtest_dataset_monthly.py",
         "scripts/llm_provider_adapter.py",
+        "scripts/nightly_adaptive_scheduler.py",
         "scripts/nightly_session_runner.py",
         "scripts/ci_change_classifier.py",
         "scripts/hmm_risk/prepare_state_model_set.py",
@@ -2367,20 +2368,28 @@ def build_runtime_contract(
                     "expected_terminal_outcome expected_run_id does not match the business_smoke_ref "
                     f"subject run: declared={declared_run_id or 'missing'} probe={probe_run_id or 'none'}"
                 )
-    persistence_basis = str(explicit.get("persistence_basis") or ("git_tracked_source" if backend_restart_required else "not_required"))
+    persistence_basis = (
+        str(explicit.get("persistence_basis") or "git_tracked_source")
+        if backend_restart_required
+        else "not_required"
+    )
     valid_persistence_basis = {"git_tracked_source", "controlled_migration", "controlled_config", "not_required"}
     if persistence_basis not in valid_persistence_basis:
         blocking.append(f"runtime_contract persistence_basis is invalid: {persistence_basis}")
     observed_fresh_process_evidence = flow._unique_strings(
         flow._as_list(explicit.get("fresh_process_evidence")) + list(fresh_process_evidence or [])
     )
+    if not backend_restart_required:
+        observed_fresh_process_evidence = []
     if backend_restart_required and persistence_basis in {"", "unknown", "not_required"}:
         blocking.append("persistent fix basis is missing")
     if backend_restart_required and not observed_fresh_process_evidence:
         blocking.append("fresh-process load evidence is missing")
-    post_restart_gate = str(explicit.get("post_restart_effective_gate") or (
-        "pending_user_restart" if backend_restart_required else "not_required"
-    ))
+    post_restart_gate = (
+        str(explicit.get("post_restart_effective_gate") or "pending_user_restart")
+        if backend_restart_required
+        else "not_required"
+    )
     return {
         "schema_version": RUNTIME_CONTRACT_SCHEMA,
         "runtime_impact": runtime_impact,
@@ -2402,13 +2411,15 @@ def build_runtime_contract(
         "catalog_ref": catalog_ref,
         "operator_runbook_ref": (target or {}).get("operator_runbook_ref"),
         "expected_identity_ref": (target or {}).get("expected_identity_ref"),
-        "expected_terminal_outcome": expectation,
+        "expected_terminal_outcome": expectation if backend_restart_required else None,
         "persistence_basis": persistence_basis,
         "fresh_process_evidence": observed_fresh_process_evidence,
         "post_restart_effective_gate": post_restart_gate,
-        "runtime_identity_match": str(explicit.get("runtime_identity_match") or (
-            "pending" if backend_restart_required else "not_required"
-        )),
+        "runtime_identity_match": (
+            str(explicit.get("runtime_identity_match") or "pending")
+            if backend_restart_required
+            else "not_required"
+        ),
         "activation_states": {
             "backend_restart": "pending_user_action" if backend_restart_required else "not_required",
             "frontend_activation": "required" if runtime_impact == "frontend" else "not_required",

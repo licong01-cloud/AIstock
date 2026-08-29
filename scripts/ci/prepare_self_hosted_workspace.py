@@ -15,6 +15,11 @@ from typing import Any
 
 
 SCHEMA_VERSION = "aistock_self_hosted_workspace_v1"
+REQUIRED_FRONTEND_ENTRYPOINTS = (
+    Path("@playwright/test/cli.js"),
+    Path("typescript/bin/tsc"),
+    Path("next/dist/bin/next"),
+)
 
 
 def _utc_now() -> str:
@@ -187,7 +192,6 @@ def _materialize_frontend_node_modules(source: Path, dest_root: Path) -> dict[st
     destination = dest_root / "frontend" / "node_modules"
     source_lock = source_root.parent / "package-lock.json"
     destination_lock = destination.parent / "package-lock.json"
-    playwright_marker = source_root / "@playwright" / "test" / "cli.js"
     if not source_root.is_dir():
         _fail(f"prebuilt frontend node_modules is missing: {source_root}", code="frontend_dependencies_missing")
     if not source_lock.is_file() or not destination_lock.is_file():
@@ -199,8 +203,13 @@ def _materialize_frontend_node_modules(source: Path, dest_root: Path) -> dict[st
             "prebuilt frontend node_modules does not match the checked-out package-lock.json",
             code="frontend_lock_mismatch",
         )
-    if not playwright_marker.is_file():
-        _fail(f"prebuilt frontend Playwright marker is missing: {playwright_marker}", code="frontend_playwright_missing")
+    missing_entrypoints = [path for path in REQUIRED_FRONTEND_ENTRYPOINTS if not (source_root / path).is_file()]
+    if missing_entrypoints:
+        _fail(
+            "prebuilt frontend direct entrypoints are missing: "
+            + ", ".join(path.as_posix() for path in missing_entrypoints),
+            code="frontend_entrypoints_missing",
+        )
     if destination.exists() or destination.is_symlink():
         _fail(f"frontend dependency destination already exists: {destination}", code="frontend_destination_exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -215,14 +224,19 @@ def _materialize_frontend_node_modules(source: Path, dest_root: Path) -> dict[st
     else:
         destination.symlink_to(source_root, target_is_directory=True)
         link_type = "symlink"
-    if not (destination / playwright_marker.relative_to(source_root)).is_file():
-        _fail("frontend node_modules link readback failed", code="frontend_link_readback_failed")
+    missing_readback = [path for path in REQUIRED_FRONTEND_ENTRYPOINTS if not (destination / path).is_file()]
+    if missing_readback:
+        _fail(
+            "frontend node_modules link readback failed for: "
+            + ", ".join(path.as_posix() for path in missing_readback),
+            code="frontend_link_readback_failed",
+        )
     return {
         "source": str(source_root),
         "destination": str(destination),
         "link_type": link_type,
         "package_lock_sha256": source_lock_sha256,
-        "playwright_marker": str(playwright_marker),
+        "direct_entrypoints": [str(source_root / path) for path in REQUIRED_FRONTEND_ENTRYPOINTS],
     }
 
 
