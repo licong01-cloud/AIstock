@@ -40,7 +40,8 @@ P0时间窗固定为：
 - 2026-08-29：冻结R0源码；只执行一次BUG-1238修复后的五股sample，不为失败反复创建新submission。
 - 2026-08-30：sample PASS后构建并签收2026-07-31 v2 full基线；优先复用已验证2026-07-31 v1组件。
 - 2026-08-31收盘后：等候当日权威源可用；先确认canonical PIT v2 state/spans覆盖至2026-08-31。若不足，
-  只通过已合入的受控operator完成DEV validate/rollback与另行授权的production DML apply/readback，再构建
+  只通过已合入的受控operator完成DEV apply/readback（可再以同cutoff幂等NO_OP复核），再凭另行授权完成production
+  DML apply/readback，然后构建
   同cutoff的P1/P2A industry authority和P3A full。
 - 2026-09-01 00:05（Asia/Shanghai）以后：只提交一次`monthly --candidate-only`；目标是在开盘前形成
   `CANDIDATE_VALIDATED` terminal receipt。provider尚未发布属于同一durable intent的retryable waiting，
@@ -811,7 +812,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | F-029 | §5.2；短租约、BUG抢占、dirty handoff和实验identity边界 | artifact: `tests/aistock_validation/pit_v2/window_scope_receipt.json`；W3-C从`66bab73f`独立开始；PR #2770重叠文件保持只读并以独立canonical adapter完成在线generation enablement | w3b_verified_w3c_scope_registered | none |
 | F-030 | §6 P3-A W3-D；最终main统一身份和隔离矩阵 | planned `backend/tests/test_qe_hmm_canonical_pit_integration.py`；command: `python -m pytest backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py backend/tests/hmm_data_source/test_isolation_constraints.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q` | design_ready_for_review | none |
 | F-031 | §0.1、§5.1、§6 P4～P7；2026-09-01 R0关键路径与R1/R2解耦 | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json`；artifact: `tests/aistock_validation/pit_v2/candidate_audit_receipt.json`；monthly terminal receipt | approved_by_user_real_execution_pending | approved_by_user: production activation、consumer default switch和模型训练明确不在P0完成定义内 |
-| F-032 | §0.1；canonical PIT monthly coverage operator、state/spans readback与独立DML receipt | `backend/tests/scripts/test_prepare_canonical_pit_monthly.py`；DEV rollback receipt；production apply/readback receipt | approved_by_user_source_gap_pending | approved_by_user: 当前缺少正式operator CLI，必须在2026-08-31执行窗前实现合入；生产DML仍需目标明确的独立授权 |
+| F-032 | §0.1；canonical PIT monthly coverage operator、state/spans readback与独立DML receipt | `backend/tests/scripts/test_prepare_canonical_pit_monthly.py`；DEV apply/readback及同cutoff NO_OP测试；production apply/readback receipt | implemented_tests_passed | approved_by_user: BUG-1243固定key/rule/scope/start，plan/verify零写入；production DML仍需目标明确的独立授权和同cutoff DEV成功receipt，不把可选幂等复核私增为阻断门禁 |
 
 设计通过只表示可以请求用户确认进入实施；不得把`designed`状态表述为源码、真实数据或生产完成。
 
@@ -859,7 +860,7 @@ survivorship limitation，不得把v1重新声明为长期权威。
 |---|---|---|---|---|
 | Review-P0-1 | 交付颗粒度与关键路径 | W0～W9的所有权边界被误当作W7串行门禁，消费者迁移阻断候选能力 | 建立R0/R1/R2三轨；W7只冻结直接构建依赖，无交集消费者不阻断且不使receipt失效 | resolved |
 | Review-P0-2 | 日期与样本执行语义 | 8月31日晚`monthly`仍解析7月31日；多轮五股sample不能证明全量准确性 | 固定9月1日00:05后单次monthly；只保留一次post-fix final sample，全量签收使用结构闭环和分层抽样 | resolved |
-| Review-P0-3 | authority可执行性 | 8月31日industry/P3A builder要求canonical PIT state/spans已覆盖同cutoff，当前缺少正式月度coverage operator | 新增F-032：最小受控operator、DEV validate/rollback、精确production DML授权/readback；禁止临时Python/SQL或monthly隐式写库 | approved_source_gap_pending_implementation |
+| Review-P0-3 | authority可执行性 | 8月31日industry/P3A builder要求canonical PIT state/spans已覆盖同cutoff，当前缺少正式月度coverage operator | 新增F-032：最小受控operator、DEV apply/readback、可选同cutoff幂等复核、精确production DML授权/readback；禁止临时Python/SQL或monthly隐式写库 | implemented_in_BUG-1243_pending_merge |
 | Review-P0-4 | 最终F2与安全复审 | 检查P0完成定义、消费者解耦、历史不可变、production动作和新门禁 | 32/32 Design Acceptance Index与matrix对应；P0不降低数据范围、不覆盖旧候选、不推导activation/restart/cleanup | pass_design_ready_for_pr |
 | Draft-0 | 主设计初稿 | F2解析器未识别标准章节/编号/矩阵字段 | 标准化章节、F-xxx和矩阵列 | resolved |
 | Review-1A | 架构与消费者 | registry历史不闭合、跨系统部分切换、bundle未成契约、W8后PR使证据失效；HMM-risk/持久profile/包双读/inference scope遗漏 | 改为versions+pointer+events；inactive分发后DB CAS；candidate bundle+activation envelope；取消W8后源码PR；补齐消费者scope | resolved |

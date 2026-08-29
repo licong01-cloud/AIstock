@@ -56,11 +56,42 @@ planner必须优先复用已验证2026-07-31 v1组件。不能为了流程验收
 `market.stock_universe_pit_spans`中`aistock_equity_pit_canonical_v2`是否ready/clean并覆盖至2026-08-31。
 industry/P3A builder会拒绝超出该覆盖的请求，不能用参数、复制7月receipt或缩短窗口绕过。
 
-如果coverage不足，必须先使用计划中的`prepare_canonical_pit_monthly.py`受控operator：默认plan-only，复用
+如果coverage不足，必须先使用`scripts/prepare_canonical_pit_monthly.py`受控operator：默认plan-only，复用
 `StockUniversePitService.ensure_canonical_pit_universe()`，固定canonical key/rule/start/cutoff；DEV执行
-apply/readback后强制rollback，再由用户对production目标和2026-08-31 refresh明确授权，最后apply/readback。
-截至本设计修订，该正式CLI尚未实现，属于9月1日前必须完成的唯一P0源码缺口；在它合入并通过测试前，禁止使用
-临时Python one-liner、直接SQL、普通ST endpoint或monthly隐式写库替代。
+apply/readback后，可用同cutoff再次apply取得`NO_OP_VERIFIED`证明幂等；该复核是推荐证据而非新增阻断门禁。
+再由用户对production目标和2026-08-31 refresh明确授权，最后绑定同cutoff DEV成功receipt执行production apply/readback。DEV是项目规定的验证库，
+不再增加强制rollback这一非规范门禁；该调整不放宽production授权、readback或不可变receipt要求。
+该CLI由BUG-1243实现；源码合入和用户完成`backend-main`重启前，仍禁止使用临时Python one-liner、直接SQL、
+普通ST endpoint或monthly隐式写库替代。所有receipt路径必须是profile control root下`operator_receipts`的
+直接子文件，文件名不可复用。
+
+```powershell
+$ReceiptRoot = 'X:\AIstock_dataset_release_control\operator_receipts'
+
+# 1. DEV只读计划
+rtk python scripts/prepare_canonical_pit_monthly.py --database dev --mode plan `
+  --cutoff 2026-08-31 `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-plan.json')
+
+# 2. DEV apply/readback；不足时只重建canonical rolling state/spans
+rtk python scripts/prepare_canonical_pit_monthly.py --database dev --mode apply `
+  --cutoff 2026-08-31 `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-apply.json')
+
+# 3. 可选幂等复核：同cutoff再次apply应得到NO_OP_VERIFIED
+rtk python scripts/prepare_canonical_pit_monthly.py --database dev --mode apply `
+  --cutoff 2026-08-31 `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-noop.json')
+
+# 4. 用户对production目标明确授权后执行；禁止从DEV复制state/spans
+rtk python scripts/prepare_canonical_pit_monthly.py --database production --mode apply `
+  --cutoff 2026-08-31 --authorization-ref '<production-authorization-ref>' `
+  --dev-receipt (Join-Path $ReceiptRoot 'canonical-pit-20260831-dev-apply.json') `
+  --receipt-path (Join-Path $ReceiptRoot 'canonical-pit-20260831-production-apply.json')
+```
+
+任一步出现`schema_contract_missing`、readback仍需重建、target/contract/cutoff不匹配或receipt已存在时均立即停止；
+operator不会建表、切换authority pointer、导出数据集、调用provider或控制进程。
 
 canonical PIT coverage PASS后，生成截至2026-08-31的双authority与P3A full：
 

@@ -123,7 +123,7 @@ Batch A～E描述已经完成或既有的源码产品化结构，不再作为202
 | F-030 | 设计、实现和最终审查逐项执行 DESIGN-COMPLIANCE-001，不允许 simplified/partial/silent fallback。 |
 | F-031 | component manifest 与 daily/minute canonical lineage 必须支持多年按月增长：分片、增量写入、旧版只读迁移和单对象有界读取均 fail closed。 |
 | F-032 | 2026-09-01 P0以一次final sample、2026-07-31 full基线和2026-08-31 monthly terminal receipt闭环；消费者迁移与production activation不得成为前置或冒充完成。 |
-| F-033 | authority构建前只读验证canonical PIT state/spans覆盖目标cutoff；不足时由单一受控operator执行DEV validate/rollback和经授权production apply/readback，禁止monthly隐式写库或临时Python/SQL绕行。 |
+| F-033 | authority构建前只读验证canonical PIT state/spans覆盖目标cutoff；不足时由单一受控operator执行DEV apply/readback（可选同cutoff幂等NO_OP复核），再凭独立授权执行production apply/readback；禁止monthly隐式写库或临时Python/SQL绕行。 |
 
 ## 4. Architecture / 架构
 
@@ -1141,7 +1141,7 @@ signoff 由 CLI 自动生成并校验，不要求人工复制。
 2. 新建一次final sample submission并等待terminal；历史terminal submission不得resume，也不并行提交第二个sample。
 3. sample PASS后生成缺失的2026-07-31 P3A full并提交一次2026-07-31 full initial migration。
 4. 2026-08-31收盘后先只读验证canonical PIT state/spans覆盖同cutoff；不足时通过P0最小operator完成DEV
-   validate/rollback，取得目标明确的production DML授权后apply/readback。该operator复用
+   apply/readback（可再以同cutoff幂等NO_OP复核），取得目标明确的production DML授权后apply/readback。该operator复用
    `StockUniversePitService.ensure_canonical_pit_universe()`，默认plan-only，固定canonical key/rule/start/cutoff，
    不接受任意SQL、任意key或activation；当前源码没有该正式CLI，这是9月1日前唯一必须补齐的P0代码缺口。
 5. PIT coverage PASS后生成同cutoff的industry/P3A full authority；writer/readback使用新repo-external目录，禁止覆盖。
@@ -1439,7 +1439,7 @@ hard-cap、真实全量性能或 production activation 已执行。`pending_real
 | F-030 | 本矩阵、§21 item-by-item review、§22 多轮审查；实现 PR #3310 validation receipt | 已完成多轮定向审查、统一隔离回归、Windows+WSL platform smoke、ruff/compile/diff/feature-workflow、最新 main 热合并与独立 code review；合入时必须再次确认 PR `headRefOid`、check `head_sha` 与最终分支 HEAD 一致且 required checks 全绿 | source_review_verified_merge_head_gate_external | F-026/F-029 的真实数据/真实性能状态与源码 gate 分开；设计文档不冻结易过期的 PR head SHA，最终绑定以 GitHub merge readback 为准 |
 | F-031 | `component_artifact_manifest.py` storage v2 section shards；`canonical_lineage.py` lineage v3 bucket/head/event refs；daily/minute outer v2 capability binding | `test_component_artifact_manifest.py::{test_component_manifest_v2_shards_and_compacts_production_scale_index,test_v2_adj_section_shards_6000_codes_by_36_months_under_hard_bound}`；`test_canonical_lineage.py::test_lineage_6000_by_36_metadata_growth_is_bounded`；legacy dual-reader/migration/tamper tests | implemented_fixture_verified | 真实 36 个月运行未执行；合成门禁只证明元数据容量与 fail-closed 迁移合同 |
 | F-032 | §0与§15 P0真实数据交付桥；现有industry/P3A builder、initial-migration和monthly durable入口 | artifact: `tests/aistock_validation/pit_v2/small_candidate_receipt.json`；artifact: `tests/aistock_validation/pit_v2/candidate_audit_receipt.json`；monthly terminal receipt | approved_by_user_real_execution_pending | approved_by_user: consumer activation、模型训练、production pointer、重启和cleanup不在P0完成定义 |
-| F-033 | §0与§15 canonical PIT coverage preflight及planned `scripts/prepare_canonical_pit_monthly.py` | `backend/tests/scripts/test_prepare_canonical_pit_monthly.py`；DEV rollback与production DML readback receipts | approved_by_user_source_gap_pending | approved_by_user: operator尚未实现；production DML在执行前仍需精确目标授权，monthly/industry/P3A builder保持零写库 |
+| F-033 | §0与§15 canonical PIT coverage preflight及`scripts/prepare_canonical_pit_monthly.py` | `backend/tests/scripts/test_prepare_canonical_pit_monthly.py`；DEV apply/readback、同cutoff NO_OP测试与production DML readback receipts | implemented_tests_passed | approved_by_user: BUG-1243 operator源码和零写plan/verify合同已实现；production DML执行前仍需精确目标授权，不把可选NO_OP复核升级为新门禁，monthly/industry/P3A builder保持零写库 |
 
 ## 21. DESIGN-COMPLIANCE-001
 
@@ -1458,7 +1458,7 @@ hard-cap、真实全量性能或 production activation 已执行。`pending_real
 |---|---|---|---|---|
 | 18A | deadline critical-path review | 首次PIT v2迁移、消费者迁移和生产激活被串成月更前置；重复sample不能增加全量正确性证据 | 增加§0/§15 P0桥，解耦R0/R1/R2，只保留一次final sample和一次monthly submission | resolved_in_sep1_rebaseline |
 | 18B | cutoff/runtime review | `previous_month_last_completed_trading_day`在8月31日晚仍返回7月31日，无法完成August candidate | 固定2026-09-01 00:05后提交，不增加临时cutoff注入或低层exporter绕行 | resolved_in_sep1_rebaseline |
-| 18C | authority dependency review | industry/P3A要求canonical PIT state/spans覆盖目标cutoff；正式月度coverage operator不存在 | 新增F-033和planned最小operator，DEV rollback与production DML授权/readback独立；monthly/builder保持零写库 | approved_source_gap_pending_implementation |
+| 18C | authority dependency review | industry/P3A要求canonical PIT state/spans覆盖目标cutoff；正式月度coverage operator不存在 | 新增F-033及最小operator，DEV apply/readback与production DML授权/readback独立；同cutoff二次DEV apply可用于幂等证明但不构成新门禁；monthly/builder保持零写库 | implemented_in_BUG-1243_pending_merge |
 | 18D | F2 final design review | 检查不覆盖历史、typed waiting/blocking、资源合同、单次提交和production边界 | canonical acceptance artifact 33/33；不新增未批准数据质量门禁，不把deadline变成范围降级 | pass_design_ready_for_pr |
 | 0 | initial draft | 形成 30 项设计索引与 A-E 实施批次 | 进入三方独立审核 | superseded |
 | 1A | data semantics | source snapshot、PIT、QFQ、re-attest、hardlink 合同不闭合 | 增加 canonical source readback、frozen PIT、dependency graph、COW 与 attestation 分层 | resolved_in_revision_1 |

@@ -347,8 +347,40 @@ class StockUniversePitService:
 
     def get_status(self, *, universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY) -> dict[str, Any]:
         self.ensure_tables()
+        return self.get_status_readonly(universe_key=universe_key)
+
+    def get_status_readonly(self, *, universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY) -> dict[str, Any]:
+        """Read materialization state without creating or changing database objects."""
+
         with get_conn() as conn:
             with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        to_regclass('market.stock_universe_pit_state') AS state_table,
+                        to_regclass('market.stock_universe_pit_spans') AS spans_table,
+                        to_regclass('market.stock_universe_pit_events') AS events_table
+                    """
+                )
+                table_row = cur.fetchone()
+                if isinstance(table_row, dict):
+                    missing_tables = sorted(key for key, value in table_row.items() if value is None)
+                elif table_row:
+                    missing_tables = [
+                        name
+                        for name, value in zip(("state_table", "spans_table", "events_table"), table_row)
+                        if value is None
+                    ]
+                else:
+                    missing_tables = ["state_table", "spans_table", "events_table"]
+                if missing_tables:
+                    return {
+                        "universe_key": universe_key,
+                        "status": "missing",
+                        "dirty": True,
+                        "reason": "schema_contract_missing",
+                        "missing_tables": missing_tables,
+                    }
                 cur.execute(
                     """
                     SELECT universe_key, rule_version, scope, start_date, end_date,
@@ -364,6 +396,67 @@ class StockUniversePitService:
         if not row:
             return {"universe_key": universe_key, "status": "missing", "dirty": True}
         return dict(row)
+
+    def plan_canonical_pit_universe(
+        self,
+        *,
+        start_date: dt.date,
+        end_date: dt.date | None = None,
+    ) -> dict[str, Any]:
+        """Build a zero-write monthly coverage plan for the canonical rolling PIT universe."""
+
+        require_canonical_rolling_universe_key(CANONICAL_PIT_UNIVERSE_KEY)
+        requested_end = end_date or self.resolve_default_end_date()
+        if requested_end < start_date:
+            raise StockUniversePitError("canonical PIT end_date must be on or after start_date")
+        state = self.get_status_readonly(universe_key=CANONICAL_PIT_UNIVERSE_KEY)
+        effective_end = self._preserve_existing_end_date(requested_end, state)
+        source = self.compute_source_fingerprint(
+            end_date=effective_end,
+            include_canonical_terminal_events=True,
+        )
+        source_sha = _fingerprint_sha256(source)
+        needs_rebuild, reason = self._needs_rebuild(
+            state=state,
+            start_date=start_date,
+            end_date=effective_end,
+            rule_version=CANONICAL_PIT_RULE_VERSION,
+            source_sha=source_sha,
+            refresh_policy="source_fingerprint",
+            expected_scope=CANONICAL_PIT_SCOPE,
+        )
+        if state.get("reason") == "schema_contract_missing":
+            needs_rebuild, reason = True, "schema_contract_missing"
+        state_projection = {
+            key: state.get(key)
+            for key in (
+                "universe_key",
+                "rule_version",
+                "scope",
+                "start_date",
+                "end_date",
+                "status",
+                "dirty",
+                "source_fingerprint_sha256",
+            )
+            if key in state
+        }
+        return {
+            "schema_version": "canonical_pit_monthly_coverage_plan_v1",
+            "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+            "rule_version": CANONICAL_PIT_RULE_VERSION,
+            "scope": CANONICAL_PIT_SCOPE,
+            "start_date": start_date,
+            "requested_end_date": requested_end,
+            "effective_end_date": effective_end,
+            "source_fingerprint_sha256": source_sha,
+            "needs_rebuild": needs_rebuild,
+            "reason": reason,
+            "decision": "REBUILD_REQUIRED" if needs_rebuild else "NO_OP_VERIFIED",
+            "coverage_satisfied": not needs_rebuild,
+            "zero_write": True,
+            "state": state_projection,
+        }
 
     def ensure_immutable_dataset_snapshot(
         self,
