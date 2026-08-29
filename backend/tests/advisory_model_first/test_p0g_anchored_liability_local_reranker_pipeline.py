@@ -27,6 +27,60 @@ def _label_rows(dates: pd.DatetimeIndex) -> pd.DataFrame:
     )
 
 
+def test_outer_anchor_price_calibration_excludes_non_matured_liability_dates() -> None:
+    dates = pd.bdate_range("2026-01-05", periods=6)
+    labels = _label_rows(dates)
+    labels.loc[
+        (labels["decision_as_of_trade_date"] == dates[2]) & (labels["instrument"] == "S01"),
+        "label_status",
+    ] = "NOT_ENTERED_LIMIT_UP"
+    labels.loc[labels["decision_as_of_trade_date"] == dates[-1], "label_status"] = (
+        "CENSORED_RIGHT_BOUNDARY"
+    )
+
+    liability_eligible, liability_coverage = pipeline.eligible_constraint_dates(
+        labels,
+        expected_decision_date_count=6,
+        expected_constraint_decision_date_count=5,
+    )
+    anchor_price_eligible, anchor_price_coverage = pipeline.complete_matured_decision_dates(
+        labels,
+        expected_candidates_per_date=20,
+    )
+    liability_dates, anchor_price_dates, receipt = pipeline._outer_calibration_date_contract(
+        train_dates=dates,
+        liability_eligible_dates=liability_eligible,
+        anchor_price_eligible_dates=anchor_price_eligible,
+    )
+
+    assert list(liability_dates) == list(dates[:-1])
+    assert list(anchor_price_dates) == [dates[0], dates[1], dates[3], dates[4]]
+    assert dates[2] in liability_dates
+    assert dates[2] not in anchor_price_dates
+    assert liability_coverage["eligible_constraint_decision_date_count"] == 5
+    assert anchor_price_coverage["complete_matured_decision_count"] == 4
+    assert receipt == {
+        "schema_version": "advisory_p0l_outer_calibration_date_contract_v1",
+        "liability_calibration_decision_count": 5,
+        "liability_calibration_dates_sha256": pipeline._date_index_sha256(dates[:-1]),
+        "anchor_price_calibration_decision_count": 4,
+        "anchor_price_calibration_dates_sha256": pipeline._date_index_sha256(
+            [dates[0], dates[1], dates[3], dates[4]]
+        ),
+    }
+
+
+def test_outer_anchor_price_calibration_fails_when_not_liability_subset() -> None:
+    dates = pd.bdate_range("2026-01-05", periods=3)
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        pipeline._outer_calibration_date_contract(
+            train_dates=dates,
+            liability_eligible_dates=[dates[0]],
+            anchor_price_eligible_dates=[dates[1]],
+        )
+    assert exc_info.value.reason_code == "ADVISORY_P0L_CALIBRATION_DATE_CONTRACT_INVALID"
+
+
 def test_fixed_anchor_oof_reselects_price_inside_each_inner_train_fold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
