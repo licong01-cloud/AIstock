@@ -1639,6 +1639,47 @@ def test_bug_1141_offline_hmm_stock_fact_repository_is_exact_and_neighbor_stays_
     assert neighboring_backend["target_ids"] == ["backend-main"]
 
 
+def test_bug_1233_p0k_offline_pipeline_is_exact_and_neighbor_stays_backend(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "backend/services/advisory_model_first/selection_liability_gate_pipeline.py",
+        "backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py",
+        "docs/architecture/advisory_p0k_selection_preserving_liability_gate_f2_design_20260828.md",
+        "tests/aistock_validation/bugs/20260828_BUG-1232.json",
+    ]
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            }
+        ),
+        changed_files=changed_files,
+        root=isolated_workflow_root,
+    )
+    neighboring_backend = workflow._classify_runtime_impact(
+        ["backend/services/advisory_model_first/model_inference.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert inference["runtime_impact"] == "none"
+    assert inference["runtime_files"] == []
+    assert inference["target_ids"] == []
+    assert contract["runtime_impact"] == "none"
+    assert contract["target_ids"] == []
+    assert contract["backend_restart_required"] is False
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert neighboring_backend["runtime_impact"] == "backend"
+    assert neighboring_backend["runtime_files"] == [
+        "backend/services/advisory_model_first/model_inference.py"
+    ]
+    assert neighboring_backend["target_ids"] == ["backend-main"]
+
+
 def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_activation(
     isolated_workflow_root: Path,
 ) -> None:

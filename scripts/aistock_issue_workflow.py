@@ -1930,6 +1930,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "tests/",
     )
     known_non_runtime_files = {
+        "backend/services/advisory_model_first/selection_liability_gate_pipeline.py",
         "backend/services/advisory_phase0b/audit_service.py",
         "backend/services/advisory_phase0b/snapshot_reader.py",
         "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
