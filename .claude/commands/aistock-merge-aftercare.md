@@ -9,7 +9,7 @@ Use this command for AIstock/RD-Agent PR merge and post-merge aftercare. RD-Agen
 1. Confirm PR number, source branch, source worktree, and clean source status.
 2. Check PR state and CI with compact `gh pr view <PR> --json statusCheckRollup,mergeable,state`.
 3. Avoid long `gh pr checks --watch` waits when compact rollup is enough.
-4. Stop if checks fail, mergeability is blocked, or source worktree is dirty.
+4. If required checks are queued or not yet published, use the workflow's bounded compact poll; do not request another merge authorization. Stop only when checks fail, the bounded wait expires, mergeability is blocked, or the source worktree is dirty.
 5. Follow `TOOL-RTK-001` from the sole development standard; this command does not redefine it.
 
 ## Merge and aftercare
@@ -23,7 +23,8 @@ Use this command for AIstock/RD-Agent PR merge and post-merge aftercare. RD-Agen
 - For docs or feature PRs without BUG state, merge only after explicit user authorization and green checks.
 - After merge, fast-forward `F:\Dev\AIstock` to `origin/main`.
 - Run close-sync/finalizer for BUG PRs.
-- Run `python scripts/aistock_issue_workflow.py install-client --apply` when `.codex/**`, `.claude/**`, or workflow client files changed.
+- A close-sync push that changes only `tests/aistock_validation/bugs/**` reuses the source PR receipt and must not rerun source CI, Semgrep, or CodeQL.
+- Immediately after the canonical root fast-forward, and before close-sync or cleanup, the single merge-aftercare owner runs change-scoped `install-client --apply` plus `verify-clients --workflow-only` for lanes changed under `.codex/**` or `.claude/**` and any already-stale lanes detected in the same explicitly targeted profile. A fully current profile is a no-op; unrelated stale lanes are warning-only, and no second authorization or client restart is required.
 - When the authorization bundle names the production target and committed migration and the DEV receipt passed, confirm the immutable merge commit first, then run target preflight, apply, and readback without another prompt. Bare merge authorization never authorizes DDL; otherwise report `production_ddl_gate=noop` or `pending`.
 - When the authorization bundle names exact cleanup targets, run cleanup after merge/close-sync and report source worktree, source local/remote branch, close-sync worktree/branch, `git fetch --prune`, and root `main...origin/main`; without cleanup authorization, report them as pending rather than deleting them.
 - Squash merge cleanup is allowed when GitHub PR state is `MERGED`, there is no open PR for the branch, and the task worktree is clean; do not require the source HEAD to be an ancestor of `main`.

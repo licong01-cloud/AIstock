@@ -1,14 +1,16 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.4
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.7
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-24
+> 修订日期：2026-08-29
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0F_POLICY_UTILITY_RANKER_F2_DESIGN_READY_IMPLEMENTATION_NOT_STARTED`
+> 当前状态：`P0K_STAGE_A_NEGATIVE_STOP_NOT_ADVANCED_P0L_DESIGN_READY`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线 shadow 推理；自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
-> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity 修复、forward evaluation、历史虚拟前向和P0-E离线实验源码均已进入 `main`；P0-E PR #3726 merge commit为 `437405ce9e43f61426fce281507c3bc9be6c1549`，本修订开发基线为 `origin/main=755c8232de78ae9e331a594795156167dd5e2000`。生产descriptor仍指向P0-D exact bundle；P0-E未激活、不替换baseline
-> 当前生产前向状态：截至 2026-08-23，两个 ENABLED Program 各有7个 forward run；最新 `decision=2026-08-21 -> target=2026-08-24` 均为 `PUBLISHED/NOT_DUE`。该已持久化 run 冻结的是切换前 legacy quality-reranker；第一条自然 P0-D observation 只能在 2026-08-24 收盘后的下一目标交易日运行中形成，禁止回填
+> 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity修复、forward evaluation、历史虚拟前向以及P0-E至P0-K Stage A源码/权威结果均已进入`main`。P0-J源码由PR #3811合入commit `5bda9091`，rank attachment修复由PR #3821合入commit `14775d01`。生产descriptor仍指向P0-D exact bundle；P0-E至P0-K均未激活、不替换baseline
+> P0-J权威结果：正式request `advselpriorresreq_3a50e2f6fd9cf43cb1f6ad3e`在首条outer path的inner block 3形成完全平坦的decreasing-isotonic prior，按预登记条件以`ADVISORY_P0J_SELECTION_PRIOR_DEGENERATE`停止；evidence-only bundle为`eb8ade9b...`，exact retry返回同identity，零trial、无winner/PBO/Stage B。该结果证明rank-to-return单调关系跨时间分区不稳定，不证明Selection全局无效
+> P0-K权威结果：源码、PR/CI、合入和正式 Stage A 均已完成。request `advselgatereq_943f9e551d5fee35e57340cc`完成`168/168`，bundle为`fee9b561...`，结果`NEGATIVE_STOP_NOT_ADVANCED`且未激活。168条trial全部选择`0.4`、拒绝数均为0，策略与Selection恒等；liability日Spearman约`0.254589`，但约束选择器没有让信号进入决策。`PBO=1.0`来自六个arm的block分数完全相同和固定tie-break，不按普通过拟合解释
+> 当前生产前向状态：截至 2026-08-28 12:55，scheduler为running/thread_alive且无last_error；第一个Program有4条P0-D observation、最早成熟日为2026-09-22，第二个Program尚无模型observation。自然证据继续积累，不回填且不阻塞离线模型演进
 > 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`。源码合入不等于 descriptor 接入或 bundle 激活
-> 演进方向：P0-D 历史虚拟前向已对24个成熟决策日完成同 policy 真实验证：胜率高于 matched Selection Top5 9.74pp，但累计净收益低2.54pp、最大回撤差5.63pp且换手更高，因此不激活。逐episode归因证明主要失败是二分类概率与收益幅度相关性仅约0.10并错失大盈利。P0-E固定收益幅度加权实验在已消费窗口改善累计收益/回撤/换手，但冻结CPCV比P0-D低0.4731bps、仅35.71%路径胜出且PBO恶化到0.8143，因此同样不激活且不继续调参。下一模型固定为P0-F：直接预测冻结policy下的连续净超额收益并排序Selection Top20；详细设计见 `advisory_p0f_policy_utility_ranker_f2_design_20260824.md`
+> 演进方向：P0-D历史虚拟前向已证明二分类概率不能稳定表达收益幅度；P0-E outcome weighting同样负向停止。P0-F/P0-G保留收益提升但未满足换手。P0-H把相对P0-D换手压低`0.022708`并改善MDD `0.010688`，但return head日Spearman仅`0.041731`、PBO `0.90`；P0-I/P0-J证明grouped rank与Selection rank收益先验跨分区不稳定。P0-K进一步证明liability信号虽稳定，但绝对阈值加“最宽松P0-D换手可行”选择会结构性退化为Selection identity。P0-L因此冻结P0-G已验证的收益排序为anchor，不训练新return head；只允许liability relative rank执行最大位移1、每日最多一次的相邻ENTER priority重排，并用train-only OOF选择最保守的非零换手可行档。
 > 历史验证执行方向：44 日 A/B/C v6 golden 已冻结；P0-D 历史虚拟前向复用正式 scorer 与 shared policy kernel，24决策日+20日tail的权威 artifact 为 `fbf072f0d8c4a637a48aa8c2ed63c3b61c245abd08ac4e1417b2a0fcc8eb59a9`。该窗口现已被 P0-D 质量判断消费，不得在后续调模后继续标为新的 OOT
 > 当前双轨目标：模型线使用批量历史虚拟前向快速淘汰无效 challenger，并以自然 future OOS 作最终独立证据；H0 继续处理更广泛的实盘单日/历史批量同核执行优化，两者不互相阻断
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
@@ -26,10 +28,16 @@ M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。�
 3. P0-C 直接读取现有 QE H5/Parquet/Qlib Bin 和目标策略包预测 PKL，构造 Top5 shadow policy episode 标签与 purged rolling/CPCV 评价。
 4. P0-D 在 WSL Conda 训练真实 meta-label 模型并进入 challenger 前向发布；正式预测只读取数据库 decision-cutoff 输入。
 5. P0-E 复用P0-C连续净超额收益，在每条CPCV path内用train-only幅度统计训练收益感知meta-label；模型选择只用冻结validation，已消费历史窗口只作回放诊断。
-6. P0-F 复用P0-C连续净超额收益，使用train-only median/MAD和固定Huber regression直接学习policy utility；entry按utility排序，退出/policy/成本不变。只有冻结CPCV收益、回撤和换手合同全部通过才实现条件运行时和历史回放。
-7. 前向 residual 自然成熟后执行 P1-A，自有两个以上兼容包的独立 bundle 后执行 P1-B；长期趋势包就绪后执行 P2。
-8. H0 在当前已授权 44 日 A/B/C 回放结果完整冻结后，以该结果作为 golden baseline，实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复 raw 计算，不改变逐日业务逻辑。
-9. 上述真实功能和 H0 均不自动解禁历史补账、历史归档、ModelOps、旧任务清理或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
+6. P0-F 复用P0-C连续净超额收益，使用train-only median/MAD和固定Huber regression直接学习policy utility；真实Stage A因换手门禁失败已负向终止。
+7. P0-G只改变训练label并完成真实Stage A；相对P0-D仍因换手`+0.004096`负向停止，禁止Stage B、replay、runtime和结果后调参。
+8. P0-H把收益和换手负担分头学习，在outer-train nested OOF模型输出上约束实际entry priority；outer validation只评价，不参与price、rounds或transform拟合。
+9. P0-I只替换P0-H收益头为policy-aligned grouped rank head，同日预测百分位进入原output constraint；P0-H的liability、候选、policy、cost、CPCV和advancement保持不变。
+10. P0-J不延续P0-I grouped-rank目标；它在每个inner-train内拟合Selection rank的非增单调收益先验，以Huber学习残差，并用同一outer-train的nested OOF解析式可靠度系数收缩残差输出，再进入原liability/output constraint。
+11. P0-K停止收益排序建模，仅训练liability head；在inner OOF选择预冻结物理holding-day阈值过滤高换手ENTER候选，eligible集合内保持Selection顺序。
+12. P0-L冻结P0-G收益anchor与P0-K liability head，用relative liability rank执行有界局部ENTER重排；identity control只作基线，不得成为candidate winner。
+13. 前向 residual 自然成熟后执行 P1-A，自有两个以上兼容包的独立 bundle 后执行 P1-B；长期趋势包就绪后执行 P2。
+14. H0 在当前已授权 44 日 A/B/C 回放结果完整冻结后，以该结果作为 golden baseline，实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复 raw 计算，不改变逐日业务逻辑。
+15. 上述真实功能和 H0 均不自动解禁历史补账、历史归档、ModelOps、旧任务清理或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
 
 以下内容不再是模型训练、模型推理、页面展示或模型启用的前置条件；H0 也不得借此恢复无界历史平台建设：
 
@@ -640,10 +648,13 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`；后续安全 des
 
 优先级：`P0_NOW_AFTER_P0E_NEGATIVE`。
 
-状态：`F2_DESIGN_READY_IMPLEMENTATION_NOT_STARTED`。
+状态：`STAGE_A_NEGATIVE_STOP_NOT_ADVANCED`。
 
 权威详细设计：
 `docs/architecture/advisory_p0f_policy_utility_ranker_f2_design_20260824.md`。
+
+Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成重启验证并关闭。真实v2训练bundle为
+`ff336eadb131cb6a3d431a846de4e9949ad984da1dcc4d9c231aa313886ebc10`：相对exact P0-D平均收益提高`2.612087 bps`、path win rate `53.57%`、相对Selection提高`5.578137 bps`、配对平均回撤改善`0.001286`，但配对平均换手增加`0.007419`。因此六项advancement只有换手失败，正式结论为`NEGATIVE_STOP_NOT_ADVANCED`；Stage B、runtime、descriptor和历史回放均禁止继续。
 
 任务列表：
 
@@ -657,6 +668,133 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`；后续安全 des
 8. 历史回放只能标为`HISTORICAL_REPLAY`且不改变winner；自然future OOS继续按交易日形成并由用户决定是否激活。
 
 完成判定：Stage A真实WSL 168 trial-path、不可变bundle、exact retry、PBO/paired comparison/advancement receipt齐全。若advancement通过，Stage B还需显式role、旧role兼容、isolated descriptor和历史回放；无论结果如何均不自动激活。
+
+### P0-G：SHORT_REBOUND turnover-constrained policy utility
+
+优先级：`P0_NOW_AFTER_P0F_TURNOVER_NEGATIVE`。
+
+状态：`STAGE_A_NEGATIVE_STOP_NOT_ADVANCED`。
+
+权威详细设计：
+`docs/architecture/advisory_p0g_turnover_constrained_utility_f2_design_20260825.md`。
+
+任务列表：
+
+1. 复用exact P0-C dataset、P0-F feature schema v2、28 READY CPCV paths和shared shadow policy；不修改candidate、exit、policy或成本。
+2. 用7716行成熟candidate episode的`holding_trading_days`构造与组合每日换手同单位的`2/(target_count*holding_days)`换手负担；3行涨停未入场和1行右删失不填默认label，其所在日期不参与constraint calibration；该未来字段只作label，禁止进入feature。
+3. 每条outer path只在train blocks计算utility/liability MAD、固定shadow-price候选和exact P0-D train turnover budget，选择第一个满足预算的最小影子价格；validation不参与。
+4. 用`net_excess_return_bps - shadow_price * turnover_liability`训练固定Huber CORE/CORE_HMM×3 seeds×28 paths，entry按预测adjusted utility排序，Selection Top40 exit保持不变。
+5. 使用shared policy评价原始组合净收益、回撤和换手；train constraint、candidate loss、PBO、winner和advancement分别报告。
+6. 复用P0-F六项advancement并要求每path constraint可行；任一失败完整负向停止，不追加price roster、family、seed、rank guard或blend。
+7. 只有Stage A通过后才允许另行批准Stage B；P0-D概率、P0-F和P0-G bps score不得混淆。
+
+完成判定：已完成真实WSL 168/168 trial-path、不可变bundle `433ff217...`、exact retry、资源/PBO/constraint/paired/advancement receipts；唯一失败门槛为相对P0-D换手`+0.004096`，已负向停止且未激活。
+
+### P0-H：SHORT_REBOUND dual-head output-constrained utility
+
+优先级：`P0_NOW_AFTER_P0G_ORACLE_OUTPUT_MISMATCH`。
+
+状态：`STAGE_A_NEGATIVE_STOP_NOT_ADVANCED`。
+
+权威详细设计：
+`docs/architecture/advisory_p0h_dual_head_output_constraint_f2_design_20260825.md`。
+
+任务列表：
+
+1. 复用exact P0-C、feature schema v2、28 outer CPCV paths和shared policy；不修改candidate、exit、policy或cost。
+2. 分别训练return bps与`2/(5*holding_days)` liability fraction/day两个Huber head，future holding只作label，预测按冻结policy物理边界clip。
+3. 每条outer path在保留train blocks内执行nested inner OOF、二次purge/embargo和block-reset shared evaluation；outer validation不参与拟合。
+4. exact P0-D预算也使用同一inner OOF dates和固定winner model spec重建；每个family/seed/path从固定8个multiplier选择第一个满足预算的最小price。
+5. 两头rounds取inner best-iteration中位数，在full outer train refit后只评价一次outer validation；固定CORE/CORE_HMM×3 seeds×28 paths。
+6. 沿用P0-F/P0-G六项advancement；P0-F/P0-G和head diagnostics/PBO只作诊断，失败禁止Stage B和结果后调参。
+7. Stage A只生成immutable dual-head bundle和完整receipts，零DDL/DML、零runtime/descriptor/activation。
+
+完成判定：已完成完整nested OOF双头Stage A、真实WSL 168/168 trial-path、不可变bundle `82afdb81...`、exact retry和资源/constraint/paired/advancement receipts；收益与path-win门槛失败，已负向停止且未激活。
+
+### P0-I：SHORT_REBOUND grouped-rank return head with output constraint
+
+优先级：`P0_NOW_AFTER_P0H_RETURN_HEAD_GENERALIZATION_FAILURE`。
+
+状态：`STAGE_A_NEGATIVE_STOP_INCOMPLETE_CPCV`。
+
+权威详细设计：
+`docs/architecture/advisory_p0i_grouped_rank_return_head_f2_design_20260826.md`。
+
+任务列表：
+
+1. 精确复用P0-H的P0-C数据、feature schema v2、28条outer CPCV path、shared policy、cost、liability label/Huber head和exact P0-D OOF换手预算。
+2. 唯一新变量是return head：在每个decision date的成熟policy episode候选中，将`net_excess_return_bps`确定性映射为0..4 ordinal relevance，训练固定`rank_xendcg`。
+3. score date不读取label；将同日20只候选的raw model score转为确定性`[0,1]`百分位，再与liability预测组合并在train-only OOF选择最小可行price。
+4. outer validation只作shared policy评价；不参与relevance规则、类别词表、rounds、price、score transform、family、seed或winner拟合。
+5. 固定CORE/CORE_HMM×P0-H相同3 seeds×28 paths=168；不增加LambdaRank对照、blend、label-gain搜索、price roster或历史回放选择。
+6. 沿用P0-H相对exact P0-D的六项advancement；P0-H paired、rank diagnostics和PBO只作诊断。
+7. Stage A仅生成immutable grouped-rank dual-head bundle和完整receipts，零DDL/DML、零runtime/descriptor/activation；完整负向结果也作为有效实验合入。
+
+完成判定：真实WSL在完成前10条path的60个trial-path后，第11条path的CORE/20260813在冻结8档price上均不能满足exact P0-D OOF换手预算，按预登记规则立即`NEGATIVE_STOP_INCOMPLETE_CPCV`。不可变evidence-only bundle为`2378358...`，exact retry复用同一identity；无winner/model/PBO/advancement，不得扩展price roster或继续Stage B。已完成的60项return daily Spearman均值为`-0.002229`、NDCG@5为`0.385322`，说明该grouped-rank收益头未形成稳定收益排序信号；liability Spearman `0.236089`继续证明原liability机制有效。
+
+### P0-J：SHORT_REBOUND Selection-prior residual return with OOF reliability shrinkage
+
+优先级：`P0_NOW_AFTER_P0I_GROUPED_RANK_SIGNAL_FAILURE`。
+
+状态：`STAGE_A_NEGATIVE_STOP_INCOMPLETE_CPCV`（source PR #3811；fix PR #3821；bundle `eb8ade9b...`）。
+
+权威详细设计：
+`docs/architecture/advisory_p0j_selection_prior_residual_return_f2_design_20260826.md`。
+
+任务列表：
+
+1. 精确复用P0-C数据、feature schema v2、28条outer CPCV path、shared policy/cost、P0-H liability head和exact P0-D OOF换手预算；P0-I只作为失败诊断，不作为模型或门槛reference。
+2. 在每个inner-train成熟样本内，按`selection_effective_rank=1..20`计算收益中位数，并以样本数加权的非增isotonic回归形成train-only Selection收益先验曲线；score date只按rank查曲线，不读label。
+3. 以`net_excess_return_bps - selection_prior_bps(rank)`为唯一return label，训练与P0-H同参数的Huber CORE/CORE_HMM残差头。
+4. 聚合六fold成熟inner OOF残差预测后，使用预冻结零截距解析系数`alpha=clip(sum(pred*actual_residual)/sum(pred^2),0,1)`；零方差或非正可靠度显式得到`alpha=0`及typed receipt，不搜索weight、不读取outer validation。
+5. 形成`anchored_return_bps=selection_prior_bps + alpha*predicted_residual_bps`，再与P0-H liability预测及固定8档price进入相同output constraint；Selection Top40 exit和停牌/涨停处理不变。
+6. 固定CORE/CORE_HMM×原3 seeds×28 paths=168；沿用实际代码权威`build_policy_utility_advancement_receipt`的六项门槛，P0-H/P0-I和prior/residual diagnostics只作诊断。
+7. Stage A只生成immutable request/bundle和完整receipts，零API/UI/DDL/DML/runtime/descriptor/activation；负向结果禁止同结果后调参。
+
+完成判定：正式Stage A在首条outer path的inner block 3发现Selection rank中位数高度非单调，decreasing-isotonic prior完全平坦为`-1.5357 bps`，按预登记规则以`ADVISORY_P0J_SELECTION_PRIOR_DEGENERATE`立即`NEGATIVE_STOP_INCOMPLETE_CPCV`。evidence-only bundle `eb8ade9b...`和exact retry identity均已验证；零trial、无winner/PBO/Stage B，禁止扩展prior、alpha、family、seed或继续调参。
+
+### P0-K：SHORT_REBOUND Selection-preserving liability gate
+
+优先级：`COMPLETED_VALID_NEGATIVE`。
+
+状态：`STAGE_A_NEGATIVE_STOP_NOT_ADVANCED_NOT_ACTIVATED`。
+
+权威详细设计：
+`docs/architecture/advisory_p0k_selection_preserving_liability_gate_f2_design_20260828.md`。
+
+任务列表：
+
+1. 精确复用P0-C数据、feature schema v2、28条outer CPCV path、shared policy/cost、P0-H liability label/Huber head和exact P0-D OOF换手预算。
+2. 不训练或组合任何return、rank、prior、residual或confidence head；唯一模型输出为`turnover_liability_fraction_per_day`。
+3. 冻结1/2/3/5/10/20日物理holding roster，对应最大liability `0.4/0.2/0.13333333333333333/0.08/0.04/0.02`；每个family/seed/path只在自己的inner OOF选择满足完整性和exact P0-D预算的最宽松阈值，并冻结P0-H相同的385/386约束日期identity。
+4. gate只过滤新的ENTER候选；held candidate继续由Top40/review policy退出。eligible候选内严格按Selection rank和instrument tie-break排序，不允许模型细粒度重排。
+5. 每日过滤后必须保留至少5个candidate，active-slot coverage和cash-day不得劣于matched Selection；禁止少荐股或空仓冒充低换手。
+6. 固定CORE/CORE_HMM×3 seeds×28 paths=168；outer validation不参与threshold、rounds或roster拟合，168项完整后才按每个family/seed的28-path平均主指标选择winner，并沿用实际代码权威六项advancement。
+7. Stage A只生成immutable request/bundle和完整receipts，零API/UI/DDL/DML/runtime/descriptor/activation；负向结果禁止同结果后调参。
+
+完成判定：正式 request `advselgatereq_943f9e551d5fee35e57340cc`在合入源码上完成真实WSL `168/168`和exact retry，生成bundle `fee9b561...`。winner为CORE/20260813，liability日Spearman `0.254589`，但全部168条trial均在最宽`0.4`阈值停止、拒绝数为0、主指标与Selection逐位相同。相对P0-D收益`-2.966049 bps`、path win`32.14%`、MDD差`-0.004162`，仅换手改善`-0.068009`；结果为`NEGATIVE_STOP_NOT_ADVANCED`。`PBO=1.0`由六个arm策略分数完全相同导致，不作为普通PBO过拟合结论。P0-K不进入Stage B/runtime/replay，不扩展绝对阈值。
+
+### P0-L：SHORT_REBOUND P0-G-anchored liability local reranker
+
+优先级：`P0_NOW_AFTER_P0K_IDENTITY_DEGENERATION`。
+
+状态：`DESIGN_READY_IMPLEMENTATION_NOT_STARTED`。
+
+权威详细设计：
+`docs/architecture/advisory_p0l_p0g_anchored_liability_local_reranker_f2_design_20260829.md`。
+
+任务列表：
+
+1. 精确复用P0-C数据、feature schema v2、28条outer CPCV path、shared policy/cost、exact P0-D、P0-G `433ff217...`和P0-H/P0-K liability证据。
+2. 固定P0-G winner `FAMILY_TURNOVER_CONSTRAINED_CORE/20260817`为唯一收益anchor；不改变P0-G family、seed、objective、rounds或shadow-price selector合同，inner/path-local price仅在各自train边界机械重算，不训练新return head。
+3. 训练P0-K同合同的liability CORE/CORE_HMM×3 seeds，并在同一nested OOF中生成anchor rank和liability rank。
+4. 冻结relative liability gain roster `(12,8,4,1)`；只考察anchor `(1,2)..(5,6)`，每个日期最多执行一组稳定相邻swap，每个候选相对anchor最多移动一位，只改变ENTER priority。
+5. identity control必须精确复现P0-G但不得成为candidate winner；每条path只在自身outer-train OOF选择最保守、至少产生一次真实ENTER差异且满足exact P0-D换手预算的干预档。
+6. winner必须形成真实priority/entry干预；Top20、active-slot和cash不得劣化。少于两个唯一block-score vector时PBO显式标为不可解释且不输出伪数值，但PBO保持diagnostic-only，不私增第七项advancement。
+7. 固定2 family×3 seed×28 path=168，outer validation只评价；沿用相对P0-D/Selection收益、path win、MDD、换手和完整性的六项advancement，P0-G只作paired诊断。
+8. Stage A仅生成immutable request/bundle和receipts；零API/UI/DDL/DML/runtime/descriptor/activation，只有`ADVANCED_TO_STAGE_B`才另行设计后续。
+
+完成判定：设计已基于P0-G/P0-H/P0-K真实receipt收敛；当前没有实现、训练、PR或运行时能力。下一步先完成F2设计PR/合入，再进入独立源码实现、多轮审核和正式Stage A。
 
 ### H0：实盘单日与历史批量同核执行
 
@@ -779,6 +917,18 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`；后续安全 des
 | F-157 | P0-F conditional runtime使用显式role；utility只决定entry rank，take/skip/confidence继续来自exact P0-D binary model |
 | F-158 | P0-F历史回放只在advancement通过后运行并固定为HISTORICAL_REPLAY；自然future OOS不回填且独立确认 |
 | F-159 | P0-F Stage A/B均无DDL/DML和默认生产激活；descriptor、restart、activation和cleanup保持独立用户授权 |
+| F-160 | P0-F真实Stage A换手门禁失败后完整终止；P0-G不得修改P0-F参数、rank guard、blend或运行时来规避负向结论 |
+| F-161 | P0-G换手负担与shared evaluator同单位，holding/exit/future return只作label/evaluation；非成熟行不填默认值且只允许同日期集合的P0-G/P0-D约束校准 |
+| F-162 | P0-G影子价格候选固定，只在每条outer CPCV path的train blocks选择最小可行值；validation和历史回放不得参与 |
+| F-163 | P0-G不连续train block之间强制空仓重置，purge/embargo和label span不得跨validation继承portfolio state |
+| F-164 | P0-G固定Huber CORE/CORE_HMM×3 seeds×28 paths，entry只按adjusted utility变化，Selection Top40 exit、policy和成本保持不变 |
+| F-165 | P0-G沿用收益、path win、Selection、回撤、换手和完整性六项advancement；失败停止Stage B且不自动激活 |
+| F-166 | P0-G Stage A生成不可变request/bundle、constraint/PBO/paired/advancement/resource/exact-retry receipt，零DDL/DML和零运行时写入 |
+| F-167 | P0-H以nested OOF双头output constraint分离return/liability并复用exact P0-D预算；真实负向结果证明约束有效但return泛化不足，未激活 |
+| F-168 | P0-I只以grouped-rank替换return head；冻结price不可行时按预登记停止，不扩展roster、不补跑、不生成winner或runtime bundle |
+| F-169 | P0-J以inner-train Selection单调收益先验加OOF解析收缩残差替换from-scratch return；liability、业务逻辑、exact P0-D预算和六项门槛不变 |
+| F-170 | P0-K删除return head，只用train-only OOF liability gate过滤高换手ENTER候选；eligible集合保持Selection顺序，完整性、业务逻辑、exact P0-D预算和六项门槛不变 |
+| F-171 | P0-L固定P0-G收益anchor，只用relative liability rank执行最大位移1/每日一次的相邻ENTER重排；identity control不得成为winner，机制必须产生真实干预且保持shared policy与六项门槛 |
 
 ## 11. Design Acceptance Matrix
 
@@ -833,6 +983,18 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`；后续安全 des
 | F-157 | conditional resolver/inference/bundle role | `backend/tests/advisory_model_first/test_policy_utility_runtime_inference.py`; `backend/tests/advisory_model_first/test_dynamic_model_binding.py` (target paths) | DESIGN_READY | none |
 | F-158 | conditional historical replay union | `backend/tests/advisory_model_first/test_historical_forward_replay.py` (target path) | DESIGN_READY | none |
 | F-159 | P0-F boundary assertions | `backend/tests/advisory_model_first/test_meta_label_boundaries.py`; `backend/tests/advisory_model_first/test_policy_utility_runtime_inference.py` (target paths) | DESIGN_READY | none |
+| F-160 | P0-F negative receipt；P0-G contracts | `backend/tests/advisory_model_first/test_policy_utility_pipeline.py`; `backend/tests/advisory_model_first/test_turnover_constrained_utility_contracts.py` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-161 | P0-G liability label/training | `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-162 | P0-G train-only price selection | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-163 | P0-G split/block-reset pipeline | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-164 | P0-G contracts/training/pipeline | `backend/tests/advisory_model_first/test_turnover_constrained_utility_contracts.py`; `backend/tests/advisory_model_first/test_turnover_constrained_utility_training.py`; `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-165 | P0-G advancement/stage guard | `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-166 | P0-G immutable bundle/exact retry/boundary | `backend/tests/advisory_model_first/test_turnover_constrained_utility_bundle.py`; `backend/tests/advisory_model_first/test_turnover_constrained_utility_pipeline.py` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-167 | P0-H dual-head contracts/training/pipeline/bundle | `backend/tests/advisory_model_first/test_dual_head_output_constraint_contracts.py`; `backend/tests/advisory_model_first/test_dual_head_output_constraint_training.py`; `backend/tests/advisory_model_first/test_dual_head_output_constraint_pipeline.py`; `backend/tests/advisory_model_first/test_dual_head_output_constraint_bundle.py` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-168 | P0-I grouped-rank contracts/training/pipeline/bundle | `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_contracts.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_training.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_pipeline.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_bundle.py` | STAGE_A_INCOMPLETE_STOP_VERIFIED | none |
+| F-169 | P0-J F2 detailed design and target implementation | `backend/tests/advisory_model_first/test_selection_prior_residual_contracts.py`; `backend/tests/advisory_model_first/test_selection_prior_residual_training.py`; `backend/tests/advisory_model_first/test_selection_prior_residual_pipeline.py`; `backend/tests/advisory_model_first/test_selection_prior_residual_bundle.py`; artifact `eb8ade9b...` | STAGE_A_INCOMPLETE_STOP_VERIFIED | none |
+| F-170 | P0-K contracts/training/pipeline/bundle/request+WSL CLI；F2 detailed design | `backend/tests/advisory_model_first/test_selection_liability_gate_contracts.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_training.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_bundle.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0k_selection_liability_gate_20260829/selection_liability_gate_bundles/fee9b561a287229d6890d478408cacfdee6ba351cf1152c81369a86cc276bbbc/advancement_receipt.json` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-171 | P0-L F2 design；contracts/training/pipeline/bundle/request+WSL CLI implemented | `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_contracts.py`; `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_training.py`; `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py`; `backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_bundle.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED_UNMERGED | formal WSL Stage A pending after source merge |
 | F-141 | H0 shared day business composition + two executors | `backend/tests/advisory_execution/test_single_batch_semantic_parity.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-142 | `AdvisoryPITAsOfViewV1` + historical batch source | `backend/tests/advisory_execution/test_pit_asof_view.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
 | F-143 | content-addressed runtime workspace session | `backend/tests/strategy_package/test_runtime_workspace_session.py` (target path) | APPROVED_BY_USER_DESIGN_READY | none |
@@ -914,7 +1076,9 @@ PR #3368 已合入 `458199cd902323e006ac23d3767c908637068fa8`；后续安全 des
 6. `COMPLETED_GOLDEN_FROZEN`：v6 A/B/C、outcome、统计和报告已完成；44日逐日结果是H0不可变oracle，不回写或重算。
 7. `NEXT_CORRECTNESS_FIRST`：先关闭仍会改变Historical Range候选、day terminal receipt、outcome timeline/hash或父子lease语义的P1 BUG，再实施H0，避免用批量拓扑固化错误业务结果。
 8. `NEXT_H0`：在独立revision实施H0，先通过batch size=1与代表日等价，再运行完整44日和性能基准；任何业务语义修订创建新identity并更新golden。
-9. `CONDITIONAL`：前向标签成熟后运行P1-A；至少两个兼容策略包具备独立bundle后运行P1-B；LONG_TREND包就绪后运行P2。H0可在等待自然标签期间推进，但不得阻断模型主线。
+9. `COMPLETED_VALID_NEGATIVE`：P0-K源码、正式168/168和exact retry已完成；liability预测存在但绝对阈值策略恒等，禁止Stage B和结果后阈值扩展。
+10. `NEXT_MODEL`：先合入P0-L设计，再实现fixed P0-G anchor + relative liability local reranker，完成多轮审核后运行正式Stage A。
+11. `CONDITIONAL`：前向标签成熟后运行P1-A；至少两个兼容策略包具备独立bundle后运行P1-B；LONG_TREND包就绪后运行P2。H0可在等待自然标签期间推进，但不得阻断模型主线。
 
 源码合入、WSL训练、模型文件生成、后端重启、模型加载和页面可见是独立状态，不得合并声明完成。
 
@@ -982,19 +1146,22 @@ historical_batch_activation = separate user-confirmed action after source merge;
 | 减少双重全量校验削弱数据漂移检测 | 保留批次full seal、chunk前后token和逐日read receipt；无token或token变化时强制full rehash |
 | chunk失败跨越名单顺序依赖 | raw预计算与有状态list transition分层；后者在首个未完成日停止，只从最后成功checkpoint exact resume |
 | 追求并发重现资源争用 | 首版单worker、默认5日chunk；先消除重复I/O和工作区重建，性能/内存收据通过后才评估并发 |
+| P0-K绝对阈值再次形成恒等策略 | P0-L改用relative liability rank、非零候选档和真实priority/entry干预完整性；identity只作control |
+| P0-L以liability取代收益排序 | 冻结P0-G为唯一收益anchor，liability仅允许最大位移1、每日一次的局部ENTER相邻重排 |
 
 ## 16. 当前下一步
 
-M0-M5C 的代码、真实 WSL 实验和固定日期推理已形成当前基线；M5A/M5B/M5C 均不激活。P0-A/P0-B 已在两个 ENABLED Program 上连续产生真实 `PUBLISHED` run。P0-C 已通过 PR #3367 合入；P0-D 已通过 PR #3368 合入并完成 exact descriptor、安全rotation、真实在线shadow和maturity修复，forward evaluation 已通过 PR #3697 合入。v6 44日 A/B/C/C5 对照已冻结；P0-D 历史虚拟前向已完成24个成熟决策日验证但不支持激活。P0-E已通过PR #3726合入固定收益幅度加权实验源码，真实CPCV结论为负面且未激活。
+M0-M5C 的代码、真实 WSL 实验和固定日期推理已形成当前基线；M5A/M5B/M5C 均不激活。P0-A/P0-B 已在两个 ENABLED Program 上连续产生真实 `PUBLISHED` run。P0-C/P0-D及forward evaluation已合入；v6 44日对照和P0-D 24个成熟决策日历史虚拟前向已冻结。P0-E至P0-H均为完整负向Stage A，P0-I/P0-J按预登记完整性条件负向停止，P0-K完成168/168后因全trial恒等Selection而负向停止；P0-E至P0-K均未激活。连续结果证明from-scratch return排序泛化不足，P0-G保留`+2.191621 bps`收益但换手仅超出`0.004096`，而liability head稳定但必须通过有界相对决策才能真正作用。
 
 下一工作严格按以下顺序执行；模型/前向与 H0 历史执行是互不阻断的两条线：
 
-1. **实现并训练 P0-F Stage A**：按已冻结F2设计直接预测连续policy净超额收益；完成fixed Huber `2 family × 3 seed × 28 path`、shared-policy评价、P0-D/P0-E配对和advancement receipt。
-2. **按结果停止或进入Stage B**：任一收益/路径胜率/回撤/换手条件失败即完整负面终止；全部通过才实现显式utility runtime role、isolated descriptor和`HISTORICAL_REPLAY`。
-3. **继续自然前向证据**：自然 observation/outcome 继续按交易日形成，不回填；历史回放用于快速开发反馈，自然 future OOS 用于最终独立确认，两者都不冒充对方。
-4. **实施 H0**：在独立后续revision以冻结v6为oracle，按H0-0至H0-6推进更广泛的batch size=1、完整44日、未来毒化、raw共享反例、chunk恢复和性能验收；实盘继续单日运行。
-5. **关闭仍阻碍 H0 的正确性 BUG**：仅修复 live triage 证明仍存在且影响业务演进的问题，不恢复历史证据固化或归档任务。
-6. **P1-A adaptive calibration**：只有forward residual成熟后执行；M4近单类binary先重审，不再重复静态校准。
-7. **P1-B / P2**：至少两个兼容策略包拥有独立真实bundle后再做跨包matched实验；长期策略包就绪后训练独立长期标签和模型。
+1. **审核并合入 P0-L Stage A 源码**：fixed P0-G nested OOF anchor、liability OOF、gain roster、相邻reranker、selector、pipeline、bundle、CLI和直接测试已实现；完成多轮审核、CI并合入，不需要后端重启。
+2. **运行 P0-L 正式 Stage A**：源码合入后从clean commit冻结exact request，完成`2 family × 3 seed × 28 path`、真实干预、shared-policy、P0-D/P0-G/Selection配对、PBO unique-vector、advancement和exact retry。
+4. **按结果停止或进入Stage B设计**：identity/coverage/CPCV失败生成typed negative；PBO不可解释时显式报告但不私增门槛；六项advancement任一失败完整终止。全部通过才允许另行设计runtime role和`HISTORICAL_REPLAY`，不自动激活。
+5. **继续自然前向证据**：自然 observation/outcome 继续按交易日形成，不回填；历史回放用于快速开发反馈，自然 future OOS 用于最终独立确认，两者都不冒充对方。
+6. **实施 H0**：在独立后续revision以冻结v6为oracle，按H0-0至H0-6推进更广泛的batch size=1、完整44日、未来毒化、raw共享反例、chunk恢复和性能验收；实盘继续单日运行。
+7. **关闭仍阻碍 H0 的正确性 BUG**：仅修复 live triage 证明仍存在且影响业务演进的问题，不恢复历史证据固化或归档任务。
+8. **P1-A adaptive calibration**：只有forward residual成熟后执行；M4近单类binary先重审，不再重复静态校准。
+9. **P1-B / P2**：至少两个兼容策略包拥有独立真实bundle后再做跨包matched实验；长期策略包就绪后训练独立长期标签和模型。
 
-继续禁止未授权历史补账/归档、旧 batch/root 清理、通用缓存/调度平台、ModelOps、角色审批和额外门禁。Historical Range 仅按 H0 详细设计执行当前已授权验证优化；任何变更若既不能关闭 P0-A至P0-F/P1/P2 的明确模型能力，也不能满足 F-141 至 F-150 的直接性能与等价目标，不进入当前路线。
+继续禁止未授权历史补账/归档、旧 batch/root 清理、通用缓存/调度平台、ModelOps、角色审批和额外门禁。Historical Range 仅按 H0 详细设计执行当前已授权验证优化；任何变更若既不能关闭 P0-A至P0-L/P1/P2 的明确模型能力，也不能满足 F-141 至 F-150 的直接性能与等价目标，不进入当前路线。

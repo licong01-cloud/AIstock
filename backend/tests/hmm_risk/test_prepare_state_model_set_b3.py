@@ -1475,6 +1475,63 @@ class _C010Connection:
         return _C010Cursor(self.rows, self.queries)
 
 
+class _C010IndustryProjection:
+    def __init__(self, symbol: str, trade_date_value: date, *, resolved: bool = True):
+        self.status = "resolved" if resolved else "unavailable"
+        self.canonical_symbol = symbol
+        self.trade_date = trade_date_value
+        self.l1_code = "801150.SI" if resolved else None
+        self.l1_name = "pharma" if resolved else None
+        self.l2_code = "370400" if resolved else None
+        self.l2_name = "distribution" if resolved else None
+        self.reason_code = None if resolved else "classification:classification_unavailable"
+
+    def as_dict(self):
+        return {
+            "status": self.status,
+            "canonical_symbol": self.canonical_symbol,
+            "trade_date": self.trade_date.isoformat(),
+            "l1_code": self.l1_code,
+            "l1_name": self.l1_name,
+            "l2_code": self.l2_code,
+            "l2_name": self.l2_name,
+            "reason_code": self.reason_code,
+            "classification_receipt_hash": "1" * 64,
+            "index_membership_receipt_hash": "2" * 64,
+            "classification_row_hashes": ["3" * 64] if self.status == "resolved" else [],
+            "index_membership_row_hashes": [],
+            "alignment_state": "classification_only",
+            "classification_research_basis": "stable_taxonomy_backcast",
+            "non_as_known_taxonomy": True,
+        }
+
+
+class _C010IndustryPitAdapter:
+    def __init__(self, *, unavailable_keys=(), transition_dates=()):
+        self.unavailable_keys = set(unavailable_keys)
+        self.classification_resolver = SimpleNamespace(transition_dates=lambda symbol: tuple(transition_dates))
+        self.index_membership_resolver = SimpleNamespace(transition_dates=lambda symbol: ())
+
+    def resolve(self, symbol: str, trade_date_value: date):
+        return _C010IndustryProjection(
+            symbol,
+            trade_date_value,
+            resolved=(symbol, trade_date_value) not in self.unavailable_keys,
+        )
+
+
+class _C010IndustryDenominator:
+    def __init__(self, symbol: str, dates):
+        self.window_start = date(2022, 1, 1)
+        self.window_end = date(2024, 6, 30)
+        self.universe_spans = (SimpleNamespace(canonical_symbol=symbol),)
+        self._dates = tuple(dates)
+
+    def dates_for_span(self, span):
+        del span
+        return self._dates
+
+
 class _C010Resolution:
     def __init__(self, symbol: str, dataset: str):
         self.security_identity_id = f"canonical:{symbol}"
@@ -1576,6 +1633,70 @@ def test_c010_partition_keeps_known_sw_domain_out_key_without_fabricating_sector
     assert "JOIN l2_catalog l2" in query
 
 
+@pytest.mark.parametrize(
+    ("unavailable", "expected_in_count", "expected_failed_predicates"),
+    [
+        (False, 1, []),
+        (True, 0, ["sw_l1_identity_valid", "sw_l2_identity_valid"]),
+    ],
+)
+def test_c010_partition_uses_frozen_industry_pit_when_stock_facts_use_the_adapter(
+    unavailable: bool,
+    expected_in_count: int,
+    expected_failed_predicates: list[str],
+) -> None:
+    trade_date_value = date(2022, 1, 4)
+    absence = _c010_absence("002411.SZ", trade_date_value)
+    provider_manifest = SimpleNamespace(
+        rows=(absence,),
+        evidence=lambda: {"schema_version": "hmm_risk_provider_absence_manifest_v1", "manifest_sha256": "b" * 64},
+    )
+    connection = _C010Connection(
+        [
+            (
+                "002411.SZ",
+                trade_date_value,
+                [{"ts_code": "002411.SZ", "eligible_start": "2018-08-01", "eligible_end": "2022-06-30"}],
+                [{"ts_code": "002411.SZ", "trade_date": "2022-01-04", "close_li": 12345}],
+            )
+        ]
+    )
+
+    partition, authorities = subject._c010_provider_absence_partition(
+        connection,
+        SimpleNamespace(universe_key="frozen", universe_rule_version="rule-v1"),
+        security_identity_manifest=_C010SecurityManifest(),
+        provider_absence_manifest=provider_manifest,
+        source_state={"column_contract_sha256": "c" * 64, "source_state": "ready"},
+        mapping_manifest={
+            "schema_version": "hmm_risk_pit_mapping_manifest_v2",
+            "classification_authority_receipt_hash": "1" * 64,
+            "index_membership_authority_receipt_hash": "2" * 64,
+            "active_classification_basis": "stable_taxonomy_backcast",
+            "non_as_known_taxonomy": True,
+            "manifest_hash": "d" * 64,
+        },
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+        formal_policy=True,
+        industry_pit_adapter=_C010IndustryPitAdapter(
+            unavailable_keys=({("002411.SZ", trade_date_value)} if unavailable else ())
+        ),
+    )
+
+    assert partition["p_in_entry_count"] == expected_in_count
+    assert partition["p_out_entry_count"] == 1 - expected_in_count
+    entry = partition["entries"][0]
+    expected_status = "unavailable" if unavailable else "available"
+    assert entry["sw_l1_identity_valid"]["status"] == expected_status
+    assert entry["sw_l2_identity_valid"]["status"] == expected_status
+    assert entry["failed_predicates"] == expected_failed_predicates
+    assert authorities[-1]["authority_type"] == "hmm_industry_pit_classification_projection"
+    query = " ".join(connection.queries[0].split())
+    assert "market.sw_index_member" not in query
+    assert "MEMBER_CLASSIFICATION_CTES" not in query
+
+
 def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping() -> None:
     authority = subject.canonical_authority_identity("test", {"version": "v1"})
     source_spec = SimpleNamespace(universe_key="frozen")
@@ -1624,6 +1745,41 @@ def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping(
             train_end=date(2024, 6, 30),
             authority_identities=[authority],
         )
+
+
+def test_c010_expected_opportunity_uses_same_frozen_industry_pit_as_stock_facts() -> None:
+    trade_dates = (date(2022, 1, 4), date(2022, 1, 5), date(2022, 1, 6))
+    authority = subject.canonical_authority_identity(
+        "hmm_industry_pit_classification_projection",
+        {"schema_version": "hmm_risk_pit_mapping_manifest_v2", "manifest_hash": "d" * 64},
+    )
+    connection = _C010Connection([])
+
+    receipt = subject._c010_expected_opportunity_receipt(
+        connection,
+        SimpleNamespace(universe_key="frozen"),
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+        authority_identities=[authority],
+        industry_pit_adapter=_C010IndustryPitAdapter(
+            unavailable_keys={("002411.SZ", date(2022, 1, 4))},
+            transition_dates=(date(2022, 1, 5),),
+        ),
+        industry_pit_denominator=_C010IndustryDenominator("002411.SZ", trade_dates),
+    )
+
+    assert connection.queries == []
+    assert receipt["opportunity_key_count"] == 2
+    assert receipt["entries"] == [
+        {
+            "canonical_ts_code": "002411.SZ",
+            "opportunity_dates": ["2022-01-05", "2022-01-06"],
+            "opportunity_count": 2,
+            "opportunity_date_sha256": subject.canonical_sha256(["2022-01-05", "2022-01-06"]),
+            "authority_identity_sha256": subject.canonical_sha256([authority]),
+            "entry_sha256": receipt["entries"][0]["entry_sha256"],
+        }
+    ]
 
 
 def test_main_c010_a5_preflight_writes_compact_readonly_receipt(monkeypatch, tmp_path, capsys) -> None:

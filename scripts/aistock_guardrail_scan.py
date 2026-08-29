@@ -6,12 +6,18 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 DEFAULT_CATALOG = Path("docs/standards/aistock_development_standard_v1.5_20260523.yaml")
@@ -283,6 +289,101 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
                             )
                             break
     return findings
+
+
+def scan_ci_workflow_policy(files: Iterable[Path], root: Path) -> list[Finding]:
+    """Adapt the stdlib workflow denylist into normal guardrail findings."""
+    from scripts.ci_workflow_policy_scan import scan_workflow_text
+
+    findings: list[Finding] = []
+    for file_path in files:
+        path_key = _path_key(file_path, root)
+        if not path_key.startswith(".github/workflows/"):
+            continue
+        for item in scan_workflow_text(file_path.read_text(encoding="utf-8", errors="ignore"), path_key):
+            database_violation = any(
+                token in item["reason"]
+                for token in ("database", "postgres", "timescale", "services", "container")
+            )
+            rule_id = "CI-DATABASE-SAFETY-001" if database_violation else "CI-ENVIRONMENT-PARITY-001"
+            title = (
+                "CI workflow must not create an independent database service"
+                if database_violation
+                else "CI workflow must use prebuilt Windows tooling without installation"
+            )
+            remediation = (
+                "Route database validation to the existing DEV database; do not declare services or start a database container."
+                if database_violation
+                else "Use the prebuilt Windows AIstock-CI runner and remove setup or dependency installation commands."
+            )
+            fingerprint = hashlib.sha256(
+                f"{rule_id}:{path_key}:{item['line']}".encode("utf-8")
+            ).hexdigest()[:16]
+            findings.append(
+                Finding(
+                    rule_id=rule_id,
+                    title=title,
+                    severity="P0",
+                    category="ci_workflow",
+                    file=path_key,
+                    line=int(item["line"]),
+                    message=item["reason"],
+                    remediation=remediation,
+                    baseline_policy="block_new_only",
+                    fingerprint=fingerprint,
+                )
+            )
+    return findings
+
+
+def scan_standard_digest_consistency(
+    files: Iterable[Path],
+    *,
+    root: Path,
+    catalog: dict[str, Any],
+    catalog_path: Path,
+) -> list[Finding]:
+    """Surface the existing sole-standard digest contract in changed-files scans."""
+
+    standard_rel = str(catalog.get("source_standard") or "").strip()
+    catalog_rel = _path_key(catalog_path, root)
+    selected = {_path_key(path, root) for path in files}
+    if not standard_rel or not ({standard_rel, catalog_rel} & selected):
+        return []
+    if not bool((catalog.get("rule_sync_policy") or {}).get("source_digest_required")):
+        return []
+    standard_path = root / standard_rel
+    if not standard_path.is_file():
+        return []
+    normalized = standard_path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    expected = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    actual = str(catalog.get("source_sha256") or "").strip().lower()
+    if actual == expected:
+        return []
+    catalog_text = catalog_path.read_text(encoding="utf-8")
+    line = next(
+        (index for index, value in enumerate(catalog_text.splitlines(), start=1) if value.startswith("source_sha256:")),
+        1,
+    )
+    rule_id = "STANDARD-SOURCE-DIGEST"
+    return [
+        Finding(
+            rule_id=rule_id,
+            title="Machine catalog must match the sole human-readable standard",
+            severity="P1",
+            category="development_standard",
+            effect="block",
+            file=catalog_rel,
+            line=line,
+            message=f"source_sha256 is stale: actual={actual or 'missing'} expected={expected}",
+            remediation=(
+                f"After completing Markdown edits, set source_sha256 to {expected}; "
+                "do not copy or replace the human-readable authority."
+            ),
+            baseline_policy="block_new_and_changed_standard",
+            fingerprint=hashlib.sha256(f"{rule_id}:{catalog_rel}:{expected}".encode("utf-8")).hexdigest()[:16],
+        )
+    ]
 
 
 def _changed_line_numbers(root: Path, paths: Iterable[Path], *, staged: bool) -> dict[str, set[int]]:
@@ -696,11 +797,20 @@ def main() -> int:
 
     files = iter_files(candidate_paths, root=root, suffixes=suffixes, skip_parts=skip_parts)
     findings = scan_files(files, rules=rules, root=root)
+    findings.extend(scan_ci_workflow_policy(files, root))
     if args.changed_only or args.staged_only:
         findings = filter_findings_to_changed_lines(
             findings,
             _changed_line_numbers(root, files, staged=args.staged_only),
         )
+    findings.extend(
+        scan_standard_digest_consistency(
+            files,
+            root=root,
+            catalog=catalog,
+            catalog_path=root / args.catalog,
+        )
+    )
     baseline_path = root / args.baseline_json if args.baseline_json else None
     baseline_fingerprints = load_baseline_fingerprints(baseline_path)
     findings = apply_baseline_status(findings, baseline_fingerprints)

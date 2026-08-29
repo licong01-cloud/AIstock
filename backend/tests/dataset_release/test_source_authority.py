@@ -16,12 +16,17 @@ from backend.services.dataset_release.pit import freeze_pit_snapshot
 from backend.services.dataset_release.source_authority import (
     PRODUCTION_QUERY_SPECS,
     MonthlySourceAuthority,
+    PostgresSourceSnapshotSession,
     SourceAuditIncomplete,
     SourceRequiredTableMissing,
     SourceSnapshotRevised,
     SourceTableSchema,
     load_source_stage_receipt,
     seal_source_stage_receipt,
+)
+from backend.services.dataset_release.profile import load_dataset_profile
+from backend.services.dataset_release.sector_data_candidate_source import (
+    SECTOR_CANDIDATE_SOURCE_SCHEMA,
 )
 from backend.services.dataset_release.sealed_source_reader import (
     CASSealedPartitionReader,
@@ -34,6 +39,58 @@ from backend.services.dataset_release.source_manifest import (
     ColumnSpec,
     PartitionSpec,
 )
+
+
+class _NamedCursorFixture:
+    def __init__(self, connection: "_NamedCursorConnectionFixture", name: str) -> None:
+        self._connection = connection
+        self._name = name
+        self._rows = [(date(2026, 7, 1),)]
+        self.description = (("trade_date",),)
+        self.itersize = 0
+
+    def execute(self, _sql: str, _params: Mapping[str, Any]) -> None:
+        return None
+
+    def fetchmany(self, _size: int) -> list[tuple[date]]:
+        rows, self._rows = self._rows, []
+        return rows
+
+    def close(self) -> None:
+        self._connection.active_names.remove(self._name)
+
+
+class _NamedCursorConnectionFixture:
+    def __init__(self) -> None:
+        self.active_names: set[str] = set()
+        self.opened_names: list[str] = []
+
+    def cursor(self, *, name: str) -> _NamedCursorFixture:
+        if name in self.active_names:
+            raise RuntimeError(f"duplicate cursor: {name}")
+        self.active_names.add(name)
+        self.opened_names.append(name)
+        return _NamedCursorFixture(self, name)
+
+
+def test_postgres_snapshot_parallel_same_query_streams_use_unique_cursor_names(dataset_profile) -> None:
+    connection = _NamedCursorConnectionFixture()
+    session = PostgresSourceSnapshotSession(dataset_profile.resource_policy)
+    session._connection = connection
+
+    first = session.stream("trading_dates", {"start": date(2026, 7, 1)}, fetch_rows=1)
+    second = session.stream("trading_dates", {"start": date(2026, 7, 2)}, fetch_rows=1)
+    try:
+        assert next(first) == {"trade_date": date(2026, 7, 1)}
+        assert next(second) == {"trade_date": date(2026, 7, 1)}
+        assert len(connection.opened_names) == 2
+        assert len(set(connection.opened_names)) == 2
+        assert all(name.startswith("dataset_release_") and len(name) <= 63 for name in connection.opened_names)
+    finally:
+        first.close()
+        second.close()
+
+    assert connection.active_names == set()
 
 
 class FakeSnapshotSession:
@@ -70,6 +127,8 @@ class FakeSnapshotSession:
         self.fingerprint_calls: list[str] = []
         self.fingerprint_call_counts: dict[str, int] = {}
         self.fingerprint_readback_drift_query: str | None = None
+        self.pit_rule_version = "st_pub_next_trade_restore_active_l_v1"
+        self.pit_scope = "st_only_active"
 
     def __enter__(self):
         self.entered += 1
@@ -155,8 +214,8 @@ class FakeSnapshotSession:
         if query_id == "pit_state":
             return {
                 "universe_key": params["universe_key"],
-                "rule_version": "st_pub_next_trade_restore_active_l_v1",
-                "scope": "st_only_active",
+                "rule_version": self.pit_rule_version,
+                "scope": self.pit_scope,
                 "start_date": date(2026, 7, 1),
                 "end_date": date(2026, 7, 31),
                 "status": "ready",
@@ -430,6 +489,152 @@ def test_production_source_allowlist_uses_semantic_projection_and_code_major_ord
         "up_limit",
         "down_limit",
     )
+
+
+def test_canonical_source_freeze_replaces_legacy_sector_table_with_p3a_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = load_dataset_profile(
+        Path(__file__).resolve().parents[3] / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml"
+    )
+    profile = replace(
+        profile,
+        start_date=date(2026, 7, 1),
+        minute_start_date=date(2026, 7, 1),
+    )
+    fake = FakeSnapshotSession()
+    fake.pit_rule_version = profile.universe_rule_version
+    fake.pit_scope = profile.pit_scope
+    candidate_hash = "a" * 64
+    selected_hash = {"value": candidate_hash}
+
+    class FakeP3ASource:
+        def __init__(self, value: str) -> None:
+            self.candidate_hash = value
+
+        @property
+        def query_version(self) -> str:
+            return f"sector_data_p3a_dual_authority_candidate_v1:{self.candidate_hash}"
+
+        @property
+        def source_table_identity(self) -> str:
+            return f"artifact.{SECTOR_CANDIDATE_SOURCE_SCHEMA}.{self.candidate_hash}"
+
+        def iter_rows(self, *, start, end, l2_code_map):  # noqa: ANN001, ANN201
+            del start, end
+            assert l2_code_map == {"801010.SI": 0}
+            yield {
+                "ts_code": "000001.SZ",
+                "trade_date": "2026-07-01",
+                "sw2_open": "1",
+                "sw2_high": "1",
+                "sw2_low": "1",
+                "sw2_close": "1",
+                "sw2_pct_change": "1",
+                "sw2_vol": "1",
+                "sw2_amount": "1",
+                "sw2_pe": "1",
+                "sw2_pb": "1",
+                "sw2_total_mv": "1",
+                "sw2_mf_buy_sm_amt": "1",
+                "sw2_mf_sell_sm_amt": "1",
+                "sw2_mf_buy_md_amt": "1",
+                "sw2_mf_sell_md_amt": "1",
+                "sw2_mf_buy_lg_amt": "1",
+                "sw2_mf_sell_lg_amt": "1",
+                "sw2_mf_buy_elg_amt": "1",
+                "sw2_mf_sell_elg_amt": "1",
+                "sw2_mf_net_amt": "1",
+                "sw2_mf_buy_elg_vol": "1",
+                "sw2_mf_sell_elg_vol": "1",
+                "sw2_mf_net_vol": "1",
+                "l2_code_id": 0,
+            }
+
+        def verify_unchanged(self) -> None:
+            return None
+
+        def receipt(self, *, code_map_digest, classify_partitions):  # noqa: ANN001, ANN201
+            return {
+                "schema_version": SECTOR_CANDIDATE_SOURCE_SCHEMA,
+                "profile": profile.profile,
+                "cutoff": "2026-07-31",
+                "candidate_root_id": profile.candidate_root_id,
+                "candidate_root_relative_path": (
+                    ".sector_data_authority/qe_hmm_full_v2/2026-07-31/full"
+                ),
+                "candidate_scope": "full",
+                "candidate_hash": self.candidate_hash,
+                "industry_bundle_hash": "b" * 64,
+                "classification_authority_receipt_hash": "c" * 64,
+                "index_membership_authority_receipt_hash": "d" * 64,
+                "source_denominator_digest": "e" * 64,
+                "expected_opportunities": 1,
+                "opportunity_digest": "f" * 64,
+                "candidate_report_canonical_hash": "0" * 64,
+                "status_counts": {"resolved": 1},
+                "alignment_counts": {"aligned": 1},
+                "unavailable_by_reason": {},
+                "query_version": self.query_version,
+                "code_map_digest": code_map_digest,
+                "classify_partitions": list(classify_partitions),
+                "safety": {
+                    "database_writes": 0,
+                    "provider_database_writes": 0,
+                    "production_writes": 0,
+                    "production_deletes": 0,
+                    "production_pointer_changes": 0,
+                    "service_process_controls": 0,
+                    "candidate_writes": 0,
+                },
+            }
+
+    monkeypatch.setattr(
+        source_authority_module.SectorCandidateSource,
+        "load",
+        lambda *_args, **_kwargs: FakeP3ASource(selected_hash["value"]),
+    )
+    store = ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(store.root)
+    authority = MonthlySourceAuthority(
+        profile,
+        cas,
+        session_factory=lambda _policy: fake,
+    )
+
+    snapshot = authority.freeze(cutoff=date(2026, 7, 31))
+
+    sector = [item for item in snapshot.partitions if item.spec.dataset == "sector_data"]
+    assert len(sector) == 1
+    assert sector[0].summary.row_count == 1
+    assert sector[0].spec.query_version.startswith(
+        f"sector_data_p3a_dual_authority_candidate_v1:{candidate_hash}:table_schema_sha256:"
+    )
+    assert candidate_hash in sector[0].source_table_schema.table_identity
+    assert "sector_data" not in fake.stream_calls
+    assert "sector_data" not in fake.audit_datasets_requested
+    stage_ref = seal_source_stage_receipt(cas, snapshot, profile=profile.profile)
+    loaded = load_source_stage_receipt(
+        cas,
+        stage_ref,
+        expected_profile=profile.profile,
+        expected_cutoff=date(2026, 7, 31),
+        profile=profile,
+    )
+    assert loaded.source_content_root == snapshot.source_content_root
+
+    selected_hash["value"] = "1" * 64
+    second_fake = FakeSnapshotSession()
+    second_fake.pit_rule_version = profile.universe_rule_version
+    second_fake.pit_scope = profile.pit_scope
+    second_store = ControlStore.initialize(tmp_path / "second-control")
+    second = MonthlySourceAuthority(
+        profile,
+        CASStore(second_store.root),
+        session_factory=lambda _policy: second_fake,
+    ).freeze(cutoff=date(2026, 7, 31))
+    assert second.source_content_root != snapshot.source_content_root
 
 
 def test_stk_limit_raw_source_accepts_only_registered_nullable_repair_columns() -> None:
@@ -858,15 +1063,51 @@ def test_source_writer_ledger_uses_latest_data_sync_attempt_per_target() -> None
     sql = source_authority_module._SOURCE_WRITER_LEDGER_SQL
     data_sync_projection = sql.split("UNION ALL", maxsplit=1)[1]
 
-    assert "WITH latest_data_sync_attempt AS" in sql
+    assert "WITH normalized_ingestion_job AS" in sql
+    assert "relevant_ingestion_job AS" in sql
+    assert "summary->>'actual_dataset'" in sql
+    assert "summary->>'schedule_dataset'" in sql
+    assert "summary->>'dataset'" in sql
+    assert "job.direct_dataset = ANY(%(datasets)s)" in sql
+    assert "job.status NOT IN ('queued','pending','running')" in sql
+    assert "job.source_start::date <= %(cutoff)s" in sql
+    assert "FROM relevant_ingestion_job" in sql
+    assert "latest_data_sync_attempt AS" in sql
     assert "SELECT DISTINCT ON (attempt.target_id)" in sql
     assert "attempt.attempt_no" in sql
     assert "ORDER BY attempt.target_id,attempt.attempt_no DESC" in sql
+    assert "target.target_date <= %(cutoff)s" in sql
     assert "FROM latest_data_sync_attempt AS attempt" in sql
     assert "attempt.status='started'" in sql
     assert "target." not in data_sync_projection
     assert "'dataset',attempt.dataset" in data_sync_projection
     assert "'data_source',attempt.data_source" in data_sync_projection
+
+
+def test_source_writer_ledger_binds_cutoff_and_versioned_relevant_writer_policy(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    authority, cas = _authority(dataset_profile, tmp_path, fake)
+
+    frozen = authority.freeze(cutoff=date(2026, 7, 31))
+
+    writer_params = [params for query_id, params in fake.stream_params if query_id == "writer_ledger"]
+    assert len(writer_params) >= 2
+    assert all(params["cutoff"] == date(2026, 7, 31) for params in writer_params)
+    assert all(params["start"] == date(2026, 7, 1) for params in writer_params)
+    assert all(tuple(params["datasets"]) for params in writer_params)
+    assert source_authority_module.SOURCE_AUTHORITY_POLICY_VERSION == "qe_monthly_source_authority_v3"
+    assert source_authority_module.SOURCE_CONSISTENCY_POLICY.endswith(
+        "relevant_writer_ledger_quiescence_v2"
+    )
+    provenance = cas.get_json_bounded(frozen.source_provenance_ref, max_bytes=4 * 1024**2)
+    writer_evidence = provenance["writer_ledger_evidence"]
+    assert writer_evidence["schema_version"] == "dataset_release_source_writer_ledger_v2"
+    assert writer_evidence["source_cutoff"] == "2026-07-31"
+    assert writer_evidence["non_active_job_policy"] == "direct_dataset_at_or_before_cutoff_v1"
+    assert writer_evidence["active_job_policy"] == "relevant_or_unclassified_fail_closed_v1"
 
 
 def test_source_freeze_still_blocks_latest_active_writer(

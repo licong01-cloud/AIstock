@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, suppress
+import json
 import os
 import socket
 import subprocess
@@ -26,6 +27,12 @@ VALIDATION_ENV_FILE_DENYLIST = {
 VALIDATION_RUNTIME_DEFAULTS = {
     "MINIQMT_EXECUTION_RUNTIME": "event_loop",
 }
+FRONTEND_DIRECT_ENTRYPOINTS = (
+    Path("@playwright/test/cli.js"),
+    Path("typescript/bin/tsc"),
+    Path("next/dist/bin/next"),
+)
+NIGHTLY_SESSION_ARGS_FILE_ENV = "AISTOCK_NIGHTLY_SESSION_ARGS_FILE"
 
 nox.options.reuse_existing_virtualenvs = True
 nox.options.sessions = ["l0"]
@@ -94,6 +101,20 @@ def _paper_v2_force_realtime(args: list[str]) -> bool:
     if os.environ.get("PAPER_V2_FORCE_REALTIME", "").strip().lower() in {"1", "true", "yes", "on"}:
         return True
     return "--require-live-bars" in args or "--require-fills" in args
+
+
+def _ci_dependency_install_forbidden() -> bool:
+    """Return whether this run must use the prebuilt validation environment.
+
+    GitHub Actions must never repair a missing frontend dependency tree at
+    runtime.  Local developers can still opt into the historical ``npm ci``
+    bootstrap by leaving both markers unset.
+    """
+
+    return any(
+        os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+        for name in ("GITHUB_ACTIONS", "AISTOCK_CI_INSTALL_FORBIDDEN")
+    )
 
 
 def _validation_artifact_args(*, output_json: str, summary_md: str | None = None) -> list[str]:
@@ -323,9 +344,18 @@ def _managed_validation_frontend(session: nox.Session, frontend_port: str, env: 
 
 def _ensure_frontend_node_modules(session: nox.Session) -> None:
     frontend = ROOT / "frontend"
-    if (frontend / "node_modules" / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright")).exists():
+    node_modules = frontend / "node_modules"
+    missing_entries = [path for path in FRONTEND_DIRECT_ENTRYPOINTS if not (node_modules / path).is_file()]
+    if not missing_entries:
         return
-    session.log("frontend node_modules missing Playwright; running npm ci once for validation workspace")
+    if _ci_dependency_install_forbidden():
+        session.error(
+            "frontend direct entrypoints are missing from the prebuilt CI environment: "
+            f"{', '.join(path.as_posix() for path in missing_entries)}; "
+            "CI/Nightly cannot run npm ci. Rebuild the AIstock-CI image or run "
+            "an explicit local dependency bootstrap before validation."
+        )
+    session.log("frontend node_modules is missing required direct entrypoints; running npm ci once for validation workspace")
     old_cwd = Path.cwd()
     os.chdir(frontend)
     try:
@@ -410,6 +440,15 @@ def _l0_changed_files() -> list[str]:
 def _l0_scan_paths(posargs: list[str]) -> list[str]:
     if posargs:
         return list(dict.fromkeys(path.replace("\\", "/") for path in posargs if path.strip()))
+    scope_file = os.environ.get(NIGHTLY_SESSION_ARGS_FILE_ENV)
+    if scope_file:
+        payload = json.loads(Path(scope_file).read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, list) or not all(isinstance(path, str) for path in payload):
+            raise RuntimeError(f"{NIGHTLY_SESSION_ARGS_FILE_ENV} must contain a JSON list of paths")
+        paths = list(dict.fromkeys(path.strip().replace("\\", "/") for path in payload if path.strip()))
+        if not paths:
+            raise RuntimeError(f"{NIGHTLY_SESSION_ARGS_FILE_ENV} contains no changed paths")
+        return paths
     paths = _l0_changed_files()
     if not paths:
         raise RuntimeError("l0 found no changed files; pass explicit paths when validating a clean checkout")
@@ -467,10 +506,9 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
     os.chdir(ROOT / "frontend")
     try:
         session.run(
-            "npm",
-            "run",
-            "test:e2e",
-            "--",
+            "node",
+            "node_modules/@playwright/test/cli.js",
+            "test",
             target,
             env=_env(
                 {
@@ -493,8 +531,15 @@ def frontend_type_lint(session: nox.Session) -> None:
     old_cwd = Path.cwd()
     os.chdir(ROOT / "frontend")
     try:
-        session.run("npm", "exec", "tsc", "--", "--noEmit", "--incremental", "false", external=True)
-        session.run("npm", "run", "lint", external=True)
+        session.run(
+            "node",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run("node", "node_modules/next/dist/bin/next", "lint", external=True)
     finally:
         os.chdir(old_cwd)
 
@@ -772,6 +817,10 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "scripts/aistock_data_quality_smoke.py",
         "backend/services/validation/plan_catalog.py",
         "backend/services/validation/catalog_integrity.py",
+        "backend/services/industry_pit",
+        "backend/services/sector_data_builder.py",
+        "scripts/build_industry_pit_candidates.py",
+        "scripts/build_sector_data_candidate.py",
         "noxfile.py",
         external=True,
     )
@@ -786,6 +835,10 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_validation_center_api.py",
         "backend/tests/test_validation_execution_runner.py",
         "backend/tests/test_data_quality_smoke_env.py",
+        "backend/tests/industry_pit",
+        "backend/tests/scripts/test_build_industry_pit_candidates.py",
+        "backend/tests/services/test_sector_data_builder.py",
+        "backend/tests/scripts/test_build_sector_data_candidate.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1131,14 +1184,29 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path and authoritative factor-metric contract regressions."""
-    _run_pytest(
-        session,
+    targets = [
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
         "backend/tests/quantevolver/test_factor_emit_hook.py",
+        "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
         "backend/tests/test_factor_metrics_h20_contract.py",
         "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
+    ]
+    dynamic_relation_test = (
+        ROOT
+        / "backend"
+        / "tests"
+        / "quantevolver"
+        / "test_dynamic_residual_flow_relation_v1.py"
+    )
+    if dynamic_relation_test.exists():
+        targets.append(
+            "backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py"
+        )
+    _run_pytest(
+        session,
+        *targets,
         "-q",
         "-p",
         "no:cacheprovider",

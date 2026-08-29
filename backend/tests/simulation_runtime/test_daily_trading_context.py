@@ -176,12 +176,15 @@ def test_missing_raw_pre_close_uses_one_exact_broker_bound_quote_batch() -> None
     }
     DailyTradingContextV1.model_validate(context.carrier_payload())
     reference = DailyTradingContextProvider.to_pre_trade_statuses(context)["000001.SZ"]["daily_trading_context"]
-    _, _, _, frozen_pre_close_source = PaperV2MinuteMarketDataProvider._frozen_realtime_daily_inputs(
-        symbol="000001.SZ",
-        trade_date=TRADE_DATE,
-        frozen_daily_fact=reference,
+    _, _, _, frozen_pre_close_source, frozen_limit_price_source = (
+        PaperV2MinuteMarketDataProvider._frozen_realtime_daily_inputs(
+            symbol="000001.SZ",
+            trade_date=TRADE_DATE,
+            frozen_daily_fact=reference,
+        )
     )
     assert frozen_pre_close_source == "TDX_REALTIME.batch_quote.pre_close:frozen_daily_trading_context_v1"
+    assert frozen_limit_price_source == "market.stk_limit:frozen_daily_trading_context_v1"
 
 
 def test_missing_raw_pre_close_keeps_miniqmt_yuan_price_basis() -> None:
