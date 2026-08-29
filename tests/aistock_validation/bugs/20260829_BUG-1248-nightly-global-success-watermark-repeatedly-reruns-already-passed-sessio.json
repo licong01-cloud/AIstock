@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1248",
-  "closed_at": null,
+  "closed_at": "2026-08-29T15:22:14Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -176,8 +176,8 @@
   },
   "first_seen_at": "2026-08-29T07:32:56.098249Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8b01b676dda58b9ba89dbdcd4c9118ebb4d68d34",
+  "fixed_at": "2026-08-29T15:22:14Z",
   "github_issue_number": 3952,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3952",
   "last_seen_at": "2026-08-29T07:32:56.098249Z",
@@ -185,6 +185,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3957",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -204,6 +205,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -213,7 +215,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1248",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "15aff0e982b9d630",
+    "recorded_at": "2026-08-29T15:26:47.743734Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "780f035f053c68ed7c4374821137ebac51182d55",
+    "source_merge_commit": "8b01b676dda58b9ba89dbdcd4c9118ebb4d68d34",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3957",
+    "validation_evidence": [
+      "validation-receipt: id=7517d2a087f4f58e commit=25e1d96954820d46868faacae19bbd5f5718b6fd kind=pytest plan=direct status=passed command=rtk_pytest_targeted result=40_passed",
+      "validation-receipt: id=ac15e2638d1663f5 commit=25e1d96954820d46868faacae19bbd5f5718b6fd kind=nox plan=guardrail_changed_files status=passed command=python_-m_nox_-s_guardrail_changed_files result=passed_blocking_0_ownership_20_20",
+      "validation-receipt: id=0914e6c0e6d5bc7d commit=25e1d96954820d46868faacae19bbd5f5718b6fd kind=nox plan=validation_module_registry_l0 status=passed command=python_-m_nox_-s_validation_module_registry_l0 result=passed_8_passed_ownership_14_14",
+      "validation-receipt: id=4cbaf8564f01c21d commit=25e1d96954820d46868faacae19bbd5f5718b6fd kind=workflow_smoke plan=direct status=passed command=workflow-smoke result=passed_unexpected_dirty_paths_0"
+    ],
+    "validation_evidence_digest": "b31263a58b3caf0652efc5adbb21fbf1e24dea5d5663be5d86daf5fd49710f7d"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -222,6 +248,12 @@
     "fingerprint": "a4b1b2447f7c63f4d958fcf8",
     "source_event_id": "FE-20260829-a4b1b2447f7c"
   },
+  "validation_evidence": [
+    "validation-receipt: id=7517d2a087f4f58e commit=25e1d96954820d46868faacae19bbd5f5718b6fd kind=pytest plan=direct status=passed command=rtk_pytest_targeted result=40_passed",
+    "validation-receipt: id=ac15e2638d1663f5 commit=25e1d96954820d46868faacae19bbd5f5718b6fd kind=nox plan=guardrail_changed_files status=passed command=python_-m_nox_-s_guardrail_changed_files result=passed_blocking_0_ownership_20_20",
+    "validation-receipt: id=0914e6c0e6d5bc7d commit=25e1d96954820d46868faacae19bbd5f5718b6fd kind=nox plan=validation_module_registry_l0 status=passed command=python_-m_nox_-s_validation_module_registry_l0 result=passed_8_passed_ownership_14_14",
+    "validation-receipt: id=4cbaf8564f01c21d commit=25e1d96954820d46868faacae19bbd5f5718b6fd kind=workflow_smoke plan=direct status=passed command=workflow-smoke result=passed_unexpected_dirty_paths_0"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
