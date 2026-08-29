@@ -600,8 +600,13 @@ def load_feature_domain_direct_aggregates(
     *,
     min_coverage: float = MIN_COVERAGE,
     formal_policy: bool = False,
+    direct_levels: tuple[str, ...] = ("L1", "L2"),
 ) -> tuple[list[L1DailyAggregate], list[L1DailyAggregate], dict[str, Any]]:
     """Build diagnostic direct L1/L2 aggregates from one canonical raw stream."""
+
+    if direct_levels not in {("L1",), ("L1", "L2")}:
+        raise StateModelSetError("C-010 direct aggregate levels are invalid")
+    include_l2 = direct_levels == ("L1", "L2")
 
     missing_rows = list(reader.iter_missing_price_rows())
     merged_rows = heapq.merge(
@@ -635,6 +640,7 @@ def load_feature_domain_direct_aggregates(
                 train_eligibility_unavailable_keys.add((symbol, row["trade_date"]))
             if contributor_eligibility.get(symbol) is not True:
                 impacted_l1.add(str(row["l1_code"]))
+            if include_l2:
                 impacted_l2.add(str(row["l2_code"]))
         l1_rows = sorted(day_rows, key=lambda row: (row["l1_code"], row["symbol"], row["l2_code"]))
         for _, group in itertools.groupby(l1_rows, key=lambda row: row["l1_code"]):
@@ -649,26 +655,27 @@ def load_feature_domain_direct_aggregates(
                 )
             except ObservationCoverageError as exc:
                 l1_invalid_price_domain.append(_invalid_price_domain_receipt(exc, rows, direct_sector_level="L1"))
-        l2_rows = sorted(day_rows, key=lambda row: (row["l2_code"], row["symbol"], row["l1_code"]))
-        projected_l2_rows = []
-        for row in l2_rows:
-            projected = dict(row)
-            projected["l1_code"] = row["l2_code"]
-            projected["l1_name"] = row["l2_name"]
-            projected_l2_rows.append(projected)
-        for _, group in itertools.groupby(projected_l2_rows, key=lambda row: row["l1_code"]):
-            rows = list(group)
-            try:
-                l2_aggregates.append(
-                    aggregate_l1_day(
-                        rows,
-                        min_coverage=min_coverage,
-                        moneyflow_contributor_eligibility=contributor_eligibility,
+        if include_l2:
+            l2_rows = sorted(day_rows, key=lambda row: (row["l2_code"], row["symbol"], row["l1_code"]))
+            projected_l2_rows = []
+            for row in l2_rows:
+                projected = dict(row)
+                projected["l1_code"] = row["l2_code"]
+                projected["l1_name"] = row["l2_name"]
+                projected_l2_rows.append(projected)
+            for _, group in itertools.groupby(projected_l2_rows, key=lambda row: row["l1_code"]):
+                rows = list(group)
+                try:
+                    l2_aggregates.append(
+                        aggregate_l1_day(
+                            rows,
+                            min_coverage=min_coverage,
+                            moneyflow_contributor_eligibility=contributor_eligibility,
+                        )
                     )
-                )
-            except ObservationCoverageError as exc:
-                l2_invalid_price_domain.append(_invalid_price_domain_receipt(exc, rows, direct_sector_level="L2"))
-    if not l1_aggregates or not l2_aggregates:
+                except ObservationCoverageError as exc:
+                    l2_invalid_price_domain.append(_invalid_price_domain_receipt(exc, rows, direct_sector_level="L2"))
+    if not l1_aggregates or (include_l2 and not l2_aggregates):
         raise StateModelSetError("C-010 diagnostic produced no direct L1/L2 aggregates")
     evidence = {
         "schema_version": "hmm_risk_c010_feature_domain_aggregate_evidence_v1",
@@ -709,4 +716,7 @@ def load_feature_domain_direct_aggregates(
         "formal_policy_activated": formal_policy,
         "database_write_performed": False,
     }
+    if not include_l2:
+        evidence["schema_version"] = "hmm_risk_c010_rotation_l1_feature_domain_aggregate_evidence_v1"
+        evidence["direct_levels"] = ["L1"]
     return l1_aggregates, l2_aggregates, {**evidence, "receipt_sha256": canonical_sha256(evidence)}
