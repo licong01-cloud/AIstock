@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1223",
-  "closed_at": null,
+  "closed_at": "2026-08-29T05:00:20.431107Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -93,10 +93,32 @@
     "inference_basis": "backend/services/paper_trading_v2/repository.py changes LocalSIM position authority",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1223-close-sync-20260829\\tmp\\issue_workflow\\BUG-1223\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1223",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5b021bc27d4e1872296985eedda40721364a174197051ad0c098a3a8c466242f",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "f68036fc406554d6e6d46af9501e922bd53abd80",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-29T04:53:44.930709Z",
+      "mode": "read_only",
+      "observed_identity": "90380772f036d89989b8113ff6740d68443b8ee0",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "63723cd5aa0d3854929774dcea225913b96153154d88168f399853e73c49b95d",
+      "receipt_sha256": "9ebb13eb6e12f72e22f02569c6f724ec9a8e1bcd3e9a10686cf696a7de85a68a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "04d1967176a92aa6e05480f6c476ccab6801facbc43f31352b1f25949ca84f7f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": true,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -129,7 +151,7 @@
     ],
     "validation_evidence_digest": "a484586579f21493f987a56853304ddf0992548d7bf39826c57352a0031613c7"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -141,7 +163,8 @@
   "validation_evidence": [
     "validation-receipt: id=41d57c067b9d4684 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14`",
     "validation-receipt: id=f889f9f4040f1d1d commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=paper_v2_backend status=passed command=`rtk nox -s paper_v2_backend` result=`passed`",
-    "validation-receipt: id=71c602ab442b66c0 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`passed`"
+    "validation-receipt: id=71c602ab442b66c0 commit=5d7afdf8b530dd37f58722e848c190b5a9182c94 kind=nox plan=simulation_core_l2 status=passed command=`rtk nox -s simulation_core_l2` result=`passed`",
+    "python scripts/prune_localsim_failed_history.py production apply -> passed; transaction=committed; plan_sha256=ef30317fd0557ef642cfa9d9e7cee12588f37a1fd6665739274fb4d4e60f2f56; deleted_runs=48; post_commit_readback=passed; remaining_candidates=0; protected_sha256_match=true"
   ],
   "verification_budget": {
     "budget": "standard",
