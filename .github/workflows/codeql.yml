@@ -3,10 +3,10 @@ name: CodeQL
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'tests/aistock_validation/bugs/**'
   push:
     branches: [main]
+    paths-ignore:
+      - 'tests/aistock_validation/bugs/**'
   schedule:
     - cron: '27 20 * * 0'
   workflow_dispatch: {}
@@ -16,30 +16,88 @@ permissions:
   contents: read
   security-events: write
 
-jobs:
-  docs-lite:
-    name: CodeQL fast-lane no-op
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    outputs:
-      docs_lite: ${{ steps.fast_lane.outputs.docs_lite }}
-      registry_sync: ${{ steps.fast_lane.outputs.registry_sync }}
-      languages: ${{ steps.fast_lane.outputs.languages }}
-      has_languages: ${{ steps.fast_lane.outputs.has_languages }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
-      - name: Install change-classifier dependency
-        run: python -m pip install --disable-pip-version-check --no-input pyyaml
+jobs:
+  codeql-verdict:
+    name: CodeQL verdict
+    runs-on: [self-hosted, Windows, aistock-ci-security]
+    timeout-minutes: 75
+    env:
+      AISTOCK_CI_CODEQL_BUNDLE_PATH: 'F:\Dev\github-actions-runner\aistock\_work\_tool\CodeQL\2.26.3\x64\codeql'
+      AISTOCK_CI_CODEQL_BUNDLE_SHA256: 504311cdee523aae41ae0ecc318f5d225ff051bbe9c50a94840d11cd35f2c38b
+      AISTOCK_CI_CODEQL_BUNDLE_VERSION: 2.26.3
+    steps:
+      - name: Prepare exact local workspace (no remote actions)
+        id: prepare
+        shell: powershell
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $source = "F:/Dev/AIstock"
+          $cacheRef = "refs/aistock-ci/codeql-${{ github.run_id }}-${{ github.run_attempt }}-$env:GITHUB_JOB"
+          try {
+            git -C $source rev-parse --verify --quiet "$env:EXPECTED_COMMIT^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              $fetchRef = if ($env:PR_NUMBER) { "refs/pull/$env:PR_NUMBER/merge" } else { "refs/heads/$env:REF_NAME" }
+              $fetched = $false
+              for ($attempt = 1; $attempt -le 3; $attempt++) {
+                git -C $source fetch --no-tags --no-write-fetch-head origin "${fetchRef}:$cacheRef"
+                if ($LASTEXITCODE -eq 0) {
+                  git -C $source rev-parse --verify --quiet "$env:EXPECTED_COMMIT^{commit}" 2>$null
+                  if ($LASTEXITCODE -eq 0) { $fetched = $true; break }
+                }
+                if ($attempt -lt 3) { Start-Sleep -Seconds ($attempt * 2) }
+              }
+              if (-not $fetched) { throw "exact workspace source fetch failed after 3 attempts: $fetchRef" }
+            }
+            git -C $source update-ref $cacheRef $env:EXPECTED_COMMIT
+            if ($LASTEXITCODE -ne 0) { throw "failed to pin exact workspace cache ref: $cacheRef" }
+            $env:GIT_CONFIG_COUNT = "1"
+            $env:GIT_CONFIG_KEY_0 = "core.longpaths"
+            $env:GIT_CONFIG_VALUE_0 = "true"
+            python "$source/scripts/ci/prepare_self_hosted_workspace.py" `
+              --source $source `
+              --dest $env:GITHUB_WORKSPACE `
+              --expected-commit $env:EXPECTED_COMMIT `
+              --repo $env:GITHUB_REPOSITORY `
+              --summary-json "$env:RUNNER_TEMP/aistock_self_hosted_workspace/$env:GITHUB_JOB.json"
+            if ($LASTEXITCODE -ne 0) { throw "exact local workspace preparation failed" }
+          } finally {
+            git -C $source update-ref -d $cacheRef
+          }
+
+      - name: Fetch current PR base ref only
+        id: base_ref
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHECKOUT_REF: ${{ github.ref }}
+        run: |
+          python scripts/ci_changed_files.py --prepare-pr-merge-base-only `
+            --base-ref $env:BASE_REF --base-sha $env:BASE_SHA --checkout-ref $env:CHECKOUT_REF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify prebuilt AIstock-CI environment
+        id: environment
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Detect CodeQL fast lane
         id: fast_lane
+        shell: bash
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           mkdir -p tmp/validation/codeql
           python scripts/ci_changed_files.py \
@@ -53,54 +111,98 @@ jobs:
             --output-json tmp/validation/codeql/change-classification.json
           DOCS_LITE=$(python -c "import json; print('1' if json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8'))['docs_lite_required'] else '0')")
           REGISTRY_SYNC=$(python -c "import json; print('1' if json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8'))['close_sync_metadata_only'] else '0')")
-          PYTHON_CHANGED=0
-          JAVASCRIPT_CHANGED=0
-          while IFS= read -r path; do
-            case "${path}" in
-              *.py) PYTHON_CHANGED=1 ;;
-              *.js|*.jsx|*.ts|*.tsx) JAVASCRIPT_CHANGED=1 ;;
-            esac
-          done < tmp/validation/codeql/changed_files.txt
-          if [ "${PYTHON_CHANGED}" = "1" ] && [ "${JAVASCRIPT_CHANGED}" = "1" ]; then
-            LANGUAGES='["python","javascript-typescript"]'
-          elif [ "${PYTHON_CHANGED}" = "1" ]; then
-            LANGUAGES='["python"]'
-          elif [ "${JAVASCRIPT_CHANGED}" = "1" ]; then
-            LANGUAGES='["javascript-typescript"]'
-          else
-            LANGUAGES='[]'
-          fi
+          LANGUAGE_FIELD=$([ "${EVENT_NAME}" = "pull_request" ] && echo codeql_pr_languages || echo codeql_languages)
+          LANGUAGES=$(python -c "import json; data=json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8')); print(json.dumps(data['${LANGUAGE_FIELD}'], separators=(',', ':')))" )
           HAS_LANGUAGES=$([ "${LANGUAGES}" = "[]" ] && echo 0 || echo 1)
           echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
           echo "registry_sync=${REGISTRY_SYNC}" >> "${GITHUB_OUTPUT}"
           echo "languages=${LANGUAGES}" >> "${GITHUB_OUTPUT}"
           echo "has_languages=${HAS_LANGUAGES}" >> "${GITHUB_OUTPUT}"
           if [ "${HAS_LANGUAGES}" = "0" ]; then
-            python -c "import json; data=json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8')); print(json.dumps({'docs_lite': data['docs_lite_required'], 'registry_sync': data['close_sync_metadata_only'], 'validation': data['classification'], 'codeql': 'skipped', 'reason': 'no_changed_codeql_language'}, ensure_ascii=False))" > tmp/validation/codeql/codeql.json
+            python -c "import json; data=json.load(open('tmp/validation/codeql/change-classification.json', encoding='utf-8')); print(json.dumps({'docs_lite': data['docs_lite_required'], 'registry_sync': data['close_sync_metadata_only'], 'validation': data['classification'], 'codeql': 'skipped', 'reason': 'pull_request_test_only' if data['codeql_pr_test_only'] and '${EVENT_NAME}' == 'pull_request' else 'no_changed_codeql_language'}, ensure_ascii=False))" > tmp/validation/codeql/codeql.json
             cat tmp/validation/codeql/codeql.json
           fi
 
-  analyze:
-    name: CodeQL (${{ matrix.language }})
-    needs: docs-lite
-    if: needs.docs-lite.outputs.has_languages == '1'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        language: ${{ fromJson(needs.docs-lite.outputs.languages) }}
-    steps:
-      - uses: actions/checkout@v4
+      - name: Run CodeQL CLI analysis
+        id: codeql_analysis
+        if: steps.fast_lane.outputs.has_languages == '1'
+        timeout-minutes: 60
+        shell: powershell
+        env:
+          CODEQL_LANGUAGES: ${{ steps.fast_lane.outputs.languages }}
+          GITHUB_TOKEN: ${{ github.token }}
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+          AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'
+        run: |
+          python scripts/ci_environment_verify.py
+          if ($LASTEXITCODE -ne 0) { throw "CodeQL environment verification failed" }
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: none
+          $codeql = Join-Path $env:AISTOCK_CI_CODEQL_BUNDLE_PATH "codeql.exe"
+          if (-not (Test-Path -LiteralPath $codeql -PathType Leaf)) {
+            throw "Verified CodeQL CLI is missing: $codeql"
+          }
+          $languages = @($env:CODEQL_LANGUAGES | ConvertFrom-Json)
+          if ($languages.Count -eq 0) { throw "CodeQL analysis was selected without a language" }
 
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:${{ matrix.language }}"
+          foreach ($language in $languages) {
+            $identity = "${{ github.run_id }}-${{ github.run_attempt }}-$language"
+            $database = Join-Path $env:RUNNER_TEMP "aistock-codeql-$identity"
+            $sarif = Join-Path $env:RUNNER_TEMP "aistock-codeql-$identity.sarif"
+            $queryLanguage = if ($language -eq "javascript-typescript") { "javascript" } else { $language }
+            $querySuite = "$queryLanguage-code-scanning.qls"
+
+            & $codeql database create $database `
+              "--language=$language" `
+              "--build-mode=none" `
+              "--source-root=$env:GITHUB_WORKSPACE" `
+              "--threads=0"
+            if ($LASTEXITCODE -ne 0) { throw "CodeQL database create failed for $language with exit code $LASTEXITCODE" }
+
+            & $codeql database analyze $database $querySuite `
+              "--format=sarif-latest" `
+              "--sarif-category=/language:$language" `
+              "--output=$sarif" `
+              "--threads=0"
+            if ($LASTEXITCODE -ne 0) { throw "CodeQL database analyze failed for $language with exit code $LASTEXITCODE" }
+
+            & $codeql github upload-results `
+              "--repository=$env:GITHUB_REPOSITORY" `
+              "--ref=$env:GITHUB_REF" `
+              "--commit=$env:GITHUB_SHA" `
+              "--sarif=$sarif" `
+              "--checkout-path=$env:GITHUB_WORKSPACE" `
+              "--wait-for-processing-timeout=120"
+            if ($LASTEXITCODE -ne 0) { throw "CodeQL SARIF upload failed for $language with exit code $LASTEXITCODE" }
+          }
+
+      - name: Enforce CodeQL result
+        if: always()
+        shell: powershell
+        env:
+          PREPARE_RESULT: ${{ steps.prepare.outcome }}
+          BASE_REF_RESULT: ${{ steps.base_ref.outcome }}
+          ENVIRONMENT_RESULT: ${{ steps.environment.outcome }}
+          CLASSIFIER_RESULT: ${{ steps.fast_lane.outcome }}
+          HAS_LANGUAGES: ${{ steps.fast_lane.outputs.has_languages }}
+          ANALYZE_RESULT: ${{ steps.codeql_analysis.outcome }}
+        run: |
+          if ($env:PREPARE_RESULT -ne "success") {
+            throw "CodeQL workspace preparation failed: $env:PREPARE_RESULT"
+          }
+          if ($env:BASE_REF_RESULT -notin @("success", "skipped")) {
+            throw "CodeQL PR base preparation failed: $env:BASE_REF_RESULT"
+          }
+          if ($env:ENVIRONMENT_RESULT -ne "success") {
+            throw "CodeQL environment verification failed: $env:ENVIRONMENT_RESULT"
+          }
+          if ($env:CLASSIFIER_RESULT -ne "success") {
+            throw "CodeQL classification failed: $env:CLASSIFIER_RESULT"
+          }
+          if ($env:HAS_LANGUAGES -eq "1" -and $env:ANALYZE_RESULT -ne "success") {
+            throw "CodeQL analysis failed: $env:ANALYZE_RESULT"
+          }
+          if ($env:HAS_LANGUAGES -eq "0" -and $env:ANALYZE_RESULT -ne "skipped") {
+            throw "CodeQL no-op analysis result is invalid: $env:ANALYZE_RESULT"
+          }
+          Write-Output "CodeQL verdict passed: classifier=$env:CLASSIFIER_RESULT languages=$env:HAS_LANGUAGES analyze=$env:ANALYZE_RESULT"
 

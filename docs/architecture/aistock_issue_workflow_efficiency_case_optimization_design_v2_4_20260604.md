@@ -1,13 +1,13 @@
-﻿# AIstock Issue Workflow Efficiency, RTK and Restart Governance Design v2.5
+﻿# AIstock Issue Workflow Efficiency, RTK, Windows CI and Restart Governance Design v2.6
 
-版本：v2.5（稳定文件路径沿用 v2.4）
+版本：v2.6（稳定文件路径沿用 v2.4）
 首次发布日期：2026-06-04
-本次更新日期：2026-07-31
-状态：设计审查修订完成，待 PR 检查与合入
+本次更新日期：2026-08-26
+状态：设计审查修订完成，待实现 PR
 适用范围：AIstock issue / BUG 登记、修复、验证、PR、合入、close-sync、清理、复盘流程
 继承基线：`docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md`
 稳定路径说明：沿用 v2.4 文件路径作为本主题唯一主设计，避免新增平行文档或复制第二套规范
-非目标：降低代码质量、绕过 PR/CI、跳过生产 Gate、修改业务功能、修改生产 DB、替用户控制后端进程或把设计文档变成第二规范
+非目标：降低代码质量、绕过 PR/CI、跳过生产 Gate、修改业务功能、修改生产 DB、替用户控制后端进程、把设计文档变成第二规范，或把生产运行中的 Conda 环境直接暴露给 CI
 
 ## 1. 执行结论
 
@@ -16,11 +16,12 @@
 - **长任务 5 小时案例**：约 5 小时 20 分内连续合入 29 个 PR，其中 PR 打开到合入累计约 126 分钟，剩余约 208 分钟主要消耗在 PR 间重复实现、验证、同步、清理、状态检查和上下文切换。
 - **BUG-254 UI 案例**：Issue #714 13:17 创建，PR #730 15:57 合入，close-sync PR #732 16:01 合入；看似 2 小时 43 分，但集中修复与 PR/CI 阶段明显短得多，主要耗时来自排队穿插和 UI scope/验证计划不准。
 
-v2.5 在保留 v2.4 提效目标的基础上增加三个必须同时落地的治理目标：
+v2.6 在保留 v2.5 提效目标的基础上增加四个必须同时落地的治理目标：
 
 1. **RTK 纳入唯一开发规范**：支持时优先压缩高输出命令；不支持时明确回退，不把 RTK 变成阻塞任务的新门禁。
 2. **后端重启默认归用户所有**：任何 Codex、Claude、子代理、Validation Center 或其他窗口都不能从修复、验证、合入或 aftercare 授权中推断后端重启权限。
 3. **所有运行时相关 BUG 必须可跨重启生效**：修复必须落在持久化来源，并在用户完成重启后立即执行只读 smoke；仅在当前进程、热加载或手工缓存中成立的修复不能关闭 BUG。
+4. **Windows 生产等价验证与 CI 零安装**：backend/runtime CI 使用预构建的 Windows `AIstock-CI` 环境；CI 禁止安装项目依赖，禁止启动任何独立 PostgreSQL/TimescaleDB，数据库验证只能消费现有 DEV 数据库 receipt。
 
 最终目标仍是：**不降低质量，只减少重复闭环、重复上下文、重复输出和错误验证选择**。代码定位、修复和必要验证应成为主要耗时，流程恢复、报告和等待不应反复放大固定成本。
 
@@ -37,6 +38,8 @@ v2.5 在保留 v2.4 提效目标的基础上增加三个必须同时落地的治
 9. **重启所有权与重启有效性分离**：窗口不得自行重启用户后端，但 workflow 必须产出可执行的用户重启计划和重启后验证计划。
 10. **授权不扩散**：修复、PR、merge、close-sync、DDL、依赖安装、runtime activation、backend restart 分别授权和报告；任一状态不能推导另一个状态。
 11. **文档不污染**：正式设计只进入 `docs/architecture/`，临时交换材料只进入忽略型 scratch；不得在根目录生成一次性 plan、日志、JSON 或 helper 脚本。
+12. **平台一致性**：生产 backend 在 Windows 运行，所需 Python/backend/runtime 验证不得以 Linux Runner 作为等价替代；纯分类、文档和与平台无关的静态任务可独立运行，但不能冒充运行时等价验证。
+13. **CI 不创建可变基础设施**：CI 不创建数据库、缓存服务或项目依赖环境；缺少预构建环境或 DEV 数据库时显式阻断，不允许自动 fallback。
 
 ## 3. 案例问题归因
 
@@ -325,10 +328,111 @@ Git 状态检查固定在开始、提交前、交付前三个节点；只有并�
 | D0 设计 | 本设计文件 | 固化边界、验收 ID、实施顺序；不改执行行为 |
 | D1 唯一规范 | `docs/standards/aistock_development_standard_v1.5_20260523.md/.yaml` | 新增 RTK、重启所有权、重启后生效 rule ID 与派生元数据 |
 | D2 Workflow | `scripts/aistock_issue_workflow.py`, `scripts/issue_flow.py`, runtime target catalog | lazy restart contract、状态机、catalog refs、runtime-read-only verify、receipt 复用、兼容升级 |
-| D3 Guardrail/CI | `scripts/aistock_guardrail_scan.py`, `scripts/ci_change_classifier.py`, `.github/workflows/test.yml`, `.github/workflows/pr-quality.yml` | 拒绝未授权后端控制并保持 focused lane，不新增真实 restart job |
+| D3 Guardrail/CI | `scripts/aistock_guardrail_scan.py`, `scripts/ci_change_classifier.py`, `.github/workflows/test.yml`, `.github/workflows/pr-quality.yml`, `.github/workflows/semgrep.yml`, `.github/workflows/codeql.yml` | 拒绝未授权后端控制、CI 依赖安装和独立数据库服务，保持 focused lane，不新增真实 restart job |
 | D4 客户端入口 | 上表 Codex skills 与对应 Claude commands | 跨窗口一致执行，不复制规范正文 |
 | D5 测试 | guardrail、issue workflow、classifier、issue flow focused tests | 证明门禁、兼容、无真实重启和最小流水线路由 |
 | D6 客户端 aftercare | `install-client`, `verify-clients` 运行证据 | 合入后同步入口；与后端重启完全分离 |
+| D7 Runner/环境 | Windows `aistock-ci` Runner、`AIstock-CI` lock/fingerprint、DEV DB target catalog | 生产等价环境预构建、PR 零安装、DEV-only 数据库验证和环境 mismatch fail-closed |
+
+### 5.15 Windows 生产等价 Conda 与 CI 零安装设计
+
+本节是 v2.6 的核心整改设计。它只定义实现约束；落地后的唯一规范 rule ID、workflow schema、Runner/环境契约和 guardrail 仍由 D1-D7 实现 PR 持久化，本设计不成为第二套执行政策。
+
+#### 5.15.1 不可协商的边界
+
+1. 任何 CI workflow/job/matrix 都不得执行 `conda install`、`pip install`、`npm install`、`npm ci`、`go mod download` 或等价的项目依赖安装；backend/runtime job 也不得用 `setup-python`、`setup-miniconda`、`setup-node` 或 `setup-go` 临时安装/替换工具链。
+2. 任何 CI workflow/job/matrix 都不得声明或启动 PostgreSQL、TimescaleDB、MySQL 或其他外部数据库服务/容器，亦不得使用 `docker-compose` 数据库服务；进程内 SQLite fixture 仅可用于纯单元测试，不能替代必需的 DEV 数据库验证。
+3. backend/runtime 验证必须运行在 Windows `aistock-ci` Runner，并使用独立、只读、版本锁定的 `AIstock-CI` Conda 环境；禁止直接使用生产运行中的 `AIstock` 环境。
+4. 需要数据库的验证只能连接现有 DEV 数据库。DEV 不可达、身份不匹配或目标不明确时返回 `dev_db_validation_pending`/`blocked`，不得创建临时库或改用生产库。
+5. CI 环境缺失、lock hash 不匹配或工具版本不匹配时必须 fail-closed；不得自动 fallback，不得为了“让 CI 通过”在 job 中临时安装或切换回 Linux backend job。
+6. GitHub Actions 平台下载 action 本身不属于项目依赖安装；若安全扫描器或分析器需要额外下载，则必须使用预构建 Runner，或移出普通 PR 热路径，不得在 backend CI 隐式安装。
+
+#### 5.15.2 环境拓扑
+
+```text
+生产 AIstock 环境（Windows，运行态）
+          │ 仅导出经过清理的锁文件和版本指纹
+          ▼
+环境构建/维护 lane（非普通 PR）
+          │ 构建并签名 AIstock-CI
+          ▼
+Windows self-hosted Runner pool（至少 2 个相同槽位）
+          │ 只读环境校验 + 目标测试
+          ├── backend/runtime pure lane（无数据库服务）
+          └── DEV DB lane（连接现有 DEV，不创建数据库）
+```
+
+`AIstock-CI` 必须具有独立 prefix、独立缓存和独立写入目录。Runner job 只能写工作树、临时测试目录和结构化 receipt，不能写生产 Conda prefix、生产服务配置或生产运行状态。
+
+#### 5.15.3 环境构建与校验
+
+环境构建只在以下情况执行：生产依赖升级、lock 文件变更、Runner 重建或定期维护。构建流程不属于普通 PR 的 CI 热路径。
+
+必须持久化以下非秘密元数据：
+
+- `platform=win-64`、Python 主次版本；
+- Conda lock/source revision；
+- `conda list --explicit` 的规范化 hash；
+- 关键包版本（LightGBM、Qlib、numpy、pandas、pytest、nox 等）；
+- 环境构建时间、构建器版本和签名/校验值。
+
+PR CI 只执行 `environment_verify`：校验 Runner label、环境路径、lock hash、关键包版本、Node/Go 工具链（如适用）和 `nox --version`。验证失败只能返回明确错误，不得调用安装命令或 setup-* 环境引导 action。
+
+#### 5.15.4 测试和数据库路由
+
+`ci_change_classifier.py` 需要为每个验证计划返回 `runner_kind` 和 `requires_dev_db`：
+
+- `runner_kind=windows_ai_stock_ci, requires_dev_db=false`：纯 Python、mock、compileall、模块 L0 和直接回归测试；不启动数据库。
+- `runner_kind=windows_ai_stock_ci, requires_dev_db=true`：连接现有 DEV 数据库执行明确计划；使用 DEV target guard、串行锁和独立 receipt；不创建服务。
+- `runner_kind=hosted_static`：只允许 changed-file、文档、分类和与平台无关的静态检查；不能承担 backend/runtime 等价验证。
+
+DEV DB lane 必须报告目标身份、schema/事务边界、读写/DDL 状态、receipt hash 和执行时间。多个需要 DDL/DML 的任务在同一 DEV target 上串行执行；纯只读查询可按现有数据库容量并行。数据库验证缺失时只阻断数据库相关变更，不扩大到无关模块。
+
+#### 5.15.5 CI 目标流水线
+
+```text
+一次 changed-file/classifier
+→ Windows AIstock-CI 环境指纹校验（零安装）
+→ changed-only/l0/ownership
+→ 目标 backend/runtime Nox session
+→ 仅 requires_dev_db=true 时进入现有 DEV DB lane
+→ 安全敏感路径的预构建 CodeQL/Semgrep 或 Nightly receipt
+→ 一个 CI verdict
+```
+
+不再把完整依赖安装绑定到每个 matrix job；兼容 session 可在同一 Runner 复用已校验环境。Runner 不可用时排队或阻断，不能自动切换到 Linux backend、临时数据库或 pip 安装。
+
+#### 5.15.6 相关 workflow 和 guardrail 改造
+
+- `.github/workflows/test.yml`：移除 `services.postgres`、临时 schema bootstrap 和 backend pip 安装；backend/runtime jobs 改用 `aistock-ci` Runner。
+- `.github/workflows/pr-quality.yml`、`semgrep.yml`、`codeql.yml`：消费唯一 classifier artifact；安全工具只能使用预构建环境或转为 Nightly/安全敏感 PR lane。
+- `scripts/ci_change_classifier.py`：新增 `runner_kind`、`requires_dev_db`、`environment_fingerprint_ref` 和 `install_forbidden=true`。
+- `scripts/aistock_guardrail_scan.py`：增加 workflow install-denylist、独立数据库 service denylist 和 Linux backend 等价性 denylist。
+- `noxfile.py`：保持 `venv_backend=none`，禁止 session 内隐式安装；DEV DB 测试必须显式标记并消费受控目标。
+- 失败 evidence publisher：只消费主 CI receipt，不重复 checkout、分类或安装依赖。
+
+#### 5.15.7 失败和回滚语义
+
+环境 hash 不匹配、Runner 离线、DEV DB 不可用或预构建工具缺失均使用显式状态：
+
+```text
+environment_mismatch
+runner_unavailable
+dev_db_validation_pending
+security_tool_not_prebuilt
+```
+
+这些状态不能自动降级为“使用 Linux/pip/临时数据库”。修复方式是维护 lane 更新 Runner 或 DEV 验证队列，而不是在当前 PR 内安装依赖。
+
+#### 5.15.8 预期收益和测量口径
+
+近期观测到单个 backend job 的容器初始化约 40 秒、依赖安装约 40 秒以上；BUG 源码 CI 平均约 3.97 分钟。实现后应分别报告：
+
+- backend job `setup_seconds`、`environment_verify_seconds` 和 `test_seconds`；
+- 是否发生 `dev_db_wait`、Runner queue、CI rerun 和 main drift；
+- 纯环境优化带来的执行时间下降，不把授权/网络等待误算为代码时间。
+
+以一条 backend session、缓存命中且无排队为基线，目标是每 job 减少约 60–90 秒 setup；source CI 平均目标约 2.3–2.8 分钟。多 session、重复 CI 和 rebase 等流程开销需另行统计，不能把该目标冒充为全生命周期保证。
 
 ## 6. 验收矩阵
 
@@ -362,6 +466,20 @@ Git 状态检查固定在开始、提交前、交付前三个节点；只有并�
 | IWO25-018 | 完全相同 validation receipt 可复用，任一 identity 输入变化即失效 | receipt-key 单元测试 |
 | IWO25-019 | 普通成功路径不会因为 restart governance 增加必执行的 `restart-plan` 命令 | fast-path/workflow-smoke 命令计数断言 |
 | IWO25-020 | 旧 IWO24 能力标记为 baseline regression，不重复实现 | current-state mapping review |
+| IWO26-001 | backend/runtime CI 使用 Windows `aistock-ci` Runner，不能以 Linux Runner 冒充等价运行时验证 | workflow YAML + classifier negative fixture |
+| IWO26-002 | `AIstock-CI` 为生产等价但独立的 Conda 环境，PR CI 只校验 lock/environment fingerprint | environment verify fixture + hash mismatch test |
+| IWO26-003 | 普通 CI workflow 不执行 `conda/pip/npm/go` 项目依赖安装 | workflow install-denylist guardrail |
+| IWO26-004 | 任何 CI workflow 不声明或启动独立 PostgreSQL/TimescaleDB/数据库容器 | workflow database-service denylist + negative fixture |
+| IWO26-005 | 数据库验证只连接现有 DEV 数据库；目标不可达时为 pending/blocked，不自动 fallback | DEV target guard + missing-target test |
+| IWO26-006 | `requires_dev_db=false` 的验证不设置数据库服务或数据库 fallback | classifier/Nox routing test |
+| IWO26-007 | `requires_dev_db=true` 的任务生成 DEV target、事务/并发边界和 receipt | DEV DB lane contract test |
+| IWO26-008 | classifier 在 PR 内只执行一次，PR Quality/Semgrep/CodeQL 消费同一 classification artifact | workflow artifact reuse smoke |
+| IWO26-009 | 纯 Python backend session 可复用预构建环境，不重复完整依赖安装 | runner environment smoke + command denylist |
+| IWO26-010 | 环境不匹配、Runner 不可用或 DEV 不可用时 fail-closed，不切换 Linux/pip/临时数据库 | negative path workflow test |
+| IWO26-011 | 低风险变更不触发无关 CodeQL、Semgrep、完整 backend matrix 或原始日志上传 | risk-tier classifier matrix |
+| IWO26-012 | CI 成功 receipt 只保留摘要，失败时才保留原始日志，并受 TTL 管理 | artifact retention check |
+| IWO26-013 | workflow/CI/allocator 维护路径不在普通 PR 内执行全量 worktree、JSON、reservation 扫描 | command-count and maintenance-lane test |
+| IWO26-014 | 计时明确区分环境准备、测试执行、CI 等待、授权、rebase 和 aftercare | timing schema fixture |
 
 ### 6.1 当前状态映射
 
@@ -369,6 +487,7 @@ Git 状态检查固定在开始、提交前、交付前三个节点；只有并�
 | --- | --- | --- |
 | IWO24-001~008 | 现有 workflow 已具备 compact、UI intake、batch/finalizer、postmortem 等主要基础；具体项以实现 PR 的 live test 为准 | 作为 regression baseline，只补缺口，不重复开发 |
 | IWO25-001~020 | 本设计定义，尚未进入唯一规范、skills 或执行代码 | 在独立 docs-controlled/workflow PR 实现和逐项验证 |
+| IWO26-001~014 | 设计已合入；workflow、classifier、Windows AIstock-CI 预检、DEV-only catalog 和 install/database denylist 已在后续实现 PR 落地，Runner provisioning 与 DEV receipt 执行仍由运维/Validation lane 提供 | 以实现 PR 的 focused tests、guardrail receipt 和 CI live run 完成最终验收；Runner/DEV lane 不可用时保持显式 blocked，不自动降级 |
 
 当前状态映射只用于避免重复步骤，不把“已有相似能力”冒充为新验收已通过。
 
@@ -384,16 +503,24 @@ Git 状态检查固定在开始、提交前、交付前三个节点；只有并�
 | 重启验证 | merge 后临时热状态被误当完成 | 首次 cold-start smoke 可判定、可追溯 |
 | 后端控制 | 多窗口可能把验证请求解释为重启授权 | 默认用户执行，窗口只生成计划和只读验证 |
 | 文档管理 | 同主题方案和根目录过程文件扩散 | 单一主设计 + 独立 worktree + scratch 隔离 |
+| backend CI 环境 | 每个 Linux matrix job 重复安装大依赖并启动临时数据库 | Windows `AIstock-CI` 预构建环境 + 零安装 + 现有 DEV DB lane |
+| 平台漂移 | Windows 生产依赖由 Linux venv 验证，无法覆盖原生包差异 | backend/runtime 使用 Windows self-hosted Runner，lock/fingerprint 校验 |
+| CI 分类重复 | 多个 workflow 各自 checkout、安装 pyyaml、重新计算 changed files | 单一 classifier artifact，其他 workflow 只消费结果 |
+| 低相关性门禁 | 普通单模块变更触发 CodeQL、Semgrep 或完整矩阵 | 安全敏感路径和高风险变更条件触发，其余转 Nightly/委托验证 |
+| 环境/数据库 fallback | Runner 或依赖缺失时临时安装或创建数据库 | 环境不匹配、Runner/DEV 不可用时显式阻断，禁止降级 |
 
 ## 8. 落地顺序
 
 1. 通过 docs-fast-update PR 审查并合入本设计，设计 PR 不改规范、skill 或执行代码。
-2. 新建独立 docs-controlled/workflow worktree，一次性更新唯一标准 Markdown/YAML、workflow schema 与 focused tests。
-3. 增加 runtime target catalog，更新 Codex skills、Claude commands、classifier 与现有 CI jobs，运行标准 digest、catalog negative fixtures、workflow smoke、focused tests 和 client dry-run。
-4. 经明确授权合入实现 PR；分别报告 source merge、root sync、client install、backend restart 和 runtime verification。
-5. 合入后执行 `install-client --apply` 与 `verify-clients --workflow-only`；只要求客户端窗口重开加载入口，不触碰后端。
-6. 用下一个 runtime 相关真实 BUG 验证 `source merge -> root sync/获授权 source cleanup -> fixed_source_pending_user_restart -> 用户重启 -> post-restart passed -> registry-only close-sync` 完整状态机。
-7. 用一个 `runtime_impact=none` 的 docs/test BUG 验证 no-op 分类不会额外制造重启步骤。
+2. 在受控 Windows 主机创建 `AIstock-CI`，导出清理后的 `win-64` lock、explicit spec 和环境 fingerprint；生产 `AIstock` prefix 只读、不直接给 CI 使用。
+3. 准备至少两个带相同 `aistock-ci` label 的 self-hosted Runner 槽位，预装 Python/Conda、Nox、pytest、frontend Node、Go 和必要的安全工具；执行环境构建验收后才允许接收 PR job。
+4. 新建独立 docs-controlled/workflow worktree，一次性更新唯一标准 Markdown/YAML、workflow schema、classifier、Nox routing 与 focused tests；删除 CI 独立数据库服务和项目依赖安装命令。
+5. 增加 `runner_kind`/`requires_dev_db`/environment fingerprint catalog，更新 Codex skills、Claude commands、classifier 与现有 CI jobs，运行标准 digest、install/database denylist、workflow smoke、focused tests 和 client dry-run。
+6. 建立现有 DEV 数据库验证队列：只允许明确的 DEV target、事务/schema 边界和 receipt；DEV 不可用时保持 pending/blocked，不得 fallback。
+7. 经明确授权合入实现 PR；分别报告 source merge、root sync、client install、backend restart、DEV DB validation 和 runtime verification。
+8. 合入后执行 `install-client --apply` 与 `verify-clients --workflow-only`；只要求客户端窗口重开加载入口，不触碰后端。
+9. 用下一个 runtime 相关真实 BUG 验证 `source merge -> root sync/获授权 source cleanup -> fixed_source_pending_user_restart -> 用户重启 -> post-restart passed -> registry-only close-sync` 完整状态机。
+10. 用一个 `runtime_impact=none` 的 docs/test BUG 和一个 `requires_dev_db=true` 的真实变更验证：前者不产生 DB job，后者只消费现有 DEV receipt，二者都不启动独立数据库或安装依赖。
 
 ## 9. 生产 Gate
 
@@ -414,9 +541,18 @@ Git 状态检查固定在开始、提交前、交付前三个节点；只有并�
 
 | 检查项 | 本设计约束 | 当前结论 |
 | --- | --- | --- |
-| 禁止简化交付 | 标准、YAML、runtime catalog、workflow、skills/commands、CI、测试和 client sync 全部纳入 D1-D6；IWO25-001~020 覆盖实现与负例 | `PASS` for design scope；实现证据待后续 PR |
+| 禁止简化交付 | 标准、YAML、runtime catalog、workflow、skills/commands、CI、测试、Runner/环境和 client sync 全部纳入 D1-D7；IWO25-001~020 与 IWO26-001~014 覆盖实现与负例 | `PASS` for design scope；实现证据待后续 PR |
 | 禁止静默错误 | `runtime_impact=unknown`、catalog 缺失/冲突、schema upgrade、identity mismatch、post-restart failure 均为显式非成功状态 | `PASS` for design scope；实现证据待后续 PR |
 | 禁止改变业务逻辑 | 本设计只调整开发流程和进程控制所有权；backend restart、frontend activation、client reload、DB readback 分开，不修改交易、研究或数据业务语义 | `PASS` for design scope |
 | 禁止私增门禁审批 | 后端用户重启所有权来自本次明确用户要求；指标样本不足不阻断，且不增加 RBAC、ACK、研究审批或 frontend/client/database 人工门禁 | `PASS` for design scope |
 
 本表只表示设计范围预审，不代表后续实现、PR、merge、client sync 或 runtime 验证已经完成。
+
+### 10.1 v2.6 多轮设计审核记录
+
+| 轮次 | 检查范围 | 发现与修订 | 结论 |
+| --- | --- | --- | --- |
+| Round 1 | 用户硬约束、Windows/ Linux 平台一致性、CI 零安装、DEV-only 数据库、现有主设计唯一性 | 增加 IWO26-001~014、Windows `AIstock-CI`、DEV DB lane、环境 fingerprint、install/database denylist 和失败状态；明确不直接使用生产 Conda | `PASS` |
+| Round 2 | 规范冲突、SQLite 单测边界、Action 平台下载边界、失败 fallback、验收矩阵和收益口径 | 明确禁止外部数据库服务但允许不替代 DEV 验证的进程内 SQLite fixture；补充 setup-* 禁止、Runner 不可用时 fail-closed、单一 classifier artifact 和环境/CI 分层 | `PASS` |
+
+审核退出条件：唯一主设计文件、`git diff --check`、docs classifier dry-run、changed-file 单文件范围、IWO26-001~014 完整映射、无生产/业务/DB 运行时修改，全部通过。实现前仍必须由独立 docs-controlled/workflow PR 将本设计约束写入唯一规范、workflow、classifier、Runner 和 guardrail，并取得实现证据。

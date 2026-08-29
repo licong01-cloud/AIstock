@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 import json
@@ -135,6 +136,8 @@ from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
 from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
     C010_APPROVED_TRAIN_TRADING_DATE_COUNT,
     C010_APPROVED_TRAIN_TRADING_DATE_SHA256,
+    C010_APPROVED_TRAIN_START,
+    C010_APPROVED_TRAIN_END,
     C010_FORMULA_VERSION,
     C010_POLICY_VERSION,
     C010_POLICY_VERSION_V1,
@@ -159,10 +162,15 @@ from backend.services.hmm_risk.security_identity import (  # noqa: E402
     load_security_source_identity_manifest,
 )
 from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest  # noqa: E402
+from backend.services.hmm_risk.industry_pit_adapter import (  # noqa: E402
+    EXPECTED_PREFLIGHT_TRADING_DAYS,
+    HMMIndustryPitAdapter,
+)
 from backend.services.hmm_risk.stock_fact_repository import (  # noqa: E402
     MEMBER_CLASSIFICATION_CTES,
     PostgresStockFactReader,
     StockFactSourceSpec,
+    load_daily_aggregates,
     load_direct_daily_aggregates,
     load_mapping_manifest,
 )
@@ -626,7 +634,67 @@ def _c010_expected_opportunity_receipt(
     train_start: date,
     train_end: date,
     authority_identities: list[dict[str, Any]],
+    industry_pit_adapter: HMMIndustryPitAdapter | None = None,
+    industry_pit_denominator: Any | None = None,
 ) -> dict[str, Any]:
+    if (industry_pit_adapter is None) != (industry_pit_denominator is None):
+        raise StateModelSetError(
+            "hmm_risk_c010_expected_opportunity_missing: industry PIT adapter/denominator must be supplied together"
+        )
+    if industry_pit_adapter is not None:
+        if industry_pit_denominator.window_start != train_start or industry_pit_denominator.window_end != train_end:
+            raise StateModelSetError(
+                "hmm_risk_c010_expected_opportunity_missing: industry PIT denominator window differs"
+            )
+        result: dict[str, list[date]] = {}
+        for span in industry_pit_denominator.universe_spans:
+            span_dates = industry_pit_denominator.dates_for_span(span)
+            if not span_dates:
+                continue
+            boundaries = {0, len(span_dates)}
+            for transition in {
+                *industry_pit_adapter.classification_resolver.transition_dates(span.canonical_symbol),
+                *industry_pit_adapter.index_membership_resolver.transition_dates(span.canonical_symbol),
+            }:
+                offset = bisect_left(span_dates, transition)
+                if 0 < offset < len(span_dates):
+                    boundaries.add(offset)
+            ordered = sorted(boundaries)
+            for left, right in zip(ordered, ordered[1:]):
+                trade_date_value = span_dates[left]
+                projection = industry_pit_adapter.resolve(span.canonical_symbol, trade_date_value)
+                if (
+                    projection.canonical_symbol != span.canonical_symbol
+                    or projection.trade_date != trade_date_value
+                    or projection.status not in {"resolved", "unavailable"}
+                ):
+                    raise StateModelSetError(
+                        "hmm_risk_c010_expected_opportunity_missing: industry PIT projection identity is invalid"
+                    )
+                if projection.status == "unavailable":
+                    continue
+                if not all((projection.l1_code, projection.l1_name, projection.l2_code, projection.l2_name)):
+                    raise StateModelSetError(
+                        "hmm_risk_c010_expected_opportunity_missing: resolved industry PIT projection is incomplete"
+                    )
+                existing = result.setdefault(span.canonical_symbol, [])
+                segment = list(span_dates[left:right])
+                if set(existing).intersection(segment):
+                    raise StateModelSetError(
+                        "hmm_risk_c010_expected_opportunity_missing: industry PIT opportunity keys overlap"
+                    )
+                existing.extend(segment)
+        if not result:
+            raise StateModelSetError(
+                "hmm_risk_c010_expected_opportunity_missing: "
+                "C-010 frozen industry PIT opportunity resolution returned no rows"
+            )
+        return build_expected_opportunity_receipt(
+            {symbol: tuple(dates) for symbol, dates in result.items()},
+            train_start=train_start,
+            train_end=train_end,
+            authority_identities=authority_identities,
+        )
     with conn.cursor() as cursor:
         cursor.execute(
             f"""
@@ -705,6 +773,7 @@ def _c010_provider_absence_partition(
     train_start: date,
     train_end: date,
     formal_policy: bool,
+    industry_pit_adapter: HMMIndustryPitAdapter | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     provider_identity = canonical_authority_identity(
         "provider_absence_manifest",
@@ -733,7 +802,11 @@ def _c010_provider_absence_partition(
         },
     )
     sw_identity = canonical_authority_identity(
-        "sw_index_member_and_classify_mapping",
+        (
+            "hmm_industry_pit_classification_projection"
+            if industry_pit_adapter is not None
+            else "sw_index_member_and_classify_mapping"
+        ),
         mapping_manifest,
     )
     filtered = sorted(
@@ -772,8 +845,9 @@ def _c010_provider_absence_partition(
             }
         )
     with conn.cursor() as cursor:
-        cursor.execute(
-            f"""
+        if industry_pit_adapter is None:
+            cursor.execute(
+                f"""
             WITH {MEMBER_CLASSIFICATION_CTES}, requested AS (
               SELECT canonical_ts_code,provider_source_ts_code,price_source_ts_code,trade_date::date trade_date
               FROM jsonb_to_recordset(%s::jsonb) AS item(
@@ -804,18 +878,60 @@ def _c010_provider_absence_partition(
                        AND (member.out_date IS NULL OR member.out_date>=r.trade_date)), '[]'::jsonb)
             FROM requested r ORDER BY r.canonical_ts_code,r.trade_date
             """,
-            (
-                json.dumps(requested, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-                source_spec.universe_key,
-            ),
-        )
+                (
+                    json.dumps(requested, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    source_spec.universe_key,
+                ),
+            )
+        else:
+            cursor.execute(
+                """
+                WITH requested AS (
+                  SELECT canonical_ts_code,provider_source_ts_code,price_source_ts_code,trade_date::date trade_date
+                  FROM jsonb_to_recordset(%s::jsonb) AS item(
+                    canonical_ts_code text,provider_source_ts_code text,price_source_ts_code text,trade_date text
+                  )
+                )
+                SELECT r.canonical_ts_code,r.trade_date,
+                       COALESCE((SELECT jsonb_agg(to_jsonb(spans))
+                         FROM market.stock_universe_pit_spans spans
+                         WHERE spans.ts_code=r.canonical_ts_code AND spans.universe_key=%s
+                           AND spans.eligible_start<=r.trade_date
+                           AND (spans.eligible_end IS NULL OR spans.eligible_end>=r.trade_date)), '[]'::jsonb),
+                       COALESCE((SELECT jsonb_agg(DISTINCT to_jsonb(price))
+                         FROM market.kline_daily_raw price
+                         WHERE price.ts_code IN (r.price_source_ts_code,r.canonical_ts_code)
+                           AND price.trade_date=r.trade_date), '[]'::jsonb)
+                FROM requested r ORDER BY r.canonical_ts_code,r.trade_date
+                """,
+                (
+                    json.dumps(requested, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    source_spec.universe_key,
+                ),
+            )
         rows = cursor.fetchall()
     if len(rows) != len(filtered):
         raise StateModelSetError(
             "hmm_risk_c010_provider_absence_domain_partition_invalid: predicate query cardinality mismatch"
         )
     predicate_evidence: dict[tuple[str, date], dict[str, Any]] = {}
-    for symbol, trade_date_value, pit_rows, price_rows, mapping_rows in rows:
+    for raw_row in rows:
+        if industry_pit_adapter is None:
+            symbol, trade_date_value, pit_rows, price_rows, mapping_rows = raw_row
+            projection = None
+        else:
+            symbol, trade_date_value, pit_rows, price_rows = raw_row
+            projection = industry_pit_adapter.resolve(str(symbol), trade_date_value)
+            if (
+                projection.canonical_symbol != str(symbol)
+                or projection.trade_date != trade_date_value
+                or projection.status not in {"resolved", "unavailable"}
+            ):
+                raise StateModelSetError(
+                    "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+                    "industry PIT projection identity is invalid"
+                )
+            mapping_rows = [projection.as_dict()]
         key = (str(symbol), trade_date_value)
         resolver_receipt = resolver_receipts[key]
 
@@ -829,7 +945,17 @@ def _c010_provider_absence_partition(
         price_status = (
             "available" if len(price_candidates) == 1 else ("unavailable" if not price_candidates else "invalid")
         )
-        if not mapping_candidates:
+        if projection is not None:
+            if projection.status == "unavailable":
+                l1_status = l2_status = "unavailable"
+            elif not all((projection.l1_code, projection.l1_name, projection.l2_code, projection.l2_name)):
+                raise StateModelSetError(
+                    "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+                    "resolved industry PIT projection is incomplete"
+                )
+            else:
+                l1_status = l2_status = "available"
+        elif not mapping_candidates:
             l1_status = l2_status = "unavailable"
         elif len(mapping_candidates) != 1:
             l1_status = l2_status = "invalid"
@@ -900,10 +1026,40 @@ def _load_l1_source_inputs(
     c010_formal: bool = False,
     expected_database_identity: Mapping[str, Any] | None = None,
     source_preflight_complete: Callable[[], None] | None = None,
+    rotation_l1_only: bool = False,
 ) -> dict[str, Any]:
     if c010_diagnostic and c010_formal:
         raise StateModelSetError("C-010 diagnostic and formal policy modes are mutually exclusive")
     source = request["source"]
+    industry_pit_adapter = None
+    industry_pit = source.get("industry_pit")
+    if industry_pit is not None:
+        if not isinstance(industry_pit, Mapping) or set(industry_pit) != {
+            "artifact_root",
+            "identity",
+            "l1_projection",
+            "research_basis",
+        }:
+            raise StateModelSetError("HMM industry PIT source authority is incomplete")
+        artifact_root = Path(str(industry_pit.get("artifact_root") or ""))
+        identity = industry_pit.get("identity")
+        if not artifact_root.is_absolute() or not isinstance(identity, Mapping):
+            raise StateModelSetError("HMM industry PIT source authority root/identity is invalid")
+        industry_pit_adapter = HMMIndustryPitAdapter.from_artifact_root(
+            artifact_root=artifact_root,
+            forbidden_roots=(ROOT,),
+            expected_identity=identity,
+        )
+        research_basis = industry_pit.get("research_basis")
+        if not isinstance(research_basis, Mapping):
+            raise StateModelSetError("HMM industry PIT research-basis contract is missing")
+        industry_pit_adapter.bind_research_basis_contract(research_basis)
+        l1_projection = industry_pit.get("l1_projection")
+        if not isinstance(l1_projection, Mapping):
+            raise StateModelSetError("HMM industry PIT L1 projection authority is missing")
+        industry_pit_adapter.bind_l1_code_projection(l1_projection)
+    if rotation_l1_only and industry_pit_adapter is None:
+        raise StateModelSetError("rotation L1 source requires the shared industry PIT authority")
     security_identity_manifest = _load_security_identity_manifest(source)
     provider_absence_manifest = _load_provider_absence_manifest(source)
     source_start = _date(source.get("source_start"), "source_start")
@@ -917,6 +1073,7 @@ def _load_l1_source_inputs(
             "circ_mv_history_start",
         ),
     )
+    industry_pit_preflight = None
     conn, db_identity = _connect_readonly(db_prefix)
     try:
         if expected_database_identity is not None:
@@ -928,6 +1085,7 @@ def _load_l1_source_inputs(
             source_spec,
             security_identity_manifest=security_identity_manifest,
             provider_absence_manifest=provider_absence_manifest,
+            industry_pit_adapter=industry_pit_adapter,
         )
         source_state = reader.validate_source()
         if source_preflight_complete is not None:
@@ -938,15 +1096,46 @@ def _load_l1_source_inputs(
             "price_mapping_stream": "server_side_cursor",
             "fact_lookup": "date_bounded_exact_key_maps",
             "causal_circ_mv": "python_state_from_authoritative_daily_basic_only",
-            "direct_l1_l2_single_stream": True,
+            "direct_l1_l2_single_stream": not rotation_l1_only,
+            "requested_sector_levels": ["L1"] if rotation_l1_only else ["L1", "L2"],
         }
+        if industry_pit_adapter is not None:
+            industry_pit_preflight = reader.run_industry_pit_preflight(
+                window_start=C010_APPROVED_TRAIN_START,
+                window_end=C010_APPROVED_TRAIN_END,
+                expected_trading_days=EXPECTED_PREFLIGHT_TRADING_DAYS,
+            )
+            source_state["industry_pit_authority"] = {
+                "candidate_bundle_hash": industry_pit_adapter.authority_bundle.manifest["bundle_hash"],
+                "classification_authority_receipt_hash": (
+                    industry_pit_adapter.classification_resolver.receipt.receipt_hash
+                ),
+                "index_membership_authority_receipt_hash": (
+                    industry_pit_adapter.index_membership_resolver.receipt.receipt_hash
+                ),
+                "preflight_canonical_hash": industry_pit_preflight["canonical_hash"],
+                "preflight_status": "preflight_complete",
+            }
+            reader.load_classification_lookup()
         reader.load_classification_lookup()
         reader.validate_fact_uniqueness()
         mapping_manifest, constituents = load_mapping_manifest(reader)
-        aggregates, stock_fact_manifest, l2_aggregates, l2_stock_fact_manifest = load_direct_daily_aggregates(
-            reader,
-            min_coverage=MIN_COVERAGE,
-        )
+        if rotation_l1_only:
+            aggregates, stock_fact_manifest = load_daily_aggregates(
+                reader,
+                min_coverage=MIN_COVERAGE,
+                sector_level="L1",
+            )
+            l2_aggregates = []
+            l2_stock_fact_manifest = {
+                "schema_version": "hmm_risk_rotation_l1_l2_not_requested_v1",
+                "status": "NOT_REQUESTED_ROTATION_L1_ONLY",
+            }
+        else:
+            aggregates, stock_fact_manifest, l2_aggregates, l2_stock_fact_manifest = load_direct_daily_aggregates(
+                reader,
+                min_coverage=MIN_COVERAGE,
+            )
         calendar, benchmark, benchmark_manifest = _load_calendar_and_benchmark(
             conn,
             source_spec.source_start,
@@ -965,6 +1154,12 @@ def _load_l1_source_inputs(
                 train_start=train_start,
                 train_end=train_end,
                 formal_policy=c010_formal,
+                industry_pit_adapter=industry_pit_adapter,
+            )
+            industry_pit_denominator = (
+                None
+                if industry_pit_adapter is None
+                else reader.load_industry_pit_denominator(window_start=train_start, window_end=train_end)
             )
             expected_opportunity = _c010_expected_opportunity_receipt(
                 conn,
@@ -972,6 +1167,8 @@ def _load_l1_source_inputs(
                 train_start=train_start,
                 train_end=train_end,
                 authority_identities=opportunity_authorities,
+                industry_pit_adapter=industry_pit_adapter,
+                industry_pit_denominator=industry_pit_denominator,
             )
             eligibility = build_train_only_observation_eligibility(
                 provider_absence_manifest.rows,
@@ -986,6 +1183,7 @@ def _load_l1_source_inputs(
                 eligibility,
                 min_coverage=MIN_COVERAGE,
                 formal_policy=c010_formal,
+                direct_levels=(("L1",) if rotation_l1_only else ("L1", "L2")),
             )
             c010_payload = {
                 "eligibility": eligibility,
@@ -1003,13 +1201,17 @@ def _load_l1_source_inputs(
         trading_dates=calendar,
         csi300_returns=benchmark,
     )
-    l2_panel, l2_feature_definition = build_l1_feature_panel(
-        l2_aggregates,
-        trading_dates=calendar,
-        csi300_returns=benchmark,
-        expected_sector_count=131,
-        direct_sector_level="L2",
-    )
+    if rotation_l1_only:
+        l2_panel = None
+        l2_feature_definition = None
+    else:
+        l2_panel, l2_feature_definition = build_l1_feature_panel(
+            l2_aggregates,
+            trading_dates=calendar,
+            csi300_returns=benchmark,
+            expected_sector_count=131,
+            direct_sector_level="L2",
+        )
     c010_diagnostic_payload = None
     if c010_payload is not None:
         diagnostic_l1_panel, diagnostic_l1_definition, diagnostic_l1_cross_section = build_c010_feature_domain_panel(
@@ -1018,19 +1220,29 @@ def _load_l1_source_inputs(
             csi300_returns=benchmark,
             diagnostic_only=c010_diagnostic,
         )
-        diagnostic_l2_panel, diagnostic_l2_definition, diagnostic_l2_cross_section = build_c010_feature_domain_panel(
-            c010_payload["l2_aggregates"],
-            trading_dates=calendar,
-            csi300_returns=benchmark,
-            expected_sector_count=131,
-            direct_sector_level="L2",
-            diagnostic_only=c010_diagnostic,
-        )
+        diagnostic_l2_panel = None
+        diagnostic_l2_definition = None
+        diagnostic_l2_cross_section = None
+        if not rotation_l1_only:
+            (
+                diagnostic_l2_panel,
+                diagnostic_l2_definition,
+                diagnostic_l2_cross_section,
+            ) = build_c010_feature_domain_panel(
+                c010_payload["l2_aggregates"],
+                trading_dates=calendar,
+                csi300_returns=benchmark,
+                expected_sector_count=131,
+                direct_sector_level="L2",
+                diagnostic_only=c010_diagnostic,
+            )
         complete_aggregate_evidence = complete_c010_domain_receipts(
             c010_payload["aggregate_evidence"],
             trading_dates=calendar,
             l1_sector_codes=diagnostic_l1_cross_section["expected_sector_codes"],
-            l2_sector_codes=diagnostic_l2_cross_section["expected_sector_codes"],
+            l2_sector_codes=(
+                None if diagnostic_l2_cross_section is None else diagnostic_l2_cross_section["expected_sector_codes"]
+            ),
         )
         c010_diagnostic_payload = {
             "eligibility": c010_payload["eligibility"].evidence(formal_policy=c010_formal),
@@ -1050,6 +1262,8 @@ def _load_l1_source_inputs(
         "security_source_identity": security_identity_manifest.evidence(),
         "provider_absence_authority": provider_absence_manifest.evidence(),
     }
+    if industry_pit_preflight is not None:
+        dataset_manifest["industry_pit_preflight"] = industry_pit_preflight
     if c010_formal and c010_diagnostic_payload is not None:
         dataset_manifest["c010_feature_domain_inputs"] = {
             "schema_version": "hmm_risk_c010_feature_domain_input_manifest_v2",
@@ -1062,10 +1276,17 @@ def _load_l1_source_inputs(
             ],
             "aggregate_receipt_sha256": c010_diagnostic_payload["aggregate_evidence"]["receipt_sha256"],
             "l1_cross_section_receipt_sha256": c010_diagnostic_payload["l1_cross_section_evidence"]["receipt_sha256"],
-            "l2_cross_section_receipt_sha256": c010_diagnostic_payload["l2_cross_section_evidence"]["receipt_sha256"],
             "l1_feature_definition_sha256": canonical_sha256(c010_diagnostic_payload["l1_feature_definition"]),
-            "l2_feature_definition_sha256": canonical_sha256(c010_diagnostic_payload["l2_feature_definition"]),
         }
+        if not rotation_l1_only:
+            dataset_manifest["c010_feature_domain_inputs"].update(
+                {
+                    "l2_cross_section_receipt_sha256": c010_diagnostic_payload["l2_cross_section_evidence"][
+                        "receipt_sha256"
+                    ],
+                    "l2_feature_definition_sha256": canonical_sha256(c010_diagnostic_payload["l2_feature_definition"]),
+                }
+            )
         panel = c010_diagnostic_payload["l1_panel"]
         l2_panel = c010_diagnostic_payload["l2_panel"]
         feature_definition = c010_diagnostic_payload["l1_feature_definition"]
@@ -1084,6 +1305,7 @@ def _load_l1_source_inputs(
         "security_identity_manifest": security_identity_manifest.evidence(),
         "provider_absence_manifest": provider_absence_manifest.evidence(),
         "c010_diagnostic": c010_diagnostic_payload,
+        "industry_pit_preflight": industry_pit_preflight,
         "trading_dates": tuple(calendar),
     }
 

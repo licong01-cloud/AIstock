@@ -5376,8 +5376,9 @@ def test_scheduler_rolls_forward_expired_localsim_binding_for_unattended_daily_r
         "source_policy_consulted_for_execution": False,
         "fallback_used": False,
     }
-    assert new_release.validation_evidence["execution_policy_authority"] == (
-        new_release.release_config_json["metadata"]["execution_policy_authority"]
+    assert (
+        new_release.validation_evidence["execution_policy_authority"]
+        == (new_release.release_config_json["metadata"]["execution_policy_authority"])
     )
     assert result.results[0].execution_plan.execution_policy_version_id == new_release.execution_policy_version_id
     assert result.results[0].execution_plan.execution_policy_sha256 == new_release.execution_policy_sha256
@@ -18699,10 +18700,46 @@ def test_local_sim_snapshot_rejects_cross_plan_facts_instead_of_filtering_them()
 class _CapturingDailyTradingContextProvider:
     def __init__(self) -> None:
         self.kwargs: dict[str, Any] = {}
+        self.stk_limit_attempt_calls: list[tuple[list[str], date]] = []
 
     def load(self, **kwargs: Any) -> SimpleNamespace:
         self.kwargs = dict(kwargs)
         return SimpleNamespace(context_id="dtc_test")
+
+    def load_stk_limit_authority_attempt(self, *, symbols: list[str], trade_date: date) -> dict[str, Any]:
+        normalized = sorted(symbols)
+        self.stk_limit_attempt_calls.append((normalized, trade_date))
+        return {
+            "schema_version": "stk_limit_authority_attempt_v1",
+            "trade_date": trade_date.isoformat(),
+            "symbol_set": normalized,
+            "availability": "ZERO_ROWS",
+            "unavailable_reason": None,
+            "refresh_identity": "refresh_test",
+            "rows": [],
+        }
+
+    @staticmethod
+    def load_supporting_facts(*, symbols: list[str], trade_date: date) -> dict[str, Any]:
+        normalized = sorted(symbols)
+        return {
+            "schema_version": "daily_trading_supporting_facts_v1",
+            "trade_date": trade_date.isoformat(),
+            "symbol_set": normalized,
+            "stock_st": {"source": "market.stock_st", "batch_hash": "a" * 64},
+            "suspend_d": {"source": "market.suspend_d", "batch_hash": "b" * 64},
+            "stock_st_facts": {
+                symbol: {
+                    "is_st": False,
+                    "source": "market.stock_st.pit",
+                    "evidence_hash": canonical_json_sha256({"symbol": symbol, "is_st": False}),
+                }
+                for symbol in normalized
+            },
+            "suspend_facts": {
+                symbol: {"is_suspended": False, "suspend_type": None, "suspend_timing": None} for symbol in normalized
+            },
+        }
 
     @staticmethod
     def to_pre_trade_statuses(context: SimpleNamespace) -> dict[str, dict[str, Any]]:
@@ -18714,8 +18751,12 @@ def test_daily_context_wires_tdx_pre_close_authority_for_localsim() -> None:
 
     daily_provider = _CapturingDailyTradingContextProvider()
 
+    quote_calls: list[list[str]] = []
+
     def quote_fetcher(symbols: list[str]) -> dict[str, dict[str, Any]]:
-        return {symbol: {} for symbol in symbols}
+        quote_calls.append(list(symbols))
+        timestamp = f"{TRADE_DATE:%Y%m%d}091000"
+        return {symbol: {"K": {"Last": 10_000}, "time": timestamp} for symbol in symbols}
 
     provider = ProductionSimulationRunContextProvider(
         daily_trading_context_provider=daily_provider,
@@ -18736,20 +18777,44 @@ def test_daily_context_wires_tdx_pre_close_authority_for_localsim() -> None:
             release_id="release-local",
             release_hash="release-hash",
         ),
-        as_of_time=datetime(2026, 8, 21, 9, 10),
+        as_of_time=datetime(TRADE_DATE.year, TRADE_DATE.month, TRADE_DATE.day, 9, 10),
         calendar_service_snapshot={"is_trading_day": True},
     )
 
-    assert result == {"context": {"context_id": "dtc_test"}}
-    assert daily_provider.kwargs["pre_close_quote_fetcher"] is quote_fetcher
-    assert daily_provider.kwargs["pre_close_quote_source"] == "TDX_REALTIME.batch_quote.pre_close"
+    assert daily_provider.stk_limit_attempt_calls == [(["000001.SZ"], TRADE_DATE)]
+    assert quote_calls == [["000001.SZ"]]
+    assert result["000001.SZ"]["source"] == "daily_trading_context_v2"
+    reference = result["000001.SZ"]["daily_trading_context"]
+    assert reference["broker_backend"] == SimulationBrokerBackend.LOCAL_SIM.value
+    assert reference["limit_authority"] == "TDX_REFERENCE_DERIVED_V1"
 
 
-def test_daily_context_wires_b0_pre_close_authority_for_miniqmt() -> None:
+def test_daily_context_wires_direct_instrument_authority_for_miniqmt() -> None:
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
     daily_provider = _CapturingDailyTradingContextProvider()
-    qmt_client = SimpleNamespace(query_quote=lambda symbol: {"symbol": symbol})
+    instrument_calls: list[list[str]] = []
+
+    def get_instrument_details(symbols: list[str]) -> dict[str, dict[str, Any]]:
+        instrument_calls.append(list(symbols))
+        return {
+            symbol: {
+                "InstrumentID": symbol.split(".", 1)[0],
+                "ExchangeID": symbol.split(".", 1)[1],
+                "PreClose": 10.0,
+                "UpStopPrice": 11.0,
+                "DownStopPrice": 9.0,
+                "PriceTick": 0.01,
+                "InstrumentStatus": 0,
+                "IsTrading": True,
+                "TradingDay": TRADE_DATE.strftime("%Y%m%d"),
+                "OpenDate": "20100101",
+                "DayCountFromIPO": 1000,
+            }
+            for symbol in symbols
+        }
+
+    qmt_client = SimpleNamespace(get_instrument_details=get_instrument_details)
     qmt_factory_calls: list[bool] = []
 
     def qmt_client_factory() -> SimpleNamespace:
@@ -18766,9 +18831,15 @@ def test_daily_context_wires_b0_pre_close_authority_for_miniqmt() -> None:
         binding_hash="binding-hash",
         strategy_id="strategy-qmt",
         broker_account_id="account-qmt",
+        binding_config_json={
+            "miniqmt_quote_control": {
+                "schema_version": "miniqmt_quote_control_binding_v1",
+                "control_revision": "B0_QUOTE_V2",
+            }
+        },
     )
 
-    provider.load_daily_trading_context(
+    result = provider.load_daily_trading_context(
         symbols=["000001.SZ"],
         trade_date=TRADE_DATE,
         binding=binding,
@@ -18778,12 +18849,11 @@ def test_daily_context_wires_b0_pre_close_authority_for_miniqmt() -> None:
             release_id="release-qmt",
             release_hash="release-hash",
         ),
-        as_of_time=datetime(2026, 8, 21, 9, 10),
+        as_of_time=datetime(TRADE_DATE.year, TRADE_DATE.month, TRADE_DATE.day, 9, 10),
         calendar_service_snapshot={"is_trading_day": True},
     )
 
-    quote_fetcher = daily_provider.kwargs["pre_close_quote_fetcher"]
-    assert qmt_factory_calls == []
-    assert quote_fetcher(["000001.SZ"]) == {"000001.SZ": {"symbol": "000001.SZ"}}
     assert qmt_factory_calls == [True]
-    assert daily_provider.kwargs["pre_close_quote_source"] == "MINIQMT_REALTIME.broker_quote.pre_close"
+    assert instrument_calls == [["000001.SZ"]]
+    assert daily_provider.kwargs == {}
+    assert result["000001.SZ"]["daily_trading_context"]["limit_authority"] == ("MINIQMT_INSTRUMENT_DETAIL_V1")

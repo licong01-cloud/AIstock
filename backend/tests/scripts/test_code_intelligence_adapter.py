@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import scripts.code_intelligence_adapter as adapter
@@ -456,27 +457,29 @@ def test_ua_semantic_refresh_uses_plugin_budget_and_isolated_workspace(tmp_path:
 
 
 def test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scoped() -> None:
-    push_workflow = Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8")
+    refresh_workflow = Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8")
     nightly = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
 
-    assert "push:\n    branches: [main]\n    paths-ignore:" in push_workflow
-    assert "tests/aistock_validation/bugs/**" in push_workflow
-    assert "pull_request:" not in push_workflow
-    assert "schedule:" in push_workflow
-    assert "- cron: '30 18 * * *'" in push_workflow
-    assert "group: code-intelligence-refresh-main" in push_workflow
-    assert "cancel-in-progress: false" in push_workflow
-    assert "continue-on-error: true" not in push_workflow
-    assert "GITHUB_OUTPUT" not in push_workflow
-    assert "--require-publish-ready" in push_workflow
-    assert "--output \"$outDir/codegraph-state-export.json\"" in push_workflow
-    assert "steps.codegraph.outputs.publish_ready" not in push_workflow
-    assert "refresh-plan `\n            --trigger main_push" in push_workflow
-    assert "run_paid_ua_refresh:" in push_workflow
-    assert "if: github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh" in push_workflow
-    assert 'AISTOCK_RUN_PAID_UA_REFRESH' in push_workflow
-    assert 'if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true")' in push_workflow
-    assert "scripts/code_intelligence_adapter.py ua-refresh" in push_workflow
+    assert not re.search(r"(?m)^\s{2}push:\s*$", refresh_workflow)
+    assert "pull_request:" not in refresh_workflow
+    assert "schedule:" in refresh_workflow
+    assert "workflow_dispatch:" in refresh_workflow
+    assert "- cron: '30 18 * * *'" in refresh_workflow
+    assert "group: code-intelligence-refresh-main" in refresh_workflow
+    assert "cancel-in-progress: false" in refresh_workflow
+    assert "continue-on-error: true" not in refresh_workflow
+    assert "GITHUB_OUTPUT" not in refresh_workflow
+    assert "--require-publish-ready" in refresh_workflow
+    assert "--output \"$outDir/codegraph-state-export.json\"" in refresh_workflow
+    assert "steps.codegraph.outputs.publish_ready" not in refresh_workflow
+    assert "refresh-plan `\n            --trigger main_push" in refresh_workflow
+    assert "run_paid_ua_refresh:" in refresh_workflow
+    assert "if: github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh" in refresh_workflow
+    assert 'AISTOCK_RUN_PAID_UA_REFRESH' in refresh_workflow
+    assert 'if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true")' in refresh_workflow
+    assert "scripts/code_intelligence_adapter.py ua-refresh" in refresh_workflow
+    assert "actions/upload-artifact@" not in refresh_workflow
+    assert "actions/download-artifact@" not in refresh_workflow
     assert "code-intelligence-refresh-main" in nightly
     assert "name: Code intelligence daily graph refresh and summary" in nightly
     assert "scripts/code_intelligence_adapter.py codegraph-sync" in nightly
@@ -486,16 +489,16 @@ def test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scop
     assert 'if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true")' in nightly
     assert "Paid Understand Anything refresh skipped" in nightly
     assert nightly.count("--require-publish-ready") >= 2
-    assert "AISTOCK_UA_DAILY_MAX_BUDGET_USD" in push_workflow
-    assert "ua_max_budget_usd:" in push_workflow
-    assert "type: number" in push_workflow
+    assert "AISTOCK_UA_DAILY_MAX_BUDGET_USD" in refresh_workflow
+    assert "ua_max_budget_usd:" in refresh_workflow
+    assert "type: number" in refresh_workflow
     assert "AISTOCK_UA_DAILY_MAX_BUDGET_USD" in nightly
     assert "continue-on-error: true\n    concurrency:" not in nightly
     assert "id: graph_refresh\n        continue-on-error: true" not in nightly
     assert "--max-age-hours 24" in nightly
-    assert "GITHUB_STEP_SUMMARY" in push_workflow
-    assert "::warning title=Code intelligence refresh" in push_workflow
-    assert "artifact is unreadable" in push_workflow
+    assert "GITHUB_STEP_SUMMARY" in refresh_workflow
+    assert "::warning title=Code intelligence refresh" in refresh_workflow
+    assert "artifact is unreadable" in refresh_workflow
     assert "GITHUB_STEP_SUMMARY" in nightly
     assert "::warning title=Daily graph refresh" in nightly
     assert "artifact is unreadable" in nightly

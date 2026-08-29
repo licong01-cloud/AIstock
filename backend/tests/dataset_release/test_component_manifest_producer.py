@@ -180,6 +180,7 @@ def test_component_manifest_producer_seals_exact_candidate_file_graph(tmp_path, 
     assert len(create) == 13
     factor = loaded.component(Component.FACTOR_H5_STATIC)
     assert factor.adj_writer_targets("000001.SZ") == ("daily_pv.h5",)
+    assert factor.source_partitions[0].source_table_schema_digest == "5" * 64
     index_files = loaded.component(Component.DOMESTIC_INDEX_CONTEXT).instrument_file_targets
     assert index_files["000985.CSI"] == ("index_csv/000985.csi.csv",)
 
