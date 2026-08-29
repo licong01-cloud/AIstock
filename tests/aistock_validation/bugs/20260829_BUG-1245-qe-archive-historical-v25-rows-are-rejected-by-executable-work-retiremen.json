@@ -99,8 +99,8 @@
   },
   "first_seen_at": "2026-08-29T07:17:58.122470Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4f6a3d35dded5fdb186a1a786a216554070c9560",
+  "fixed_at": "2026-08-29T15:06:52Z",
   "github_issue_number": 3948,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3948",
   "last_seen_at": "2026-08-29T07:17:58.122470Z",
@@ -108,6 +108,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3958",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -133,6 +134,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -144,7 +146,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1245",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b55b3a04258af848",
+    "recorded_at": "2026-08-29T15:32:06.929089Z",
+    "runtime_contract_digest": "53782ee66f4457c1301b26c10ed9816dce172ec5e87db17adb6e876059732073",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "58417011e7164f7d7edf8a67a5b69808a60a0dce",
+    "source_merge_commit": "4f6a3d35dded5fdb186a1a786a216554070c9560",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3958",
+    "validation_evidence": [
+      "head=58417011; focused=5_passed; qe_archive_backend=165_passed; validation_module_registry_l0=8_passed; guardrail_blocking=0; ownership_unmapped=0; ci_verdict=success"
+    ],
+    "validation_evidence_digest": "686843e90f22c53ebb2234ad2d66f9829dfe7134aac9494621d2a725ac28f342"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.archive"
   ],
@@ -153,6 +176,9 @@
     "fingerprint": "04185e759c769eccd2e28071",
     "source_event_id": "FE-20260829-04185e759c76"
   },
+  "validation_evidence": [
+    "head=58417011; focused=5_passed; qe_archive_backend=165_passed; validation_module_registry_l0=8_passed; guardrail_blocking=0; ownership_unmapped=0; ci_verdict=success"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
