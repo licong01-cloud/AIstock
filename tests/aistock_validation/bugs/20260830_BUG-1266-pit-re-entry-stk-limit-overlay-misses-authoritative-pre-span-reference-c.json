@@ -30,14 +30,22 @@
   ],
   "expected": "Canonical candidate source-freeze derives missing or invalid-placeholder stk_limit values from the last authoritative observed close and adjustment factors across PIT gaps, with bounded memory/provider calls and immutable receipts.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/services/dataset_release/stk_limit_overlay.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_stk_limit_overlay.py",
+      "tests/aistock_validation/bugs/20260830_BUG-1266-pit-re-entry-stk-limit-overlay-misses-authoritative-pre-span-reference-c.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/artifact_ready_source.py",
       "backend/services/dataset_release/stk_limit_overlay.py",
       "backend/tests/dataset_release/test_artifact_ready_source.py",
-      "backend/tests/dataset_release/test_stk_limit_overlay.py"
+      "backend/tests/dataset_release/test_stk_limit_overlay.py",
+      "tests/aistock_validation/bugs/20260830_BUG-1266-pit-re-entry-stk-limit-overlay-misses-authoritative-pre-span-reference-c.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/artifact_ready_source.py",
@@ -145,11 +153,18 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "fresh Python process imported artifact_ready_source, fetched Tushare 600462.SH 2019-01-11 close/adj, and derived 2019-01-14 limits 3.37/3.71/3.03"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
