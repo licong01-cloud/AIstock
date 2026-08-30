@@ -25,9 +25,7 @@ class SelectionPaperPortfolioController:
         portfolio_service: PaperTradingV2PortfolioService | Any | None = None,
     ) -> None:
         self.selection_service = selection_service
-        self.portfolio_service = portfolio_service or PaperTradingV2PortfolioService(
-            package_repository=selection_service.package_repository
-        )
+        self.portfolio_service = portfolio_service
 
     def create_from_run(
         self,
@@ -60,7 +58,10 @@ class SelectionPaperPortfolioController:
             },
             "selection_runtime_profile_binding": dict(binding),
         }
-        portfolio = self.portfolio_service.create_portfolio(
+        portfolio_service = self.portfolio_service or PaperTradingV2PortfolioService(
+            package_repository=self.selection_service.package_repository
+        )
+        portfolio = portfolio_service.create_portfolio(
             package_id=package_id,
             portfolio_name=portfolio_name,
             initial_cash=initial_cash,

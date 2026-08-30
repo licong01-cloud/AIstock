@@ -72,6 +72,12 @@ class FakeSelectionCenterService:
             context={"run_id": kwargs["run_id"], "mode": self.run.mode.value, "package_ids": self.run.package_ids},
         )
 
+    def prepare_paper_portfolio_creation(self, *, run_id: str):
+        raise UnsupportedFeatureError(
+            "creating a paper portfolio from multi-package selection requires a combined StrategyPackage",
+            context={"run_id": run_id, "mode": self.run.mode.value, "package_ids": self.run.package_ids},
+        )
+
     def list_paper_portfolio_links(self, run_id: str) -> list:
         assert run_id == self.run.run_id
         return []
