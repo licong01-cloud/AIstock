@@ -1,11 +1,11 @@
 # AIstock Advisory N1 Tier-1 Oracle 与 Learnability Audit F2 详细设计 v1.0
 
-> 日期：2026-08-31  
-> 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`  
-> 交付等级：F2  
-> 当前状态：`IMPLEMENTED_LOCAL_FORMAL_RUN_PENDING`  
-> 业务模块：Advisory / Selection Center  
-> 目标合同：`ALPHA_RANKING`  
+> 日期：2026-08-31
+> 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
+> 交付等级：F2
+> 当前状态：`IMPLEMENTED_LOCAL_FORMAL_RUN_PENDING`
+> 业务模块：Advisory / Selection Center
+> 目标合同：`ALPHA_RANKING`
 > 生产影响：无 API/UI、无数据库 DDL/DML、无 descriptor、无 Selection 写入、无运行时激活、无需后端重启
 
 ## 1. Background / 当前事实
