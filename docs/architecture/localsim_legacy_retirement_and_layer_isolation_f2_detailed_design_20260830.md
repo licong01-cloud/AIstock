@@ -650,6 +650,7 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 | R14 | PR-B1 owner真实性、反向依赖、单writer与projector边界 | 初版只迁移broker和事务wrapper，scheduler仍解释outbox并生成projection，且runtime models保留第二份dead definitions；逐轮迁移normal/first-causal/valuation/duplicate/recovery/persistence workflow并物理删除重复模型和scheduler内联writer逻辑 | findings fixed |
 | R15 | PR-B1全量业务不漂移与失败语义 | 逐项复核TWAP、causal minute、cash competition、partial fill、T+1、limit/suspend、rollback、CAS/idempotency、commit-unknown/readback、KERNEL_V2；execution/lifecycle、Paper v2和MiniQMT广域矩阵全绿，source无Paper/Runtime反向import | zero local findings; ownership/feature validator/current-head CI required |
 | R16 | PR-B1修订后最终本地门禁与四项设计符合性 | 第一轮F2校验发现F-137/F-138证据不够具体且阶段缺口未显式标记、Ruff发现三个迁移文件未格式化，均已修订；复跑详细设计=`16/16,warnings=0`、父蓝图=`148/148,warnings=0`、ownership=`7/7 mapped`、execution+StrategyPackage=`114 passed`、`simulation_core_l2`=`718 passed,2 skipped`加跨模块`63 passed,1 skipped`、L0/registry/diff全绿；未发现简化交付、silent fallback、业务语义漂移或新增审批门禁 | zero local findings; current-head CI required |
+| R17 | PR-B1首轮current-head CI分类完整性 | Semgrep/CodeQL在安全扫描前共同fail closed，精确根因为Stage A catalog覆盖architecture/data/signal但漏掉同一模块新增的`backend/tests/simulation_execution/**`，导致四个真实执行层测试被分类为unmapped；补齐`simulation.layer_foundation`的唯一test ownership，不改pipeline、测试计划或业务实现，并要求classifier/catalog/current-head CI复跑 | finding fixed; current-head CI rerun required |
 
 ## 15. 合入条件
 
