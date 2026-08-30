@@ -602,6 +602,7 @@ def test_canonical_historical_delisted_daily_gap_uses_tushare_candidate_overlay(
 
 
 def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(dataset_profile, tmp_path) -> None:
+    prior_day = date(2024, 7, 19)
     day1 = date(2024, 7, 22)
     day2 = date(2024, 7, 23)
     partition_key = f"{day1.isoformat()}_{day2.isoformat()}"
@@ -628,7 +629,7 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
         ],
         universe_key=profile.universe_key,
         rule_version=profile.universe_rule_version,
-        scope_start=day1,
+        scope_start=prior_day,
         cutoff=day2,
         state_identity=_digest("limit-state"),
         source_fingerprint_sha256=_digest("limit-source"),
@@ -662,9 +663,9 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
             {
                 "ts_code": CODE,
                 "trade_date": day1.isoformat(),
-                "pre_close": 9.0,
-                "up_limit": 9.9,
-                "down_limit": 8.1,
+                "pre_close": 0.0,
+                "up_limit": 11.0,
+                "down_limit": 9.0,
             }
         ],
         f"kline_daily_raw:{partition_key}": [
@@ -683,9 +684,24 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
     adj_ref = cas.put_json(
         {"schema_version": ARTIFACT_READY_ADJ_COVERAGE_SCHEMA, "overlay_rows": []}
     )
-    builder = ArtifactReadySourceBuilder(profile, cas)
+    reference_calls: list[tuple[str, date, date]] = []
 
-    entries, refs, summary = builder._limit_entries(
+    def fetch_reference(code: str, query_start: date, required_day: date) -> Mapping[str, Any]:
+        reference_calls.append((code, query_start, required_day))
+        return {
+            "ts_code": code,
+            "close_date": prior_day.isoformat(),
+            "close_li": 10_000,
+            "close_adj_factor": "1",
+        }
+
+    builder = ArtifactReadySourceBuilder(
+        profile,
+        cas,
+        fetch_tushare_limit_reference=fetch_reference,
+    )
+
+    entries, provider_refs, refs, summary = builder._limit_entries(
         view,
         snapshot=snapshot,
         trading_dates=(day1, day2),
@@ -706,6 +722,17 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
         checkpoint=lambda: None,
     )
 
+    assert reference_calls == [(CODE, prior_day, day1)]
+    assert len(provider_refs) == 1
+    provider_receipt = cas.get_json(provider_refs[0])
+    assert provider_receipt["schema_version"] == artifact_ready_module.STK_LIMIT_REFERENCE_PROVIDER_SCHEMA
+    assert provider_receipt["required_date"] == day1.isoformat()
+    assert provider_receipt["safety"]["database_writes"] == 0
+    replay = artifact_ready_module._FrozenProviderReplay(
+        cas,
+        [provider_refs[0].as_dict()],
+    )
+    assert replay.fetch_tushare_limit_reference(CODE, prior_day, day1) == provider_receipt["seed"]
     assert len(entries) == len(refs) == 1
     assert entries[0]["dataset"] == "stk_limit_rule_coverage"
     assert entries[0]["affected_instruments"] == ["000001.SZ"]
@@ -714,7 +741,16 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
     assert receipt["pit_snapshot_digest"] == pit.spans_sha256
     assert receipt["database_override_rows"] == 0
     assert receipt["unresolved_keys"] == 0
+    assert receipt["reference_seed_rows"] == 1
+    assert receipt["database_completion_rows"] == 1
     assert receipt["overlay_rows"] == [
+        {
+            "ts_code": CODE,
+            "trade_date": day1.isoformat(),
+            "pre_close": "10.00",
+            "up_limit": "11.00",
+            "down_limit": "9.00",
+        },
         {
             "ts_code": CODE,
             "trade_date": day2.isoformat(),
@@ -723,7 +759,8 @@ def test_candidate_limit_overlay_is_sealed_missing_only_with_rule_identity(datas
             "down_limit": "9.00",
         }
     ]
-    assert summary["rule_derived_rows"] == 1
+    assert summary["rule_derived_rows"] == 2
+    assert summary["reference_seed_rows"] == 1
     raw_entry = {
         "identity": f"stk_limit:{partition_key}",
         "dataset": "stk_limit",
@@ -924,6 +961,75 @@ def test_tushare_daily_column_bound_is_terminal_not_retryable(
 
     assert caught.value.retryable is False
     assert frame.to_dict_called is False
+
+
+def test_tushare_limit_reference_selects_latest_strictly_prior_close_and_exact_adj_factor(
+    dataset_profile,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import tushare as ts
+
+    store = ControlStore.initialize(tmp_path / "limit-reference-provider-control")
+    builder = ArtifactReadySourceBuilder(dataset_profile, CASStore(store.root))
+    query_start = date(2024, 7, 18)
+    prior_day = date(2024, 7, 19)
+    required_day = date(2024, 7, 22)
+    daily_frame = pd.DataFrame(
+        [
+            {
+                "ts_code": CODE,
+                "trade_date": query_start.strftime("%Y%m%d"),
+                "open": 9.0,
+                "high": 9.0,
+                "low": 9.0,
+                "close": 9.0,
+                "vol": 100.0,
+                "amount": 100.0,
+            },
+            {
+                "ts_code": CODE,
+                "trade_date": prior_day.strftime("%Y%m%d"),
+                "open": 10.0,
+                "high": 10.0,
+                "low": 10.0,
+                "close": 10.0,
+                "vol": 100.0,
+                "amount": 100.0,
+            },
+        ]
+    )
+    monkeypatch.setattr(ts, "pro_bar", lambda **_kwargs: daily_frame)
+    adj_calls: list[Mapping[str, Any]] = []
+
+    def adj_factor(**kwargs):
+        adj_calls.append(kwargs)
+        return pd.DataFrame(
+            [
+                {
+                    "ts_code": CODE,
+                    "trade_date": prior_day.strftime("%Y%m%d"),
+                    "adj_factor": 1.5,
+                }
+            ]
+        )
+
+    builder._tushare._provider = SimpleNamespace(adj_factor=adj_factor)
+
+    result = builder._fetch_tushare_limit_reference(
+        CODE,
+        query_start,
+        required_day,
+    )
+
+    assert result == {
+        "ts_code": CODE,
+        "close_date": prior_day.isoformat(),
+        "close_li": 10_000,
+        "close_adj_factor": "1.5",
+    }
+    assert adj_calls[0]["start_date"] == prior_day.strftime("%Y%m%d")
+    assert adj_calls[0]["end_date"] == prior_day.strftime("%Y%m%d")
 
 
 def test_tushare_adj_factor_row_bound_precedes_record_materialization(
