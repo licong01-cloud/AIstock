@@ -1632,6 +1632,22 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert stale_nightly_contract["runtime_identity_match"] == "not_required"
 
 
+def test_dataset_release_migration_profile_and_plan_are_exact_worker_sources() -> None:
+    changed_files = [
+        "backend/services/dataset_release/profile.py",
+        "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files, root=workflow.REPO_ROOT)
+
+    assert inference == {
+        "runtime_impact": "worker_scheduler",
+        "observed_impacts": ["worker_scheduler"],
+        "runtime_files": changed_files,
+        "target_ids": ["worker-scheduler"],
+    }
+
+
 def test_bug_1141_offline_hmm_stock_fact_repository_is_exact_and_neighbor_stays_backend(
     isolated_workflow_root: Path,
 ) -> None:

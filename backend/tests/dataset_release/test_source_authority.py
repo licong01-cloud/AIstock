@@ -861,6 +861,7 @@ def test_initial_migration_sample_filters_stock_codes_before_row_materialization
     fake.pit_codes = (
         "000001.SZ",
         "300379.SZ",
+        "300741.SZ",
         "600462.SH",
         "600930.SH",
         "688981.SH",
