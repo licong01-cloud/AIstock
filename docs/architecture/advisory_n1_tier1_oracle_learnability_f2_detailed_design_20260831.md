@@ -387,6 +387,8 @@ backend/tests/advisory_model_first/test_oracle_learnability_audit.py
 backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py
 backend/tests/advisory_model_first/test_research_control_cli.py
 scripts/advisory_n1_tier1_oracle_learnability.py
+scripts/ci_change_classifier.py
+backend/tests/scripts/test_ci_change_classifier.py
 tests/aistock_validation/catalog/file_ownership.yaml
 docs/architecture/advisory_n1_tier1_oracle_learnability_f2_detailed_design_20260831.md
 docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
