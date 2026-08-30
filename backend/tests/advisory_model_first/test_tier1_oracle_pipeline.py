@@ -4,7 +4,9 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+import pytest
 
+from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.research_control_contracts import (
     DecisionUse,
     ResearchResultClass,
@@ -67,6 +69,7 @@ def _fixture_frames():
                 {
                     "decision_as_of_trade_date": decision,
                     "trade_date": decision,
+                    "target_trade_date": calendar[calendar.get_loc(decision) + 1],
                     "instrument": symbol,
                     "selection_effective_rank": rank,
                 }
@@ -167,6 +170,27 @@ def test_rank_bucket_output_includes_the_derived_top41_to_top50_slice() -> None:
     last_bucket = result.rank_bucket_summary[-1]
     assert (last_bucket["rank_start"], last_bucket["rank_end"]) == (41, 50)
     assert last_bucket["row_count"] == 60 * 10
+
+
+def test_parent_and_outcome_target_date_mismatch_fails_closed() -> None:
+    rankings, daily, benchmark, suspend, snapshot, calendar, decisions, _ = _fixture_frames()
+    rankings.loc[
+        rankings["decision_as_of_trade_date"] == decisions[0], "target_trade_date"
+    ] = calendar[calendar.get_loc(decisions[0]) + 2]
+
+    with pytest.raises(AdvisoryModelFirstError) as captured:
+        build_tier1_outcomes_and_oracle(
+            rankings=rankings,
+            daily=daily,
+            benchmark_daily=benchmark,
+            suspend_rows=suspend,
+            pit_snapshot=snapshot,
+            trading_calendar=calendar,
+            decision_dates=decisions,
+            request=_request(),
+        )
+
+    assert captured.value.reason_code == "ADVISORY_N1_LABEL_CLOCK_INVALID"
 
 
 def test_immutable_bundle_records_real_parquet_rows_and_exact_retry(tmp_path) -> None:

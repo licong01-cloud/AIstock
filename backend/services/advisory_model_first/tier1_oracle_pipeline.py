@@ -989,7 +989,28 @@ def build_tier1_outcomes_and_oracle(
             if date_evaluable
             else []
         )
-        candidate = rank_frame.merge(
+        candidate_rank_frame = rank_frame
+        if "target_trade_date" in rank_frame.columns:
+            rank_targets = pd.DatetimeIndex(
+                pd.to_datetime(rank_frame["target_trade_date"])
+            ).normalize().unique()
+            outcome_targets = pd.DatetimeIndex(
+                pd.to_datetime(outcome["target_trade_date"])
+            ).normalize().unique()
+            if (
+                len(rank_targets) != 1
+                or len(outcome_targets) != 1
+                or rank_targets[0] != outcome_targets[0]
+            ):
+                _raise(
+                    "parent ranking and N1 outcome disagree on the T+1 target date",
+                    "ADVISORY_N1_LABEL_CLOCK_INVALID",
+                    decision_date=decision.date().isoformat(),
+                    ranking_targets=[item.date().isoformat() for item in rank_targets],
+                    outcome_targets=[item.date().isoformat() for item in outcome_targets],
+                )
+            candidate_rank_frame = rank_frame.drop(columns=["target_trade_date"])
+        candidate = candidate_rank_frame.merge(
             outcome,
             on=["decision_as_of_trade_date", "instrument"],
             how="left",
