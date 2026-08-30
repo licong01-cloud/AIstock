@@ -48,7 +48,7 @@ def _audit_inputs():
                     "instrument": symbol,
                     "selection_effective_rank": rank,
                     "target_trade_date": calendar[positions[decision] + 1],
-                    "effective_exit_trade_date": calendar[positions[decision] + 21],
+                    "effective_exit_trade_date": calendar[positions[decision] + 20],
                     "slot_return_bps": float((rank - 10) * 10),
                     "outcome_known": True,
                 }

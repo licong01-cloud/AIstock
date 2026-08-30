@@ -1507,7 +1507,9 @@ def _build_one_date_outcomes(
     policy = request.outcome_policy
     decision_position = positions[decision]
     entry_position = decision_position + policy.entry_offset_trading_days
-    planned_exit_position = entry_position + policy.holding_period_trading_days
+    # H20 counts the entry session as holding session 1: decision T, entry T+1,
+    # planned exit T+20.  Adding 20 again after entry would incorrectly be H21.
+    planned_exit_position = entry_position + policy.holding_period_trading_days - 1
     if entry_position >= len(calendar) or planned_exit_position >= len(calendar):
         _raise(
             "N1 label clock extends beyond the frozen data cutoff",
