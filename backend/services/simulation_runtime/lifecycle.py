@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime, time
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
-from backend.services.paper_trading_v2.broker.base import BrokerBackend
+from backend.services.simulation_execution.broker import BrokerBackend
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.selection_center.models import SignalSnapshot, TargetPosition
 from backend.services.strategy_package.models import StrategyPackageManifest
@@ -34,7 +34,6 @@ from .decision import (
     TargetPositionService,
 )
 from .models import (
-    DailySelectionEvidence,
     ExecutionPlan,
     SimulationBrokerBackend,
     SimulationDailyRun,
@@ -44,6 +43,7 @@ from .models import (
     canonical_json_sha256,
     miniqmt_kernel_runtime_id,
 )
+from backend.services.simulation_signal.contracts import DailySelectionEvidence
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .tca_capture import (
     CaptureMergeOutcome,

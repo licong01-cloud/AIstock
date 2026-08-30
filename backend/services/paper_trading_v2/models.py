@@ -1,4 +1,4 @@
-﻿"""Paper Trading v2 persistent domain models."""
+"""Paper Trading v2 persistent domain models."""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ import json
 from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any, Literal
+
+from backend.services.simulation_execution.broker import BrokerBackendId
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from backend.services.paper_trading_v2.market_data import (
+from backend.services.simulation_data.contracts import (
     ALLOWED_MARKET_SOURCES,
     MinuteDataSource,
     assert_broker_market_source_match,
@@ -20,13 +22,10 @@ from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, PositionLot, RunStatus
 
 
-# Strategy Engine design 2026-05-08 §3.6.1 (R-Q9 D1): broker_backend Literal
+# Strategy Engine design 2026-05-08 搂3.6.1 (R-Q9 D1): broker_backend Literal
 # kept in sync with ALLOWED_MARKET_SOURCES keys. minqmt_live is reserved for
-# future live admission (main design §11) and not creatable through Paper v2
+# future live admission (main design 搂11) and not creatable through Paper v2
 # portfolio APIs in this round.
-BrokerBackendId = Literal["local_sim", "minqmt_sim"]
-
-
 class PortfolioStatus(str, Enum):
     DRAFT = "DRAFT"
     READY = "READY"
@@ -71,13 +70,12 @@ class PaperPortfolio(BaseModel):
 
     @model_validator(mode="after")
     def _broker_backend_matches_data_source(self) -> "PaperPortfolio":
-        # Strategy Engine design §3.6.4 (R-Q9 D3): minute data source is
+        # Strategy Engine design 搂3.6.4 (R-Q9 D3): minute data source is
         # strongly bound to broker backend. Reject cross-pairing fail-fast at
         # the model layer so DB-level CHECK is never the only line of defense.
         if self.broker_backend not in ALLOWED_MARKET_SOURCES:
             raise ValueError(
-                f"unknown broker_backend {self.broker_backend!r}; "
-                f"allowed: {sorted(ALLOWED_MARKET_SOURCES.keys())}"
+                f"unknown broker_backend {self.broker_backend!r}; allowed: {sorted(ALLOWED_MARKET_SOURCES.keys())}"
             )
         assert_broker_market_source_match(self.broker_backend, self.data_source)
         return self
@@ -123,7 +121,7 @@ class PaperRun(BaseModel):
     completed_at: datetime | None = None
     error: dict[str, Any] | None = None
     # Provenance of the QE model params used for this run. Default 'node'
-    # is intentional — it covers (a) existing rows post-migration and
+    # is intentional 鈥?it covers (a) existing rows post-migration and
     # (b) PaperRun construction sites that fire BEFORE the live inference
     # workspace is materialized (e.g. day_runner / live_session) and
     # subsequently UPDATE the field once inference resolves origin.

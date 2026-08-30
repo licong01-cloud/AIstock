@@ -50,6 +50,8 @@ from backend.services.simulation_runtime.miniqmt_quote_activation import (
 from backend.services.simulation_runtime.models import (
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
+)
+from backend.services.simulation_data.daily_context import (
     SimulationBrokerBackend,
 )
 from backend.services.simulation_runtime.repository import InMemorySimulationRuntimeRepository
@@ -288,9 +290,7 @@ class _KernelLeaseSupervisor:
             json.dumps(expected_lease, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         actual_identity = (
-            hashlib.sha256(
-                json.dumps(actual_lease, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
+            hashlib.sha256(json.dumps(actual_lease, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
             if actual_lease is not None
             else None
         )
@@ -2407,8 +2407,7 @@ def test_blocked_release_worker_does_not_block_repeated_watchdog_health_or_peer_
         assert receipt["ingress"]["status"] == "READBACK_DEFERRED"  # type: ignore[index]
         assert receipt["ingress"]["readback_current"] is False  # type: ignore[index]
         assert any(
-            item["runtime_id"] == blocked.runtime_id
-            and item["operation"] == "RELEASE_UNKNOWN_RECONCILIATION"
+            item["runtime_id"] == blocked.runtime_id and item["operation"] == "RELEASE_UNKNOWN_RECONCILIATION"
             for item in receipt["kernel_auxiliary_workers"]  # type: ignore[union-attr]
         )
 
@@ -2458,9 +2457,9 @@ def test_exact_physical_lease_owner_drift_degrades_only_owner_and_preserves_peer
     elif drift == "empty_lease_id":
         supervisor.consumers[consumer_id]["lease_id"] = ""
     elif drift == "generation":
-        supervisor.consumers[consumer_id]["lease_generation"] = int(
-            supervisor.consumers[consumer_id]["lease_generation"]
-        ) + 1
+        supervisor.consumers[consumer_id]["lease_generation"] = (
+            int(supervisor.consumers[consumer_id]["lease_generation"]) + 1
+        )
     elif drift == "symbols":
         supervisor.consumers[consumer_id]["symbols"] = ["000001.SZ"]
     else:
@@ -2470,10 +2469,7 @@ def test_exact_physical_lease_owner_drift_degrades_only_owner_and_preserves_peer
         item["runtime_id"]: item["ingress_retry"] for item in activation.health()["kernel_product_runtimes"]
     }
     assert health_by_runtime[broken.runtime_id]["state"] == "OWNER_DRIFT"
-    assert (
-        health_by_runtime[broken.runtime_id]["reason_code"]
-        == "MINIQMT_K6_PRODUCT_CONSUMER_LEASE_OWNER_DRIFT"
-    )
+    assert health_by_runtime[broken.runtime_id]["reason_code"] == "MINIQMT_K6_PRODUCT_CONSUMER_LEASE_OWNER_DRIFT"
     assert health_by_runtime[peer.runtime_id]["state"] == "HEALTHY"
     with pytest.raises(MiniQMTKernelProductLifecycleError, match="exact active owner graph"):
         activation.get_kernel_product_runtime(broken.runtime_id)
@@ -3420,9 +3416,7 @@ def test_watchdog_fails_loud_for_exact_owner_drift_without_starving_peer(drift: 
     assert failures[0]["runtime_id"] == broken.runtime_id
     assert failures[0]["binding_id"] == broken.binding_id
     assert failures[0]["reason_code"] == (
-        "MINIQMT_K6_PRODUCT_SINK_OWNER_DRIFT"
-        if drift == "sink"
-        else "MINIQMT_K6_PRODUCT_CALLBACK_WORKER_OWNER_DRIFT"
+        "MINIQMT_K6_PRODUCT_SINK_OWNER_DRIFT" if drift == "sink" else "MINIQMT_K6_PRODUCT_CALLBACK_WORKER_OWNER_DRIFT"
     )
     assert failures[0]["broker_side_effect_state"] == "UNKNOWN"
 
@@ -4503,8 +4497,8 @@ def test_completed_watchdog_owner_drift_is_aggregated_without_starving_peer_resu
     )
 
     def completed_entry(runtime_id: str, attempt_token: int) -> Any:
-        result_queue: activation_module.queue.Queue[tuple[str, dict[str, object]]] = (
-            activation_module.queue.Queue(maxsize=1)
+        result_queue: activation_module.queue.Queue[tuple[str, dict[str, object]]] = activation_module.queue.Queue(
+            maxsize=1
         )
         claim = activation_module._KernelProductAttemptClaim(
             runtime_id=runtime_id,
@@ -4582,8 +4576,8 @@ def test_auxiliary_owner_drift_and_non_string_runtime_identity_are_aggregated_pe
     )
 
     def completed_entry(runtime_id: object, operation: str) -> Any:
-        result_queue: activation_module.queue.Queue[tuple[str, dict[str, object]]] = (
-            activation_module.queue.Queue(maxsize=1)
+        result_queue: activation_module.queue.Queue[tuple[str, dict[str, object]]] = activation_module.queue.Queue(
+            maxsize=1
         )
         entry = activation_module._KernelAuxiliaryWorker(
             owner_key=runtime_id,

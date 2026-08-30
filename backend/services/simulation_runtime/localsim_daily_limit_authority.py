@@ -14,8 +14,9 @@ from backend.services.dataset_release.a_share_limit_rule import (
     AShareLimitRuleError,
     classify_a_share_board,
 )
-from backend.services.paper_trading_v2.market_data import parse_tdx_reference_pre_close
-from backend.services.simulation_runtime.models import (
+from backend.services.simulation_data.tdx_causal_minute import parse_tdx_reference_pre_close
+from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.simulation_data.daily_context import (
     DAILY_LIMIT_AUTHORITY_BY_BROKER_V2,
     DailyLimitAuthorityV2,
     DailyLimitResolverV2,
@@ -24,7 +25,6 @@ from backend.services.simulation_runtime.models import (
     DailyTradingContextV2,
     DailyTradingSymbolFactV2,
     SimulationBrokerBackend,
-    canonical_json_sha256,
 )
 from backend.services.trading_core.a_share_live_limit_rule import (
     LIVE_REFERENCE_LIMIT_RULE_VERSION,

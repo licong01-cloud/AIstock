@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any, Callable
 
 from backend.execution_algos.vnpy_style import VNPY_STYLE_ASSETS, is_vnpy_style_algo
-from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandle
+from backend.services.simulation_execution.broker import BrokerBackend, OrderHandle
 from backend.services.qmt_strategy_ledger.order_service import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,

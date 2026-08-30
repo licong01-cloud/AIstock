@@ -22,7 +22,6 @@ from backend.services.miniqmt_execution_runtime.repository import InMemoryMiniQM
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-    DailySelectionEvidence,
     InMemorySimulationRuntimeRepository,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
@@ -32,8 +31,11 @@ from backend.services.simulation_runtime import (
     SimulationRunContext,
     SimulationRuntimeOpsService,
     StaticSimulationRunContextProvider,
-    StrategyPackageSelectionResult,
     StrategyRuntimeReleaseService,
+)
+from backend.services.simulation_signal import (
+    DailySelectionEvidence,
+    StrategyPackageSelectionResult,
 )
 from backend.services.simulation_runtime.models import (
     LocalSimExecutionRuntimeStatus,
@@ -727,10 +729,7 @@ def test_scheduler_verification_status_scopes_blockers_without_mutating_runs(
             },
         )
     )
-    before = {
-        run_id: run.model_dump(mode="json")
-        for run_id, run in repo.daily_runs.items()
-    }
+    before = {run_id: run.model_dump(mode="json") for run_id, run in repo.daily_runs.items()}
     service = SimulationRuntimeOpsService(
         repository=repo,
         scheduler=getattr(repo, "_ops_test_scheduler"),
@@ -756,10 +755,7 @@ def test_scheduler_verification_status_scopes_blockers_without_mutating_runs(
     assert exact["verification_scope"]["broker_backend"] == "minqmt_sim"
     assert exact["current_trade_date_blockers"]["blocker_count"] == 1
     assert local_run_id in repo.daily_runs
-    assert {
-        run_id: run.model_dump(mode="json")
-        for run_id, run in repo.daily_runs.items()
-    } == before
+    assert {run_id: run.model_dump(mode="json") for run_id, run in repo.daily_runs.items()} == before
 
 
 def test_scheduler_verification_status_requires_a_valid_subject(

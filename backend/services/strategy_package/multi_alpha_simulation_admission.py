@@ -11,7 +11,7 @@ import psycopg2.extras
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.db.pg_pool import get_conn
-from backend.services.paper_trading_v2.models import BrokerBackendId
+from backend.services.simulation_execution.broker import BrokerBackendId
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -25,7 +25,7 @@ def admission_id_from_payload(payload: Any) -> str:
     return f"mapa_{canonical_json_sha256(payload)[:24]}"
 
 
-class MultiAlphaPaperAdmissionRecord(BaseModel):
+class MultiAlphaSimulationAdmissionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     admission_id: str
@@ -45,7 +45,7 @@ class MultiAlphaPaperAdmissionRecord(BaseModel):
         return self.model_dump(mode="json")
 
 
-class MultiAlphaPaperAdmissionRepository:
+class MultiAlphaSimulationAdmissionRepository:
     """Legacy repository for optional dry-run evidence, not signal eligibility."""
 
     def __init__(self, conn_factory: ConnFactory | None = None) -> None:
@@ -58,7 +58,7 @@ class MultiAlphaPaperAdmissionRepository:
         manifest_sha256: str,
         broker_backend: BrokerBackendId,
         runtime_variant: str,
-    ) -> MultiAlphaPaperAdmissionRecord | None:
+    ) -> MultiAlphaSimulationAdmissionRecord | None:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -82,7 +82,7 @@ class MultiAlphaPaperAdmissionRepository:
             return None
         return self._record_from_row(dict(row))
 
-    def upsert_success(self, record: MultiAlphaPaperAdmissionRecord) -> MultiAlphaPaperAdmissionRecord:
+    def upsert_success(self, record: MultiAlphaSimulationAdmissionRecord) -> MultiAlphaSimulationAdmissionRecord:
         payload = record.model_dump(mode="json")
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -126,8 +126,8 @@ class MultiAlphaPaperAdmissionRepository:
         return self._record_from_row(dict(row))
 
     @staticmethod
-    def _record_from_row(row: dict[str, Any]) -> MultiAlphaPaperAdmissionRecord:
-        return MultiAlphaPaperAdmissionRecord(
+    def _record_from_row(row: dict[str, Any]) -> MultiAlphaSimulationAdmissionRecord:
+        return MultiAlphaSimulationAdmissionRecord(
             admission_id=str(row["admission_id"]),
             package_id=str(row["package_id"]),
             manifest_sha256=str(row["manifest_sha256"]),
@@ -143,11 +143,11 @@ class MultiAlphaPaperAdmissionRepository:
         )
 
 
-class InMemoryMultiAlphaPaperAdmissionRepository:
+class InMemoryMultiAlphaSimulationAdmissionRepository:
     """In-memory repository used by tests and dry-run unit wiring."""
 
     def __init__(self) -> None:
-        self.records: dict[tuple[str, str, str, str], MultiAlphaPaperAdmissionRecord] = {}
+        self.records: dict[tuple[str, str, str, str], MultiAlphaSimulationAdmissionRecord] = {}
 
     def get_eligible(
         self,
@@ -156,12 +156,14 @@ class InMemoryMultiAlphaPaperAdmissionRepository:
         manifest_sha256: str,
         broker_backend: BrokerBackendId,
         runtime_variant: str,
-    ) -> MultiAlphaPaperAdmissionRecord | None:
+    ) -> MultiAlphaSimulationAdmissionRecord | None:
         record = self.records.get((package_id, manifest_sha256, broker_backend, runtime_variant))
         if record is None or not record.eligible:
             return None
         return record
 
-    def upsert_success(self, record: MultiAlphaPaperAdmissionRecord) -> MultiAlphaPaperAdmissionRecord:
-        self.records[(record.package_id, record.manifest_sha256, record.broker_backend, record.runtime_variant)] = record
+    def upsert_success(self, record: MultiAlphaSimulationAdmissionRecord) -> MultiAlphaSimulationAdmissionRecord:
+        self.records[(record.package_id, record.manifest_sha256, record.broker_backend, record.runtime_variant)] = (
+            record
+        )
         return record

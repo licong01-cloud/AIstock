@@ -36,7 +36,7 @@ from backend.services.simulation_runtime import (
     InMemorySimulationRuntimeRepository,
     StrategyRuntimeReleaseService,
 )
-from backend.services.simulation_runtime.selection import StrategyPackageSelectionService
+from backend.services.simulation_signal.strategy_package_selection import StrategyPackageSelectionService
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,

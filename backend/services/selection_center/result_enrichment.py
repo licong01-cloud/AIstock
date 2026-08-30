@@ -18,7 +18,7 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.models.analysis import StockQuote
 from backend.services.analysis_service import get_realtime_quote
-from backend.services.paper_trading_v2.market_data import PRICE_UNIT_DIVISOR
+from backend.services.simulation_data.contracts import PRICE_UNIT_DIVISOR
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
@@ -60,11 +60,7 @@ class SelectionResultEnrichmentService:
         quotes = self._load_current_quotes(symbols)
         today = self._today_provider()
         reference_trade_date = self._reference_price_trade_date(runtime_config or {}, fallback=trade_date)
-        historical_rows = (
-            {}
-            if trade_date >= today
-            else self._load_daily_rows(symbols, reference_trade_date)
-        )
+        historical_rows = {} if trade_date >= today else self._load_daily_rows(symbols, reference_trade_date)
         enriched: list[SelectionCandidate] = []
         missing_current_entry_price: list[str] = []
         for candidate in rows:
@@ -76,10 +72,7 @@ class SelectionResultEnrichmentService:
             current_time = _iso_or_none(getattr(quote, "quote_timestamp", None))
             current_source = str(getattr(quote, "quote_source", None) or "TDX_REALTIME") if quote else None
             stock_name = (
-                candidate.stock_name
-                or names.get(symbol)
-                or str(getattr(quote, "name", "") or "").strip()
-                or None
+                candidate.stock_name or names.get(symbol) or str(getattr(quote, "name", "") or "").strip() or None
             )
 
             if trade_date >= today:

@@ -6,8 +6,9 @@ import psycopg2
 import pytest
 
 from backend.services.data_refresh_audit import DatasetRefreshStatus
-from backend.services.paper_trading_v2.market_data import DailyTradingContextProvider, PaperV2MinuteMarketDataProvider
-from backend.services.simulation_runtime.models import DailyTradingContextV1
+from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider
+from backend.services.simulation_data.daily_context_provider import DailyTradingContextProvider
+from backend.services.simulation_data.daily_context import DailyTradingContextV1
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.tests.paper_trading_v2.fixtures_dev_db import DevDbTargetMisconfigured, _dev_dsn
 
