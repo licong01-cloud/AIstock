@@ -36,6 +36,8 @@ SECTOR_CANDIDATE_QUERY_VERSION = "sector_data_p3a_dual_authority_candidate_v1"
 SECTOR_CANDIDATE_NAMESPACE = ".sector_data_authority"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _CODE = re.compile(r"[0-9]{6}\.(?:SH|SZ)\Z")
+_BARE_INDEX_CODE = re.compile(r"[0-9]{6}\Z")
+_CANONICAL_INDEX_SYMBOL = re.compile(r"[0-9]{6}\.SI\Z")
 _ZERO_SAFETY = {
     "database_writes": 0,
     "provider_database_writes": 0,
@@ -244,8 +246,8 @@ class SectorCandidateSource:
                 l2_code = str(identity_codes.get("l2_code") or "") if isinstance(identity_codes, Mapping) else ""
                 if l2_code != str(fact.get("classification_l2_code") or ""):
                     raise SectorCandidateSourceError("P3A assignment/fact classification identity differs")
-                index_l2_code = str(fact.get("index_l2_code") or "")
-                if index_l2_code not in l2_code_map:
+                index_l2_symbol = _canonical_index_l2_symbol(fact.get("index_l2_code"))
+                if index_l2_symbol not in l2_code_map:
                     raise SectorCandidateSourceError("P3A index L2 code is absent from the frozen catalog")
                 sw_daily = fact.get("sw_daily")
                 moneyflow = fact.get("moneyflow_aggregate")
@@ -254,7 +256,7 @@ class SectorCandidateSource:
                 row: dict[str, Any] = {
                     "ts_code": str(assignment["canonical_symbol"]),
                     "trade_date": trade_date.isoformat(),
-                    "l2_code_id": int(l2_code_map[index_l2_code]),
+                    "l2_code_id": int(l2_code_map[index_l2_symbol]),
                 }
                 row.update({_SW_FIELD_MAP[key]: sw_daily[key] for key in _SW_FIELD_MAP})
                 row.update({_MONEYFLOW_FIELD_MAP[key]: moneyflow[key] for key in _MONEYFLOW_FIELD_MAP})
@@ -441,6 +443,16 @@ def _read_slice_rows(path: Path, value: _DateSlice | None) -> Iterable[Mapping[s
                 yield parsed
 
     return rows()
+
+
+def _canonical_index_l2_symbol(value: Any) -> str:
+    if not isinstance(value, str):
+        raise SectorCandidateSourceError("P3A index L2 code is not a canonical string")
+    if _BARE_INDEX_CODE.fullmatch(value):
+        return f"{value}.SI"
+    if _CANONICAL_INDEX_SYMBOL.fullmatch(value):
+        return value
+    raise SectorCandidateSourceError("P3A index L2 code is not canonical")
 
 
 def _assert_plain_chain(allowed_root: Path, target: Path) -> None:
