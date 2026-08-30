@@ -481,6 +481,9 @@ D1R + D2 + D3 结果
 12. **Round 12 — D2 设计复核**：把等待期工具限定为 signal-level 四格，不生成或冒充 TWAP portfolio；固定 self-hashed manifest、唯一 Parquet、四格×hard/soft、稳定 tie-break、oracle 不可部署与 `NOT_COMPUTABLE_WAITING_D1R_TWAP`。
 13. **Round 13 — D2 代码复核**：修正板块表/股票表 tie-break 复用错误，补 Parquet 物理 schema 精确校验、5M 行/2GiB/10k bootstrap 不可放宽硬上限、非交易/未映射/重复键/覆盖不足 fail closed，以及 receipt 逐日 rows/sectors 计数。
 14. **Round 14 — D2 验证复核**：25 项聚焦测试覆盖八格、oracle 上界、确定性、manifest/panel hash、schema、coverage、资源、输出保护、零 DB/网络/进程与 runtime none；加入现有 `qe_read_backend` 精确测试列表，不新建 pipeline/session。
+15. **Round 15 — D3 方法复核**：固定 Brinson-Fachler allocation/selection/interaction 三项公式和逐日 `active=allocation+selection+interaction` 闭合；absolute 与 benchmark/active 使用相同日期、sector union、权重和 return 面板，oracle/等权/当前成分不得回填。
+16. **Round 16 — D3 fail-closed 复核**：实现 self-hashed manifest、唯一 SHA-pinned Parquet、五类 identity、逐日双侧权重守恒、正整数 taxonomy、return 下界、三类硬资源上限、benchmark 零方差与 tracking error 零拒绝、输入覆盖保护和原子 receipt；任一缺口均稳定 `NOT_COMPUTABLE`，不访问数据库/API 或控制进程。
+17. **Round 17 — D3 验证复核**：28 项聚焦测试覆盖逐日闭合、累计与算术口径分离、beta/TE/IR、moving-block bootstrap 确定性、hash/schema/权重/taxonomy/coverage/资源/输出保护、零 DB/网络/进程与 runtime none；加入既有 `qe_read_backend` 精确测试列表，不新增流水线或审批。
 
 ## DESIGN-COMPLIANCE-001 Review / 设计符合性审核
 
@@ -497,14 +500,14 @@ D1R + D2 + D3 结果
 | F-102 | Historical Synthesis、父蓝图 2.5.3 | validation-receipt: MA-E19R2 9/12、分钟 calendar/feature/all.txt 覆盖差异、228 个明确受影响 loop 与 56 个明确保持未分类的旧 loop 分层 | VERIFIED | 无 |
 | F-103 | WP-D1R、等待包 §5～§5.1 | validation-receipt: MA-E19R2 九臂完成、三臂 metadata fail closed；`ma_e19_semantic_equivalence_audit.py` 标准库 CLI + 21 项聚焦测试；真实等价裁决仍等待新 manifest，未提交实验 | VERIFIED | 无 |
 | F-104 | WP-D2、等待包 §7～§7.4 | validation-receipt: `p0_d2_sector_oracle.py`、25 项聚焦测试、four-cell×hard/soft、oracle identity、Parquet/manifest、稳定 tie-break、signal metrics/bootstrap/逐日计数与 portfolio `NOT_COMPUTABLE` 边界 | VERIFIED | 无 |
-| F-105 | WP-D3 | validation-receipt: 本文 absolute/active/Brinson 输入、输出、`NOT_COMPUTABLE` 和结果触发 | DESIGN_READY | 无 |
+| F-105 | WP-D3、等待包 §8～§8.3 | validation-receipt: `p0_d3_benchmark_brinson.py`、28 项聚焦测试、absolute/active/beta/TE/IR、Brinson-Fachler 公式与逐日闭合、自哈希 manifest/Parquet、bootstrap/resource、`NOT_COMPUTABLE` 与 runtime none 合同 | VERIFIED | 无 |
 | F-106 | Result Trigger Matrix | validation-receipt: 本文 10 行观测→最小工作包映射及禁止跳跃 | VERIFIED | 无 |
 | F-107 | A-01～A-06 | validation-receipt: 本文六张研发卡均含假设、角色、输入、PIT、公式/设计、快筛、QE 与退出条件 | VERIFIED | 无 |
 | F-108 | Concept Sector Track | validation-receipt: `docs/architecture/qe_concept_sector_data_factor_parallel_f2_design_20260813.md` 与五个预期实现路径存在性复核 | DESIGN_READY | 无 |
 | F-109 | Minute Signal Deferral | validation-receipt: 本文七项重新进入条件与独立 TWAP execution contract | VERIFIED | 无 |
 | F-110 | Contracts、Production Gates | validation-receipt: 本文 zero DB/process/DDL/dependency/activation/no-platform 明细表 | VERIFIED | 无 |
 | F-111 | WP-D1R/D2/D3 end markers | validation-receipt: `MA_E19R_END_STATUS`、`P0_D2_END_STATUS`、`P0_D3_END_STATUS` 的稳定定义 | VERIFIED | 无 |
-| F-112 | Verification Plan、Review Record | validation-receipt: F2 validator、equivalence 21 项与 D2 25 项聚焦测试、ruff/py_compile、runtime/ownership/guardrail、`git diff --check` 与十四轮历史/当前审核记录；提交并同步主线后在最终 HEAD 复验 | VERIFIED | 无 |
+| F-112 | Verification Plan、Review Record | validation-receipt: F2 validator、equivalence 21 项、D2 25 项与 D3 28 项聚焦测试、ruff/py_compile、runtime/ownership/guardrail、`git diff --check` 与十七轮历史/当前审核记录；提交并同步主线后在最终 HEAD 复验 | VERIFIED | 无 |
 
 ## Rollout / Rollback / 发布与回滚
 
@@ -561,6 +564,8 @@ D1R + D2 + D3 结果
 `MA_E19_EQUIVALENCE_TOOL_STATUS=SOURCE_IMPLEMENTED_TESTED`
 
 `P0_D2_TOOL_STATUS=SOURCE_IMPLEMENTED_TESTED_SIGNAL_RECEIPT_PENDING_REAL_PANEL`
+
+`P0_D3_TOOL_STATUS=SOURCE_IMPLEMENTED_TESTED_ATTRIBUTION_RECEIPT_PENDING_REAL_PANEL`
 
 未来实验阶段结束：
 
