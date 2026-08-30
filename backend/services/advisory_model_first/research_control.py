@@ -64,6 +64,9 @@ INITIAL_SEED_EXPERIMENT_IDS = (
     "ADVISORY-H0-V6-GOLDEN",
 )
 N0_EXPERIMENT_ID = "ADVISORY-N0-RESEARCH-CONTROL-20260830"
+N1_ORACLE_EXPERIMENT_ID = "ADVISORY-N1-TIER1-ORACLE"
+N1_LEARNABILITY_EXPERIMENT_ID = "ADVISORY-N1-TIER1-LEARNABILITY"
+N1_EXPERIMENT_IDS = (N1_ORACLE_EXPERIMENT_ID, N1_LEARNABILITY_EXPERIMENT_ID)
 
 if P0C_POLICY_IDENTITY != canonical_json_sha256(
     {
@@ -987,13 +990,28 @@ def generate_current_route(
             "N0 control record does not bind the supplied parent/window receipts",
             "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
         )
-    next_task = (
-        "N1_TIER1_ORACLE_LEARNABILITY"
-        if spike.status == ParentPredictionExtensionStatus.FROZEN_MODEL_CAN_INFER
-        else "PARENT_PREDICTION_EXTENSION_DECISION"
-    )
+    n1_records = [item for item in records if item.experiment_id in N1_EXPERIMENT_IDS]
+    n1_present = {item.experiment_id for item in n1_records}
+    if n1_present and n1_present != set(N1_EXPERIMENT_IDS):
+        _raise(
+            "registry contains only part of the atomic N1 diagnostic pair",
+            "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
+            present_n1=sorted(n1_present),
+            missing_n1=sorted(set(N1_EXPERIMENT_IDS) - n1_present),
+        )
+    if n1_present:
+        _validate_n1_route_records(n1_records, window=window)
+        next_task = "N2_ENTRY_EXIT_QE_PREPARATION"
+        n1_state = "COMPLETE"
+    else:
+        next_task = (
+            "N1_TIER1_ORACLE_LEARNABILITY"
+            if spike.status == ParentPredictionExtensionStatus.FROZEN_MODEL_CAN_INFER
+            else "PARENT_PREDICTION_EXTENSION_DECISION"
+        )
+        n1_state = "PENDING"
     registry_sha = sha256_file(registry_path)
-    # ALGO-COMPLEXITY-001: the route is a fixed 17-line projection; no row join,
+    # ALGO-COMPLEXITY-001: the route is a fixed-size projection; no row join,
     # market-data loop, or result-sized materialization occurs here.
     text = "\n".join(
         (
@@ -1007,6 +1025,7 @@ def generate_current_route(
             "|---|---|",
             "| P0-D..P0-L | `FAMILY_FROZEN`；不得派生 P0-M |",
             "| N0 | `COMPLETE`；registry、父包 spike、窗口合同已具备 |",
+            f"| N1 Tier-1 oracle + learnability | `{n1_state}` |",
             f"| 父包延伸能力 | `{spike.status.value}` |",
             "| active main research line | `NONE` |",
             "| active auxiliary research line | `NONE` |",
@@ -1024,8 +1043,74 @@ def generate_current_route(
         "output_path": Path(output_path).resolve().as_posix(),
         "output_sha256": sha256_file(output_path),
         "parent_prediction_status": spike.status.value,
+        "n1_state": n1_state,
         "next_task": next_task,
     }
+
+
+def _validate_n1_route_records(
+    records: Sequence[AdvisoryResearchTrialRecordV1],
+    *,
+    window: AdvisoryResearchWindowContractV1,
+) -> None:
+    if len(records) != 2 or {item.experiment_id for item in records} != set(
+        N1_EXPERIMENT_IDS
+    ):
+        _raise(
+            "registry does not contain exactly one record for each N1 diagnostic",
+            "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
+        )
+    by_id = {item.experiment_id: item for item in records}
+    oracle = by_id[N1_ORACLE_EXPERIMENT_ID]
+    learnability = by_id[N1_LEARNABILITY_EXPERIMENT_ID]
+    shared_identity = (
+        "attempt_id",
+        "dataset_identity",
+        "policy_identity",
+        "objective_contract",
+        "consumed_windows",
+        "parent_lineage",
+    )
+    mismatches = [
+        field
+        for field in shared_identity
+        if getattr(oracle, field) != getattr(learnability, field)
+    ]
+    if (
+        mismatches
+        or oracle.study_type != ResearchStudyType.ORACLE_DIAGNOSTIC
+        or learnability.study_type != ResearchStudyType.LEARNABILITY_AUDIT
+        or oracle.objective_contract != ObjectiveContract.ALPHA_RANKING
+        or oracle.planned_trial_count != 1
+        or learnability.planned_trial_count != 1
+        or oracle.evaluated_trial_count != 1
+        or learnability.evaluated_trial_count != 1
+        or len(oracle.consumed_windows) != 1
+        or oracle.consumed_windows[0].window_id != "P0C_DEVELOPMENT_V1"
+        or oracle.consumed_windows[0].dataset_identity != P0C_DATASET_IDENTITY
+        or any(
+            item.decision_use == DecisionUse.ACTIVATION_EVIDENCE
+            or item.result_class
+            in {ResearchResultClass.CONFIRMED, ResearchResultClass.ACTIVATED}
+            or len(item.evidence_refs) != 1
+            for item in records
+        )
+    ):
+        _raise(
+            "N1 diagnostic records violate the atomic route contract",
+            "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
+            mismatched_identity_fields=mismatches,
+        )
+    expected_policy_identity = research_policy_identity(
+        baseline_policy_sha256=window.baseline_policy_sha256,
+        shadow_policy_sha256=window.shadow_policy_sha256,
+        cost_policy_sha256=window.cost_policy_sha256,
+    )
+    if oracle.policy_identity != expected_policy_identity:
+        _raise(
+            "N1 diagnostic policy identity differs from the research window",
+            "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
+        )
 
 
 def complete_n0(
