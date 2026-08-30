@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1255",
-  "closed_at": null,
+  "closed_at": "2026-08-30T09:47:40.229875Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -65,19 +65,44 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "worker_heartbeat.business",
     "fresh_process_evidence": [
       "fresh Python process persistent source contract smoke -> passed"
     ],
+    "health_ref": "worker_heartbeat.health",
+    "identity_ref": "worker_heartbeat.identity",
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1255\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1255",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "ef909486ad6859a04bb4a51b549a5e9eccd26a64d7281ea7612e5b46564091de",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "b4a53c76b760d4ee3ec6bb20c56dd5adc8124b1b",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-30T09:46:45.341050Z",
+      "mode": "read_only",
+      "observed_identity": "b4a53c76b760d4ee3ec6bb20c56dd5adc8124b1b",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b2296e7d86b7fc071918831828776cf12980d75067b0072c13c0bb02ad33d680",
+      "receipt_sha256": "2bd393ed17306382dc744b9ad5b9afdeed7696765bf2fa91a8b935724bd89159",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d4a47c1ac9cb8d84a33f7d96d501880f6fa3517ea24dbf988286d680a8074179",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -112,7 +137,7 @@
     ],
     "validation_evidence_digest": "273b8f5eaac7adedf155856679e87af9af8404a37cbffc11a995c03fadaea97b"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -126,7 +151,8 @@
     "validation-receipt: id=e0ba7f43ec6166c7 commit=bab96c6fdaa0391258a9ea72b24622916046e044 kind=nox plan=qlib_data_backend status=passed command=`python -m nox -s qlib_data_backend` result=`passed (20 passed)`",
     "validation-receipt: id=88b68f41b9dc3105 commit=bab96c6fdaa0391258a9ea72b24622916046e044 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_source_authority.py -k targeted -q` result=`passed (59 passed)`",
     "validation-receipt: id=78f2462683137d8a commit=bab96c6fdaa0391258a9ea72b24622916046e044 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed (blocking=0)`",
-    "validation-receipt: id=80bf5fb13d65d574 commit=bab96c6fdaa0391258a9ea72b24622916046e044 kind=ruff plan=direct status=passed command=`python -m ruff check changed Python files; python -m py_compile changed Python files; git diff --check` result=`passed`"
+    "validation-receipt: id=80bf5fb13d65d574 commit=bab96c6fdaa0391258a9ea72b24622916046e044 kind=ruff plan=direct status=passed command=`python -m ruff check changed Python files; python -m py_compile changed Python files; git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1255 --target worker-scheduler --expected-identity b4a53c76b760d4ee3ec6bb20c56dd5adc8124b1b -> passed (workflow_gate=verified)"
   ],
   "verification_budget": {
     "budget": "standard",
