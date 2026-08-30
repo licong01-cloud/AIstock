@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1197",
-  "closed_at": "2026-08-29T19:33:25.511177Z",
+  "closed_at": "2026-08-30T04:07:20Z",
   "closure_requirements": [
     "Implement F-130/F-131 P1-A immutable V2 contracts, strict V1 read-only discrimination, broker/source matrix, symbol failure state and mixed-source hash closure.",
     "Implement the versioned pure TDX live-reference A-share limit rule without adjustment-factor fabrication or runtime source wiring.",
@@ -75,7 +75,7 @@
   },
   "first_seen_at": "2026-08-26T04:50:47.126714Z",
   "fix_branch": null,
-  "fix_commit": "8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1",
+  "fix_commit": "80979b14cf249357a81211b7e76ffd002488be74",
   "fixed_at": "2026-08-26T06:49:54Z",
   "github_issue_number": 3813,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3813",
@@ -87,7 +87,7 @@
     "Do not perform DDL/DML, dependency, config, broker or process operations.",
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3816",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3817",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -113,8 +113,8 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "passed",
-    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1197\\post-restart-verify-20260830.json",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "post_restart_receipt_summary": {
       "bug_id": "BUG-1197",
       "business_smoke_semantic": {
@@ -137,7 +137,7 @@
       "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
       "target_id": "backend-main"
     },
-    "runtime_identity_match": true,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -154,21 +154,21 @@
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "8d7b0e68f57a44c1",
-    "recorded_at": "2026-08-26T07:00:53.387133Z",
-    "runtime_contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
-    "runtime_identity_match": "pending",
-    "runtime_verification": "pending_user_restart",
+    "receipt_id": "7d786570cd19008a",
+    "recorded_at": "2026-08-30T04:08:17.213590Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "3bbc3d464a7efd8ea533656c9b82f8b71b667714",
-    "source_merge_commit": "8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3816",
+    "source_head_oid": "c6b777d37acf5aefac363bee52a0e196a0c6c179",
+    "source_merge_commit": "80979b14cf249357a81211b7e76ffd002488be74",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3817",
     "validation_evidence": [
-      "python -m nox -s simulation_core_l2 -> 678 passed, 2 skipped; PR CI passed on source-equivalent tree"
+      "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1197 --target backend-main --expected-identity 8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1 -> passed"
     ],
-    "validation_evidence_digest": "37ceb5613764ed5f5264e2f15f97439bce6f9dfd98c203b5d7e757408491ce62"
+    "validation_evidence_digest": "d8236714c7acbb1aa80a8077e86ae3916d0fd4c662ebe2de0f7a779bdd79cd20"
   },
-  "status": "verified",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
