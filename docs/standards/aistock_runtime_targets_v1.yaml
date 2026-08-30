@@ -18,6 +18,7 @@ non_runtime_source_paths:
   - scripts/prepare_canonical_pit_monthly.py
   - scripts/qe_alpha_candidates/sector_rotation/ma_e19_semantic_equivalence_audit.py
   - scripts/qe_alpha_candidates/sector_rotation/p0_d2_sector_oracle.py
+  - scripts/qe_alpha_candidates/sector_rotation/p0_d3_benchmark_brinson.py
   - scripts/qlib_authoritative_bin_export.py
   - scripts/repair_announcement_event_signal_issuer_binding.py
   - scripts/seed_dataset_refresh_audit.py

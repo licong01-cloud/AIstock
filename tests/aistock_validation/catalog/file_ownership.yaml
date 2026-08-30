@@ -155,6 +155,7 @@ rules:
       - backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py
       - backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py
       - backend/tests/quantevolver/test_p0_d2_sector_oracle.py
+      - backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py
     primary_module: qe.core
     impact_modules: [qe.auto_evolution, factor_library]
     layer: data_pipeline
