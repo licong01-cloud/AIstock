@@ -28,12 +28,18 @@
   ],
   "expected": "Load the complete L1 rotation plus L2 market-carrier source identity while still running only the approved rotation_L1 component; preserve 24-fit, market parameters, Ridge parameters, folds, thresholds and capability scope.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "tests/aistock_validation/bugs/20260830_BUG-1254-hr1-rotation-l1-source-omits-required-l2-market-carrier.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
       "scripts/hmm_risk/prepare_state_model_set.py",
-      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+      "tests/aistock_validation/bugs/20260830_BUG-1254-hr1-rotation-l1-source-omits-required-l2-market-carrier.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/hmm_risk/prepare_state_model_set.py",
@@ -101,10 +107,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
