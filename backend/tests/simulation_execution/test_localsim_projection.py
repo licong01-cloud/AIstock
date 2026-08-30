@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,6 +15,7 @@ from backend.services.simulation_execution.localsim.projection import (
     LocalSimProjectionCommitRequest,
     LocalSimProjector,
 )
+from backend.services.trading_core.models import AccountSnapshot
 
 
 class _RuntimeRepository:
@@ -143,3 +145,61 @@ def test_projector_validates_and_dispatches_one_pending_outbox() -> None:
     )
 
     assert calls == ["project:run-1"]
+
+
+def test_projector_rebuilds_one_projected_generation_without_scheduler_interpretation() -> None:
+    calls: list[str] = []
+    runtime_repository = _RuntimeRepository(calls)
+    receipt = LocalSimEconomicReceiptV1(
+        run_id="run-1",
+        binding_id="binding-1",
+        trade_date="2026-08-31",
+        plan_id="plan-1",
+        generation=1,
+        economic_facts={"schema_version": "economic_v1"},
+    )
+    account = AccountSnapshot(
+        portfolio_id="portfolio-1",
+        cash=100_000,
+        market_value=0,
+        nav=100_000,
+        snapshot_time=datetime(2026, 8, 31, 15, 0, tzinfo=UTC),
+    )
+    outbox = LocalSimProjectionOutboxV1(
+        receipt_id=receipt.receipt_id,
+        run_id="run-1",
+        plan_id="plan-1",
+        generation=1,
+        economic_hash=receipt.economic_hash,
+        projection_payload={
+            "schema_version": "local_sim_projection_payload_v1",
+            "positions": [],
+            "marks": [],
+            "account_snapshot": account.model_dump(mode="json"),
+        },
+        status="PROJECTED",
+    )
+    runtime_repository.run_payload = {
+        "local_sim_projection_outbox_v1": outbox.model_dump(mode="json"),
+        "strategy_performance": {"total_return": 0.0},
+        "local_sim_persistence": {
+            "order_count": 0,
+            "fill_count": 0,
+            "cash_ledger_count": 0,
+            "position_count": 0,
+            "active_state_count": 0,
+            "residual_state_count": 0,
+            "terminal": True,
+        },
+    }
+    projector = LocalSimProjector(runtime_repository=runtime_repository)
+
+    result = projector.existing_projection_result(
+        run_id="run-1",
+        observed_positions={},
+        observed_account=SimpleNamespace(cash=100_000),
+    )
+
+    assert result.outbox_id == outbox.outbox_id
+    assert result.cash == 100_000
+    assert result.payload["terminal"] is True
