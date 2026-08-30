@@ -151,8 +151,8 @@ N1 排名标签固定为 `ADVISORY_TIER1_H20_OPEN_TO_OPEN_V1`：
 ```text
 T close       : decision；模型/排名只能看到 <= T
 T+1 open      : entry；必须 PIT eligible 且可执行
-T+21 open     : planned exit，即 entry 后完整持有 20 个交易时段
-T+21..T+26    : exit 停牌/一字跌停时最多顺延 5 个交易日
+T+20 open     : planned exit，即 T+1 entry 当日计为第 1 个持有 session，共持有 20 个交易 session
+T+20..T+25    : exit 停牌/一字跌停时在数据可见范围内最多顺延 5 个交易日
 ```
 
 执行与收益：
@@ -345,7 +345,7 @@ CLI 规则：
 | `ADVISORY_N1_PIT_SNAPSHOT_CONFLICT` | PIT snapshot 已存在但内容不同或 hash 漂移 |
 | `ADVISORY_N1_SOURCE_IDENTITY_MISMATCH` | P0-C、prediction、calendar、suspend、factor 或 policy identity 漂移 |
 | `ADVISORY_N1_SEALED_HOLDOUT_ACCESS_DENIED` | 任何诊断请求触及 sealed holdout |
-| `ADVISORY_N1_LABEL_CLOCK_INVALID` | T/T+1/T+21 与 calendar 不闭合 |
+| `ADVISORY_N1_LABEL_CLOCK_INVALID` | T/T+1/T+20 与 calendar 不闭合 |
 | `ADVISORY_N1_OUTCOME_COVERAGE_INSUFFICIENT` | 无足够可评价日期，不能形成 typed N1 结果 |
 | `ADVISORY_N1_CROSSFIT_INVALID` | train/validation、embargo、OOF count 或未来毒化失败 |
 | `ADVISORY_N1_BUNDLE_CONFLICT` | 同 request 的 immutable bundle 内容冲突 |
@@ -384,7 +384,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 
 ### 11.2 Label and oracle
 
-- T close 不读 T+1；T+1 entry、T+21 planned exit、最多 5 日顺延。
+- T close 不读 T+1；T+1 entry、T+20 planned exit（入场日计第 1 个持有 session）、最多 5 日顺延。
 - 一字涨停、停牌、一字跌停、权威停牌缺 bar、非权威缺失、右删失。
 - benchmark 同实际 entry/exit 日期；6.9 bps cost + 5 bps capacity 只扣一次。
 - Top20/40/50 recall、rank bucket、固定五槽 cash、perfect Top5 对照。

@@ -21,6 +21,10 @@ from backend.services.advisory_model_first.tier1_oracle_contracts import (
 from backend.services.advisory_model_first.tier1_oracle_pipeline import (
     Tier1LearnabilityResult,
     Tier1OracleResult,
+    _benchmark_series,
+    _build_one_date_outcomes,
+    _eligible_symbols_by_date,
+    _normalize_market_frame,
     _publish_n1_bundle,
     _read_n1_bundle,
     build_tier1_outcomes_and_oracle,
@@ -278,3 +282,99 @@ def test_immutable_bundle_records_real_parquet_rows_and_exact_retry(tmp_path) ->
         "row_count"
     ] == 1
     assert loaded["manifest"]["files"]["oracle_daily.parquet"]["row_count"] == 1
+
+
+def test_h20_last_decision_exits_on_data_cutoff_not_one_session_later() -> None:
+    calendar = pd.DatetimeIndex(
+        pd.to_datetime(
+            [
+                "2026-01-26",
+                "2026-01-27",
+                "2026-01-28",
+                "2026-01-29",
+                "2026-01-30",
+                "2026-02-02",
+                "2026-02-03",
+                "2026-02-04",
+                "2026-02-05",
+                "2026-02-06",
+                "2026-02-09",
+                "2026-02-10",
+                "2026-02-11",
+                "2026-02-12",
+                "2026-02-13",
+                "2026-02-24",
+                "2026-02-25",
+                "2026-02-26",
+                "2026-02-27",
+                "2026-03-02",
+                "2026-03-03",
+                "2026-03-04",
+                "2026-03-05",
+                "2026-03-06",
+                "2026-03-09",
+                "2026-03-10",
+            ]
+        )
+    )
+    symbols = [f"{index:06d}.SZ" for index in range(1, 6)]
+    snapshot = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": symbol,
+                "eligible_start": date(2024, 7, 4),
+                "eligible_end": date(2026, 3, 10),
+                "entry_reason": "252_sessions",
+                "exit_reason": None,
+            }
+            for symbol in symbols
+        ],
+        universe_key="aistock_equity_pit_canonical_v2",
+        rule_version="shsz_a_252td_st_delist_asof_v2",
+        scope_start=date(2024, 7, 4),
+        cutoff=date(2026, 3, 10),
+        state_identity="ready-v1",
+        source_fingerprint_sha256=HASH_A,
+        parameter_hash=HASH_B,
+    )
+    rows = []
+    for trade_date in calendar:
+        for symbol in symbols:
+            rows.append(
+                {
+                    "datetime": trade_date,
+                    "instrument": symbol,
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "factor": 1.0,
+                    "up_limit_price": 110.0,
+                    "down_limit_price": 90.0,
+                    "limit_up": 0.0,
+                    "limit_down": 0.0,
+                }
+            )
+    benchmark_frame = pd.DataFrame(
+        {
+            "datetime": calendar,
+            "instrument": "000300.SH",
+            "open": 100.0,
+        }
+    ).set_index(["datetime", "instrument"])
+
+    outcome = _build_one_date_outcomes(
+        decision=pd.Timestamp("2026-02-02"),
+        calendar=calendar,
+        positions={value: index for index, value in enumerate(calendar)},
+        eligible_by_date=_eligible_symbols_by_date(snapshot, calendar),
+        market=_normalize_market_frame(
+            pd.DataFrame(rows).set_index(["datetime", "instrument"])
+        ),
+        benchmark_open=_benchmark_series(benchmark_frame, "open"),
+        suspended_by_date={},
+        request=_request(),
+    )
+
+    assert set(outcome["target_trade_date"]) == {pd.Timestamp("2026-02-03")}
+    assert set(outcome["planned_exit_trade_date"]) == {pd.Timestamp("2026-03-10")}
+    assert set(outcome["effective_exit_trade_date"]) == {pd.Timestamp("2026-03-10")}
