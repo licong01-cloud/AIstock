@@ -169,6 +169,15 @@ modules:
     test_plans:
       required_on_change: [l0, simulation_core_l2]
       recommended: [localsim_unattended_l3, simulation_runtime_ops_ui, simulation_dual_backend_l4, miniqmt_sim_trading_hours_l5]
+  - module_id: simulation.localsim_successor_core
+    display_name: LocalSIM successor account and replay core
+    parent_module: simulation_runtime
+    module_type: product_feature
+    risk_level: critical
+    description: Internal LocalSIM account, immutable release binding, retained-account lineage, replay cursor, safe-boundary transition, and additive schema authority.
+    description_zh: LocalSIM 内部账户、不可变 release binding、保留账户 lineage、回放游标、安全边界切换与新增 schema 权威。
+    test_plans:
+      required_on_change: [l0, simulation_core_l2, localsim_successor_core_dev_db]
   - module_id: simulation.layer_foundation
     display_name: Simulation data signal execution layer foundation
     parent_module: simulation_runtime

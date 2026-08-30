@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from backend.db import init_trading_core_v2_schema
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TRADING_CORE_MIGRATION = REPO_ROOT / "backend" / "migrations" / "trading_core_v2_schema.sql"
 ACCOUNT_SLOT_MIGRATION = REPO_ROOT / "backend" / "migrations" / "add_simulation_runtime_account_slots_20260604.sql"
-TRADING_CORE_INIT = REPO_ROOT / "backend" / "db" / "init_trading_core_v2_schema.py"
+LOCALSIM_SUCCESSOR_MIGRATION = REPO_ROOT / "backend" / "migrations" / "localsim_successor_core_20260831.sql"
 
 
 def test_runtime_release_and_binding_schema_are_commented_in_migration_and_bootstrap() -> None:
@@ -80,6 +82,65 @@ def test_runtime_release_and_binding_schema_are_commented_in_migration_and_boots
             "created_at",
             "updated_at",
         ],
+        "paper_v2.simulation_account_v1": [
+            "account_id",
+            "account_hash",
+            "schema_version",
+            "account_name",
+            "broker_backend",
+            "package_id",
+            "manifest_sha256",
+            "admission_receipt_id",
+            "initial_capital",
+            "account_config_json",
+            "status",
+            "version",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ],
+        "paper_v2.legacy_localsim_account_lineage_v1": [
+            "lineage_id",
+            "lineage_hash",
+            "schema_version",
+            "legacy_account_id",
+            "account_id",
+            "release_id",
+            "binding_id",
+            "ledger_scope_id",
+            "economic_facts_sha256",
+            "status",
+            "version",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ],
+        "paper_v2.localsim_replay_job_v1": [
+            "replay_job_id",
+            "replay_hash",
+            "schema_version",
+            "simulation_account_id",
+            "release_id",
+            "binding_id",
+            "day_engine_contract_id",
+            "start_trade_date",
+            "end_trade_date",
+            "historical_source_id",
+            "historical_source_sha256",
+            "calendar_snapshot_sha256",
+            "status",
+            "next_trade_date",
+            "completed_trade_date",
+            "live_release_id",
+            "live_binding_id",
+            "activation_trade_date",
+            "version",
+            "failure_code",
+            "failure_context",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ],
         "selection.daily_selection_evidence": [
             "evidence_id",
             "target_trade_date",
@@ -149,9 +210,11 @@ def test_runtime_release_and_binding_schema_are_commented_in_migration_and_boots
         [
             TRADING_CORE_MIGRATION.read_text(encoding="utf-8"),
             ACCOUNT_SLOT_MIGRATION.read_text(encoding="utf-8"),
+            LOCALSIM_SUCCESSOR_MIGRATION.read_text(encoding="utf-8"),
         ]
     )
-    for ddl in (migration_ddl, TRADING_CORE_INIT.read_text(encoding="utf-8")):
+    bootstrap_ddl = "\n".join(init_trading_core_v2_schema.iter_ddl())
+    for ddl in (migration_ddl, bootstrap_ddl):
         for table, columns in expected.items():
             assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
             assert f"COMMENT ON TABLE {table}" in ddl

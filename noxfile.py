@@ -355,7 +355,9 @@ def _ensure_frontend_node_modules(session: nox.Session) -> None:
             "CI/Nightly cannot run npm ci. Rebuild the AIstock-CI image or run "
             "an explicit local dependency bootstrap before validation."
         )
-    session.log("frontend node_modules is missing required direct entrypoints; running npm ci once for validation workspace")
+    session.log(
+        "frontend node_modules is missing required direct entrypoints; running npm ci once for validation workspace"
+    )
     old_cwd = Path.cwd()
     os.chdir(frontend)
     try:
@@ -911,7 +913,18 @@ def paper_v2_ui(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def paper_v2_l3(session: nox.Session) -> None:
     """Run the first-stage Paper v2 + Selection Center L3 local suite."""
-    session.run("python", "scripts/aistock_validate.py", "record", "--module", "paper_v2_selection_center", "--level", "L3", "--title", "Paper v2 Selection Center L3 regression", external=True)
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "record",
+        "--module",
+        "paper_v2_selection_center",
+        "--level",
+        "L3",
+        "--title",
+        "Paper v2 Selection Center L3 regression",
+        external=True,
+    )
     session.notify("l0")
     session.notify("paper_v2_backend")
     session.notify("paper_v2_data_quality")
@@ -957,6 +970,22 @@ def simulation_core_l2(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def localsim_successor_core_dev_db(session: nox.Session) -> None:
+    """Run the guarded existing-DEV-PostgreSQL successor-core DDL and repository gate."""
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env({"AISTOCK_DEV_DB_E2E": "1"}),
+        external=True,
     )
 
 
@@ -1215,17 +1244,9 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/test_factor_metrics_h20_contract.py",
         "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
     ]
-    dynamic_relation_test = (
-        ROOT
-        / "backend"
-        / "tests"
-        / "quantevolver"
-        / "test_dynamic_residual_flow_relation_v1.py"
-    )
+    dynamic_relation_test = ROOT / "backend" / "tests" / "quantevolver" / "test_dynamic_residual_flow_relation_v1.py"
     if dynamic_relation_test.exists():
-        targets.append(
-            "backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py"
-        )
+        targets.append("backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py")
     _run_pytest(
         session,
         *targets,
@@ -2417,7 +2438,15 @@ def research_assistant_mcp_contract(session: nox.Session) -> None:
 def research_assistant_ui(session: nox.Session) -> None:
     """Run Research Assistant mocked UI regression."""
     session.chdir("frontend")
-    session.run("npx", "playwright", "test", "tests/research-assistant/research-assistant.spec.ts", "--project", "chromium", external=True)
+    session.run(
+        "npx",
+        "playwright",
+        "test",
+        "tests/research-assistant/research-assistant.spec.ts",
+        "--project",
+        "chromium",
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")
@@ -2542,10 +2571,7 @@ def rl_execution_smoke(session: nox.Session) -> None:
             "no:cacheprovider",
         )
     else:
-        session.skip(
-            "backend/tests/test_rl_execution_module_visibility.py not yet present "
-            "on this branch."
-        )
+        session.skip("backend/tests/test_rl_execution_module_visibility.py not yet present on this branch.")
 
 
 @nox.session(venv_backend="none")
@@ -3720,7 +3746,6 @@ def rl_execution_ui(session: nox.Session) -> None:
         )
     finally:
         os.chdir(old_cwd)
-
 
 
 @nox.session(venv_backend="none")
