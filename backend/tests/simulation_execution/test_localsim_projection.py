@@ -6,6 +6,10 @@ from typing import Any
 
 import pytest
 
+from backend.services.simulation_execution.localsim.models import (
+    LocalSimEconomicReceiptV1,
+    LocalSimProjectionOutboxV1,
+)
 from backend.services.simulation_execution.localsim.projection import (
     LocalSimProjectionCommitRequest,
     LocalSimProjector,
@@ -15,6 +19,7 @@ from backend.services.simulation_execution.localsim.projection import (
 class _RuntimeRepository:
     def __init__(self, calls: list[str]) -> None:
         self.calls = calls
+        self.run_payload: dict[str, Any] = {}
 
     @contextmanager
     def local_sim_economic_transaction_scope(self):
@@ -27,6 +32,9 @@ class _RuntimeRepository:
     def stage_local_sim_projection_commit(self, **_kwargs: Any) -> Any:
         self.calls.append("runtime.stage_projection")
         return SimpleNamespace(projection_receipt_id="projection-1")
+
+    def get_simulation_daily_run(self, _run_id: str) -> Any:
+        return SimpleNamespace(run_payload_json=self.run_payload)
 
 
 class _PaperRepository:
@@ -102,3 +110,36 @@ def test_projector_never_stages_or_reads_back_after_paper_projection_failure() -
     assert "projection.staged" not in calls
     assert "projection.readback" not in calls
 
+
+def test_projector_validates_and_dispatches_one_pending_outbox() -> None:
+    calls: list[str] = []
+    runtime_repository = _RuntimeRepository(calls)
+    receipt = LocalSimEconomicReceiptV1(
+        run_id="run-1",
+        binding_id="binding-1",
+        trade_date="2026-08-31",
+        plan_id="plan-1",
+        generation=1,
+        economic_facts={"schema_version": "economic_v1"},
+    )
+    outbox = LocalSimProjectionOutboxV1(
+        receipt_id=receipt.receipt_id,
+        run_id="run-1",
+        plan_id="plan-1",
+        generation=1,
+        economic_hash=receipt.economic_hash,
+        projection_payload={"schema_version": "projection_v1"},
+    )
+    runtime_repository.run_payload = {"local_sim_projection_outbox_v1": outbox.model_dump(mode="json")}
+    projector = LocalSimProjector(
+        runtime_repository=runtime_repository,
+        paper_repository=_PaperRepository(calls),
+    )
+
+    projector.replay_pending(
+        run_id="run-1",
+        project_valuation_pending=None,
+        project_outbox=lambda run_id: calls.append(f"project:{run_id}"),
+    )
+
+    assert calls == ["project:run-1"]

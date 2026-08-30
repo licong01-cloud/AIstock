@@ -13534,36 +13534,32 @@ class SimulationLifecycleScheduler:
         observed_account: Any | None = None,
         valuation_as_of_time: datetime | None = None,
     ) -> None:
-        run = self.repository.get_simulation_daily_run(run_id)
-        raw = run.run_payload_json.get("local_sim_projection_outbox_v1")
-        if raw is None:
-            return
-        try:
-            outbox = LocalSimProjectionOutboxV1.model_validate(raw)
-        except Exception as exc:
-            raise DataUnavailableError(
-                "LocalSim projection outbox cannot be recovered",
-                context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID", "run_id": run_id},
-            ) from exc
-        if outbox.projection_payload.get("schema_version") == "local_sim_valuation_pending_projection_payload_v1":
-            if context is None or execution is None:
-                return
-            self._project_local_sim_valuation_pending_outbox(
-                run=run,
-                outbox=outbox,
+        valuation_projector = None
+        if context is not None and execution is not None:
+            def project_valuation_pending(run: Any, outbox: LocalSimProjectionOutboxV1) -> None:
+                self._project_local_sim_valuation_pending_outbox(
+                    run=run,
+                    outbox=outbox,
+                    paper_repository=paper_repository,
+                    context=context,
+                    execution=execution,
+                    observed_positions=observed_positions,
+                    observed_account=observed_account,
+                    valuation_as_of_time=valuation_as_of_time,
+                )
+
+            valuation_projector = project_valuation_pending
+        LocalSimProjector(
+            runtime_repository=self.repository,
+            paper_repository=paper_repository,
+        ).replay_pending(
+            run_id=run_id,
+            project_valuation_pending=valuation_projector,
+            project_outbox=lambda pending_run_id: self._project_local_sim_outbox(
+                run_id=pending_run_id,
                 paper_repository=paper_repository,
-                context=context,
-                execution=execution,
-                observed_positions=observed_positions,
-                observed_account=observed_account,
-                valuation_as_of_time=valuation_as_of_time,
-            )
-            return
-        if outbox.status in {
-            LocalSimProjectionOutboxStatus.PENDING,
-            LocalSimProjectionOutboxStatus.PROJECTION_RETRYABLE,
-        } or run.run_payload_json.get("local_sim_projection_readback_failure"):
-            self._project_local_sim_outbox(run_id=run_id, paper_repository=paper_repository)
+            ),
+        )
 
     def _project_local_sim_valuation_pending_outbox(
         self,

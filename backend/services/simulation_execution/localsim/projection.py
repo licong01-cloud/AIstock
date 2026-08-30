@@ -8,8 +8,12 @@ from typing import Any, Protocol
 
 import psycopg2
 
-from backend.services.simulation_execution.localsim.models import LocalSimProjectionReceiptV1
-from backend.services.trading_core.errors import SessionLockTimeoutError
+from backend.services.simulation_execution.localsim.models import (
+    LocalSimProjectionOutboxStatus,
+    LocalSimProjectionOutboxV1,
+    LocalSimProjectionReceiptV1,
+)
+from backend.services.trading_core.errors import DataUnavailableError, SessionLockTimeoutError
 
 
 LOCAL_SIM_PROJECTION_RETRYABLE_PG_CODES = frozenset({"40001", "40P01", "55P03"})
@@ -88,6 +92,36 @@ class LocalSimProjector:
             request.on_staged()
         projected = request.readback(receipt)
         return LocalSimProjectionCommitResult(receipt=receipt, projected=projected)
+
+    def replay_pending(
+        self,
+        *,
+        run_id: str,
+        project_valuation_pending: Callable[[Any, LocalSimProjectionOutboxV1], None] | None,
+        project_outbox: Callable[[str], None],
+    ) -> None:
+        """Validate and dispatch exactly one committed outbox generation."""
+
+        run = self._runtime_repository.get_simulation_daily_run(run_id)
+        raw = run.run_payload_json.get("local_sim_projection_outbox_v1")
+        if raw is None:
+            return
+        try:
+            outbox = LocalSimProjectionOutboxV1.model_validate(raw)
+        except Exception as exc:
+            raise DataUnavailableError(
+                "LocalSim projection outbox cannot be recovered",
+                context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_SCHEMA_INVALID", "run_id": run_id},
+            ) from exc
+        if outbox.projection_payload.get("schema_version") == "local_sim_valuation_pending_projection_payload_v1":
+            if project_valuation_pending is not None:
+                project_valuation_pending(run, outbox)
+            return
+        if outbox.status in {
+            LocalSimProjectionOutboxStatus.PENDING,
+            LocalSimProjectionOutboxStatus.PROJECTION_RETRYABLE,
+        } or run.run_payload_json.get("local_sim_projection_readback_failure"):
+            project_outbox(run_id)
 
 
 __all__ = [
