@@ -6973,9 +6973,8 @@ def _verification_budget_for_record(
     schema_scope = (
         module in {"database", "db", "platform.database", "validation.database"}
         or any(
-            path.endswith(".sql")
-            or "/migrations/" in f"/{path}"
-            or path.startswith(("backend/db/", "scripts/migrations/", "scripts/db/"))
+            flow._requires_production_ddl(path)
+            or path.startswith(("backend/db/", "scripts/db/"))
             for path in normalized_scope
         )
     )
@@ -8388,9 +8387,7 @@ def _file_category(path: str) -> str:
         return "docs"
     if normalized.startswith(".codex/") or normalized.startswith(".claude/"):
         return "client_wrapper"
-    if normalized in FAST_PATH_DEPENDENCY_FILES or normalized.endswith((".sql",)):
-        return "production_gate_sensitive"
-    if "/migrations/" in normalized:
+    if normalized in FAST_PATH_DEPENDENCY_FILES or flow._requires_production_ddl(normalized):
         return "production_gate_sensitive"
     if normalized.startswith("frontend/"):
         return "frontend"

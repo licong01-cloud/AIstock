@@ -6305,6 +6305,22 @@ def test_fast_path_classifies_workflow_script_as_t1(isolated_workflow_root: Path
     assert payload["code_intelligence_hint"]["consume_command"] == "python scripts/code_intelligence_adapter.py latest-freshness"
 
 
+def test_fast_path_keeps_dataset_release_plan_yaml_out_of_production_ddl(
+    isolated_workflow_root: Path,
+) -> None:
+    path = "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml"
+    payload = workflow.build_fast_path_plan(
+        bug_id=None,
+        issue_json=None,
+        changed_files=[path],
+        module="qlib_data",
+    )
+
+    assert payload["file_categories"][path] == "other"
+    assert payload["production_gates"]["ddl"] == "noop"
+    assert workflow._file_category("backend/migrations/example.sql") == "production_gate_sensitive"
+
+
 def test_start_and_finish_embed_fast_path(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
