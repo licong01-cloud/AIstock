@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -63,8 +63,15 @@ def _trial_values() -> dict[str, object]:
 
 
 def test_trial_record_identity_is_deterministic_and_count_monotonicity_is_enforced():
-    first = build_trial_record(**_trial_values())
-    second = build_trial_record(**_trial_values())
+    first_recorded_at = datetime(2026, 8, 30, tzinfo=timezone.utc)
+    first = build_trial_record(
+        **_trial_values(),
+        recorded_at=first_recorded_at,
+    )
+    second = build_trial_record(
+        **_trial_values(),
+        recorded_at=first_recorded_at + timedelta(microseconds=1),
+    )
 
     assert first.registry_entry_id == second.registry_entry_id
     assert first.record_sha256 == second.record_sha256
