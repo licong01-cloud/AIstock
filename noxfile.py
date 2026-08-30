@@ -1190,6 +1190,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
         "backend/tests/quantevolver/test_factor_emit_hook.py",
         "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+        "backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py",
         "backend/tests/test_factor_metrics_h20_contract.py",
         "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
     ]

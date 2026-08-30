@@ -108,6 +108,26 @@
 - 任一臂 `RERUN_REQUIRED` 或证据缺失：以新 dataset identity 完整重跑 12 臂；
 - 禁止把“窗口早于旧 all.txt 截止日”单独作为等价证明。
 
+### 5.1 文件型审计工具合同
+
+实现入口固定为 `scripts/qe_alpha_candidates/sector_rotation/ma_e19_semantic_equivalence_audit.py`，输入为两个 `qe_ma_e19_arm_set_manifest_v1` JSON 文件，输出为一个 `qe_ma_e19_semantic_equivalence_receipt_v1` JSON 文件。工具只使用 Python 标准库，不导入 backend、不访问 API/数据库、不启动任务或进程。
+
+每个 manifest 必须：
+
+1. 自身 `manifest_sha256` 与去除该字段后的 canonical JSON 匹配；
+2. 精确包含 2024H2、2025H1、2025H2 × fixed/expanding/rolling 九个 arm；2024H2 的 `fixed_anchor` 规范化为 `fixed`，不得出现重复规范键；
+3. 每臂包含 train/valid/test 窗口和 `dataset/calendar/universe/tradability/factor/label/prediction/order/strategy` 九个组件；
+4. 每个组件包含非空 `identity`、真实来源 `source_sha256` 和窗口/配置语义 `semantic_sha256`；来源 SHA 可因 immutable release 改变，但 `semantic_sha256` 必须逐组件相等才能复用；
+5. candidate manifest 额外包含非空且为 64 位 SHA256 的 `candidate_signoff_sha256`、`catalog_readback_sha256`、`node_distribution_sha256`、`active_activation_sha256`。缺任一项为 `NOT_COMPUTABLE`，不得把 worker healthy/IDLE 或 source/runtime receipt 代替数据证据。
+
+输出规则：
+
+- 输入 schema、manifest hash、九臂集合、窗口、组件或 release evidence 缺失/非法：整体 `NOT_COMPUTABLE`，返回稳定 `reason_code`，退出码 2；
+- 输入完整且任一臂窗口或组件 `semantic_sha256` 不同：该臂及整体 `RERUN_REQUIRED`，退出码 1；
+- 九臂窗口与九组件语义全部相同：整体 `SEMANTIC_EQUIVALENT`，退出码 0；
+- `identity/source_sha256` 变化只进入 provenance differences，不被静默忽略，也不在语义相同的情况下伪造重跑要求；
+- receipt 必须按规范键排序、包含两侧 manifest SHA、逐臂结果、计数、稳定 reason codes 和自校验 `receipt_sha256`；同输入重复运行必须逐字节相同。输出写入显式路径并原子替换，不扫描目录、不覆盖输入文件、不创建数据或实验制品。
+
 ## 6. MA-E19R 2026H1 三臂恢复任务卡（仅预注册，不提交）
 
 任务身份在实际提交前重新查询并生成；禁止恢复旧 task。
@@ -222,7 +242,7 @@
 | W-01 九臂真实状态与指标 | §2～§3 | 8001 summary/full API readback | COMPLETE | 2026H1 三臂缺失 |
 | W-02 不提前裁决 D1 | §3 | 3 vintage delta 与停止条件 | COMPLETE | 等待 2026H1 |
 | W-03 数据 signoff 与 active 分离 | §4 | WSL 只读观察不冒充双节点签核 | COMPLETE | 正式 signoff 待数据窗口 |
-| W-04 旧九臂等价性 | §5 | 明确逐 arm 算法和 fail-closed 结果 | IMPLEMENTATION_ACTIVE | 等待新 manifest 才能形成最终裁决 |
+| W-04 旧九臂等价性 | §5～§5.1 | 标准库 CLI、21 项聚焦测试、三态/退出码、自校验 receipt、未知字段与大小写 SHA fail closed、精确 non-runtime/ownership 登记 | SOURCE_IMPLEMENTED_TESTED | 等待新 manifest 才能形成最终裁决；未提交实验 |
 | W-05 三臂任务卡 | §6 | 窗口/固定项/提交前条件 | DESIGN_READY | 不提交 task |
 | W-06 D2 四格 | §7 | 四格、oracle 标记、输出与触发 | TOOLING_ACTIVE_EXPERIMENT_PENDING | 等待 D1R 才能形成真实实验结论 |
 | W-07 D3 Brinson | §8 | 输入一致性、分解和缺失语义 | TOOLING_ACTIVE_EXPERIMENT_PENDING | 等待 D1R 才能形成真实归因结论 |

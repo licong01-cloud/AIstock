@@ -475,7 +475,9 @@ D1R + D2 + D3 结果
 6. **Round 6 — 历史影响分层**：按实际 loop 配置区分 228 个显式越过 2026-04-28 的 V25/V25_1 执行指标、56 个窗口未明的旧 V25 loop 与 19 个日频 loop；只标记 execution metrics，不扩大到模型、prediction、label、IC/RankIC，也不启动历史平台工程。
 7. **Round 7 — 2026-08-30 状态漂移复核**：回读 BUG-1191 verified/closed 与 dataset latest submission `BLOCKED_CONTRACT`，确认 source/runtime 完成不能升级为 candidate signoff；MA-E19R2 保持 9/12，worker healthy/IDLE 不升级为 release ready。
 8. **Round 8 — 等待期可执行性复核**：把语义等价、D2、D3 从“实验已可运行”拆为“文件型工具可开发、真实实验待 signoff”，并固定 `SEMANTIC_EQUIVALENT/RERUN_REQUIRED/NOT_COMPUTABLE` 三态，避免默认只补三臂。
-9. **统一门禁重跑**：两个 F2 validator、`git diff --check`、changed-file scope 与 `DESIGN-COMPLIANCE-001` 在所有修订完成后统一执行；receipt 必须绑定最终分支 HEAD。文档任务不把 BUG/数据模块回归列为伪必要门禁。
+9. **Round 9 — 实现合同复核**：固定九臂集合、fixed-anchor 规范化、九组件窗口语义、四项 release evidence、三态/退出码和自校验 receipt；禁止仅按全局 dataset id 或“窗口早于截止日”判等价。
+10. **Round 10 — fail-closed 代码复核**：补齐 manifest/arm/component/release exact-field 校验、manifest/receipt 自哈希、大小写 SHA 拒绝、输入覆盖防护和原子输出；修正 release evidence reason-code 被泛化字段错误遮蔽的问题。
+11. **Round 11 — runtime/ownership 复核**：实际 changed-files 分类为 `runtime_impact=none`；只精确登记单个离线脚本，不放宽 `scripts/qe_alpha_candidates/**`。21 项聚焦测试、ruff、py_compile、F2 validator、ownership、guardrail 和 `git diff --check` 统一执行。
 
 ## DESIGN-COMPLIANCE-001 Review / 设计符合性审核
 
@@ -490,7 +492,7 @@ D1R + D2 + D3 结果
 |---|---|---|---|---|
 | F-101 | Background、父蓝图 2.5/17 | validation-receipt: MA-E19A/B、MA-E19R2 task detail、BUG-1133/BUG-1191、node1 冻结文件只读回读 | VERIFIED | 无 |
 | F-102 | Historical Synthesis、父蓝图 2.5.3 | validation-receipt: MA-E19R2 9/12、分钟 calendar/feature/all.txt 覆盖差异、228 个明确受影响 loop 与 56 个明确保持未分类的旧 loop 分层 | VERIFIED | 无 |
-| F-103 | WP-D1R | validation-receipt: MA-E19R2 九臂完成、三臂 metadata fail closed；dataset signoff/activation、逐臂语义等价、三臂或完整 12 臂恢复顺序与 end marker；运行阻断在进度表独立记账 | DESIGN_READY | 无 |
+| F-103 | WP-D1R、等待包 §5～§5.1 | validation-receipt: MA-E19R2 九臂完成、三臂 metadata fail closed；`ma_e19_semantic_equivalence_audit.py` 标准库 CLI + 21 项聚焦测试；真实等价裁决仍等待新 manifest，未提交实验 | VERIFIED | 无 |
 | F-104 | WP-D2 | validation-receipt: 本文 four-cell、hard/soft、oracle identity、输出与结果触发 | DESIGN_READY | 无 |
 | F-105 | WP-D3 | validation-receipt: 本文 absolute/active/Brinson 输入、输出、`NOT_COMPUTABLE` 和结果触发 | DESIGN_READY | 无 |
 | F-106 | Result Trigger Matrix | validation-receipt: 本文 10 行观测→最小工作包映射及禁止跳跃 | VERIFIED | 无 |
@@ -499,13 +501,13 @@ D1R + D2 + D3 结果
 | F-109 | Minute Signal Deferral | validation-receipt: 本文七项重新进入条件与独立 TWAP execution contract | VERIFIED | 无 |
 | F-110 | Contracts、Production Gates | validation-receipt: 本文 zero DB/process/DDL/dependency/activation/no-platform 明细表 | VERIFIED | 无 |
 | F-111 | WP-D1R/D2/D3 end markers | validation-receipt: `MA_E19R_END_STATUS`、`P0_D2_END_STATUS`、`P0_D3_END_STATUS` 的稳定定义 | VERIFIED | 无 |
-| F-112 | Verification Plan、Review Record | validation-receipt: 三个 F2 validator、`git diff --check`、changed-file scope 与八轮历史/当前审核记录；提交并同步主线后在最终 HEAD 复验 | VERIFIED | 无 |
+| F-112 | Verification Plan、Review Record | validation-receipt: F2 validator、21 项聚焦测试、ruff/py_compile、runtime/ownership/guardrail、`git diff --check` 与十一轮历史/当前审核记录；提交并同步主线后在最终 HEAD 复验 | VERIFIED | 无 |
 
 ## Rollout / Rollback / 发布与回滚
 
-- 本 changeset 只包含父蓝图 v6.11、本文 v1.2 与等待期执行包的进度/顺序修订；不修改 BUG-1191、MA-E19 模型、因子、数据或调度业务逻辑。
-- 文档合入不启动实验、不构建或激活数据、不改变 runtime；candidate 与 active activation 必须另立身份和授权。
-- 回滚使用本次 docs PR revert；不得删除现有 task、prediction、receipt 或 dataset control evidence，也不得恢复使用过期 `all.txt` 作为物理 feature 覆盖权威。
+- 本 changeset 交付标准库-only 的 MA-E19 九臂语义等价 CLI、直接测试、等待包/矩阵回执，以及该单文件的精确 non-runtime/ownership 登记；不修改 BUG-1191、MA-E19 模型、因子、数据、调度或后端业务逻辑。
+- 源码合入不启动实验、不构建或激活数据、不改变 runtime；candidate 与 active activation 必须另立身份和授权。
+- 回滚使用本次 feature PR revert；不得删除现有 task、prediction、receipt 或 dataset control evidence，也不得恢复使用过期 `all.txt` 作为物理 feature 覆盖权威。
 - 后续真实实验各自使用新 task identity；失败保留，不覆盖历史。
 - 正式 task 编号、合入、数据 candidate、node distribution、进程控制和生产动作均需按当时工作流单独处理。
 
@@ -528,7 +530,7 @@ D1R + D2 + D3 结果
 
 | 状态项 | 本文状态 |
 |---|---|
-| source/code change | docs-only v6.11/v1.2 progress and execution-order correction |
+| source/code change | file-only MA-E19 equivalence CLI + direct tests + exact runtime/ownership registration |
 | experiment submission | noop |
 | dataset build/candidate signoff | noop |
 | production activation/symlink | noop |
@@ -538,7 +540,7 @@ D1R + D2 + D3 结果
 | dependency install | noop |
 | client install | noop |
 | UI/Archive/history backfill | noop |
-| runtime activation | not required for docs; candidate activation remains separate |
+| runtime activation | not required (`runtime_impact=none`); candidate activation remains separate |
 | merge | authorized after review/CI pass; cleanup separate workflow |
 
 ## Long Task End Markers / 长任务结束标识
@@ -550,6 +552,10 @@ D1R + D2 + D3 结果
 当前 8 小时长任务状态：
 
 `QE_LT8H_01_STATUS=IN_PROGRESS_DATASET_BLOCKED_TOOLING_ACTIVE`
+
+当前工具阶段状态：
+
+`MA_E19_EQUIVALENCE_TOOL_STATUS=SOURCE_IMPLEMENTED_TESTED`
 
 未来实验阶段结束：
 
