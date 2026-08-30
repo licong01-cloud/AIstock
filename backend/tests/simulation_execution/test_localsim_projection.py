@@ -203,3 +203,13 @@ def test_projector_rebuilds_one_projected_generation_without_scheduler_interpret
     assert result.outbox_id == outbox.outbox_id
     assert result.cash == 100_000
     assert result.payload["terminal"] is True
+
+
+def test_projector_source_has_no_broker_or_signal_execution_path() -> None:
+    import inspect
+
+    source = inspect.getsource(LocalSimProjector)
+
+    assert "local_broker" not in source
+    assert "selection" not in source
+    assert "submit_order" not in source

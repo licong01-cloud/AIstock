@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import date
+import inspect
 from types import SimpleNamespace
 from typing import Any
 
@@ -15,6 +16,8 @@ from backend.services.simulation_execution.localsim.models import (
     LocalSimEconomicReceiptV1,
     LocalSimProjectionOutboxV1,
 )
+from backend.services.simulation_execution.localsim.persistence import LocalSimPersistenceCoordinator
+from backend.services.simulation_runtime.scheduler import SimulationLifecycleScheduler
 
 
 class _RuntimeRepository:
@@ -151,3 +154,13 @@ def test_coordinator_does_not_stage_or_readback_after_paper_write_failure() -> N
     assert "runtime.readback" not in calls
     assert "paper.readback" not in calls
 
+
+def test_persistence_owner_has_no_legacy_product_import_or_scheduler_writer() -> None:
+    owner_source = inspect.getsource(LocalSimPersistenceCoordinator)
+    scheduler_source = inspect.getsource(SimulationLifecycleScheduler)
+
+    assert "from backend.services.paper_trading_v2" not in owner_source
+    assert "from backend.services.simulation_runtime" not in owner_source
+    assert "stage_local_sim_economic_commit" not in scheduler_source
+    assert "stage_local_sim_projection_commit" not in scheduler_source
+    assert "local_sim_economic_transaction_scope" not in scheduler_source
