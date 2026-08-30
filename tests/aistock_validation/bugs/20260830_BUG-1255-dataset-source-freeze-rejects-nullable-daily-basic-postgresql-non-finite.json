@@ -1,6 +1,8 @@
 {
   "actual": "The one authorized qe_hmm_full_v2 five-instrument initial-migration sample dss_43485e68b2645562430a12f8e7ce1620 terminated after 2283 seconds with DATASET_RELEASE_SOURCE_MANIFEST_INVALID and zero writes. The persisted message hash uniquely resolves to source query numeric value is invalid for daily_basic 2018-08-01 through 2018-10-31 pe. Read-only production sampling found 10169 PostgreSQL NaN markers across nullable daily_basic pe, pe_ttm, pb, volume_ratio, dv_ratio and dv_ttm fields. BUG-1173 normalized only exact stk_limit repairable fields; BUG-1238 addressed unrelated writer-ledger drift. Exact PostgreSQL NaN/Infinity/-Infinity in allowlisted nullable daily_basic numeric fields should become canonical null overlay inputs with a bumped query identity, while arbitrary text, required values, other datasets and database rows remain unchanged and fail closed.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/source_authority.py",
+    "backend/tests/dataset_release/test_source_authority.py",
     "tests/aistock_validation/bugs/20260830_BUG-1255-dataset-source-freeze-rejects-nullable-daily-basic-postgresql-non-finite.json"
   ],
   "assigned_agent": null,
@@ -57,20 +59,29 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "data_sync_autonomy_backend"
+    "qlib_data_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "fresh Python process persistent source contract smoke -> passed"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
