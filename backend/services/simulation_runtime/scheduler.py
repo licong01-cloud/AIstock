@@ -19,7 +19,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field, fields as dataclass_fields, is_dataclass, replace
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import Enum
 from types import SimpleNamespace
@@ -29,6 +29,15 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.execution_algos.adaptive_is.reasons import QuoteContractError
 from backend.services.simulation_execution.broker import BrokerBackend
+from backend.services.simulation_execution.localsim.economic import (
+    LocalSimEconomicCommitRequest,
+    LocalSimEconomicCoordinator,
+)
+from backend.services.simulation_execution.localsim.projection import (
+    LocalSimProjectionCommitRequest,
+    LocalSimProjector,
+)
+from backend.services.simulation_execution.localsim.planning import LocalSimPlanner
 from backend.services.simulation_data.contracts import (
     MinuteDataSource,
     pre_trade_tradability_is_suspended,
@@ -1486,7 +1495,7 @@ class ProductionSimulationRunContextProvider:
                 context={"portfolio_id": portfolio_id, "binding_id": binding.binding_id},
             )
         try:
-            from backend.services.paper_trading_v2.broker.localsim import LocalSimBackend
+            from backend.services.simulation_execution.localsim import LocalSimBackend
 
             data_source = self._resolve_local_sim_market_data_source(
                 portfolio=portfolio,
@@ -8722,64 +8731,7 @@ class SimulationLifecycleScheduler:
         binding: SimulationReleaseBinding,
         plan: ExecutionPlan,
     ) -> None:
-        if binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM:
-            return
-        plan_policy_id = str(plan.execution_policy_version_id or "").strip()
-
-        def malformed(detail: str) -> RuntimeConfigInvalidError:
-            # A plan whose policy payload cannot even be read is an unknown shape, not a
-            # verified retired legacy policy; it must stay typed fail loud and must never
-            # be classified as (or terminalized under) the retired-policy reason.
-            return RuntimeConfigInvalidError(
-                "LocalSIM existing execution plan policy payload is missing or malformed",
-                context={
-                    "reason_code": "LOCALSIM_EXECUTION_PLAN_POLICY_MISSING_OR_MALFORMED",
-                    "binding_id": binding.binding_id,
-                    "plan_id": plan.plan_id,
-                    "plan_execution_policy_version_id": plan_policy_id or None,
-                    "plan_algo_code": None,
-                    "required_algo_code": "TWAP",
-                    "malformed_detail": detail,
-                    "broker_call_attempted": False,
-                    "fallback_used": False,
-                    "required_action": (
-                        "inspect or lawfully rebuild the frozen execution plan; its execution "
-                        "policy payload is missing or malformed"
-                    ),
-                },
-            )
-
-        policy_container = plan.plan_payload_json.get("execution_policy")
-        if not isinstance(policy_container, dict):
-            raise malformed("execution_policy container is missing or not an object")
-        payload = policy_container.get("payload")
-        if not isinstance(payload, dict):
-            raise malformed("execution_policy payload is missing or not an object")
-        policy_json = payload.get("policy_json")
-        if policy_json is None:
-            # Legacy inline shape: the payload itself carries the policy fields.
-            policy_json = payload
-        elif not isinstance(policy_json, dict):
-            raise malformed("execution_policy policy_json is present but not an object")
-        algo_code = str(policy_json.get("algo_code") or "").strip().upper()
-        if not algo_code:
-            raise malformed("execution_policy algo_code is missing or blank")
-        if algo_code == "TWAP":
-            return
-        raise RuntimeConfigInvalidError(
-            "LocalSIM existing execution plan is not eligible under the TWAP-only runtime policy",
-            context={
-                "reason_code": "LOCALSIM_LEGACY_EXECUTION_PLAN_POLICY_RETIRED",
-                "binding_id": binding.binding_id,
-                "plan_id": plan.plan_id,
-                "plan_execution_policy_version_id": plan_policy_id or None,
-                "plan_algo_code": algo_code,
-                "required_algo_code": "TWAP",
-                "broker_call_attempted": False,
-                "fallback_used": False,
-                "required_action": "create a new LocalSIM execution plan under the TWAP-only runtime policy",
-            },
-        )
+        LocalSimPlanner.assert_plan_uses_twap(binding=binding, plan=plan)
 
     @staticmethod
     def _run_failure_stage(run: SimulationDailyRun) -> str:
@@ -11267,28 +11219,19 @@ class SimulationLifecycleScheduler:
         plan: ExecutionPlan,
         context: SimulationRunContext,
     ) -> tuple[SimulationDailyRun, ExecutionPlan]:
-        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM or not plan.intents:
-            return run, plan
-        prepared_plan, fit_payload = self._cash_fit_localsim_execution_plan(
+        return self._local_sim_planner().prepare_execution_plan_for_submit(
             binding=binding,
             run=run,
             plan=plan,
             context=context,
         )
-        if fit_payload["status"] == "UNCHANGED":
-            return run, plan
-        prepared_plan = self.repository.save_execution_plan(prepared_plan)
-        updated = self.repository.update_simulation_daily_run(
-            run.run_id,
-            execution_plan=prepared_plan,
-            payload_patch={
-                "local_sim_cash_fit": fit_payload,
-                "execution_plan_intent_count": len(prepared_plan.intents),
-                "order_intent_count": len(prepared_plan.intents),
-            },
-            payload_unset=("submit_failure", "local_sim_retry_diagnostics"),
+
+    def _local_sim_planner(self) -> LocalSimPlanner:
+        return LocalSimPlanner(
+            repository=self.repository,
+            normalize_time=scheduler_time,
+            schedule_windows=compute_schedule_windows,
         )
-        return updated, prepared_plan
 
     def _cash_fit_localsim_execution_plan(
         self,
@@ -11298,49 +11241,12 @@ class SimulationLifecycleScheduler:
         plan: ExecutionPlan,
         context: SimulationRunContext,
     ) -> tuple[ExecutionPlan, dict[str, Any]]:
-        if context.cash is None:
-            raise DataUnavailableError(
-                "LocalSim cash-fit requires explicit account cash; context.cash is missing",
-                context={
-                    "reason_code": "LOCALSIM_CASH_CONTEXT_MISSING",
-                    "stage": "LOCALSIM_CASH_FIT",
-                    "run_id": run.run_id,
-                    "plan_id": plan.plan_id,
-                    "binding_id": binding.binding_id,
-                    "strategy_id": binding.strategy_id,
-                    "trade_date": run.trade_date.isoformat(),
-                    "broker_backend": binding.broker_backend.value,
-                    "required_action": "load authoritative Paper v2 portfolio cash before LocalSim submit; do not default missing cash to 0.0",
-                },
-            )
-        cash = float(context.cash)
-        sells = [intent for intent in plan.intents if intent.side == OrderSide.SELL]
-        buys = [intent for intent in plan.intents if intent.side == OrderSide.BUY]
-        prepared = [*sells, *buys]
-
-        payload = {
-            "schema_version": "localsim_capital_dependency_v1",
-            "status": "UNCHANGED",
-            "reason": "localsim_sell_first_durable_dependent_buy",
-            "initial_cash": round(cash, 6),
-            "original_intent_count": len(plan.intents),
-            "prepared_intent_count": len(prepared),
-            "sell_intent_count": len(sells),
-            "buy_intent_count": len(buys),
-            "dependent_buy_count": len(buys),
-            "capital_waiting_owner": "LocalSimExecutionStateV1",
-        }
-        original_ids = [intent.intent_id for intent in plan.intents]
-        prepared_ids = [intent.intent_id for intent in prepared]
-        if prepared_ids == original_ids:
-            return plan, payload
-        payload["status"] = "SELL_FIRST_DEPENDENCY_ORDERED"
-        prepared_plan = self._copy_localsim_plan_with_intents(
+        return LocalSimPlanner.cash_fit_execution_plan(
+            binding=binding,
+            run=run,
             plan=plan,
-            intents=prepared,
-            cash_fit_payload=payload,
+            context=context,
         )
-        return prepared_plan, payload
 
     @staticmethod
     def _copy_localsim_plan_with_intents(
@@ -11349,42 +11255,10 @@ class SimulationLifecycleScheduler:
         intents: list[Any],
         cash_fit_payload: dict[str, Any],
     ) -> ExecutionPlan:
-        payload = deepcopy(plan.plan_payload_json)
-        payload["intents"] = [
-            {
-                "intent_id": intent.intent_id,
-                "symbol": intent.symbol,
-                "side": intent.side.value,
-                "target_quantity": intent.target_quantity,
-                "delta_quantity": intent.delta_quantity,
-                "order_quantity": intent.order_quantity,
-                "target_weight": intent.target_weight,
-                "reference_price": intent.price_policy.get("reference_price"),
-                "current_quantity": intent.current_quantity,
-                "current_available_quantity": intent.current_available_quantity,
-                "rebalance_reason": intent.rebalance_reason,
-                "trading_rule_decision_id": intent.trading_rule_decision_id,
-                "order_type": intent.price_policy.get("order_type"),
-                "limit_price": intent.price_policy.get("limit_price"),
-                "schedule_window": intent.schedule_window,
-                "price_policy": intent.price_policy,
-                "risk_context": intent.risk_context,
-                "metadata": intent.metadata,
-            }
-            for intent in intents
-        ]
-        payload["local_sim_cash_fit"] = cash_fit_payload
-        plan_hash = canonical_json_sha256(payload)
-        plan_id = f"plan_{plan_hash[:16]}"
-        plan_intents = [intent.model_copy(update={"plan_id": plan_id}) for intent in intents]
-        return plan.model_copy(
-            update={
-                "plan_id": plan_id,
-                "intents": plan_intents,
-                "plan_payload_json": payload,
-                "plan_hash": plan_hash,
-                "created_at": datetime.now(UTC),
-            }
+        return LocalSimPlanner._copy_plan_with_intents(  # noqa: SLF001 - compatibility seam until PR-D1
+            plan=plan,
+            intents=intents,
+            cash_fit_payload=cash_fit_payload,
         )
 
     @staticmethod
@@ -12390,59 +12264,46 @@ class SimulationLifecycleScheduler:
                 )
                 for state in execution_states
             }
-            with self.repository.local_sim_economic_transaction_scope():
-                with paper_repository.local_sim_economic_transaction(run.run_id) as connection:
-                    self._ensure_local_sim_paper_run(repository=paper_repository, run=run, context=context)
-                    for order in orders:
-                        paper_repository.save_order(run.run_id, order)
-                    for fill in fills:
-                        paper_repository.save_fill(run.run_id, fill)
-                    for event in events:
-                        paper_repository.save_order_event(run.run_id, event)
-                    for entry in cash_entries:
-                        paper_repository.save_cash_entry(run.run_id, entry)
-                    receipt, outbox, created = self.repository.stage_local_sim_economic_commit(
-                        connection=connection,
-                        run_id=run.run_id,
-                        binding_id=binding.binding_id,
-                        trade_date=run.trade_date,
-                        plan_id=execution.execution_plan.plan_id,
-                        states=execution_states,
-                        expected_versions=expected_versions,
-                        economic_facts=economic_facts,
-                        projection_payload=projection_payload,
-                        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
-                        payload_patch=payload_patch,
-                        payload_unset=(
-                            "submit_failure",
-                            "local_sim_retry_diagnostics",
-                            *(("local_sim_synchronous_terminal",) if execution_states else ()),
-                        ),
-                    )
-                    if created:
-                        paper_repository.save_run_event(
-                            run_id=run.run_id,
-                            event_type="RUN_ECONOMIC_COMMITTED",
-                            message="simulation runtime LocalSim economic facts committed; projection outbox pending",
-                            context={
-                                "source": "simulation_runtime_local_sim",
-                                "simulation_run_id": run.run_id,
-                                "execution_plan_id": execution.execution_plan.plan_id,
-                                "receipt_id": receipt.receipt_id,
-                                "outbox_id": outbox.outbox_id,
-                                "generation": receipt.generation,
-                                "economic_hash": receipt.economic_hash,
-                            },
-                        )
-            economic_commit_staged = True
-            self.repository.readback_local_sim_economic_commit(run_id=run.run_id, receipt=receipt, outbox=outbox)
-            paper_repository.readback_local_sim_economic_facts(
-                run_id=run.run_id,
-                order_ids={str(item.order_id) for item in orders},
-                fill_ids={str(item.fill_id) for item in fills},
-                order_event_ids={str(item.event_id) for item in events},
-                cash_fill_ids={str(item.fill_id) for item in cash_entries},
+            commit_result = LocalSimEconomicCoordinator(
+                runtime_repository=self.repository,
+                paper_repository=paper_repository,
+                ensure_paper_run=lambda: self._ensure_local_sim_paper_run(
+                    repository=paper_repository,
+                    run=run,
+                    context=context,
+                ),
+            ).commit(
+                LocalSimEconomicCommitRequest(
+                    run_id=run.run_id,
+                    binding_id=binding.binding_id,
+                    trade_date=run.trade_date,
+                    plan_id=execution.execution_plan.plan_id,
+                    states=execution_states,
+                    expected_versions=expected_versions,
+                    economic_facts=economic_facts,
+                    projection_payload=projection_payload,
+                    status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+                    payload_patch=payload_patch,
+                    payload_unset=(
+                        "submit_failure",
+                        "local_sim_retry_diagnostics",
+                        *(("local_sim_synchronous_terminal",) if execution_states else ()),
+                    ),
+                    orders=orders,
+                    fills=fills,
+                    events=events,
+                    cash_entries=cash_entries,
+                    event_message="simulation runtime LocalSim economic facts committed; projection outbox pending",
+                    event_context={
+                        "source": "simulation_runtime_local_sim",
+                        "simulation_run_id": run.run_id,
+                        "execution_plan_id": execution.execution_plan.plan_id,
+                    },
+                )
             )
+            receipt = commit_result.receipt
+            outbox = commit_result.outbox
+            economic_commit_staged = True
             projected_run, performance_payload = self._project_local_sim_outbox(
                 run_id=run.run_id, paper_repository=paper_repository
             )
@@ -12861,50 +12722,40 @@ class SimulationLifecycleScheduler:
                 "failed_intents": 0,
                 "last_stage": "LOCAL_SIM_WAITING_ECONOMIC_COMMITTED",
             }
-            with self.repository.local_sim_economic_transaction_scope():
-                with paper_repository.local_sim_economic_transaction(run.run_id) as connection:
-                    self._ensure_local_sim_paper_run(repository=paper_repository, run=run, context=context)
-                    for order in orders:
-                        paper_repository.save_order(run.run_id, order)
-                    receipt, outbox, created = self.repository.stage_local_sim_economic_commit(
-                        connection=connection,
-                        run_id=run.run_id,
-                        binding_id=binding.binding_id,
-                        trade_date=run.trade_date,
-                        plan_id=execution.execution_plan.plan_id,
-                        states=states,
-                        expected_versions=expected_versions,
-                        economic_facts=economic_facts,
-                        projection_payload=projection_payload,
-                        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
-                        payload_patch=payload_patch,
-                        payload_unset=("submit_failure", "local_sim_retry_diagnostics"),
-                    )
-                    if created:
-                        paper_repository.save_run_event(
-                            run_id=run.run_id,
-                            event_type="RUN_ECONOMIC_COMMITTED",
-                            message="LocalSim order/state wait facts committed; first causal mark is pending",
-                            context={
-                                "source": "simulation_runtime_local_sim",
-                                "simulation_run_id": run.run_id,
-                                "execution_plan_id": execution.execution_plan.plan_id,
-                                "receipt_id": receipt.receipt_id,
-                                "outbox_id": outbox.outbox_id,
-                                "generation": receipt.generation,
-                                "economic_hash": receipt.economic_hash,
-                                "projection_kind": "FIRST_CAUSAL_BAR_WAIT",
-                            },
-                        )
-            committed = True
-            self.repository.readback_local_sim_economic_commit(run_id=run.run_id, receipt=receipt, outbox=outbox)
-            paper_repository.readback_local_sim_economic_facts(
-                run_id=run.run_id,
-                order_ids=set(order_hashes),
-                fill_ids=set(),
-                order_event_ids=set(),
-                cash_fill_ids=set(),
+            commit_result = LocalSimEconomicCoordinator(
+                runtime_repository=self.repository,
+                paper_repository=paper_repository,
+                ensure_paper_run=lambda: self._ensure_local_sim_paper_run(
+                    repository=paper_repository,
+                    run=run,
+                    context=context,
+                ),
+            ).commit(
+                LocalSimEconomicCommitRequest(
+                    run_id=run.run_id,
+                    binding_id=binding.binding_id,
+                    trade_date=run.trade_date,
+                    plan_id=execution.execution_plan.plan_id,
+                    states=states,
+                    expected_versions=expected_versions,
+                    economic_facts=economic_facts,
+                    projection_payload=projection_payload,
+                    status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+                    payload_patch=payload_patch,
+                    payload_unset=("submit_failure", "local_sim_retry_diagnostics"),
+                    orders=orders,
+                    event_message="LocalSim order/state wait facts committed; first causal mark is pending",
+                    event_context={
+                        "source": "simulation_runtime_local_sim",
+                        "simulation_run_id": run.run_id,
+                        "execution_plan_id": execution.execution_plan.plan_id,
+                        "projection_kind": "FIRST_CAUSAL_BAR_WAIT",
+                    },
+                )
             )
+            receipt = commit_result.receipt
+            outbox = commit_result.outbox
+            committed = True
             projected_run, performance = self._project_local_sim_outbox(
                 run_id=run.run_id,
                 paper_repository=paper_repository,
@@ -13261,90 +13112,76 @@ class SimulationLifecycleScheduler:
             )
             for state in states
         }
+
+        def on_valuation_generation_created(
+            receipt: LocalSimEconomicReceiptV1,
+            outbox: LocalSimProjectionOutboxV1,
+        ) -> None:
+            paper_repository.save_run_event(
+                run_id=run.run_id,
+                event_type="RUN_INTRADAY_VALUATION_PENDING",
+                message="LocalSim is waiting for authoritative marks without rolling back economic facts",
+                context={
+                    "source": "simulation_runtime_local_sim",
+                    "simulation_run_id": run.run_id,
+                    "local_sim_generation": receipt.generation,
+                    "local_sim_outbox_id": outbox.outbox_id,
+                    "missing_symbols": missing_symbols,
+                    "reason_code": mark_reason,
+                },
+            )
+            paper_repository.update_run_status(
+                paper_repository.get_run(run.run_id),
+                RunStatus.RUNNING,
+                error=None,
+            )
+
         committed = False
         try:
-            with self.repository.local_sim_economic_transaction_scope():
-                with paper_repository.local_sim_economic_transaction(run.run_id) as connection:
-                    self._ensure_local_sim_paper_run(
-                        repository=paper_repository,
-                        run=run,
-                        context=context,
-                    )
-                    for order in orders:
-                        paper_repository.save_order(run.run_id, order)
-                    for fill in fills:
-                        paper_repository.save_fill(run.run_id, fill)
-                    for event in events:
-                        paper_repository.save_order_event(run.run_id, event)
-                    for entry in cash_entries:
-                        paper_repository.save_cash_entry(run.run_id, entry)
-                    receipt, outbox, created = self.repository.stage_local_sim_economic_commit(
-                        connection=connection,
-                        run_id=run.run_id,
-                        binding_id=binding.binding_id,
-                        trade_date=run.trade_date,
-                        plan_id=execution.execution_plan.plan_id,
-                        states=states,
-                        expected_versions=expected_versions,
-                        economic_facts=economic_facts,
-                        projection_payload=projection_payload,
-                        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
-                        payload_patch=payload_patch,
-                        payload_unset=(
-                            "submit_failure",
-                            "local_sim_retry_diagnostics",
-                            "strategy_performance",
-                            "performance_projection",
-                        ),
-                    )
-                    if created:
-                        paper_repository.save_run_event(
-                            run_id=run.run_id,
-                            event_type="RUN_ECONOMIC_COMMITTED",
-                            message=("LocalSim economic facts committed; authoritative valuation marks are pending"),
-                            context={
-                                "source": "simulation_runtime_local_sim",
-                                "simulation_run_id": run.run_id,
-                                "execution_plan_id": execution.execution_plan.plan_id,
-                                "receipt_id": receipt.receipt_id,
-                                "outbox_id": outbox.outbox_id,
-                                "generation": receipt.generation,
-                                "economic_hash": receipt.economic_hash,
-                                "projection_kind": "VALUATION_PENDING",
-                                "missing_symbols": missing_symbols,
-                            },
-                        )
-                        paper_repository.save_run_event(
-                            run_id=run.run_id,
-                            event_type="RUN_INTRADAY_VALUATION_PENDING",
-                            message="LocalSim is waiting for authoritative marks without rolling back economic facts",
-                            context={
-                                "source": "simulation_runtime_local_sim",
-                                "simulation_run_id": run.run_id,
-                                "local_sim_generation": receipt.generation,
-                                "local_sim_outbox_id": outbox.outbox_id,
-                                "missing_symbols": missing_symbols,
-                                "reason_code": mark_reason,
-                            },
-                        )
-                        paper_repository.update_run_status(
-                            paper_repository.get_run(run.run_id),
-                            RunStatus.RUNNING,
-                            error=None,
-                        )
+            commit_result = LocalSimEconomicCoordinator(
+                runtime_repository=self.repository,
+                paper_repository=paper_repository,
+                ensure_paper_run=lambda: self._ensure_local_sim_paper_run(
+                    repository=paper_repository,
+                    run=run,
+                    context=context,
+                ),
+            ).commit(
+                LocalSimEconomicCommitRequest(
+                    run_id=run.run_id,
+                    binding_id=binding.binding_id,
+                    trade_date=run.trade_date,
+                    plan_id=execution.execution_plan.plan_id,
+                    states=states,
+                    expected_versions=expected_versions,
+                    economic_facts=economic_facts,
+                    projection_payload=projection_payload,
+                    status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+                    payload_patch=payload_patch,
+                    payload_unset=(
+                        "submit_failure",
+                        "local_sim_retry_diagnostics",
+                        "strategy_performance",
+                        "performance_projection",
+                    ),
+                    orders=orders,
+                    fills=fills,
+                    events=events,
+                    cash_entries=cash_entries,
+                    event_message="LocalSim economic facts committed; authoritative valuation marks are pending",
+                    event_context={
+                        "source": "simulation_runtime_local_sim",
+                        "simulation_run_id": run.run_id,
+                        "execution_plan_id": execution.execution_plan.plan_id,
+                        "projection_kind": "VALUATION_PENDING",
+                        "missing_symbols": missing_symbols,
+                    },
+                    on_created=on_valuation_generation_created,
+                )
+            )
+            receipt = commit_result.receipt
+            outbox = commit_result.outbox
             committed = True
-            self.repository.readback_local_sim_economic_commit(
-                run_id=run.run_id,
-                receipt=receipt,
-                outbox=outbox,
-            )
-            paper_repository.readback_local_sim_economic_facts(
-                run_id=run.run_id,
-                order_ids=set(order_hashes),
-                fill_ids=set(fill_hashes),
-                order_event_ids=set(event_hashes),
-                cash_fill_ids=set(cash_hashes),
-            )
             return LocalSimPersistenceResult(
                 payload={
                     "order_count": len(orders),
@@ -14274,68 +14111,45 @@ class SimulationLifecycleScheduler:
             "completion_hash": completion["completion_hash"],
         }
         projection_committed = False
-        try:
-            with self.repository.local_sim_economic_transaction_scope():
-                with paper_repository.local_sim_economic_transaction(run.run_id) as connection:
-                    paper_repository.save_positions(
-                        run_id=run.run_id,
-                        trade_date=run.trade_date,
-                        positions=list(positions.values()),
-                        prices=marks,
-                    )
-                    paper_repository.save_daily_snapshot(
-                        run_id=run.run_id,
-                        trade_date=run.trade_date,
-                        snapshot=account_snapshot,
-                        metadata=snapshot_metadata,
-                    )
-                    paper_repository.save_run_event(
-                        run_id=run.run_id,
-                        event_type=str(payload["final_event_type"]),
-                        message=str(payload["final_event_message"]),
-                        context={
-                            **dict(payload["final_event_context"]),
-                            "snapshot_time": completion_snapshot_time.isoformat(),
-                            "local_sim_generation": outbox.generation,
-                            "local_sim_outbox_id": outbox.outbox_id,
-                            "local_sim_economic_hash": outbox.economic_hash,
-                            "valuation_completed_from_pending": True,
-                        },
-                    )
-                    paper_repository.update_run_status(
-                        paper_repository.get_run(run.run_id),
-                        final_paper_status,
-                        error=payload["paper_error"],
-                    )
-                    receipt = self.repository.stage_local_sim_projection_commit(
-                        connection=connection,
-                        run_id=run.run_id,
-                        outbox_id=outbox.outbox_id,
-                        generation=outbox.generation,
-                        final_status=final_status,
-                        projection_result=projection_result,
-                        payload_patch={
-                            "strategy_performance": performance,
-                            "performance_projection": performance,
-                            "local_sim_persistence": completed_persistence,
-                            "local_sim_valuation_completion_v1": completion,
-                            "local_sim_projection_generation": {
-                                "schema_version": "local_sim_projection_generation_v1",
-                                "generation": outbox.generation,
-                                "outbox_id": outbox.outbox_id,
-                                "economic_hash": outbox.economic_hash,
-                            },
-                            "last_stage": final_status.value,
-                        },
-                        payload_unset=(
-                            "submit_failure",
-                            "local_sim_retry_diagnostics",
-                            "local_sim_valuation_pending_v1",
-                            "local_sim_failed_run_recovery_failure_v1",
-                        ),
-                    )
+
+        def apply_valuation_projection() -> None:
+            paper_repository.save_positions(
+                run_id=run.run_id,
+                trade_date=run.trade_date,
+                positions=list(positions.values()),
+                prices=marks,
+            )
+            paper_repository.save_daily_snapshot(
+                run_id=run.run_id,
+                trade_date=run.trade_date,
+                snapshot=account_snapshot,
+                metadata=snapshot_metadata,
+            )
+            paper_repository.save_run_event(
+                run_id=run.run_id,
+                event_type=str(payload["final_event_type"]),
+                message=str(payload["final_event_message"]),
+                context={
+                    **dict(payload["final_event_context"]),
+                    "snapshot_time": completion_snapshot_time.isoformat(),
+                    "local_sim_generation": outbox.generation,
+                    "local_sim_outbox_id": outbox.outbox_id,
+                    "local_sim_economic_hash": outbox.economic_hash,
+                    "valuation_completed_from_pending": True,
+                },
+            )
+            paper_repository.update_run_status(
+                paper_repository.get_run(run.run_id),
+                final_paper_status,
+                error=payload["paper_error"],
+            )
+
+        def mark_projection_staged() -> None:
+            nonlocal projection_committed
             projection_committed = True
-            projected = self.repository.readback_local_sim_projection_commit(
+
+        def readback_valuation_projection(receipt: LocalSimProjectionReceiptV1) -> SimulationDailyRun:
+            projected_run = self.repository.readback_local_sim_projection_commit(
                 run_id=run.run_id,
                 receipt=receipt,
             )
@@ -14347,7 +14161,44 @@ class SimulationLifecycleScheduler:
                 generation=outbox.generation,
                 expected_position_count=len(positions),
             )
-            return projected, performance
+            return projected_run
+
+        try:
+            result = LocalSimProjector(
+                runtime_repository=self.repository,
+                paper_repository=paper_repository,
+            ).commit(
+                LocalSimProjectionCommitRequest(
+                    run_id=run.run_id,
+                    outbox_id=outbox.outbox_id,
+                    generation=outbox.generation,
+                    final_status=final_status,
+                    projection_result=projection_result,
+                    payload_patch={
+                        "strategy_performance": performance,
+                        "performance_projection": performance,
+                        "local_sim_persistence": completed_persistence,
+                        "local_sim_valuation_completion_v1": completion,
+                        "local_sim_projection_generation": {
+                            "schema_version": "local_sim_projection_generation_v1",
+                            "generation": outbox.generation,
+                            "outbox_id": outbox.outbox_id,
+                            "economic_hash": outbox.economic_hash,
+                        },
+                        "last_stage": final_status.value,
+                    },
+                    payload_unset=(
+                        "submit_failure",
+                        "local_sim_retry_diagnostics",
+                        "local_sim_valuation_pending_v1",
+                        "local_sim_failed_run_recovery_failure_v1",
+                    ),
+                    apply_paper_projection=apply_valuation_projection,
+                    readback=readback_valuation_projection,
+                    on_staged=mark_projection_staged,
+                )
+            )
+            return result.projected, performance
         except Exception as exc:
             attempt_count = outbox.attempt_count + 1
             retryable = self._local_sim_projection_error_is_retryable(exc)
@@ -14626,56 +14477,70 @@ class SimulationLifecycleScheduler:
             "performance_hash": None,
         }
         projection_committed = False
-        try:
-            with self.repository.local_sim_economic_transaction_scope():
-                with paper_repository.local_sim_economic_transaction(run.run_id) as connection:
-                    paper_repository.save_run_event(
-                        run_id=run.run_id,
-                        event_type=str(payload["final_event_type"]),
-                        message=str(payload["final_event_message"]),
-                        context={
-                            "source": "simulation_runtime_local_sim",
-                            "simulation_run_id": run.run_id,
-                            "execution_plan_id": run.execution_plan_id,
-                            "observed_until": observed_until.isoformat(),
-                            "active_state_ids": sorted(state_hashes),
-                            "local_sim_generation": outbox.generation,
-                            "local_sim_outbox_id": outbox.outbox_id,
-                            "local_sim_economic_hash": outbox.economic_hash,
-                        },
-                    )
-                    paper_repository.update_run_status(
-                        paper_repository.get_run(run.run_id),
-                        RunStatus.RUNNING,
-                        error=None,
-                    )
-                    receipt = self.repository.stage_local_sim_projection_commit(
-                        connection=connection,
-                        run_id=run.run_id,
-                        outbox_id=outbox.outbox_id,
-                        generation=outbox.generation,
-                        final_status=SimulationDailyRunStatus.INTRADAY_RUNNING,
-                        projection_result=projection_result,
-                        payload_patch={
-                            "local_sim_persistence": persistence,
-                            "local_sim_projection_generation": {
-                                "schema_version": "local_sim_projection_generation_v1",
-                                "generation": outbox.generation,
-                                "outbox_id": outbox.outbox_id,
-                                "economic_hash": outbox.economic_hash,
-                            },
-                            "last_stage": SimulationDailyRunStatus.INTRADAY_RUNNING.value,
-                        },
-                        payload_unset=(
-                            "submit_failure",
-                            "local_sim_retry_diagnostics",
-                            "strategy_performance",
-                            "performance_projection",
-                        ),
-                    )
+
+        def apply_wait_projection() -> None:
+            paper_repository.save_run_event(
+                run_id=run.run_id,
+                event_type=str(payload["final_event_type"]),
+                message=str(payload["final_event_message"]),
+                context={
+                    "source": "simulation_runtime_local_sim",
+                    "simulation_run_id": run.run_id,
+                    "execution_plan_id": run.execution_plan_id,
+                    "observed_until": observed_until.isoformat(),
+                    "active_state_ids": sorted(state_hashes),
+                    "local_sim_generation": outbox.generation,
+                    "local_sim_outbox_id": outbox.outbox_id,
+                    "local_sim_economic_hash": outbox.economic_hash,
+                },
+            )
+            paper_repository.update_run_status(
+                paper_repository.get_run(run.run_id),
+                RunStatus.RUNNING,
+                error=None,
+            )
+
+        def mark_wait_projection_staged() -> None:
+            nonlocal projection_committed
             projection_committed = True
+
+        def readback_wait_projection(receipt: LocalSimProjectionReceiptV1) -> SimulationDailyRun:
             readback_projection(receipt)
-            return self.repository.get_simulation_daily_run(run.run_id), performance_payload
+            return self.repository.get_simulation_daily_run(run.run_id)
+
+        try:
+            result = LocalSimProjector(
+                runtime_repository=self.repository,
+                paper_repository=paper_repository,
+            ).commit(
+                LocalSimProjectionCommitRequest(
+                    run_id=run.run_id,
+                    outbox_id=outbox.outbox_id,
+                    generation=outbox.generation,
+                    final_status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+                    projection_result=projection_result,
+                    payload_patch={
+                        "local_sim_persistence": persistence,
+                        "local_sim_projection_generation": {
+                            "schema_version": "local_sim_projection_generation_v1",
+                            "generation": outbox.generation,
+                            "outbox_id": outbox.outbox_id,
+                            "economic_hash": outbox.economic_hash,
+                        },
+                        "last_stage": SimulationDailyRunStatus.INTRADAY_RUNNING.value,
+                    },
+                    payload_unset=(
+                        "submit_failure",
+                        "local_sim_retry_diagnostics",
+                        "strategy_performance",
+                        "performance_projection",
+                    ),
+                    apply_paper_projection=apply_wait_projection,
+                    readback=readback_wait_projection,
+                    on_staged=mark_wait_projection_staged,
+                )
+            )
+            return result.projected, performance_payload
         except Exception as exc:
             attempt_count = outbox.attempt_count + 1
             retryable = self._local_sim_projection_error_is_retryable(exc)
@@ -14951,58 +14816,43 @@ class SimulationLifecycleScheduler:
             "performance_hash": canonical_json_sha256(performance),
         }
         projection_committed = False
-        try:
-            with self.repository.local_sim_economic_transaction_scope():
-                with paper_repository.local_sim_economic_transaction(run_id) as connection:
-                    paper_repository.save_positions(
-                        run_id=run_id,
-                        trade_date=projection_trade_date,
-                        positions=list(positions.values()),
-                        prices=marks,
-                    )
-                    paper_repository.save_daily_snapshot(
-                        run_id=run_id,
-                        trade_date=projection_trade_date,
-                        snapshot=account_snapshot,
-                        metadata=snapshot_metadata,
-                    )
-                    paper_repository.save_run_event(
-                        run_id=run_id,
-                        event_type=str(payload.get("final_event_type")),
-                        message=str(payload.get("final_event_message")),
-                        context={
-                            **dict(payload.get("final_event_context") or {}),
-                            "local_sim_generation": outbox.generation,
-                            "local_sim_outbox_id": outbox.outbox_id,
-                            "local_sim_economic_hash": outbox.economic_hash,
-                        },
-                    )
-                    paper_repository.update_run_status(
-                        paper_repository.get_run(run_id), final_paper_status, error=payload.get("paper_error")
-                    )
-                    receipt = self.repository.stage_local_sim_projection_commit(
-                        connection=connection,
-                        run_id=run_id,
-                        outbox_id=outbox.outbox_id,
-                        generation=outbox.generation,
-                        final_status=final_status,
-                        projection_result=projection_result,
-                        payload_patch={
-                            "strategy_performance": performance,
-                            "performance_projection": performance,
-                            "local_sim_persistence": dict(payload.get("local_sim_persistence") or {}),
-                            "local_sim_projection_generation": {
-                                "schema_version": "local_sim_projection_generation_v1",
-                                "generation": outbox.generation,
-                                "outbox_id": outbox.outbox_id,
-                                "economic_hash": outbox.economic_hash,
-                            },
-                            "last_stage": final_status.value,
-                        },
-                        payload_unset=("submit_failure", "local_sim_retry_diagnostics"),
-                    )
+
+        def apply_terminal_projection() -> None:
+            paper_repository.save_positions(
+                run_id=run_id,
+                trade_date=projection_trade_date,
+                positions=list(positions.values()),
+                prices=marks,
+            )
+            paper_repository.save_daily_snapshot(
+                run_id=run_id,
+                trade_date=projection_trade_date,
+                snapshot=account_snapshot,
+                metadata=snapshot_metadata,
+            )
+            paper_repository.save_run_event(
+                run_id=run_id,
+                event_type=str(payload.get("final_event_type")),
+                message=str(payload.get("final_event_message")),
+                context={
+                    **dict(payload.get("final_event_context") or {}),
+                    "local_sim_generation": outbox.generation,
+                    "local_sim_outbox_id": outbox.outbox_id,
+                    "local_sim_economic_hash": outbox.economic_hash,
+                },
+            )
+            paper_repository.update_run_status(
+                paper_repository.get_run(run_id),
+                final_paper_status,
+                error=payload.get("paper_error"),
+            )
+
+        def mark_terminal_projection_staged() -> None:
+            nonlocal projection_committed
             projection_committed = True
-            projected = self.repository.readback_local_sim_projection_commit(run_id=run_id, receipt=receipt)
+
+        def readback_terminal_projection(receipt: LocalSimProjectionReceiptV1) -> SimulationDailyRun:
+            projected_run = self.repository.readback_local_sim_projection_commit(run_id=run_id, receipt=receipt)
             paper_repository.readback_local_sim_projection(
                 run_id=run_id,
                 portfolio_id=account_snapshot.portfolio_id,
@@ -15011,7 +14861,38 @@ class SimulationLifecycleScheduler:
                 generation=outbox.generation,
                 expected_position_count=len(positions),
             )
-            return projected, performance
+            return projected_run
+
+        try:
+            result = LocalSimProjector(
+                runtime_repository=self.repository,
+                paper_repository=paper_repository,
+            ).commit(
+                LocalSimProjectionCommitRequest(
+                    run_id=run_id,
+                    outbox_id=outbox.outbox_id,
+                    generation=outbox.generation,
+                    final_status=final_status,
+                    projection_result=projection_result,
+                    payload_patch={
+                        "strategy_performance": performance,
+                        "performance_projection": performance,
+                        "local_sim_persistence": dict(payload.get("local_sim_persistence") or {}),
+                        "local_sim_projection_generation": {
+                            "schema_version": "local_sim_projection_generation_v1",
+                            "generation": outbox.generation,
+                            "outbox_id": outbox.outbox_id,
+                            "economic_hash": outbox.economic_hash,
+                        },
+                        "last_stage": final_status.value,
+                    },
+                    payload_unset=("submit_failure", "local_sim_retry_diagnostics"),
+                    apply_paper_projection=apply_terminal_projection,
+                    readback=readback_terminal_projection,
+                    on_staged=mark_terminal_projection_staged,
+                )
+            )
+            return result.projected, performance
         except Exception as exc:
             previous_readback_failure = run.run_payload_json.get("local_sim_projection_readback_failure")
             previous_readback_attempts = (
@@ -18402,24 +18283,8 @@ class SimulationLifecycleScheduler:
             preserved_cursor=preserved_causality_cursor,
         )
 
-    @staticmethod
-    def _local_sim_plan_causality_cursor(plan: ExecutionPlan | None) -> datetime | None:
-        if plan is None:
-            return None
-        payload = plan.plan_payload_json.get("local_sim_execution_causality")
-        if not isinstance(payload, dict):
-            return None
-        raw = payload.get("eligible_bar_after")
-        if not raw:
-            return None
-        try:
-            parsed = datetime.fromisoformat(str(raw))
-        except ValueError as exc:
-            raise RuntimeConfigInvalidError(
-                "LocalSim execution plan has an invalid causality cursor",
-                context={"plan_id": plan.plan_id, "eligible_bar_after": raw},
-            ) from exc
-        return scheduler_time(parsed)
+    def _local_sim_plan_causality_cursor(self, plan: ExecutionPlan | None) -> datetime | None:
+        return self._local_sim_planner().causality_cursor(plan)
 
     def _attach_local_sim_causality_cursor(
         self,
@@ -18428,95 +18293,11 @@ class SimulationLifecycleScheduler:
         as_of_time: datetime | None,
         preserved_cursor: datetime | None,
     ) -> SimulationPlanBuildResult:
-        plan = build_result.execution_plan
-        local_as_of = scheduler_time(as_of_time)
-        cursor = scheduler_time(preserved_cursor) if preserved_cursor is not None else None
-        cursor_source = "preserved_execution_plan"
-        if cursor is None:
-            windows = compute_schedule_windows(
-                trade_date=plan.target_trade_date,
-                as_of_time=local_as_of,
-            )
-            submit_windows = [window for window in windows if window.get("action") == "submit"]
-            active = next((window for window in submit_windows if window.get("state") == "ACTIVE"), None)
-            if active is not None:
-                cursor = local_as_of
-                cursor_source = "first_plan_during_submit_window"
-            else:
-                next_window = next(
-                    (
-                        window
-                        for window in submit_windows
-                        if datetime.fromisoformat(str(window["start_at"])) > local_as_of
-                    ),
-                    None,
-                )
-                if next_window is not None:
-                    cursor = datetime.fromisoformat(str(next_window["start_at"])) - timedelta(microseconds=1)
-                    cursor_source = "next_submit_window_boundary"
-                else:
-                    cursor = local_as_of
-                    cursor_source = "after_last_submit_window"
-
-        causality = {
-            "schema_version": "local_sim_execution_causality_v1",
-            "eligible_bar_after": cursor.isoformat(),
-            "captured_as_of_time": local_as_of.isoformat(),
-            "cursor_source": cursor_source,
-            "bar_selection_rule": "strictly_after_cursor_and_not_after_scheduler_as_of",
-        }
-        payload = deepcopy(plan.plan_payload_json)
-        payload["local_sim_execution_causality"] = causality
-        payload_intents = payload.get("intents")
-        if not isinstance(payload_intents, list):
-            raise RuntimeConfigInvalidError(
-                "LocalSim execution plan payload is missing intents",
-                context={"plan_id": plan.plan_id},
-            )
-        updated_intents = [
-            intent.model_copy(
-                update={
-                    "metadata": {
-                        **dict(intent.metadata),
-                        "local_sim_execution_causality": causality,
-                    },
-                }
-            )
-            for intent in plan.intents
-        ]
-        by_intent_id = {intent.intent_id: intent for intent in updated_intents}
-        for item in payload_intents:
-            if not isinstance(item, dict):
-                raise RuntimeConfigInvalidError(
-                    "LocalSim execution plan contains an invalid intent payload",
-                    context={"plan_id": plan.plan_id},
-                )
-            updated = by_intent_id.get(str(item.get("intent_id") or ""))
-            if updated is None:
-                raise RuntimeConfigInvalidError(
-                    "LocalSim execution plan intent payload cannot be reconstructed",
-                    context={"plan_id": plan.plan_id, "intent_id": item.get("intent_id")},
-                )
-            item["metadata"] = dict(updated.metadata)
-        new_hash = canonical_json_sha256(payload)
-        new_id = f"plan_{new_hash[:16]}"
-        updated_intents = [intent.model_copy(update={"plan_id": new_id}) for intent in updated_intents]
-        prepared_plan = plan.model_copy(
-            update={
-                "plan_id": new_id,
-                "intents": updated_intents,
-                "plan_payload_json": payload,
-                "plan_hash": new_hash,
-                "created_at": datetime.now(UTC),
-            }
+        return self._local_sim_planner().attach_causality_cursor(
+            build_result=build_result,
+            as_of_time=as_of_time,
+            preserved_cursor=preserved_cursor,
         )
-        persisted_plan = self.repository.save_execution_plan(prepared_plan)
-        updated_run = self.repository.update_simulation_daily_run(
-            build_result.run.run_id,
-            execution_plan=persisted_plan,
-            payload_patch={"local_sim_execution_causality": causality},
-        )
-        return replace(build_result, run=updated_run, execution_plan=persisted_plan)
 
     @staticmethod
     def _target_equity_basis_for_context(

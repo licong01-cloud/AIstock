@@ -1326,3 +1326,21 @@ def local_sim_execution_state_id(
 def local_sim_execution_state_hash(state: LocalSimExecutionStateV1) -> str:
     payload = state.model_dump(mode="json", exclude={"state_hash", "updated_at"})
     return canonical_json_sha256(payload)
+
+
+# Import-only compatibility authority for Stage B.  The physical legacy model
+# definitions above remain removable only after the Stage C fresh-process gate;
+# all exported LocalSIM contract names resolve to the execution-owned module now.
+from backend.services.simulation_execution.localsim.models import (  # noqa: E402,F811
+    LOCAL_SIM_TERMINAL_RUNTIME_STATUSES,
+    LocalSimEconomicReceiptV1,
+    LocalSimExecutionRuntimeStatus,
+    LocalSimExecutionStateV1,
+    LocalSimMarketMarkProvenance,
+    LocalSimMarketMarkV1,
+    LocalSimProjectionOutboxStatus,
+    LocalSimProjectionOutboxV1,
+    LocalSimProjectionReceiptV1,
+    local_sim_execution_state_hash,
+    local_sim_execution_state_id,
+)

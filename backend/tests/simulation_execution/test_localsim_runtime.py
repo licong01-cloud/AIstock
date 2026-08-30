@@ -1,4 +1,4 @@
-"""Tests for ``paper_trading_v2.broker.LocalSimBackend`` (Task #20).
+"""Direct invariants for the execution-owned LocalSIM runtime.
 
 Covers Engine 閹?.6.1 (R-Q9 D1) BrokerBackend protocol:
   - 6 Protocol methods happy path
@@ -23,9 +23,7 @@ from typing import Any
 
 import pytest
 
-from backend.services.paper_trading_v2.broker import (
-    LocalSimBackend,
-)
+from backend.services.simulation_execution.localsim import LocalSimBackend
 from backend.services.simulation_execution.broker import (
     BrokerAccountSnapshot,
     BrokerBindCapacity,
@@ -36,8 +34,8 @@ from backend.services.simulation_execution.broker import (
     OrderHandleStatus,
     SubscriptionHandle,
 )
-from backend.services.paper_trading_v2.market_data import (
-    PaperV2MinuteMarketDataProvider,
+from backend.services.simulation_data.minute_provider import (
+    SimulationMinuteMarketDataProvider,
 )
 from backend.services.simulation_data.contracts import (
     LocalSimMarketSnapshotV1,
@@ -49,7 +47,7 @@ from backend.services.strategy_package.execution_policy import (
     compute_execution_policy_sha256,
     normalize_execution_policy_json,
 )
-from backend.services.simulation_runtime.models import LocalSimMarketMarkV1
+from backend.services.simulation_execution.localsim.models import LocalSimMarketMarkV1
 from backend.services.simulation_data.daily_context import (
     DAILY_LIMIT_AUTHORITY_BY_BROKER_V2,
     DAILY_LIMIT_RESOLVER_BY_BROKER_V2,
@@ -412,7 +410,7 @@ class ConcurrentObservedMarketDataProvider(ObservedMarketDataProvider):
                 self.active_read_count -= 1
 
 
-class FrozenV2ObservedMarketDataProvider(PaperV2MinuteMarketDataProvider):
+class FrozenV2ObservedMarketDataProvider(SimulationMinuteMarketDataProvider):
     def __init__(self, *, inputs_by_symbol: dict[str, MinuteExecutionMarketInput]) -> None:
         self.inputs_by_symbol = inputs_by_symbol
         self.calls: list[dict[str, Any]] = []
