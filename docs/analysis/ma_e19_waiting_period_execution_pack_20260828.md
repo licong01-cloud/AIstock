@@ -1,11 +1,11 @@
 # MA-E19 数据等待期执行包：九臂信号分析、D2/D3 预注册与三臂恢复卡
 
 - 文档类型：QE-only `docs-fast-new` 执行包
-- 日期：2026-08-28
-- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.10
-- 执行方案：`docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md` v1.1
+- 日期：2026-08-30
+- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.11
+- 执行方案：`docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md` v1.2
 - 当前任务：`qe_20260825_031740_2457`
-- 当前状态：`MA_E19R2_PARTIAL_9_OF_12_WAITING_DATASET_SIGNOFF`
+- 当前状态：`MA_E19R2_PARTIAL_9_OF_12_WAITING_DATASET_SIGNOFF_TOOLING_ACTIVE`
 - 唯一目标：在不提交实验、不修改数据集和不访问数据库数据面的前提下，把数据就绪后的下一步压缩为可直接执行的最小工作包。
 
 ## 1. 边界
@@ -28,7 +28,9 @@
 
 ## 2. 当前事实冻结
 
-实时回读时间为 2026-08-28。任务 `qe_20260825_031740_2457` 状态为 `failed`，Loop1～9 `completed`，Loop10～12 `failed`；当前没有 running/queued 的 QE 主线任务。
+实时回读时间为 2026-08-30。任务 `qe_20260825_031740_2457` 状态为 `failed`，Loop1～9 `completed`，Loop10～12 `failed`；没有发现更新的 completed D1 task。BUG-1191 / Issue #3793 已完成 source/runtime/close-sync 并关闭，但该事实不等于数据 candidate 已签核或激活。
+
+回测数据集 durable workflow 的最新只读状态：profile `qe_hmm_full_v2`、submission `dss_cdc7ee95f703cb1cbd8a4faf9e8cee40`、`submission_state=BLOCKED_CONTRACT`、`run_id/run_state/outcome=null`、worker `healthy/IDLE`、`production_activation=not_requested`。因此当前仍禁止提交依赖新数据的正式 QE task；worker 空闲不能替代 terminal receipt、catalog readback、candidate signoff 或 activation。
 
 固定合同：LGBM、CE3、h20、seed 123、21 交易日 purge、Top50/n_drop1、`score_weighted_topk_v2`、`TWAP/1min`、node1 串行度 1、零数据库数据面。
 
@@ -85,6 +87,8 @@
 4. PIT universe、停牌、涨跌停、pre-close、factor 和交易单位合同；
 5. candidate signoff、node1 distribution、active activation 三个独立状态；
 6. QE subprocess 零数据库数据面证明。
+
+截至 2026-08-30，上述 signoff 尚未取得。BUG-1191 的 verified/closed、worker `healthy/IDLE` 和 `BLOCKED_CONTRACT` submission 均不能满足本节门禁；本执行包不创建新的 dataset intent，不构建、发布、分发或激活数据。
 
 仅观察到某个 active `all.txt` 的结束日期变化，不等于上述门禁完成。
 
@@ -184,7 +188,7 @@
 
 ### 9.1 `sector_participation_gap_v2` 当前执行回执
 
-- 独立研究工作树已形成文件型候选源码、因子卡和 13 项聚焦测试；未提交 catalog、数据库或正式 QE。
+- 当前 `origin/main` 已包含文件型候选源码 `scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py`、因子卡和 13 项聚焦测试；未提交 catalog、数据库或正式 QE。
 - 旧调试文件快照的 H5/Parquet 真实计算通过，但仅覆盖 2018-08-28 至 2019-12-31，因此不形成收益结论。
 - 当前 `F:\Dev\RD-Agent-state\factor_data` 的行业 HDF 覆盖到 2026-04-30，但配套 `static_factors.parquet` 不含 PIT `l2_code_id`；2024H2～2025H2 h20 快筛在标签计算前 fail closed。
 - 候选读取器已支持日期有界 HDF 切片、19 交易日 rolling 预热、Parquet 日期过滤和 repo 外输出，避免为快筛加载 826 万行全历史；缺 `l2_code_id` 的 schema 检查先于 HDF 大文件加载。
@@ -205,6 +209,10 @@
 
 `WAITING_PACK_STATUS=READY_WITHOUT_EXPERIMENT_SUBMISSION`
 
+当前长任务状态：
+
+`QE_LT8H_01_STATUS=IN_PROGRESS_DATASET_BLOCKED_TOOLING_ACTIVE`
+
 该标识只表示等待期分析和预注册已准备，不表示数据、D1、D2、D3、新 Alpha 或策略包已经完成。
 
 ## 11. 验收矩阵
@@ -214,9 +222,9 @@
 | W-01 九臂真实状态与指标 | §2～§3 | 8001 summary/full API readback | COMPLETE | 2026H1 三臂缺失 |
 | W-02 不提前裁决 D1 | §3 | 3 vintage delta 与停止条件 | COMPLETE | 等待 2026H1 |
 | W-03 数据 signoff 与 active 分离 | §4 | WSL 只读观察不冒充双节点签核 | COMPLETE | 正式 signoff 待数据窗口 |
-| W-04 旧九臂等价性 | §5 | 明确逐 arm 算法和 fail-closed 结果 | DESIGN_READY | 等待新 manifest |
+| W-04 旧九臂等价性 | §5 | 明确逐 arm 算法和 fail-closed 结果 | IMPLEMENTATION_ACTIVE | 等待新 manifest 才能形成最终裁决 |
 | W-05 三臂任务卡 | §6 | 窗口/固定项/提交前条件 | DESIGN_READY | 不提交 task |
-| W-06 D2 四格 | §7 | 四格、oracle 标记、输出与触发 | DESIGN_READY | 等待 D1R |
-| W-07 D3 Brinson | §8 | 输入一致性、分解和缺失语义 | DESIGN_READY | 等待 D1R |
+| W-06 D2 四格 | §7 | 四格、oracle 标记、输出与触发 | TOOLING_ACTIVE_EXPERIMENT_PENDING | 等待 D1R 才能形成真实实验结论 |
+| W-07 D3 Brinson | §8 | 输入一致性、分解和缺失语义 | TOOLING_ACTIVE_EXPERIMENT_PENDING | 等待 D1R 才能形成真实归因结论 |
 | W-08 日频 Alpha 边界 | §9～§9.1 | 文件型、无 DB、无正式 QE；A-01 源码/13 tests/旧文件冒烟 | SOURCE_READY_DATA_BLOCKED | 等待含 PIT `l2_code_id` 的正式 signoff |
 | W-09 动作边界 | 全文 | process/DB/dataset/experiment 均 noop | COMPLETE | 无 |
