@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any, Literal
@@ -10,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.services.simulation_data.daily_context import canonical_json_sha256
-from backend.services.trading_core.models import OrderSide
+from backend.services.trading_core.models import OrderSide, PositionLot
 
 
 class LocalSimExecutionRuntimeStatus(str, Enum):
@@ -330,6 +331,18 @@ def local_sim_execution_state_hash(state: LocalSimExecutionStateV1) -> str:
     return canonical_json_sha256(payload)
 
 
+@dataclass(frozen=True)
+class LocalSimPersistenceResult:
+    payload: dict[str, Any]
+    positions: dict[str, PositionLot]
+    marks: dict[str, float]
+    cash: float
+    economic_receipt_id: str
+    outbox_id: str
+    generation: int
+    performance_payload: dict[str, Any]
+
+
 __all__ = [
     "LOCAL_SIM_TERMINAL_RUNTIME_STATUSES",
     "LocalSimEconomicReceiptV1",
@@ -337,6 +350,7 @@ __all__ = [
     "LocalSimExecutionStateV1",
     "LocalSimMarketMarkProvenance",
     "LocalSimMarketMarkV1",
+    "LocalSimPersistenceResult",
     "LocalSimProjectionOutboxStatus",
     "LocalSimProjectionOutboxV1",
     "LocalSimProjectionReceiptV1",

@@ -6,7 +6,26 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import psycopg2
+
 from backend.services.simulation_execution.localsim.models import LocalSimProjectionReceiptV1
+from backend.services.trading_core.errors import SessionLockTimeoutError
+
+
+LOCAL_SIM_PROJECTION_RETRYABLE_PG_CODES = frozenset({"40001", "40P01", "55P03"})
+
+
+def local_sim_projection_error_is_retryable(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (SessionLockTimeoutError, psycopg2.OperationalError, psycopg2.InterfaceError)):
+            return True
+        if str(getattr(current, "pgcode", "") or "") in LOCAL_SIM_PROJECTION_RETRYABLE_PG_CODES:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class LocalSimRuntimeProjectionRepository(Protocol):
@@ -72,9 +91,11 @@ class LocalSimProjector:
 
 
 __all__ = [
+    "LOCAL_SIM_PROJECTION_RETRYABLE_PG_CODES",
     "LocalSimPaperProjectionRepository",
     "LocalSimProjectionCommitRequest",
     "LocalSimProjectionCommitResult",
     "LocalSimProjector",
     "LocalSimRuntimeProjectionRepository",
+    "local_sim_projection_error_is_retryable",
 ]

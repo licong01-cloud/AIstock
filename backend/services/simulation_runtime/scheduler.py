@@ -18,7 +18,7 @@ import time as monotonic_time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import dataclass, field, fields as dataclass_fields, is_dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import Enum
@@ -32,12 +32,17 @@ from backend.services.simulation_execution.broker import BrokerBackend
 from backend.services.simulation_execution.localsim.economic import (
     LocalSimEconomicCommitRequest,
     LocalSimEconomicCoordinator,
+    canonical_local_sim_json_value,
+    local_sim_fact_payload,
+    validate_local_sim_duplicate_account_truth,
 )
 from backend.services.simulation_execution.localsim.projection import (
     LocalSimProjectionCommitRequest,
     LocalSimProjector,
+    local_sim_projection_error_is_retryable,
 )
 from backend.services.simulation_execution.localsim.planning import LocalSimPlanner
+from backend.services.simulation_execution.localsim.models import LocalSimPersistenceResult
 from backend.services.simulation_data.contracts import (
     MinuteDataSource,
     pre_trade_tradability_is_suspended,
@@ -96,7 +101,6 @@ from backend.services.trading_core.errors import (
     DataUnavailableError,
     InvalidStateTransitionError,
     RuntimeConfigInvalidError,
-    SessionLockTimeoutError,
 )
 from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
@@ -308,9 +312,6 @@ _LOCALSIM_STALE_ACTIVE_STATUSES = (
 _LOCALSIM_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.localsim_roll_forward"
 _MINIQMT_ROLL_FORWARD_CREATED_BY = "simulation_lifecycle_scheduler.miniqmt_roll_forward"
 _LOCALSIM_PROJECTION_MAX_ATTEMPTS = 3
-_LOCALSIM_PROJECTION_RETRYABLE_PG_CODES = frozenset({"40001", "40P01", "55P03"})
-
-
 @dataclass(frozen=True)
 class SimulationRunContext:
     """Authoritative run context supplied by the target broker/account adapter."""
@@ -339,18 +340,6 @@ class SimulationRunContext:
     pre_trade_tradability: dict[str, dict[str, Any]] = field(default_factory=dict)
     target_total_equity: float | None = None
     target_equity_context: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class LocalSimPersistenceResult:
-    payload: dict[str, Any]
-    positions: dict[str, PositionLot]
-    marks: dict[str, float]
-    cash: float
-    economic_receipt_id: str
-    outbox_id: str
-    generation: int
-    performance_payload: dict[str, Any]
 
 
 class SimulationRunContextProvider(Protocol):
@@ -12402,103 +12391,11 @@ class SimulationLifecycleScheduler:
 
     @staticmethod
     def _local_sim_json_value(value: Any, *, path: str = "$") -> Any:
-        if isinstance(value, (datetime, date)):
-            return value.isoformat()
-        if isinstance(value, Decimal):
-            if not value.is_finite():
-                raise RuntimeConfigInvalidError(
-                    "LocalSIM durable fact contains a non-finite Decimal",
-                    context={
-                        "reason_code": "LOCALSIM_FACT_JSON_NUMBER_INVALID",
-                        "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
-                        "path": path,
-                        "value": str(value),
-                    },
-                )
-            return str(value)
-        if isinstance(value, Enum):
-            return SimulationLifecycleScheduler._local_sim_json_value(value.value, path=path)
-        if isinstance(value, Mapping):
-            invalid_keys = [key for key in value if not isinstance(key, str)]
-            if invalid_keys:
-                invalid_key = invalid_keys[0]
-                raise RuntimeConfigInvalidError(
-                    "LocalSIM durable fact JSON object keys must be strings",
-                    context={
-                        "reason_code": "LOCALSIM_FACT_JSON_KEY_INVALID",
-                        "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
-                        "path": path,
-                        "key_type": type(invalid_key).__name__,
-                        "key_repr": repr(invalid_key),
-                    },
-                )
-            return {
-                key: SimulationLifecycleScheduler._local_sim_json_value(item, path=f"{path}.{key}")
-                for key, item in sorted(value.items())
-            }
-        if isinstance(value, (list, tuple)):
-            return [
-                SimulationLifecycleScheduler._local_sim_json_value(item, path=f"{path}[{index}]")
-                for index, item in enumerate(value)
-            ]
-        if isinstance(value, float):
-            if not math.isfinite(value):
-                raise RuntimeConfigInvalidError(
-                    "LocalSIM durable fact contains a non-finite float",
-                    context={
-                        "reason_code": "LOCALSIM_FACT_JSON_NUMBER_INVALID",
-                        "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
-                        "path": path,
-                        "value": repr(value),
-                    },
-                )
-            return value
-        if value is None or isinstance(value, (str, int, bool)):
-            return value
-        raise RuntimeConfigInvalidError(
-            "LocalSIM durable fact contains a value that is not JSON serializable",
-            context={
-                "reason_code": "LOCALSIM_FACT_JSON_TYPE_INVALID",
-                "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
-                "path": path,
-                "value_type": type(value).__name__,
-            },
-        )
+        return canonical_local_sim_json_value(value, path=path)
 
     @staticmethod
     def _local_sim_fact_payload(item: Any, *, fact_type: str) -> dict[str, Any]:
-        dump = getattr(item, "model_dump", None)
-        if callable(dump):
-            # Keep arbitrary immutable Mapping implementations in Python mode
-            # until the canonical recursive converter has normalized them.
-            # Pydantic JSON mode rejects MappingProxyType before that boundary,
-            # which previously rolled back the whole LocalSIM economic commit.
-            raw = dump(mode="python", exclude={"created_at", "updated_at"})
-        elif is_dataclass(item):
-            # dataclasses.asdict() deep-copies values and cannot copy a
-            # MappingProxyType.  Read the frozen fields without mutating or
-            # copying them; _local_sim_json_value owns canonical conversion.
-            raw = {
-                field_info.name: getattr(item, field_info.name)
-                for field_info in dataclass_fields(item)
-                if field_info.name not in {"created_at", "updated_at"}
-            }
-        else:
-            raise DataUnavailableError(
-                "LocalSim economic fact cannot be serialized canonically",
-                context={
-                    "reason_code": "LOCALSIM_ECONOMIC_FACT_SCHEMA_INVALID",
-                    "fact_type": fact_type,
-                    "python_type": type(item).__name__,
-                },
-            )
-        payload = SimulationLifecycleScheduler._local_sim_json_value(raw)
-        if not isinstance(payload, dict):
-            raise DataUnavailableError(
-                "LocalSim economic fact canonical payload must be an object",
-                context={"reason_code": "LOCALSIM_ECONOMIC_FACT_SCHEMA_INVALID", "fact_type": fact_type},
-            )
-        return payload
+        return local_sim_fact_payload(item, fact_type=fact_type)
 
     @classmethod
     def _local_sim_hashed_fact_map(
@@ -13609,9 +13506,8 @@ class SimulationLifecycleScheduler:
             performance_payload=performance,
         )
 
-    @classmethod
+    @staticmethod
     def _validate_local_sim_duplicate_account_truth(
-        cls,
         *,
         run_id: str,
         projected_positions: dict[str, PositionLot],
@@ -13619,37 +13515,13 @@ class SimulationLifecycleScheduler:
         observed_positions: dict[str, PositionLot],
         observed_account: Any,
     ) -> None:
-        raw_observed_cash = getattr(observed_account, "cash", None)
-        if isinstance(raw_observed_cash, bool) or not isinstance(raw_observed_cash, (int, float, Decimal)):
-            raise DataUnavailableError(
-                "LocalSim duplicate generation has no exact observed cash",
-                context={
-                    "reason_code": "LOCALSIM_DUPLICATE_ECONOMIC_STATE_CONFLICT",
-                    "run_id": run_id,
-                    "observed_cash_type": type(raw_observed_cash).__name__,
-                },
-            )
-        observed_cash = float(raw_observed_cash)
-        projected_hashes = {
-            symbol: canonical_json_sha256(cls._local_sim_fact_payload(position, fact_type="position"))
-            for symbol, position in sorted(projected_positions.items())
-        }
-        observed_hashes = {
-            symbol: canonical_json_sha256(cls._local_sim_fact_payload(position, fact_type="position"))
-            for symbol, position in sorted(observed_positions.items())
-        }
-        if not math.isfinite(observed_cash) or observed_cash != projected_cash or observed_hashes != projected_hashes:
-            raise DataUnavailableError(
-                "LocalSim duplicate generation account truth changed without a new economic generation",
-                context={
-                    "reason_code": "LOCALSIM_DUPLICATE_ECONOMIC_STATE_CONFLICT",
-                    "run_id": run_id,
-                    "projected_cash": projected_cash,
-                    "observed_cash": observed_cash,
-                    "projected_position_hashes": projected_hashes,
-                    "observed_position_hashes": observed_hashes,
-                },
-            )
+        validate_local_sim_duplicate_account_truth(
+            run_id=run_id,
+            projected_positions=projected_positions,
+            projected_cash=projected_cash,
+            observed_positions=observed_positions,
+            observed_account=observed_account,
+        )
 
     def _replay_pending_local_sim_projection(
         self,
@@ -14985,23 +14857,7 @@ class SimulationLifecycleScheduler:
 
     @staticmethod
     def _local_sim_projection_error_is_retryable(exc: BaseException) -> bool:
-        current: BaseException | None = exc
-        seen: set[int] = set()
-        while current is not None and id(current) not in seen:
-            seen.add(id(current))
-            if isinstance(
-                current,
-                (
-                    SessionLockTimeoutError,
-                    psycopg2.OperationalError,
-                    psycopg2.InterfaceError,
-                ),
-            ):
-                return True
-            if str(getattr(current, "pgcode", "") or "") in _LOCALSIM_PROJECTION_RETRYABLE_PG_CODES:
-                return True
-            current = current.__cause__ or current.__context__
-        return False
+        return local_sim_projection_error_is_retryable(exc)
 
     @staticmethod
     def _filter_local_sim_snapshot_by_plan(

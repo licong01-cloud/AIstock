@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
-from datetime import date
+import math
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, fields as dataclass_fields, is_dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
 from typing import Any, Protocol
 
 from backend.services.simulation_execution.localsim.models import (
@@ -12,6 +15,139 @@ from backend.services.simulation_execution.localsim.models import (
     LocalSimExecutionStateV1,
     LocalSimProjectionOutboxV1,
 )
+from backend.services.simulation_data.daily_context import canonical_json_sha256
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
+
+
+def canonical_local_sim_json_value(value: Any, *, path: str = "$") -> Any:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise RuntimeConfigInvalidError(
+                "LocalSIM durable fact contains a non-finite Decimal",
+                context={
+                    "reason_code": "LOCALSIM_FACT_JSON_NUMBER_INVALID",
+                    "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
+                    "path": path,
+                    "value": str(value),
+                },
+            )
+        return str(value)
+    if isinstance(value, Enum):
+        return canonical_local_sim_json_value(value.value, path=path)
+    if isinstance(value, Mapping):
+        invalid_keys = [key for key in value if not isinstance(key, str)]
+        if invalid_keys:
+            invalid_key = invalid_keys[0]
+            raise RuntimeConfigInvalidError(
+                "LocalSIM durable fact JSON object keys must be strings",
+                context={
+                    "reason_code": "LOCALSIM_FACT_JSON_KEY_INVALID",
+                    "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
+                    "path": path,
+                    "key_type": type(invalid_key).__name__,
+                    "key_repr": repr(invalid_key),
+                },
+            )
+        return {
+            key: canonical_local_sim_json_value(item, path=f"{path}.{key}")
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, (list, tuple)):
+        return [canonical_local_sim_json_value(item, path=f"{path}[{index}]") for index, item in enumerate(value)]
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise RuntimeConfigInvalidError(
+                "LocalSIM durable fact contains a non-finite float",
+                context={
+                    "reason_code": "LOCALSIM_FACT_JSON_NUMBER_INVALID",
+                    "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
+                    "path": path,
+                    "value": repr(value),
+                },
+            )
+        return value
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    raise RuntimeConfigInvalidError(
+        "LocalSIM durable fact contains a value that is not JSON serializable",
+        context={
+            "reason_code": "LOCALSIM_FACT_JSON_TYPE_INVALID",
+            "stage": "LOCALSIM_FACT_JSON_NORMALIZE",
+            "path": path,
+            "value_type": type(value).__name__,
+        },
+    )
+
+
+def local_sim_fact_payload(item: Any, *, fact_type: str) -> dict[str, Any]:
+    dump = getattr(item, "model_dump", None)
+    if callable(dump):
+        raw = dump(mode="python", exclude={"created_at", "updated_at"})
+    elif is_dataclass(item):
+        raw = {
+            field_info.name: getattr(item, field_info.name)
+            for field_info in dataclass_fields(item)
+            if field_info.name not in {"created_at", "updated_at"}
+        }
+    else:
+        raise DataUnavailableError(
+            "LocalSim economic fact cannot be serialized canonically",
+            context={
+                "reason_code": "LOCALSIM_ECONOMIC_FACT_SCHEMA_INVALID",
+                "fact_type": fact_type,
+                "python_type": type(item).__name__,
+            },
+        )
+    payload = canonical_local_sim_json_value(raw)
+    if not isinstance(payload, dict):
+        raise DataUnavailableError(
+            "LocalSim economic fact canonical payload must be an object",
+            context={"reason_code": "LOCALSIM_ECONOMIC_FACT_SCHEMA_INVALID", "fact_type": fact_type},
+        )
+    return payload
+
+
+def validate_local_sim_duplicate_account_truth(
+    *,
+    run_id: str,
+    projected_positions: Mapping[str, Any],
+    projected_cash: float,
+    observed_positions: Mapping[str, Any],
+    observed_account: Any,
+) -> None:
+    raw_observed_cash = getattr(observed_account, "cash", None)
+    if isinstance(raw_observed_cash, bool) or not isinstance(raw_observed_cash, (int, float, Decimal)):
+        raise DataUnavailableError(
+            "LocalSim duplicate generation has no exact observed cash",
+            context={
+                "reason_code": "LOCALSIM_DUPLICATE_ECONOMIC_STATE_CONFLICT",
+                "run_id": run_id,
+                "observed_cash_type": type(raw_observed_cash).__name__,
+            },
+        )
+    observed_cash = float(raw_observed_cash)
+    projected_hashes = {
+        symbol: canonical_json_sha256(local_sim_fact_payload(position, fact_type="position"))
+        for symbol, position in sorted(projected_positions.items())
+    }
+    observed_hashes = {
+        symbol: canonical_json_sha256(local_sim_fact_payload(position, fact_type="position"))
+        for symbol, position in sorted(observed_positions.items())
+    }
+    if not math.isfinite(observed_cash) or observed_cash != projected_cash or observed_hashes != projected_hashes:
+        raise DataUnavailableError(
+            "LocalSim duplicate generation account truth changed without a new economic generation",
+            context={
+                "reason_code": "LOCALSIM_DUPLICATE_ECONOMIC_STATE_CONFLICT",
+                "run_id": run_id,
+                "projected_cash": projected_cash,
+                "observed_cash": observed_cash,
+                "projected_position_hashes": projected_hashes,
+                "observed_position_hashes": observed_hashes,
+            },
+        )
 
 
 class LocalSimRuntimeEconomicRepository(Protocol):
@@ -166,6 +302,9 @@ class LocalSimEconomicCoordinator:
 
 
 __all__ = [
+    "canonical_local_sim_json_value",
+    "local_sim_fact_payload",
+    "validate_local_sim_duplicate_account_truth",
     "LocalSimEconomicCommitRequest",
     "LocalSimEconomicCommitResult",
     "LocalSimEconomicCoordinator",
