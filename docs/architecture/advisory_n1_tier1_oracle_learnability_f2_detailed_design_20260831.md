@@ -3,7 +3,7 @@
 > 日期：2026-08-31
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 交付等级：F2
-> 当前状态：`IMPLEMENTED_LOCAL_FORMAL_RUN_PENDING`
+> 当前状态：`FORMAL_COMPLETE_SOURCE_PR_PENDING`
 > 业务模块：Advisory / Selection Center
 > 目标合同：`ALPHA_RANKING`
 > 生产影响：无 API/UI、无数据库 DDL/DML、无 descriptor、无 Selection 写入、无运行时激活、无需后端重启
@@ -300,14 +300,18 @@ poison tests 必须证明：
 
 ```text
 F:/Dev/AIstock_model_artifacts/advisory_n1_tier1_oracle_learnability_20260831/
-  frozen_pit_snapshot.json
-  n1_request.json
+  canonical_pit_snapshot.json
+  training_request_v5.json
   tier1_bundles/<bundle_id>/
     request.json
+    candidate_rankings_top50.parquet
+    candidate_outcomes_top50.parquet
     oracle_daily.parquet
     oracle_recall_daily.parquet
     outcome_coverage.parquet
     learnability_oof.parquet
+    learnability_daily.parquet
+    n1_label_interval_cpcv.json
     oracle_receipt.json
     learnability_receipt.json
     quadrant_receipt.json
@@ -317,6 +321,22 @@ F:/Dev/AIstock_model_artifacts/advisory_n1_tier1_oracle_learnability_20260831/
 ```
 
 发布顺序：临时 sibling 目录 -> 全文件 hash/readback -> 原子 rename。若同 request 已有完整 bundle，返回 `EXISTING_BUNDLE`；内容不同则 typed conflict。若 bundle 已发布但 registry/route 尚未完成，exact retry 只恢复 append/route，不重算市场结果。
+
+### 7.1 Formal result / 2026-08-31
+
+| 项目 | 正式结果 |
+|---|---|
+| request | `advn1req_d8116a79d72d9c1813485053`；compute commit `f6f2edb93b8df8078795332c75db3505b9e9c5bb` |
+| bundle | `74827d037128b9a4716afdf3a17221fda8c18b0af885be33c9f6978699283348`；readback `VALID` |
+| PIT/coverage | 5067只股票、5077段；386个决策日；19300条Top50；382个oracle/learnability可评价日；平均known outcome `99.6982%` |
+| winner recall | Top20 `0.8808%`；Top40 `1.6062%`；Top50 `1.7617%` |
+| oracle | perfect Top5 lift `1314.27 bps/五槽日`；95%区间`[1136.61,1516.57]`；MDE `269.55 bps`；`HIGH/CONTROL_READY/DIRECTION_GATE` |
+| fixed learnability | Ridge lift `98.83 bps/五槽日`；95%区间`[1.18,193.73]`；MDE `136.01 bps`；`INCONCLUSIVE/EXPLORATORY/NAVIGATION_ONLY` |
+| typed quadrant | `INCONCLUSIVE__THEORETICAL_HIGH__LEARNABILITY_HIGH`；`direction_ready=false` |
+| resources | `397.922s`；peak RSS `2,584,461,312` bytes；386/386 feature dates；7720 OOF rows，每行7次预测 |
+| boundaries | `sealed_holdout_accessed=false`；`runtime_eligible=false`；`activated=false`；DDL/DML/restart/descriptor均noop |
+
+结论：Top20内部存在很高的hindsight排序空间，但当前冻结信息集+单一Ridge尚无确认性可学习证据；同时父包Top20/40/50对全市场赢家的召回极低，强烈提示上游候选召回是重要瓶颈。N1不直接选择或激活模型，按route进入`N2_ENTRY_EXIT_QE_PREPARATION`。
 
 ## 8. CLI
 
@@ -334,7 +354,7 @@ CLI 规则：
 - 不从 cwd 或 `latest` 猜输入；
 - stdout 只输出一条 JSON summary，stage progress 写 stderr；
 - failure 返回非零和 typed reason；
-- `run` 必须验证 WSL、`CONDA_DEFAULT_ENV=rdagent-gpu` 与 exact repository commit；
+- 新计算的 `run` 必须验证 WSL、`CONDA_DEFAULT_ENV=rdagent-gpu` 与 exact repository commit；完整bundle的delivery-only exact resume仍验证WSL/Conda和全部bundle关系，但允许当前交付源码commit不同，并分别记录compute/delivery commit；
 - 峰值 RSS 超 8GB 立即停止并保留 typed failure receipt，不降采样冒充完成。
 
 ## 9. Error contract
@@ -432,21 +452,21 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-191 | `backend/services/advisory_model_first/tier1_oracle_contracts.py`; `tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_mini_contract.py` | LOCAL_VERIFIED | none |
-| F-192 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_mini_contract.py`; PIT snapshot `5c3a5247...` | LOCAL_VERIFIED | none |
-| F-193 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py` | LOCAL_VERIFIED | none |
-| F-194 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py`; `policy_rank_source.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py` | LOCAL_VERIFIED | none |
-| F-195 | `backend/services/advisory_model_first/tier1_oracle_contracts.py`; `tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py` | LOCAL_VERIFIED | none |
-| F-196 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py` | LOCAL_VERIFIED | none |
-| F-197 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py` | LOCAL_VERIFIED | none |
-| F-198 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_learnability_audit.py` | LOCAL_VERIFIED | none |
-| F-199 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_learnability_audit.py` | LOCAL_VERIFIED | none |
-| F-200 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_learnability_audit.py` | LOCAL_VERIFIED | none |
-| F-201 | `backend/services/advisory_model_first/tier1_oracle_contracts.py`; `tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_learnability_audit.py` | LOCAL_VERIFIED | none |
-| F-202 | `backend/services/advisory_model_first/research_control.py`; `tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_research_control_cli.py` | LOCAL_VERIFIED | none |
-| F-203 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py`; `research_control.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py` | LOCAL_VERIFIED | none |
-| F-204 | no production surface | artifact: `tests/aistock_validation/catalog/file_ownership.yaml` | LOCAL_VERIFIED | none |
-| F-205 | `scripts/advisory_n1_tier1_oracle_learnability.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n1_tier1_oracle_learnability_20260831` | DESIGN_READY | none |
+| F-191 | `backend/services/advisory_model_first/tier1_oracle_contracts.py`; `tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_mini_contract.py` | FORMAL_VERIFIED | none |
+| F-192 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_mini_contract.py`; PIT snapshot `5c3a5247...` | FORMAL_VERIFIED | none |
+| F-193 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py` | FORMAL_VERIFIED | none |
+| F-194 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py`; `policy_rank_source.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py`; artifact: `candidate_rankings_top50.parquet` | FORMAL_VERIFIED | none |
+| F-195 | `backend/services/advisory_model_first/tier1_oracle_contracts.py`; `tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py`; artifact: `candidate_outcomes_top50.parquet` | FORMAL_VERIFIED | none |
+| F-196 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py`; artifact: `oracle_receipt.json` | FORMAL_VERIFIED | none |
+| F-197 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py`; artifact: `oracle_daily.parquet` | FORMAL_VERIFIED | none |
+| F-198 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_learnability_audit.py`; artifact: `learnability_receipt.json` | FORMAL_VERIFIED | none |
+| F-199 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_learnability_audit.py`; artifact: `n1_label_interval_cpcv.json` | FORMAL_VERIFIED | none |
+| F-200 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_learnability_audit.py`; artifact: `learnability_daily.parquet` | FORMAL_VERIFIED | none |
+| F-201 | `backend/services/advisory_model_first/tier1_oracle_contracts.py`; `tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_oracle_learnability_audit.py`; artifact: `quadrant_receipt.json` | FORMAL_VERIFIED | none |
+| F-202 | `backend/services/advisory_model_first/research_control.py`; `tier1_oracle_pipeline.py` | `backend/tests/advisory_model_first/test_research_control_cli.py`; artifact: `registry_records.json` | FORMAL_VERIFIED | none |
+| F-203 | `backend/services/advisory_model_first/tier1_oracle_pipeline.py`; `research_control.py` | `backend/tests/advisory_model_first/test_tier1_oracle_pipeline.py`; artifact: `manifest.json` | FORMAL_VERIFIED | none |
+| F-204 | no production surface | artifact: `tests/aistock_validation/catalog/file_ownership.yaml`; manifest runtime flags | FORMAL_VERIFIED | none |
+| F-205 | `scripts/advisory_n1_tier1_oracle_learnability.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_n1_tier1_oracle_learnability_20260831/tier1_bundles/74827d03...` | FORMAL_VERIFIED | none |
 
 ## 14. Risks / failure modes
 
@@ -464,7 +484,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 ## 15. Rollout / rollback
 
 - rollout 只创建 task artifact、向既有 JSONL registry 追加两行并更新派生 route。
-- 未合入源码不得形成正式 N1 方向证据；候选运行仅供实现验证。
+- 正式N1 bundle必须绑定一个已提交且通过本地门禁的exact compute commit；源码PR/合入状态单独报告。未合入不使已冻结开发诊断失真，但该证据不得进入生产激活，源码合入失败时也不得声称工程交付完成。
 - 源码回滚只需 revert PR；无数据库、runtime、descriptor 或模型激活需要回滚。
 - 正式 artifact 不删除；若发现实现错误，以新 lineage/attempt 追加纠正，不改写旧 registry 行。
 
