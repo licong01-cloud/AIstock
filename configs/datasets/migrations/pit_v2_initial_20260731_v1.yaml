@@ -8,6 +8,7 @@ allowed_scopes:
 sample_instruments:
   - 000001.SZ
   - 300379.SZ
+  - 300741.SZ
   - 600462.SH
   - 600930.SH
   - 688981.SH
@@ -52,6 +53,10 @@ event_windows:
     start: 2020-08-21
     end: 2020-08-25
     oracle: star_market_twenty_percent_limit_boundary
+  - instrument: 300741.SZ
+    start: 2021-07-30
+    end: 2021-08-02
+    oracle: p3a_classification_index_authority_alignment_boundary
 index_windows:
   - selector: 000688.SH
     start: 2019-12-31

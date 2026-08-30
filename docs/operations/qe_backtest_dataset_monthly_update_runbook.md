@@ -14,7 +14,32 @@
 ### 0.1 8月29日至30日：只闭合首次v2基线
 
 1. 冻结直接参与数据发布的source/profile/toolchain；无交集消费者提交不阻断本任务。
-2. 对BUG-1238修复后的最终runtime只提交一次五股sample：
+2. 对BUG-1238修复后的最终runtime只提交一次六股sample。原五只PIT/价格边界股票保持不变；
+   `300741.SZ`是P3A双authority控制股票，用于同时覆盖2021-07-30 aligned行业事实与
+   2021-08-02 classification/index authority unaligned边界。提交前先从已验证的2026-07-31
+   industry full authority构建新的六股P3A sample；新的scope digest形成独立目录，旧五股candidate完整保留：
+
+```powershell
+$CandidateRoot = 'X:\AIstock_dataset_candidates\backtest_dataset_candidates'
+$IndustryJul = Join-Path $CandidateRoot '.industry_pit_authority\qe_hmm_full_v2\2026-07-31\full'
+$SectorSampleJul = Join-Path $CandidateRoot '.sector_data_authority\qe_hmm_full_v2\2026-07-31\sample-554c8193b6f6de4c859b0f16881b1f34e6eb11c41a68f416b829801b941301d2'
+
+rtk python scripts/build_sector_data_candidate.py `
+  --industry-candidate-root $IndustryJul `
+  --artifact-root $SectorSampleJul `
+  --start-date 2018-08-01 `
+  --end-date 2026-07-31 `
+  --symbol 000001.SZ `
+  --symbol 300379.SZ `
+  --symbol 300741.SZ `
+  --symbol 600462.SH `
+  --symbol 600930.SH `
+  --symbol 688981.SH
+```
+
+六股P3A readback必须满足完整分母闭合、`sector_fact_rows>0`，并在2021-07-30包含
+`300741.SZ`的aligned resolved行；不得通过允许空`sector_data`、默认行业或复用旧五股scope绕过。
+随后提交唯一sample：
 
 ```powershell
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration `

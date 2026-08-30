@@ -1,6 +1,7 @@
 {
   "actual": "Submission dss_634f1bf90d7e90061b01f44f56436796 terminated without run_id; error fingerprint f323bdc63ac6e1b3df756cae32953e3d5d1be381ed7c8f4230e92e4a64c2548d resolves exactly to required source dataset is empty: sector_data. Read-only DB probes show market.sector_data is present, while the P3A sample report is unavailable=4903, sector_fact_rows=0.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/profile.py",
     "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
     "backend/tests/dataset_release/test_control_service.py",
     "backend/tests/dataset_release/test_source_authority.py",
@@ -33,6 +34,7 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "backend/services/dataset_release/profile.py",
       "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
       "backend/tests/dataset_release/test_control_service.py",
       "backend/tests/dataset_release/test_source_authority.py",
@@ -108,6 +110,7 @@
       "unmatched_files": []
     },
     "planned_files": [
+      "backend/services/dataset_release/profile.py",
       "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
       "backend/tests/dataset_release/test_control_service.py",
       "backend/tests/dataset_release/test_source_authority.py",
@@ -115,6 +118,7 @@
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/dataset_release/profile.py",
       "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
       "backend/tests/dataset_release/test_control_service.py",
       "backend/tests/dataset_release/test_source_authority.py",
