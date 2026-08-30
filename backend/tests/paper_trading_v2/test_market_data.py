@@ -5,20 +5,26 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from backend.services.paper_trading_v2.market_data import (
-    DailySuspendStatus,
-    DailyStStatus,
+    PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.daily_context_provider import (
     DbStStatusProvider,
     DbSuspendStatusProvider,
-    MinuteDataSource,
-    PaperV2MinuteMarketDataProvider,
     PreTradeTradabilityProvider,
-    PreviousClose,
+)
+from backend.services.simulation_data.tdx_causal_minute import (
     fetch_tdx_realtime_quotes,
     quote_tradability_evidence,
 )
+from backend.services.simulation_data.contracts import (
+    DailySuspendStatus,
+    DailyStStatus,
+    MinuteDataSource,
+)
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
-from backend.services.simulation_runtime.models import DailyLimitAuthorityV2, canonical_json_sha256
+from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.simulation_data.daily_context import DailyLimitAuthorityV2
 
 
 class FakeLimitProvider:
@@ -157,22 +163,6 @@ class FakeSuspendProvider:
             trade_date=trade_date,
             is_suspended=self.suspended,
             suspend_type="S" if self.suspended else None,
-        )
-
-
-class FakePreviousCloseProvider:
-    def __init__(self, *, pre_close: float | None = 10.0) -> None:
-        self.pre_close = pre_close
-
-    def get_previous_close(self, symbol: str, trade_date: date) -> PreviousClose:
-        if self.pre_close is None:
-            raise DataUnavailableError("pre_close is required for minute execution context")
-        return PreviousClose(
-            symbol=symbol,
-            trade_date=trade_date,
-            previous_trade_date=trade_date - timedelta(days=1),
-            pre_close=self.pre_close,
-            source="test.previous_close_provider",
         )
 
 
@@ -429,7 +419,6 @@ def test_tdx_market_data_provider_fails_when_31_bars_are_required_but_missing() 
 def test_completed_day_tdx_adapter_fails_when_stk_limit_pre_close_is_missing() -> None:
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=FakeLimitProvider(pre_close=None),
-        previous_close_provider=FakePreviousCloseProvider(pre_close=None),
         tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(31),
     )
 
@@ -443,11 +432,10 @@ def test_completed_day_tdx_adapter_fails_when_stk_limit_pre_close_is_missing() -
     assert exc_info.value.context["reason_code"] == "STK_LIMIT_PRE_CLOSE_INVALID"
 
 
-def test_realtime_market_data_ignores_previous_close_provider_and_uses_frozen_limits() -> None:
+def test_realtime_market_data_uses_only_frozen_daily_limits() -> None:
     limit_provider = FakeLimitProvider(pre_close=None)
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=limit_provider,
-        previous_close_provider=FakePreviousCloseProvider(pre_close=9.8),
         st_status_provider=FakeStStatusProvider(is_st=False),
         tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(31),
     )
@@ -474,7 +462,6 @@ def test_realtime_market_data_uses_frozen_stk_limit_when_provider_has_no_row() -
     limit_provider = MissingLimitProvider()
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=limit_provider,  # type: ignore[arg-type]
-        previous_close_provider=FakePreviousCloseProvider(pre_close=10.0),
         st_status_provider=FakeStStatusProvider(is_st=False),
         tdx_fetcher=lambda _symbol, trade_date: make_raw_bars(31, trade_date=trade_date),
     )
@@ -501,7 +488,6 @@ def test_realtime_market_data_uses_frozen_stk_limit_when_provider_has_no_row() -
 def test_realtime_market_data_does_not_rederive_st_limits() -> None:
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=MissingLimitProvider(),  # type: ignore[arg-type]
-        previous_close_provider=FakePreviousCloseProvider(pre_close=10.0),
         st_status_provider=FakeStStatusProvider(is_st=True),
         tdx_fetcher=lambda _symbol, trade_date: make_raw_bars(31, trade_date=trade_date),
     )
@@ -531,7 +517,6 @@ def test_realtime_market_data_does_not_rederive_st_limits() -> None:
 def test_realtime_market_data_does_not_call_st_provider_after_context_freeze() -> None:
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=MissingLimitProvider(),  # type: ignore[arg-type]
-        previous_close_provider=FakePreviousCloseProvider(pre_close=10.0),
         st_status_provider=MissingStStatusProvider(),
         tdx_fetcher=lambda _symbol, trade_date: make_raw_bars(31, trade_date=trade_date),
     )
@@ -550,7 +535,6 @@ def test_realtime_market_data_does_not_rederive_chinext_limits() -> None:
     limit_provider = MissingLimitProvider()
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=limit_provider,  # type: ignore[arg-type]
-        previous_close_provider=FakePreviousCloseProvider(pre_close=10.0),
         st_status_provider=FakeStStatusProvider(is_st=False),
         tdx_fetcher=lambda _symbol, trade_date: make_raw_bars(31, trade_date=trade_date),
     )
@@ -578,7 +562,6 @@ def test_realtime_observed_intraday_uses_frozen_stk_limit_without_derivation() -
     limit_provider = MissingLimitProvider()
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=limit_provider,  # type: ignore[arg-type]
-        previous_close_provider=FakePreviousCloseProvider(pre_close=10.0),
         st_status_provider=FakeStStatusProvider(is_st=False),
         tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(5, trade_date=date(2026, 6, 16)),
     )
@@ -626,7 +609,6 @@ def test_realtime_observed_intraday_accepts_frozen_v2_authority_without_static_q
     limit_provider = MissingLimitProvider()
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=limit_provider,  # type: ignore[arg-type]
-        previous_close_provider=FakePreviousCloseProvider(pre_close=10.0),
         st_status_provider=FakeStStatusProvider(is_st=False),
         tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(5),
         conn_factory=lambda: pytest.fail("frozen V2 LocalSIM cadence must not query the database"),
@@ -645,9 +627,7 @@ def test_realtime_observed_intraday_accepts_frozen_v2_authority_without_static_q
     assert result.market_context["prev_close_source"] == expected_source
     assert result.market_context["limit_up"] == pytest.approx(11.0)
     assert result.market_context["limit_down"] == pytest.approx(9.0)
-    assert result.market_context["daily_trading_context"]["schema_version"] == (
-        "daily_trading_context_reference_v2"
-    )
+    assert result.market_context["daily_trading_context"]["schema_version"] == ("daily_trading_context_reference_v2")
 
 
 def test_realtime_observed_intraday_rejects_cross_broker_v2_reference() -> None:
@@ -707,7 +687,6 @@ def test_realtime_observed_intraday_accepts_v2_no_daily_limit_without_fabricatin
 def test_completed_day_tdx_adapter_does_not_fallback_to_previous_close() -> None:
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=MissingLimitProvider(),  # type: ignore[arg-type]
-        previous_close_provider=FakePreviousCloseProvider(pre_close=None),
         st_status_provider=FakeStStatusProvider(is_st=False),
         tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(31),
     )
@@ -734,7 +713,6 @@ def test_db_historical_still_requires_stk_limit_rows_without_realtime_derivation
 
     provider = PaperV2MinuteMarketDataProvider(
         limit_price_provider=MissingLimitProvider(),  # type: ignore[arg-type]
-        previous_close_provider=FakePreviousCloseProvider(pre_close=10.0),
         st_status_provider=FakeStStatusProvider(is_st=False),
         tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(31),
         conn_factory=lambda: EmptyDbConn(),
@@ -1009,7 +987,7 @@ def test_fetch_tdx_realtime_quotes_chunks_batch_quote_requests(monkeypatch: pyte
         assert len(codes) <= 50
         return FakeResponse(codes)
 
-    monkeypatch.setattr("backend.services.paper_trading_v2.market_data.requests.post", fake_post)
+    monkeypatch.setattr("backend.services.simulation_data.tdx_causal_minute.requests.post", fake_post)
     symbols = [f"{index:06d}.SZ" for index in range(1, 86)]
 
     quotes = fetch_tdx_realtime_quotes(symbols)

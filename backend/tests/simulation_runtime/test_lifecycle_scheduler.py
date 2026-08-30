@@ -40,15 +40,14 @@ from backend.execution_algos.adaptive_is.reasons import (
 )
 from backend.miniqmt_quote_contract_config import QuoteContractPolicy, QuoteIngressRuntimeConfig
 from backend.services.paper_trading_v2.models import PaperPortfolio
-from backend.services.paper_trading_v2.market_data import (
+from backend.services.simulation_data.contracts import (
     DailyStStatus,
     MinuteDataSource,
     MinuteExecutionMarketInput,
-    PreviousClose,
 )
 from backend.services.paper_trading_v2.broker.localsim import LocalSimBackend
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
-from backend.services.paper_trading_v2.broker.base import OrderHandle
+from backend.services.simulation_execution.broker import OrderHandle
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
@@ -72,10 +71,8 @@ from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerS
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-    DailySelectionEvidence,
     InMemorySimulationRuntimeRepository,
     SimulationBindingApprovalState,
-    SimulationBrokerBackend,
     SimulationLifecycleBackgroundScheduler,
     SimulationDailyRunStatus,
     SimulationDailyRun,
@@ -85,9 +82,13 @@ from backend.services.simulation_runtime import (
     StaticSimulationRunContextProvider,
     SimulationSchedulerBindingResult,
     SimulationSchedulerRunOnceResult,
+    StrategyRuntimeReleaseService,
+)
+from backend.services.simulation_data.daily_context import SimulationBrokerBackend
+from backend.services.simulation_signal import (
+    DailySelectionEvidence,
     StrategyPackageSelectionResult,
     StrategyPackageSelectionService,
-    StrategyRuntimeReleaseService,
 )
 from backend.services.miniqmt_execution_runtime.kernel_product_runtime import (
     K6DProductParentStartResultV1,
@@ -3942,15 +3943,6 @@ class FakePaperRepository:
 class FakeLocalSimMarketDataProvider:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
-        self.previous_close_provider = SimpleNamespace(
-            get_previous_close=lambda symbol, trade_date: PreviousClose(
-                symbol=symbol,
-                trade_date=trade_date,
-                previous_trade_date=trade_date - timedelta(days=1),
-                pre_close=10.0,
-                source="test.previous_close",
-            )
-        )
 
     def load_symbol_input(
         self,
@@ -3960,7 +3952,6 @@ class FakeLocalSimMarketDataProvider:
         source: MinuteDataSource,
         min_bars: int,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         self.calls.append(
             {
@@ -3969,7 +3960,6 @@ class FakeLocalSimMarketDataProvider:
                 "source": source,
                 "min_bars": min_bars,
                 "require_suspend_status": require_suspend_status,
-                "require_day_features": require_day_features,
             }
         )
         start = datetime.combine(trade_date, datetime.min.time()).replace(hour=9, minute=31)
@@ -4012,7 +4002,6 @@ class FakeLocalSimMarketDataProvider:
         source: MinuteDataSource,
         until_time: datetime,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         source_input = self.load_symbol_input(
             symbol=symbol,
@@ -4020,7 +4009,6 @@ class FakeLocalSimMarketDataProvider:
             source=source,
             min_bars=6,
             require_suspend_status=require_suspend_status,
-            require_day_features=require_day_features,
         )
         return replace(
             source_input,
@@ -4052,7 +4040,6 @@ class ToggleMissingLocalSimMarkProvider(FakeLocalSimMarketDataProvider):
         source: MinuteDataSource,
         until_time: datetime,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         observed = super().load_observed_intraday(
             symbol=symbol,
@@ -4060,7 +4047,6 @@ class ToggleMissingLocalSimMarkProvider(FakeLocalSimMarketDataProvider):
             source=source,
             until_time=until_time,
             require_suspend_status=require_suspend_status,
-            require_day_features=require_day_features,
         )
         if symbol == self.missing_symbol and not self.mark_available:
             return replace(observed, minute_bars=[])
@@ -14104,11 +14090,46 @@ def test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance
         symbols=(position.symbol,),
         trade_date=TRADE_DATE,
         as_of_time=as_of_time,
-        pre_trade_tradability={position.symbol: {"suspend_status": {"is_suspended": True}}},
+        pre_trade_tradability={
+            position.symbol: {
+                "suspend_status": {"is_suspended": True},
+                "daily_trading_context": {
+                    "schema_version": "daily_trading_context_reference_v1",
+                    "symbol_fact": {
+                        "symbol": position.symbol,
+                        "trade_date": TRADE_DATE.isoformat(),
+                        "pre_close": 10.0,
+                        "up_limit": 11.0,
+                        "down_limit": 9.0,
+                        "price_basis": "raw",
+                        "stk_limit_row_hash": canonical_json_sha256(
+                            {
+                                "source": "market.stk_limit",
+                                "symbol": position.symbol,
+                                "trade_date": TRADE_DATE.isoformat(),
+                                "pre_close": 10.0,
+                                "up_limit": 11.0,
+                                "down_limit": 9.0,
+                                "price_basis": "raw",
+                            }
+                        ),
+                        "is_st": False,
+                        "st_source": "market.stock_st",
+                        "st_evidence_hash": "1" * 64,
+                        "is_suspended": True,
+                        "suspend_type": "S",
+                        "suspend_timing": None,
+                        "suspend_source": "market.suspend_d",
+                        "board": "MAIN",
+                        "lot_rule": {"min_quantity": 100, "increment": 100},
+                    },
+                },
+            }
+        },
     )[position.symbol]
     assert suspended.price == 10.0
-    assert suspended.as_of_time == datetime(2026, 5, 20, 15, 0)
-    assert suspended.source == "test.previous_close"
+    assert suspended.as_of_time == as_of_time
+    assert suspended.source == "market.stk_limit.pre_close:frozen_daily_trading_context_v1"
     assert suspended.provenance == LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
 
     with pytest.raises(DataUnavailableError) as exc_info:
@@ -18144,7 +18165,7 @@ def test_production_context_provider_selects_explicit_twap_only_policy_for_v25_r
     )
 
     assert ctx.local_broker.query_status(handle).state == "filled"
-    assert market_data.calls[-1]["require_day_features"] is False
+    assert market_data.calls[-1]["source"] == MinuteDataSource.DB_HISTORICAL
 
 
 def test_production_context_provider_policy_authority_never_uses_portfolio_policy_for_recovery():
@@ -18197,7 +18218,7 @@ def test_production_context_provider_policy_authority_never_uses_portfolio_polic
     )
 
     assert ctx.local_broker.query_status(handle).state == "filled"
-    assert market_data.calls[-1]["require_day_features"] is False
+    assert market_data.calls[-1]["source"] == MinuteDataSource.DB_HISTORICAL
 
 
 def test_existing_localsim_v25_plan_is_rejected_before_runtime_context_loading() -> None:

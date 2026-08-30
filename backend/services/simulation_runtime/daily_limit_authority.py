@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from backend.services.simulation_runtime.models import (
+from backend.services.simulation_data.daily_context import (
     DAILY_LIMIT_AUTHORITY_BY_BROKER_V2,
     DAILY_LIMIT_RESOLVER_BY_BROKER_V2,
     DailyLimitAuthorityV2,

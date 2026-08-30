@@ -28,13 +28,17 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.execution_algos.adaptive_is.reasons import QuoteContractError
-from backend.services.paper_trading_v2.broker.base import BrokerBackend
-from backend.services.paper_trading_v2.market_data import (
-    DailyTradingContextProvider,
+from backend.services.simulation_execution.broker import BrokerBackend
+from backend.services.simulation_data.contracts import (
     MinuteDataSource,
-    PreTradeTradabilityProvider,
-    fetch_tdx_realtime_quotes,
     pre_trade_tradability_is_suspended,
+)
+from backend.services.simulation_data.daily_context_provider import (
+    DailyTradingContextProvider,
+    PreTradeTradabilityProvider,
+)
+from backend.services.simulation_data.tdx_causal_minute import (
+    fetch_tdx_realtime_quotes,
 )
 from backend.services.paper_trading_v2.models import PaperRun
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
@@ -104,7 +108,6 @@ from .lifecycle import (
     scheduler_time,
 )
 from .models import (
-    DailySelectionEvidence,
     ExecutionPlan,
     LocalSimEconomicReceiptV1,
     LocalSimExecutionRuntimeStatus,
@@ -115,7 +118,6 @@ from .models import (
     LocalSimProjectionOutboxV1,
     LocalSimProjectionReceiptV1,
     SimulationBindingApprovalState,
-    SimulationBrokerBackend,
     SimulationDailyRun,
     SimulationDailyRunStatus,
     SimulationReleaseBinding,
@@ -123,6 +125,8 @@ from .models import (
     canonical_json_sha256,
     miniqmt_kernel_runtime_id,
 )
+from backend.services.simulation_data.daily_context import SimulationBrokerBackend
+from backend.services.simulation_signal.contracts import DailySelectionEvidence
 from .miniqmt_quote_activation import (
     MiniQMTKernelProductSyncError,
     build_miniqmt_quote_ingress_activation_from_env,
@@ -136,7 +140,10 @@ from .repository import (
     inspect_simulation_retry_backoff,
     simulation_retry_json_safe_evidence,
 )
-from .selection import StrategyPackageSelectionResult, StrategyPackageSelectionService
+from backend.services.simulation_signal.strategy_package_selection import (
+    StrategyPackageSelectionResult,
+    StrategyPackageSelectionService,
+)
 from .service import StrategyRuntimeReleaseService
 from .tca_eod_observation import TcaEodObservationHook
 from .tca_observation_metrics import TcaObservationMetricsEmitter

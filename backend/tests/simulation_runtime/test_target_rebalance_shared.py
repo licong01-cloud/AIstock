@@ -5,17 +5,20 @@ from datetime import UTC, datetime
 
 import pytest
 
-from backend.services.paper_trading_v2.broker.base import OrderHandle
-from backend.services.paper_trading_v2.market_data import (
+from backend.services.simulation_execution.broker import OrderHandle
+from backend.services.simulation_data.daily_context_provider import (
+    PreTradeTradabilityProvider,
+)
+from backend.services.simulation_data.tdx_causal_minute import (
+    quote_tradability_evidence,
+)
+from backend.services.simulation_data.contracts import (
     DailySuspendStatus,
     DailyStStatus,
-    PreTradeTradabilityProvider,
-    quote_tradability_evidence,
 )
 from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot, TargetPosition
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-    DailySelectionEvidence,
     ExecutionPlanCompiler,
     InMemorySimulationRuntimeRepository,
     LocalSimExecutionBridge,
@@ -26,6 +29,9 @@ from backend.services.simulation_runtime import (
     StrategyRuntimeReleaseService,
     TargetPositionService,
     TradingRuleService,
+)
+from backend.services.simulation_signal import (
+    DailySelectionEvidence,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
 from backend.services.strategy_package.execution_policy import (
@@ -126,9 +132,7 @@ def _release_and_binding(*, backend: SimulationBrokerBackend = SimulationBrokerB
         execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256="tail_policy_hash_close_v1",
-        execution_policy_json=(
-            _b0_quote_policy() if backend is SimulationBrokerBackend.MINIQMT_SIM else None
-        ),
+        execution_policy_json=(_b0_quote_policy() if backend is SimulationBrokerBackend.MINIQMT_SIM else None),
         created_by="unit-test",
         created_reason="shared target rebalance test",
     )
@@ -174,9 +178,7 @@ def _release_binding_repo(
         execution_policy_sha256=effective_execution_policy_sha256,
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256="tail_policy_hash_close_v1",
-        execution_policy_json=(
-            _b0_quote_policy() if backend is SimulationBrokerBackend.MINIQMT_SIM else None
-        ),
+        execution_policy_json=(_b0_quote_policy() if backend is SimulationBrokerBackend.MINIQMT_SIM else None),
         created_by="unit-test",
         created_reason="shared target rebalance test",
     )
@@ -221,7 +223,9 @@ def _snapshot() -> SignalSnapshot:
                 reason="daily_strategy_buy_or_retain",
             ),
         ],
-        runtime_config={"runtime_profile": {"selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}}},
+        runtime_config={
+            "runtime_profile": {"selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}}
+        },
     )
 
 
@@ -274,7 +278,9 @@ def _empty_snapshot() -> SignalSnapshot:
         trade_date=date(2026, 5, 21),
         data_source="DB_HISTORICAL",
         candidates=[],
-        runtime_config={"runtime_profile": {"selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}}},
+        runtime_config={
+            "runtime_profile": {"selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}}
+        },
         valid_no_candidate=True,
         no_candidate_reason="unit test no candidate day",
     )
@@ -386,8 +392,14 @@ def test_target_and_rebalance_services_are_shared_for_localsim_and_miniqmt() -> 
         target_positions=qmt_targets,
     )
 
-    normalized_local = [(item.symbol, item.side.value, item.quantity, item.metadata["rebalance_reason"]) for item in local_result.order_intents]
-    normalized_qmt = [(item.symbol, item.side.value, item.quantity, item.metadata["rebalance_reason"]) for item in qmt_result.order_intents]
+    normalized_local = [
+        (item.symbol, item.side.value, item.quantity, item.metadata["rebalance_reason"])
+        for item in local_result.order_intents
+    ]
+    normalized_qmt = [
+        (item.symbol, item.side.value, item.quantity, item.metadata["rebalance_reason"])
+        for item in qmt_result.order_intents
+    ]
     assert normalized_local == normalized_qmt
     assert ("000003.SZ", "SELL", 77, "DROPPED_FROM_SELECTION") in normalized_local
     assert ("688001.SH", "BUY", 201, "daily_strategy_buy_or_retain") in normalized_local
@@ -475,9 +487,7 @@ def test_localsim_execution_plan_persists_effective_twap_snapshot_identity() -> 
         current_positions=_current_positions("portfolio_shared"),
         target_positions=targets,
     )
-    policy_json = normalize_execution_policy_json(
-        {"algo_code": "V25_1_SMALL_CAP", "algo_config": {}}
-    )
+    policy_json = normalize_execution_policy_json({"algo_code": "V25_1_SMALL_CAP", "algo_config": {}})
     policy_snapshot = {
         "policy_version_id": "requested_v25_policy",
         "policy_sha256": compute_execution_policy_sha256(policy_json),
@@ -698,7 +708,9 @@ def test_empty_daily_signal_sells_dropped_positions_and_no_trade_is_legal() -> N
         current_positions={"000003.SZ": _current_positions("portfolio_shared")["000003.SZ"]},
         target_positions=targets,
     )
-    assert [(item.symbol, item.side.value, item.quantity) for item in sell_all.order_intents] == [("000003.SZ", "SELL", 77)]
+    assert [(item.symbol, item.side.value, item.quantity) for item in sell_all.order_intents] == [
+        ("000003.SZ", "SELL", 77)
+    ]
     assert sell_all.order_intents[0].metadata["rebalance_reason"] == "DROPPED_FROM_SELECTION"
 
     no_trade = RebalanceIntentService().build_order_intents(
@@ -780,9 +792,12 @@ def test_rebalance_blocks_suspended_or_no_quote_existing_holding_without_sell_in
     assert qmt_result.order_intents == []
     assert [decision.reason_code for decision in local_result.trading_rule_decisions] == ["NO_TRADABLE_REALTIME_QUOTE"]
     assert local_result.trading_rule_decisions[0].legal_quantity == 0
-    assert local_result.trading_rule_decisions[0].price_limit_rule["pre_trade_tradability"]["quote_evidence"][
-        "no_tradable_market"
-    ] is True
+    assert (
+        local_result.trading_rule_decisions[0].price_limit_rule["pre_trade_tradability"]["quote_evidence"][
+            "no_tradable_market"
+        ]
+        is True
+    )
 
 
 def test_pre_trade_tradability_provider_combines_suspend_d_and_realtime_quote() -> None:
@@ -1097,7 +1112,6 @@ def test_lifecycle_successful_localsim_retry_clears_submit_failure() -> None:
             local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
             as_of_time=datetime(2026, 5, 21, 10, 0),
         )
-
 
     failed = repo.get_simulation_daily_run(build.run.run_id)
     assert failed.status == SimulationDailyRunStatus.FAILED_RETRYABLE

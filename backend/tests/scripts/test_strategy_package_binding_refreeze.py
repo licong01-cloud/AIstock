@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date
 
@@ -7,6 +7,8 @@ import pytest
 from backend.services.simulation_runtime.models import (
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
+)
+from backend.services.simulation_data.daily_context import (
     SimulationBrokerBackend,
 )
 from backend.services.simulation_runtime.repository import InMemorySimulationRuntimeRepository
@@ -280,4 +282,3 @@ def test_apply_gate_requires_prod_flag_and_env(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setenv(refreeze.APPLY_CONFIRM_ENV, refreeze.APPLY_CONFIRM_VALUE)
     refreeze._validate_apply_gate(args)  # noqa: SLF001
-

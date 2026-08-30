@@ -8,11 +8,11 @@ from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.services.paper_trading_v2.models import BrokerBackendId
+from backend.services.simulation_execution.broker import BrokerBackendId
 from backend.services.strategy_package.models import AlphaMode
-from backend.services.strategy_package.multi_alpha_paper_admission import (
-    MultiAlphaPaperAdmissionRecord,
-    MultiAlphaPaperAdmissionRepository,
+from backend.services.strategy_package.multi_alpha_simulation_admission import (
+    MultiAlphaSimulationAdmissionRecord,
+    MultiAlphaSimulationAdmissionRepository,
     admission_id_from_payload,
     canonical_json_sha256,
 )
@@ -29,7 +29,7 @@ from backend.services.trading_core.errors import (
     StrategyPackageValidationError,
 )
 
-MULTI_ALPHA_PAPER_DRY_RUN_CONFIRMATION = "MULTI_ALPHA_LOCALSIM_DRY_RUN"
+MULTI_ALPHA_SIMULATION_DRY_RUN_CONFIRMATION = "MULTI_ALPHA_LOCALSIM_DRY_RUN"
 
 REASON_MULTI_ALPHA_DRY_RUN_CONFIRMATION_REQUIRED = "multi_alpha_paper_dry_run_confirmation_required"
 REASON_MULTI_ALPHA_DRY_RUN_NOT_APPLICABLE = "multi_alpha_paper_dry_run_not_applicable"
@@ -40,7 +40,7 @@ REASON_MULTI_ALPHA_DRY_RUN_DETERMINISM_MISMATCH = "multi_alpha_paper_dry_run_det
 REASON_MULTI_ALPHA_DRY_RUN_NO_ORDER_PREVIEW = "multi_alpha_paper_dry_run_no_order_preview"
 
 
-class MultiAlphaPaperDryRunResult(BaseModel):
+class MultiAlphaSimulationDryRunResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dry_run_run_id: str
@@ -56,13 +56,13 @@ class MultiAlphaPaperDryRunResult(BaseModel):
     deterministic_replay: bool
     artifact_shas: dict[str, Any] = Field(default_factory=dict)
     evidence_json: dict[str, Any] = Field(default_factory=dict)
-    admission: MultiAlphaPaperAdmissionRecord
+    admission: MultiAlphaSimulationAdmissionRecord
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
 
 
-class MultiAlphaPaperDryRunValidator:
+class MultiAlphaSimulationDryRunValidator:
     """Produce optional LocalSim order-preview evidence without gating signal eligibility."""
 
     def __init__(
@@ -84,7 +84,7 @@ class MultiAlphaPaperDryRunValidator:
         self.runtime = runtime or StrategyPackageRuntime(artifact_repository=artifact_repository)
         self.target_engine = target_engine or TargetPositionEngine()
         self.rebalance_engine = rebalance_engine or RebalanceEngine()
-        self.admission_repository = admission_repository or MultiAlphaPaperAdmissionRepository()
+        self.admission_repository = admission_repository or MultiAlphaSimulationAdmissionRepository()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     def run(
@@ -98,8 +98,8 @@ class MultiAlphaPaperDryRunValidator:
         validated_by: str = "aistock_api",
         runtime_config: dict[str, Any] | None = None,
         initial_cash: float = 1_000_000.0,
-    ) -> MultiAlphaPaperDryRunResult:
-        if confirmation != MULTI_ALPHA_PAPER_DRY_RUN_CONFIRMATION:
+    ) -> MultiAlphaSimulationDryRunResult:
+        if confirmation != MULTI_ALPHA_SIMULATION_DRY_RUN_CONFIRMATION:
             raise StrategyPackageValidationError(
                 "MULTI_ALPHA paper dry-run requires explicit confirmation",
                 context={
@@ -306,7 +306,7 @@ class MultiAlphaPaperDryRunValidator:
             "artifact_shas": artifact_shas,
             "stable_evidence": stable_payload,
         }
-        admission = MultiAlphaPaperAdmissionRecord(
+        admission = MultiAlphaSimulationAdmissionRecord(
             admission_id=admission_id_from_payload(admission_payload),
             package_id=package_id,
             manifest_sha256=manifest.manifest_sha256,
@@ -320,7 +320,7 @@ class MultiAlphaPaperDryRunValidator:
             validated_by=validated_by,
         )
         saved = self.admission_repository.upsert_success(admission)
-        return MultiAlphaPaperDryRunResult(
+        return MultiAlphaSimulationDryRunResult(
             dry_run_run_id=dry_run_run_id,
             package_id=package_id,
             manifest_sha256=manifest.manifest_sha256,

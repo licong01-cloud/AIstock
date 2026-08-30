@@ -8,11 +8,19 @@ from backend.services.paper_trading_v2.execution.minqmt_execution_report import 
     build_minqmt_execution_quality_report,
     list_minqmt_execution_quality_reports,
 )
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperPortfolio, PaperRun
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.trading_core.ledger import FeeModel
-from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderSide, OrderStatus, OrderType, RunStatus
+from backend.services.trading_core.models import (
+    AccountSnapshot,
+    Fill,
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    RunStatus,
+)
 from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
 
 

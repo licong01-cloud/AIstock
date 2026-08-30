@@ -41,7 +41,10 @@ from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.simulation_runtime.repository import SimulationRuntimeRepository
-from backend.services.simulation_runtime.selection import DailySelectionSignalService, StrategyPackageSelectionService
+from backend.services.simulation_signal.strategy_package_selection import (
+    DailySelectionSignalService,
+    StrategyPackageSelectionService,
+)
 from backend.services.strategy_package.live_inference import (
     LiveInferenceResult,
 )
@@ -153,7 +156,9 @@ class _ForbiddenSelection:
         raise AssertionError(f"unexpected Selection dependency during Program provisioning: {name}")
 
 
-def _program_spec(*, program_id: str, package_id: str, alpha_mode: AlphaMode, runtime_config: dict[str, Any]) -> HistoricalProgramSpec:
+def _program_spec(
+    *, program_id: str, package_id: str, alpha_mode: AlphaMode, runtime_config: dict[str, Any]
+) -> HistoricalProgramSpec:
     return HistoricalProgramSpec(
         program_id=program_id,
         program_name=f"O3 L2 {program_id}",
@@ -305,7 +310,9 @@ def _with_complete_asset_closure(manifest: Any) -> Any:
         model.model_copy(
             update={
                 "asset_ref": f"o3-l2://model/{model.model_id}",
-                "sha256": canonical_evidence_json_sha256({"package_id": manifest.package_id, "model_id": model.model_id}),
+                "sha256": canonical_evidence_json_sha256(
+                    {"package_id": manifest.package_id, "model_id": model.model_id}
+                ),
             }
         )
         for model in raw_models
@@ -343,7 +350,9 @@ def _native_multi_manifest(manifest: Any) -> Any:
         update={
             "model_id": "model_b",
             "model_ref": "model_b",
-            "lineage": second.lineage.model_copy(update={"model_artifact_ref": "parent_package_asset:model_id:model_b"}),
+            "lineage": second.lineage.model_copy(
+                update={"model_artifact_ref": "parent_package_asset:model_id:model_b"}
+            ),
         }
     )
     model_assets = [
@@ -367,8 +376,16 @@ def _native_multi_manifest(manifest: Any) -> Any:
                     "multi_alpha": {
                         "combine_backtest_run_id": f"o3-l2:{completed.package_id}",
                         "legs": [
-                            {"leg_id": first.alpha_id, "seed_run_ids": ["seed_a"], "terminal_weight": weights[first.alpha_id]},
-                            {"leg_id": second.alpha_id, "seed_run_ids": ["seed_b"], "terminal_weight": weights[second.alpha_id]},
+                            {
+                                "leg_id": first.alpha_id,
+                                "seed_run_ids": ["seed_a"],
+                                "terminal_weight": weights[first.alpha_id],
+                            },
+                            {
+                                "leg_id": second.alpha_id,
+                                "seed_run_ids": ["seed_b"],
+                                "terminal_weight": weights[second.alpha_id],
+                            },
                         ],
                         "terminal_weights": weights,
                         "weight_policy": {"mode": "frozen_backtest_terminal_weights"},
@@ -613,8 +630,14 @@ def test_o3_program_dse_and_dual_track_historical_retry_use_real_postgres(
     completed_by_program = {item.program_id: item for item in completed.program_runs}
     assert completed.status is HistoricalResearchRunStatus.COMPLETE
     assert {item.status for item in completed.program_runs} == {HistoricalResearchRunStatus.COMPLETE}
-    assert completed_by_program[single_program.program_id].program_run_id == first_by_program[single_program.program_id].program_run_id
-    assert completed_by_program[multi_program.program_id].program_run_id == first_by_program[multi_program.program_id].program_run_id
+    assert (
+        completed_by_program[single_program.program_id].program_run_id
+        == first_by_program[single_program.program_id].program_run_id
+    )
+    assert (
+        completed_by_program[multi_program.program_id].program_run_id
+        == first_by_program[multi_program.program_id].program_run_id
+    )
 
     exact_retry = runner.run(request)
     assert exact_retry.receipt_id == completed.receipt_id

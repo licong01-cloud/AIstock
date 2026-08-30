@@ -1,6 +1,6 @@
-"""LocalSimBackend — in-process broker matching minute bars.
+"""LocalSimBackend 閳?in-process broker matching minute bars.
 
-Strategy Engine design 2026-05-08 §3.6 (R-Q9 D1/D2/D3). LocalSim is the
+Strategy Engine design 2026-05-08 鎼?.6 (R-Q9 D1/D2/D3). LocalSim is the
 default Paper Trading v2 backend. It binds to a single ``portfolio_id`` and
 matches OrderIntents against TDX or DB historical minute bars in-process
 via the existing ``MinuteExecutionEngine`` + ``OMS`` + ``InMemoryLedger``
@@ -33,10 +33,12 @@ from uuid import uuid4
 
 from backend.execution_algos.board_lot import board_lot_rule
 from backend.services.paper_trading_v2.market_data import (
+    PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.contracts import (
     LocalSimMarketSnapshotV1,
     LocalSimMarketSnapshotV2,
     MinuteDataSource,
-    PaperV2MinuteMarketDataProvider,
     assert_broker_market_source_match,
     pre_trade_tradability_is_suspended,
 )
@@ -49,14 +51,18 @@ from backend.services.trading_core.execution_algo_retirement import (
 )
 from backend.services.simulation_runtime.daily_limit_authority import parse_daily_trading_context
 from backend.services.simulation_runtime.models import (
-    DailyTradingContextV1,
-    DailyTradingContextV2,
     LocalSimExecutionRuntimeStatus,
     LocalSimExecutionStateV1,
     LocalSimMarketMarkProvenance,
     LocalSimMarketMarkV1,
-    SimulationBrokerBackend,
     canonical_json_sha256,
+)
+from backend.services.simulation_data.daily_context import (
+    DailyTradingContextV1,
+    DailyTradingContextV2,
+    DailyTradingSymbolFactV1,
+    DailyTradingSymbolFactV2,
+    SimulationBrokerBackend,
 )
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
@@ -83,7 +89,7 @@ from backend.services.trading_core.models import (
 )
 from backend.services.trading_core.oms import OMS
 
-from .base import (
+from backend.services.simulation_execution.broker import (
     BackendId,
     BrokerAccountSnapshot,
     BrokerBackend,
@@ -739,14 +745,13 @@ class LocalSimBackend(BrokerBackend):
                         trade_date=intent.target_trade_date,
                         source=self._data_source,
                         min_bars=1,
-                        require_day_features=False,
                     )
             except BrokerConnectivityError as exc:
                 if self._data_source != MinuteDataSource.TDX_REALTIME:
                     raise
                 market_data_error = exc
             except DataUnavailableError as exc:
-                # Missing minute bars / pre_close / suspend — treat as a
+                # Missing minute bars / pre_close / suspend 閳?treat as a
                 # connectivity-class fault: the data layer the broker depends
                 # on is unavailable, not an order-shape problem.
                 raise BrokerConnectivityError(
@@ -876,7 +881,7 @@ class LocalSimBackend(BrokerBackend):
                         events=events,
                     )
             except (ExecutionAlgoError, RiskRuleError, InvalidStateTransitionError) as exc:
-                # Backend rejected — distinct from connectivity (data fine,
+                # Backend rejected 閳?distinct from connectivity (data fine,
                 # order semantics violated).
                 rejection_handle = OrderHandle(
                     handle_id=f"lsh_{uuid4().hex}",
@@ -1182,36 +1187,51 @@ class LocalSimBackend(BrokerBackend):
                 symbol=symbol,
             )
             if suspended:
-                previous_close_provider = getattr(self._market_data_provider, "previous_close_provider", None)
-                loader = getattr(previous_close_provider, "get_previous_close", None)
-                if not callable(loader):
+                daily_reference = tradability.get("daily_trading_context") if isinstance(tradability, Mapping) else None
+                raw_fact = daily_reference.get("symbol_fact") if isinstance(daily_reference, Mapping) else None
+                schema_version = daily_reference.get("schema_version") if isinstance(daily_reference, Mapping) else None
+                if not isinstance(raw_fact, Mapping):
                     raise DataUnavailableError(
-                        "LocalSim suspended position mark has no authoritative previous-close provider",
+                        "LocalSim suspended position mark requires the frozen daily trading fact",
                         context={
-                            "reason_code": "LOCALSIM_SUSPENDED_PREV_CLOSE_PROVIDER_MISSING",
+                            "reason_code": "LOCALSIM_SUSPENDED_DAILY_FACT_MISSING",
                             "symbol": symbol,
                             "trade_date": trade_date.isoformat(),
                         },
                     )
-                previous = loader(symbol, trade_date)
-                if (
-                    str(getattr(previous, "symbol", "")) != symbol
-                    or getattr(previous, "trade_date", None) != trade_date
-                    or getattr(previous, "previous_trade_date", trade_date) >= trade_date
-                ):
+                try:
+                    fact = (
+                        DailyTradingSymbolFactV1.model_validate(dict(raw_fact))
+                        if schema_version == "daily_trading_context_reference_v1"
+                        else DailyTradingSymbolFactV2.model_validate(dict(raw_fact))
+                    )
+                except Exception as exc:
                     raise DataUnavailableError(
-                        "LocalSim suspended previous-close identity does not match the requested position",
+                        "LocalSim suspended position mark daily fact is invalid",
                         context={
-                            "reason_code": "LOCALSIM_SUSPENDED_PREV_CLOSE_IDENTITY_CONFLICT",
+                            "reason_code": "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID",
+                            "symbol": symbol,
+                            "trade_date": trade_date.isoformat(),
+                        },
+                    ) from exc
+                if fact.symbol != symbol or fact.trade_date != trade_date or fact.pre_close is None:
+                    raise DataUnavailableError(
+                        "LocalSim suspended daily fact identity does not match the requested position",
+                        context={
+                            "reason_code": "LOCALSIM_SUSPENDED_DAILY_FACT_IDENTITY_CONFLICT",
                             "symbol": symbol,
                             "trade_date": trade_date.isoformat(),
                         },
                     )
                 records[symbol] = LocalSimMarketMarkV1(
                     symbol=symbol,
-                    price=float(getattr(previous, "pre_close")),
-                    as_of_time=datetime.combine(getattr(previous, "previous_trade_date"), time(15, 0)),
-                    source=str(getattr(previous, "source", "") or ""),
+                    price=float(fact.pre_close),
+                    as_of_time=as_of_time,
+                    source=(
+                        f"{fact.pre_close_source}:frozen_daily_trading_context_v1"
+                        if isinstance(fact, DailyTradingSymbolFactV1)
+                        else f"{fact.limit_authority.value}:frozen_daily_trading_context_v2"
+                    ),
                     provenance=LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE,
                 )
                 continue
@@ -1328,7 +1348,7 @@ class LocalSimBackend(BrokerBackend):
         )
 
     def bind_capacity(self) -> BrokerBindCapacity:
-        # LocalSim is per-portfolio (R-Q9 D2 — multi-package parallelism is
+        # LocalSim is per-portfolio (R-Q9 D2 閳?multi-package parallelism is
         # achieved by spawning one LocalSim per portfolio, not by sharing a
         # single LocalSim across portfolios).
         return BrokerBindCapacity(
@@ -1519,7 +1539,6 @@ class LocalSimBackend(BrokerBackend):
                         source=self._data_source,
                         until_time=as_of_time,
                         require_suspend_status=True,
-                        require_day_features=False,
                     )
                 except DataUnavailableError as exc:
                     raise BrokerConnectivityError(
@@ -1578,7 +1597,6 @@ class LocalSimBackend(BrokerBackend):
                 "source": self._data_source,
                 "until_time": as_of_time,
                 "require_suspend_status": True,
-                "require_day_features": False,
                 "frozen_daily_fact": frozen_reference,
             }
             try:

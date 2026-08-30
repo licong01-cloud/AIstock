@@ -1,10 +1,10 @@
 """Tests for ``paper_trading_v2.broker.LocalSimBackend`` (Task #20).
 
-Covers Engine §3.6.1 (R-Q9 D1) BrokerBackend protocol:
+Covers Engine 閹?.6.1 (R-Q9 D1) BrokerBackend protocol:
   - 6 Protocol methods happy path
   - typed error paths: BrokerSubmitError / BrokerRejectedError /
     BrokerConnectivityError
-  - multi-portfolio isolation (R-Q9 D2 — N parallel LocalSim instances do not
+  - multi-portfolio isolation (R-Q9 D2 闁?N parallel LocalSim instances do not
     share state)
   - market-source cross-pairing rejected at backend init
     (BrokerMarketSourceMismatchError, R-Q9 D3)
@@ -24,28 +24,33 @@ from typing import Any
 import pytest
 
 from backend.services.paper_trading_v2.broker import (
+    LocalSimBackend,
+)
+from backend.services.simulation_execution.broker import (
     BrokerAccountSnapshot,
     BrokerBindCapacity,
     CancelAck,
     FillEvent,
-    LocalSimBackend,
     MarketDataChannel,
     OrderHandle,
     OrderHandleStatus,
     SubscriptionHandle,
 )
 from backend.services.paper_trading_v2.market_data import (
+    PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.contracts import (
     LocalSimMarketSnapshotV1,
     MinuteDataSource,
     MinuteExecutionMarketInput,
-    PaperV2MinuteMarketDataProvider,
 )
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.execution_policy import (
     compute_execution_policy_sha256,
     normalize_execution_policy_json,
 )
-from backend.services.simulation_runtime.models import (
+from backend.services.simulation_runtime.models import LocalSimMarketMarkV1
+from backend.services.simulation_data.daily_context import (
     DAILY_LIMIT_AUTHORITY_BY_BROKER_V2,
     DAILY_LIMIT_RESOLVER_BY_BROKER_V2,
     DailyLimitAuthorityV2,
@@ -53,7 +58,6 @@ from backend.services.simulation_runtime.models import (
     DailyTradingContextSourcesV2,
     DailyTradingContextV2,
     DailyTradingSymbolFactV2,
-    LocalSimMarketMarkV1,
     SimulationBrokerBackend,
 )
 from backend.services.trading_core.execution_algo_retirement import (
@@ -160,7 +164,6 @@ class FakeMarketDataProvider:
         source: MinuteDataSource,
         min_bars: int,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         self.calls.append(
             {
@@ -168,7 +171,6 @@ class FakeMarketDataProvider:
                 "trade_date": trade_date,
                 "source": source,
                 "min_bars": min_bars,
-                "require_day_features": require_day_features,
             }
         )
         if symbol in self.unavailable_symbols:
@@ -363,7 +365,6 @@ class ObservedMarketDataProvider(FakeMarketDataProvider):
         source: MinuteDataSource,
         until_time: datetime,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         self.calls.append(
             {
@@ -372,7 +373,6 @@ class ObservedMarketDataProvider(FakeMarketDataProvider):
                 "source": source,
                 "until_time": until_time,
                 "require_suspend_status": require_suspend_status,
-                "require_day_features": require_day_features,
             }
         )
         if symbol in self.unavailable_symbols:
@@ -425,7 +425,6 @@ class FrozenV2ObservedMarketDataProvider(PaperV2MinuteMarketDataProvider):
         source: MinuteDataSource,
         until_time: datetime,
         require_suspend_status: bool = False,
-        require_day_features: bool = False,
         frozen_daily_fact=None,
     ) -> MinuteExecutionMarketInput:
         self.calls.append(
@@ -435,7 +434,6 @@ class FrozenV2ObservedMarketDataProvider(PaperV2MinuteMarketDataProvider):
                 "source": source,
                 "until_time": until_time,
                 "require_suspend_status": require_suspend_status,
-                "require_day_features": require_day_features,
                 "frozen_daily_fact": frozen_daily_fact,
             }
         )
@@ -1606,7 +1604,7 @@ def test_localsim_init_accepts_tdx_and_db() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. submit_order_intent — happy path + synchronous semantics
+# 2. submit_order_intent 闁?happy path + synchronous semantics
 # ---------------------------------------------------------------------------
 
 
@@ -1706,11 +1704,9 @@ def test_submit_order_intent_allows_star_whole_position_odd_lot_sell() -> None:
     assert [fill.quantity for fill in snapshot["fills"]] == [1547]
 
 
-def test_localsim_policy_authority_uses_explicit_twap_snapshot_without_day_features() -> None:
+def test_localsim_policy_authority_uses_explicit_twap_snapshot_without_auxiliary_loader() -> None:
     manifest = make_paper_enabled_manifest().model_copy(update={"minute_execution_policy": None})
-    provider = FakeMarketDataProvider(
-        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=6)}
-    )
+    provider = FakeMarketDataProvider(inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=6)})
     backend = LocalSimBackend(
         portfolio_id="paper_local_validated_policy",
         initial_cash=100_000,
@@ -1729,7 +1725,6 @@ def test_localsim_policy_authority_uses_explicit_twap_snapshot_without_day_featu
     handle = backend.submit_order_intent(_buy_intent(backend, quantity=100))
 
     assert backend.query_status(handle).state == "filled"
-    assert provider.calls[-1]["require_day_features"] is False
 
 
 def test_localsim_policy_authority_fails_fast_without_snapshot_even_when_manifest_has_policy() -> None:
@@ -1873,7 +1868,7 @@ def test_submit_keeps_affordable_quantity_when_cash_cannot_fund_full_order() -> 
 
 
 # ---------------------------------------------------------------------------
-# 5. cancel — terminal-state path is no-op accepted=False
+# 5. cancel 闁?terminal-state path is no-op accepted=False
 # ---------------------------------------------------------------------------
 
 
@@ -1956,7 +1951,7 @@ def test_subscribe_returns_handle_and_unsubscribe_releases() -> None:
 
     backend.unsubscribe_fill_callback(sub_a)
     backend.submit_order_intent(_buy_intent(backend, symbol="000002.SZ"))
-    # sub_a unsubscribed — no new events delivered to it
+    # sub_a unsubscribed 闁?no new events delivered to it
     assert len(received_a) == a_count_before
     assert len(received_b) > 1
 

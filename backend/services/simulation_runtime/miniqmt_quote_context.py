@@ -45,10 +45,9 @@ from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     build_execution_clock_event,
 )
 from backend.services.miniqmt_execution_runtime.quote_normalizer import MINIQMT_NORMALIZER_MAP_VERSION
-from backend.services.paper_trading_v2.market_data import (
+from backend.services.simulation_data.contracts import (
     EquityInstrumentMetadataProvider,
     LimitPriceProvider,
-    PreviousCloseProvider,
     SuspendStatusProvider,
 )
 from backend.services.trading_calendar_status import TradingCalendarStatusService
@@ -239,9 +238,7 @@ class MiniQMTInstrumentQuoteSpecProvider:
         return QuoteContextSymbolSpec(
             symbol=normalized_symbol,
             depth_quantity_unit=DepthQuantityUnit.SHARES,
-            unit_evidence_version=(
-                f"{MINIQMT_WHOLE_QUOTE_DEPTH_UNIT_EVIDENCE_VERSION}:{authority_sha256}"
-            ),
+            unit_evidence_version=(f"{MINIQMT_WHOLE_QUOTE_DEPTH_UNIT_EVIDENCE_VERSION}:{authority_sha256}"),
             price_tick=price_tick,
             lot_size=board_min_qty,
             intraday_halt=instrument_status >= 1,
@@ -265,7 +262,6 @@ class MiniQMTQuoteContextAuthorityAdapter:
         trading_calendar_service: TradingCalendarStatusService | Any,
         suspend_status_provider: SuspendStatusProvider,
         limit_price_provider: LimitPriceProvider,
-        previous_close_provider: PreviousCloseProvider,
         equity_metadata_provider: EquityInstrumentMetadataProvider,
         clock_continuity_tracker: ClockContinuityTracker | None = None,
         symbol_specs_provider: Callable[[], Iterable[QuoteContextSymbolSpec]] | None = None,
@@ -277,7 +273,6 @@ class MiniQMTQuoteContextAuthorityAdapter:
         self._calendar = trading_calendar_service
         self._suspend = suspend_status_provider
         self._limit = limit_price_provider
-        self._previous_close = previous_close_provider
         self._metadata = equity_metadata_provider
         self._continuity = clock_continuity_tracker or ClockContinuityTracker()
         self._symbol_specs_provider = symbol_specs_provider
@@ -336,9 +331,8 @@ class MiniQMTQuoteContextAuthorityAdapter:
             specs = self._normalize_specs(symbol_specs)
             previous_context = self._context_store.snapshot()
             calendar_set = self._build_calendar_snapshot_set(trade_date=trade_date, effective_at_utc=at_utc)
-            if (
-                previous_context is not None
-                and self._same_calendar_authority(previous_context.calendar_snapshot_set, calendar_set)
+            if previous_context is not None and self._same_calendar_authority(
+                previous_context.calendar_snapshot_set, calendar_set
             ):
                 calendar_set = previous_context.calendar_snapshot_set
             clock = build_execution_clock_event(
@@ -361,15 +355,10 @@ class MiniQMTQuoteContextAuthorityAdapter:
                     trade_date=trade_date,
                     observed_at_utc=at_utc,
                 )
-                previous_symbol = (
-                    previous_context.symbol_context(spec.symbol)
-                    if previous_context is not None
-                    else None
-                )
+                previous_symbol = previous_context.symbol_context(spec.symbol) if previous_context is not None else None
                 symbols[spec.symbol] = (
                     previous_symbol
-                    if previous_symbol is not None
-                    and self._same_symbol_authority(previous_symbol, candidate)
+                    if previous_symbol is not None and self._same_symbol_authority(previous_symbol, candidate)
                     else candidate
                 )
             context = QuoteEvaluationContext(
@@ -578,7 +567,9 @@ class MiniQMTQuoteContextAuthorityAdapter:
     def _merge_runtime_contexts(
         runtime_contexts: Mapping[str, _RegisteredRuntimeQuoteContext],
     ) -> tuple[QuoteContractPolicy, tuple[QuoteContextSymbolSpec, ...]]:
-        policies = {registration.policy.policy_sha256: registration.policy for registration in runtime_contexts.values()}
+        policies = {
+            registration.policy.policy_sha256: registration.policy for registration in runtime_contexts.values()
+        }
         if len(policies) != 1:
             raise quote_contract_error(
                 QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
@@ -608,12 +599,19 @@ class MiniQMTQuoteContextAuthorityAdapter:
                 stage=QuoteContractStage.CALENDAR,
                 context={"trade_date": trade_date.isoformat(), "exception_type": type(exc).__name__},
             ) from exc
-        if not isinstance(status, dict) or status.get("as_of_date") != trade_date.isoformat() or not status.get("is_trading_day"):
+        if (
+            not isinstance(status, dict)
+            or status.get("as_of_date") != trade_date.isoformat()
+            or not status.get("is_trading_day")
+        ):
             raise quote_contract_error(
                 QuoteContractReasonCode.CLOCK_CALENDAR_INVALID,
                 "authoritative calendar does not prove the scheduler date is a trading day",
                 stage=QuoteContractStage.CALENDAR,
-                context={"trade_date": trade_date.isoformat(), "calendar_status": dict(status) if isinstance(status, dict) else None},
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "calendar_status": dict(status) if isinstance(status, dict) else None,
+                },
             )
         cache = status.get("cache") if isinstance(status.get("cache"), dict) else {}
         checksum = cache.get("checksum")
@@ -689,8 +687,7 @@ class MiniQMTQuoteContextAuthorityAdapter:
             )
         suspend = self._suspend.get_suspend_status(spec.symbol, trade_date)
         limit = self._limit.get_limit_price(spec.symbol, trade_date)
-        previous_close = self._previous_close.get_previous_close(spec.symbol, trade_date)
-        if suspend.symbol != spec.symbol or limit.symbol != spec.symbol or previous_close.symbol != spec.symbol:
+        if suspend.symbol != spec.symbol or limit.symbol != spec.symbol:
             raise quote_contract_error(
                 QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
                 "tradability authority returned a symbol different from the requested exact symbol",
@@ -706,7 +703,7 @@ class MiniQMTQuoteContextAuthorityAdapter:
         else:
             state = TradabilityState.TRADABLE
         pre_close = _positive_decimal_or_none(
-            limit.pre_close if limit.pre_close is not None else previous_close.pre_close,
+            limit.pre_close,
             field_name="pre_close",
             symbol=spec.symbol,
         )
@@ -717,7 +714,6 @@ class MiniQMTQuoteContextAuthorityAdapter:
                 "metadata": metadata.source_version,
                 "suspend": suspend.source,
                 "limit": getattr(limit, "source", "market.stk_limit"),
-                "previous_close": previous_close.source,
                 "intraday_halt_source": spec.intraday_halt_source,
                 "unit_evidence_version": spec.unit_evidence_version,
             }
@@ -743,9 +739,7 @@ class MiniQMTQuoteContextAuthorityAdapter:
             source="market.authority.preload",
             source_version=source_version,
             state=state,
-            validation_reasons=()
-            if listed_equity
-            else (QuoteContractReasonCode.TRADABILITY_DATA_INVALID,),
+            validation_reasons=() if listed_equity else (QuoteContractReasonCode.TRADABILITY_DATA_INVALID,),
         )
         return QuoteSymbolContext(
             symbol=spec.symbol,

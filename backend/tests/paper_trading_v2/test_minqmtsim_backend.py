@@ -29,16 +29,19 @@ from backend.services.paper_trading_v2.models import (
     PortfolioStatus,
 )
 from backend.services.paper_trading_v2.broker import (
+    MiniQMTSimBackend,
+)
+from backend.services.simulation_execution.broker import (
     BrokerAccountSnapshot,
     BrokerBindCapacity,
     MarketDataChannel,
-    MiniQMTSimBackend,
     OrderHandle,
     OrderHandleStatus,
     SubscriptionHandle,
 )
 from backend.services.paper_trading_v2.broker.minqmtsim import _OrderRecord
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, quote_tradability_evidence
+from backend.services.simulation_data.tdx_causal_minute import quote_tradability_evidence
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.live_inference import (

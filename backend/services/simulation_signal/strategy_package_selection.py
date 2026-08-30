@@ -22,7 +22,7 @@ from backend.services.advisory_phase1.stage_trace import (
     TraceCaptureResult,
     TraceCaptureState,
 )
-from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.selection_center.canonical_pit_runtime import (
     CANONICAL_PIT_RUNTIME_LEASE_KEY,
     freeze_canonical_pit_runtime_binding,
@@ -85,13 +85,14 @@ from backend.services.trading_core.errors import (
     TradingCalendarUnavailableError,
 )
 
-from .models import (
+from backend.services.simulation_signal.contracts import (
     DailySelectionEvidence,
-    StrategyRuntimeRelease,
+    InMemorySelectionEvidenceRepository,
+    SelectionEvidenceRepository,
+    StrategyRuntimeReleaseView,
     assert_selection_only_payload_boundary,
     canonical_json_sha256,
 )
-from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 
 
 logger = logging.getLogger(__name__)
@@ -243,7 +244,7 @@ class StrategyPackageSelectionService:
         calendar_provider: TradeCalendarProvider | Any | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
         package_health_service: SelectionPackageHealthService | Any | None = None,
-        repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
+        repository: SelectionEvidenceRepository | Any | None = None,
         signal_service: DailySelectionSignalService | None = None,
         phase1_trace_capture_service: Phase1TraceCaptureService | Any | None = None,
         selection_computation: StrategyPackageSelectionComputation | Any | None = None,
@@ -264,7 +265,7 @@ class StrategyPackageSelectionService:
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
             hmm_runtime=getattr(self.runtime, "hmm_runtime", None),
         )
-        self.repository = repository or SimulationRuntimeRepository()
+        self.repository = repository or InMemorySelectionEvidenceRepository()
         self.signal_service = signal_service or DailySelectionSignalService(
             runtime=self.runtime,
             selection_artifact_service=self.selection_artifact_service,
@@ -281,7 +282,7 @@ class StrategyPackageSelectionService:
         trade_date: date,
         data_source: str,
         runtime_config: dict[str, Any] | None = None,
-        runtime_release: StrategyRuntimeRelease | None = None,
+        runtime_release: StrategyRuntimeReleaseView | None = None,
         created_by: str | None = None,
         prospective_context: ProspectiveSelectionContext | None = None,
     ) -> StrategyPackageSelectionResult:
@@ -582,7 +583,7 @@ class StrategyPackageSelectionService:
             return None
 
     @staticmethod
-    def release_selection_runtime_config(runtime_release: StrategyRuntimeRelease) -> dict[str, Any]:
+    def release_selection_runtime_config(runtime_release: StrategyRuntimeReleaseView) -> dict[str, Any]:
         """Return the broker-neutral selection config persisted with a runtime release."""
 
         release_config = (
@@ -625,7 +626,7 @@ class StrategyPackageSelectionService:
     def _first_release_selection_config(
         candidates: tuple[tuple[str, Any], ...],
         *,
-        runtime_release: StrategyRuntimeRelease,
+        runtime_release: StrategyRuntimeReleaseView,
     ) -> dict[str, Any] | None:
         for source, value in candidates:
             if value is None:
@@ -647,7 +648,7 @@ class StrategyPackageSelectionService:
     def _first_release_selection_artifact_config(
         candidates: tuple[tuple[str, Any], ...],
         *,
-        runtime_release: StrategyRuntimeRelease,
+        runtime_release: StrategyRuntimeReleaseView,
     ) -> dict[str, Any] | None:
         for source, value in candidates:
             if value is None:
@@ -683,7 +684,7 @@ class StrategyPackageSelectionService:
     @staticmethod
     def _attach_runtime_release_binding(
         runtime_config: dict[str, Any],
-        runtime_release: StrategyRuntimeRelease,
+        runtime_release: StrategyRuntimeReleaseView,
         *,
         package_ids: list[str],
     ) -> dict[str, Any]:
@@ -1206,7 +1207,7 @@ class StrategyPackageSelectionService:
         package_results: dict[str, list[SelectionCandidate]],
         excluded_results: dict[str, list[SelectionExclusion]],
         manifest_sha256_by_package: dict[str, str],
-        runtime_release: StrategyRuntimeRelease | None,
+        runtime_release: StrategyRuntimeReleaseView | None,
         created_by: str | None,
     ) -> dict[str, DailySelectionEvidence]:
         evidence_by_package: dict[str, DailySelectionEvidence] = {}
@@ -1238,7 +1239,7 @@ class StrategyPackageSelectionService:
         package_results: dict[str, list[SelectionCandidate]],
         excluded_results: dict[str, list[SelectionExclusion]],
         manifest_sha256_by_package: dict[str, str],
-        runtime_release: StrategyRuntimeRelease | None,
+        runtime_release: StrategyRuntimeReleaseView | None,
         created_by: str | None,
         prospective_context: ProspectiveSelectionContext | None,
         artifact_by_package: dict[str, Any],
@@ -1333,7 +1334,7 @@ class StrategyPackageSelectionService:
         runtime_config: dict[str, Any],
         selected: list[SelectionCandidate],
         excluded: list[SelectionExclusion],
-        runtime_release: StrategyRuntimeRelease | None,
+        runtime_release: StrategyRuntimeReleaseView | None,
         created_by: str | None,
     ) -> DailySelectionEvidence:
         binding = self._runtime_profile_binding_for_evidence(runtime_config, package_id=package_id)
