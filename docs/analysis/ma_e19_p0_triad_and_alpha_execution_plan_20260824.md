@@ -4,7 +4,7 @@
 - 状态：`MA_E19R_PARTIAL_9_OF_12_WAITING_DATASET_SIGNOFF_TOOLING_ACTIVE`
 - 版本：v1.2
 - 日期：2026-08-30
-- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.11
+- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.12
 - 概念板块从属设计：`docs/architecture/qe_concept_sector_data_factor_parallel_f2_design_20260813.md`
 - 唯一目标：形成更优、可复算、可实施的多 Alpha 长期趋势与板块轮动策略包
 
@@ -42,11 +42,11 @@ BUG-1191 的源码、用户重启后的运行态验证与 close-sync 已完成�
 | 项目 | 当前事实 | 解释边界 |
 |---|---|---|
 | BUG-1191 | Issue #3793 closed；registry `verified`；source/runtime/close-sync complete | 只证明修复代码已生效，不证明数据发布完成 |
-| canonical PIT v2 | profile `qe_hmm_full_v2`；latest submission `dss_cdc7ee95f703cb1cbd8a4faf9e8cee40`；`BLOCKED_CONTRACT`；无 run/release；activation `not_requested` | worker healthy/IDLE 不能替代 terminal receipt、catalog readback 或 signoff |
+| canonical PIT v2 | profile `qe_hmm_full_v2`；latest submission `dss_43485e68b2645562430a12f8e7ce1620`；`BLOCKED_CONTRACT`；无 run/release；activation `not_requested` | worker healthy/IDLE 不能替代 terminal receipt、catalog readback 或 signoff |
 | MA-E19R2 | 仍为 9 completed/3 failed | D1 仍 `INCOMPLETE`，不提交依赖新数据的正式实验 |
 | 等待期工作 | 九臂语义等价、D2 Sector Oracle、D3 benchmark/Brinson 文件型工具 | 只读冻结文件；缺输入 `NOT_COMPUTABLE`；零数据库、零数据修改、零进程控制 |
 
-数据真正 signoff 与独立激活后，先运行九臂语义等价审计。只有旧九臂的 dataset/calendar/universe/factor/label/prediction/order/strategy identity 与新数据语义全部一致时才输出 `SEMANTIC_EQUIVALENT` 并仅补 2026H1 三臂；任一差异或证据缺失均输出 `RERUN_REQUIRED`/`NOT_COMPUTABLE` 并完整重跑 12 臂。稳定执行状态为 `QE_LT8H_01_STATUS=IN_PROGRESS_DATASET_BLOCKED_TOOLING_ACTIVE`。
+九臂语义等价、D2、D3 工具已通过 PR #3984/#3986/#3988 合入，但真实裁决仍等待数据 signoff。真正 signoff 与独立激活后，先运行九臂语义等价审计。只有旧九臂的 dataset/calendar/universe/factor/label/prediction/order/strategy identity 与新数据语义全部一致时才输出 `SEMANTIC_EQUIVALENT` 并仅补 2026H1 三臂；任一差异或证据缺失均输出 `RERUN_REQUIRED`/`NOT_COMPUTABLE` 并完整重跑 12 臂。稳定执行状态为 `QE_LT8H_01_STATUS=COMPLETE_DATASET_BLOCKED_TOOLS_READY_NO_EXPERIMENT_SUBMITTED`。
 
 历史影响按证据层分开：只读控制面审计确认，自 2026-07-07 分钟 Bin 导出后，32 个 task 中至少 228 个已完成 V25/V25_1 loop 的显式 `test_end=2026-06-30`，其 CAGR/MDD/Calmar/Sharpe/IR/turnover/fill/position 统一标记为 `EXECUTION_METRICS_PENDING_MINUTE_UNIVERSE_RERUN`；这不自动否定其模型、prediction、label、IC 或 RankIC。另有 56 个旧 V25 loop 未在控制配置中显式保存 `test_end`，保持 `NOT_YET_CLASSIFIED`，不得在未回读实际窗口前批量判无效。19 个 `CLOSE_PRICE` 日频 loop 不受本次分钟 universe 元数据缺陷影响，但仍只按既有规则作为 `DAILY_EXECUTION_DIAGNOSTIC_ONLY`。本次只修正研究解释，不建设历史补账、Archive 或批量物化平台。
 
@@ -481,6 +481,12 @@ D1R + D2 + D3 结果
 12. **Round 12 — D2 设计复核**：把等待期工具限定为 signal-level 四格，不生成或冒充 TWAP portfolio；固定 self-hashed manifest、唯一 Parquet、四格×hard/soft、稳定 tie-break、oracle 不可部署与 `NOT_COMPUTABLE_WAITING_D1R_TWAP`。
 13. **Round 13 — D2 代码复核**：修正板块表/股票表 tie-break 复用错误，补 Parquet 物理 schema 精确校验、5M 行/2GiB/10k bootstrap 不可放宽硬上限、非交易/未映射/重复键/覆盖不足 fail closed，以及 receipt 逐日 rows/sectors 计数。
 14. **Round 14 — D2 验证复核**：25 项聚焦测试覆盖八格、oracle 上界、确定性、manifest/panel hash、schema、coverage、资源、输出保护、零 DB/网络/进程与 runtime none；加入现有 `qe_read_backend` 精确测试列表，不新建 pipeline/session。
+15. **Round 15 — D3 方法复核**：固定 Brinson-Fachler allocation/selection/interaction 三项公式和逐日 `active=allocation+selection+interaction` 闭合；absolute 与 benchmark/active 使用相同日期、sector union、权重和 return 面板，oracle/等权/当前成分不得回填。
+16. **Round 16 — D3 fail-closed 复核**：实现 self-hashed manifest、唯一 SHA-pinned Parquet、五类 identity、逐日双侧权重守恒、正整数 taxonomy、return 下界、三类硬资源上限、benchmark 零方差与 tracking error 零拒绝、输入覆盖保护和原子 receipt；任一缺口均稳定 `NOT_COMPUTABLE`，不访问数据库/API 或控制进程。
+17. **Round 17 — D3 验证复核**：28 项聚焦测试覆盖逐日闭合、累计与算术口径分离、beta/TE/IR、moving-block bootstrap 确定性、hash/schema/权重/taxonomy/coverage/资源/输出保护、零 DB/网络/进程与 runtime none；加入既有 `qe_read_backend` 精确测试列表，不新增流水线或审批。
+18. **Round 18 — 合入事实复核**：逐项回读 PR #3984/#3986/#3988 均已合入，D3 merge SHA `8bf61f4a…` 已同步 canonical root，三个 source worktree/本地分支/远端分支均按 workflow 清理；源码完成不冒充真实 manifest/panel receipt。
+19. **Round 19 — 数据状态漂移复核**：最新 durable submission 已变为 `dss_43485e68b2645562430a12f8e7ce1620`，但状态仍为 `BLOCKED_CONTRACT` 且没有 run/release/outcome；worker healthy/IDLE 继续不升级为 signoff，不提交实验。
+20. **Round 20 — 跨文档结束态复核**：父蓝图、执行方案和等待包统一为 v6.12、同一 submission、同一长任务结束标识与同一恢复入口；把工具 source merge、数据签核、真实研究 receipt、实验提交四态分开。
 
 ## DESIGN-COMPLIANCE-001 Review / 设计符合性审核
 
@@ -497,14 +503,14 @@ D1R + D2 + D3 结果
 | F-102 | Historical Synthesis、父蓝图 2.5.3 | validation-receipt: MA-E19R2 9/12、分钟 calendar/feature/all.txt 覆盖差异、228 个明确受影响 loop 与 56 个明确保持未分类的旧 loop 分层 | VERIFIED | 无 |
 | F-103 | WP-D1R、等待包 §5～§5.1 | validation-receipt: MA-E19R2 九臂完成、三臂 metadata fail closed；`ma_e19_semantic_equivalence_audit.py` 标准库 CLI + 21 项聚焦测试；真实等价裁决仍等待新 manifest，未提交实验 | VERIFIED | 无 |
 | F-104 | WP-D2、等待包 §7～§7.4 | validation-receipt: `p0_d2_sector_oracle.py`、25 项聚焦测试、four-cell×hard/soft、oracle identity、Parquet/manifest、稳定 tie-break、signal metrics/bootstrap/逐日计数与 portfolio `NOT_COMPUTABLE` 边界 | VERIFIED | 无 |
-| F-105 | WP-D3 | validation-receipt: 本文 absolute/active/Brinson 输入、输出、`NOT_COMPUTABLE` 和结果触发 | DESIGN_READY | 无 |
+| F-105 | WP-D3、等待包 §8～§8.3 | validation-receipt: `p0_d3_benchmark_brinson.py`、28 项聚焦测试、absolute/active/beta/TE/IR、Brinson-Fachler 公式与逐日闭合、自哈希 manifest/Parquet、bootstrap/resource、`NOT_COMPUTABLE` 与 runtime none 合同 | VERIFIED | 无 |
 | F-106 | Result Trigger Matrix | validation-receipt: 本文 10 行观测→最小工作包映射及禁止跳跃 | VERIFIED | 无 |
 | F-107 | A-01～A-06 | validation-receipt: 本文六张研发卡均含假设、角色、输入、PIT、公式/设计、快筛、QE 与退出条件 | VERIFIED | 无 |
 | F-108 | Concept Sector Track | validation-receipt: `docs/architecture/qe_concept_sector_data_factor_parallel_f2_design_20260813.md` 与五个预期实现路径存在性复核 | DESIGN_READY | 无 |
 | F-109 | Minute Signal Deferral | validation-receipt: 本文七项重新进入条件与独立 TWAP execution contract | VERIFIED | 无 |
 | F-110 | Contracts、Production Gates | validation-receipt: 本文 zero DB/process/DDL/dependency/activation/no-platform 明细表 | VERIFIED | 无 |
 | F-111 | WP-D1R/D2/D3 end markers | validation-receipt: `MA_E19R_END_STATUS`、`P0_D2_END_STATUS`、`P0_D3_END_STATUS` 的稳定定义 | VERIFIED | 无 |
-| F-112 | Verification Plan、Review Record | validation-receipt: F2 validator、equivalence 21 项与 D2 25 项聚焦测试、ruff/py_compile、runtime/ownership/guardrail、`git diff --check` 与十四轮历史/当前审核记录；提交并同步主线后在最终 HEAD 复验 | VERIFIED | 无 |
+| F-112 | Verification Plan、Review Record | validation-receipt: F2 validator、equivalence 21 项、D2 25 项与 D3 28 项聚焦测试、ruff/py_compile、runtime/ownership/guardrail、`git diff --check` 与二十轮历史/当前审核记录；最终工具 HEAD 和蓝图检查点分别复验 | VERIFIED | 无 |
 
 ## Rollout / Rollback / 发布与回滚
 
@@ -554,13 +560,17 @@ D1R + D2 + D3 结果
 
 当前 8 小时长任务状态：
 
-`QE_LT8H_01_STATUS=IN_PROGRESS_DATASET_BLOCKED_TOOLING_ACTIVE`
+`QE_LT8H_01_STATUS=COMPLETE_DATASET_BLOCKED_TOOLS_READY_NO_EXPERIMENT_SUBMITTED`
+
+`QE_LT8H_01_RESUME=DATASET_SIGNOFF_AND_ACTIVATION_THEN_SEMANTIC_AUDIT`
 
 当前工具阶段状态：
 
 `MA_E19_EQUIVALENCE_TOOL_STATUS=SOURCE_IMPLEMENTED_TESTED`
 
 `P0_D2_TOOL_STATUS=SOURCE_IMPLEMENTED_TESTED_SIGNAL_RECEIPT_PENDING_REAL_PANEL`
+
+`P0_D3_TOOL_STATUS=SOURCE_IMPLEMENTED_TESTED_ATTRIBUTION_RECEIPT_PENDING_REAL_PANEL`
 
 未来实验阶段结束：
 

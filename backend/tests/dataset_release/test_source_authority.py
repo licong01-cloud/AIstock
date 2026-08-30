@@ -1380,12 +1380,66 @@ def test_stk_limit_arbitrary_text_numeric_value_remains_fail_closed(
         authority.freeze(cutoff=date(2026, 7, 31))
 
 
-def test_postgres_numeric_marker_outside_stk_limit_remains_fail_closed(
+@pytest.mark.parametrize(
+    "column",
+    [
+        "close",
+        "turnover_rate",
+        "turnover_rate_f",
+        "volume_ratio",
+        "pe",
+        "pe_ttm",
+        "pb",
+        "ps",
+        "ps_ttm",
+        "dv_ratio",
+        "dv_ttm",
+        "total_share",
+        "float_share",
+        "free_share",
+        "total_mv",
+        "circ_mv",
+    ],
+)
+@pytest.mark.parametrize("marker", ["NaN", "Infinity", "-Infinity"])
+def test_daily_basic_postgres_numeric_non_finite_marker_becomes_nullable_source_null(
+    dataset_profile,
+    tmp_path,
+    column,
+    marker,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.payload_overrides["daily_basic"] = {column: marker}
+    authority, cas = _authority(dataset_profile, tmp_path, fake)
+
+    frozen = authority.freeze(cutoff=date(2026, 7, 31))
+    partition = next(item.as_build_input() for item in frozen.partitions if item.spec.dataset == "daily_basic")
+    reader = CASSealedPartitionReader(cas, [partition], max_partition_rows=10)
+    with reader.iter_rows("daily_basic", partition["partition_key"]) as rows:
+        row = next(rows)
+
+    assert row[column] is None
+    assert PRODUCTION_QUERY_SPECS["daily_basic"].query_version.endswith(":nonfinite_numeric_to_null_v1")
+
+
+def test_daily_basic_arbitrary_text_numeric_value_remains_fail_closed(
     dataset_profile,
     tmp_path,
 ) -> None:
     fake = FakeSnapshotSession()
-    fake.payload_overrides["daily_basic"] = {"pe": "NaN"}
+    fake.payload_overrides["daily_basic"] = {"pe": "not-a-number"}
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
+    with pytest.raises(SourceManifestError, match="numeric value is invalid"):
+        authority.freeze(cutoff=date(2026, 7, 31))
+
+
+def test_postgres_numeric_marker_outside_allowlisted_datasets_remains_fail_closed(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.payload_overrides["moneyflow_ts"] = {"buy_sm_vol": "NaN"}
     authority, _cas = _authority(dataset_profile, tmp_path, fake)
 
     with pytest.raises(SourceManifestError, match="numeric value is invalid"):

@@ -2,7 +2,7 @@
 
 - 文档类型：QE-only `docs-fast-new` 执行包
 - 日期：2026-08-30
-- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.11
+- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.12
 - 执行方案：`docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md` v1.2
 - 当前任务：`qe_20260825_031740_2457`
 - 当前状态：`MA_E19R2_PARTIAL_9_OF_12_WAITING_DATASET_SIGNOFF_TOOLING_ACTIVE`
@@ -30,7 +30,9 @@
 
 实时回读时间为 2026-08-30。任务 `qe_20260825_031740_2457` 状态为 `failed`，Loop1～9 `completed`，Loop10～12 `failed`；没有发现更新的 completed D1 task。BUG-1191 / Issue #3793 已完成 source/runtime/close-sync 并关闭，但该事实不等于数据 candidate 已签核或激活。
 
-回测数据集 durable workflow 的最新只读状态：profile `qe_hmm_full_v2`、submission `dss_cdc7ee95f703cb1cbd8a4faf9e8cee40`、`submission_state=BLOCKED_CONTRACT`、`run_id/run_state/outcome=null`、worker `healthy/IDLE`、`production_activation=not_requested`。因此当前仍禁止提交依赖新数据的正式 QE task；worker 空闲不能替代 terminal receipt、catalog readback、candidate signoff 或 activation。
+回测数据集 durable workflow 的最新只读状态：profile `qe_hmm_full_v2`、submission `dss_43485e68b2645562430a12f8e7ce1620`、`submission_state=BLOCKED_CONTRACT`、`run_id/run_state/outcome=null`、worker `healthy/IDLE`、`production_activation=not_requested`。因此当前仍禁止提交依赖新数据的正式 QE task；worker 空闲不能替代 terminal receipt、catalog readback、candidate signoff 或 activation。
+
+等待期三个离线工具已分别通过 PR #3984（九臂语义等价）、#3986（D2 Sector Oracle）、#3988（D3 benchmark/Brinson）合入；该状态只代表 source/test ready，不代表已有真实 signoff 输入、研究 receipt 或实验结果。
 
 固定合同：LGBM、CE3、h20、seed 123、21 交易日 purge、Top50/n_drop1、`score_weighted_topk_v2`、`TWAP/1min`、node1 串行度 1、零数据库数据面。
 
@@ -214,6 +216,22 @@
 
 完成标识：`P0_D3_END_STATUS=ABSOLUTE_ACTIVE_BRINSON_RECONCILED`。
 
+### 8.3 等待期离线归因工具合同
+
+实现入口固定为 `scripts/qe_alpha_candidates/sector_rotation/p0_d3_benchmark_brinson.py`。输入为自校验 `qe_p0_d3_brinson_input_v1` manifest 和一个 SHA-pinned Parquet；面板精确包含 `datetime/l2_code_id/portfolio_weight/benchmark_weight/portfolio_sector_return/benchmark_sector_return`。manifest 钉住 dataset、taxonomy、portfolio holdings、benchmark 和 execution contract identity/SHA 及固定 bootstrap/resource 参数。
+
+每个日期必须显式包含 portfolio/benchmark 的同一 sector union，键唯一、`l2_code_id>0`、权重有限且位于 `[0,1]`、两侧权重和各自等于 1（固定 tolerance）、sector return 有限且大于 -1。缺 benchmark、当前权重回填、负权重、权重不守恒、hash/schema 漂移、benchmark 零方差、tracking error 为零或资源越界均 `NOT_COMPUTABLE`；不得删除异常行或改用等权隐式补齐。
+
+按日计算：
+
+- `portfolio_return = Σ wp * Rp_sector`；`benchmark_return = Σ wb * Rb_sector`；`active_return = portfolio_return - benchmark_return`；
+- `allocation = Σ (wp-wb)*(Rb_sector-Rb_total)`；
+- `selection = Σ wb*(Rp_sector-Rb_sector)`；
+- `interaction = Σ (wp-wb)*(Rp_sector-Rb_sector)`；
+- 每日 `active_return = allocation + selection + interaction` 必须在 tolerance 内闭合，否则 fail closed。
+
+receipt 输出 portfolio/benchmark cumulative return、active arithmetic/cumulative difference、annualized beta/tracking error/information ratio、三类 Brinson effect 的均值/总和与 moving-block bootstrap 区间、最大 reconciliation residual、逐日 rows/sectors 计数及 daily-attribution SHA。相同输入逐字节确定；不写 Parquet、不访问 API/数据库、不控制进程。成功且全部闭合的状态为 `ABSOLUTE_ACTIVE_BRINSON_RECONCILED`、退出码 0；否则 `NOT_COMPUTABLE`、退出码 2。
+
 ## 9. 等待期可继续的 Alpha 工作
 
 只允许日频文件型候选的源码、fixture、PIT 截断和单元测试，不做 catalog/数据库写入或正式 QE：
@@ -249,7 +267,9 @@
 
 当前长任务状态：
 
-`QE_LT8H_01_STATUS=IN_PROGRESS_DATASET_BLOCKED_TOOLING_ACTIVE`
+`QE_LT8H_01_STATUS=COMPLETE_DATASET_BLOCKED_TOOLS_READY_NO_EXPERIMENT_SUBMITTED`
+
+`QE_LT8H_01_RESUME=DATASET_SIGNOFF_AND_ACTIVATION_THEN_SEMANTIC_AUDIT`
 
 该标识只表示等待期分析和预注册已准备，不表示数据、D1、D2、D3、新 Alpha 或策略包已经完成。
 
@@ -263,6 +283,6 @@
 | W-04 旧九臂等价性 | §5～§5.1 | 标准库 CLI、21 项聚焦测试、三态/退出码、自校验 receipt、未知字段与大小写 SHA fail closed、精确 non-runtime/ownership 登记 | SOURCE_IMPLEMENTED_TESTED | 等待新 manifest 才能形成最终裁决；未提交实验 |
 | W-05 三臂任务卡 | §6 | 窗口/固定项/提交前条件 | DESIGN_READY | 不提交 task |
 | W-06 D2 四格 | §7～§7.4 | Parquet/manifest 文件型工具、25 项聚焦测试、八格指标、bootstrap、逐日计数、oracle 标记与 portfolio `NOT_COMPUTABLE` | SOURCE_IMPLEMENTED_TESTED | 等待真实冻结 panel 形成信号层 receipt；等待 D1R/TWAP 形成 portfolio 结论 |
-| W-07 D3 Brinson | §8 | 输入一致性、分解和缺失语义 | TOOLING_ACTIVE_EXPERIMENT_PENDING | 等待 D1R 才能形成真实归因结论 |
+| W-07 D3 Brinson | §8 | 输入一致性、分解和缺失语义 | SOURCE_IMPLEMENTED_TESTED_ATTRIBUTION_RECEIPT_PENDING_REAL_PANEL | 28 项聚焦测试通过；等待 D1R 真实同 holdings/TWAP 面板才能形成归因结论 |
 | W-08 日频 Alpha 边界 | §9～§9.1 | 文件型、无 DB、无正式 QE；A-01 源码/13 tests/旧文件冒烟 | SOURCE_READY_DATA_BLOCKED | 等待含 PIT `l2_code_id` 的正式 signoff |
 | W-09 动作边界 | 全文 | process/DB/dataset/experiment 均 noop | COMPLETE | 无 |
