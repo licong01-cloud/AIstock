@@ -176,6 +176,24 @@
 
 完成标识：`P0_D2_END_STATUS=FOUR_CELL_COMPUTABLE`。
 
+### 7.4 等待期离线工具合同
+
+实现入口固定为 `scripts/qe_alpha_candidates/sector_rotation/p0_d2_sector_oracle.py`。它只实现信号层四格上界诊断，不生成或冒充 TWAP portfolio；正式收益、成本、换手、成交与主动暴露继续等待 D1R 的冻结 holdings/execution receipt。
+
+输入由一个自校验 `qe_p0_d2_sector_oracle_input_v1` JSON manifest 和它唯一引用的 Parquet 面板组成。manifest 必须钉住 panel SHA256、dataset/taxonomy/prediction/label/execution-contract identity 与各自 SHA256；Parquet 精确包含 `datetime/instrument/score/label/l2_code_id/tradable`，键唯一、日期与代码规范、数值有限、`l2_code_id>0`、`tradable` 为布尔值。缺列、重复键、未映射板块、hash 漂移、非交易样本混入或单日板块/股票样本不足均 `NOT_COMPUTABLE`，不删行、不补零、不访问数据库。
+
+固定算法：
+
+1. reality sector = 每日板块内可交易股票 prediction score 均值；oracle sector = 同日板块内 future label 均值；
+2. reality stock = prediction score；oracle stock = future label；
+3. hard = 固定 Top-M sector 后在入选板块中按 stock score 取全局 Top-K；
+4. soft = sector score 的每日百分位 × stock score 的板块内百分位作为连续分数，再取全局 Top-K；
+5. 四格 × hard/soft 共八个 cell 使用相同日期、投资域、Top-M、Top-K 和 tail fraction；排序统一使用稳定 `(score desc, l2_code_id asc, instrument asc)` tie-break，不在评价期调参；
+6. 输出逐 cell 的 sector Recall@M/NDCG@M、top-tail sector capture、within-sector RankIC、stock tail recall、selected future-label mean/hit rate及固定 seed 的 moving-block bootstrap 区间；oracle cell 永久带 `QE_ONLY_FUTURE_INFORMATION_CEILING`，RR 才可标记 reality baseline；
+7. receipt 保存输入 manifest/panel SHA、参数、逐日样本计数、八格指标和自校验 SHA；同输入逐字节确定。`portfolio_status=NOT_COMPUTABLE_WAITING_D1R_TWAP` 是信息依赖，不得被 signal proxy 覆盖。
+
+退出码：成功计算八格为 0；输入/覆盖/合同不可计算为 2。该工具本身不提交实验、不读 API/数据库、不写 Parquet、不控制进程。
+
 ## 8. WP-D3 Benchmark-relative / Brinson 预注册
 
 ### 8.1 输入
@@ -244,7 +262,7 @@
 | W-03 数据 signoff 与 active 分离 | §4 | WSL 只读观察不冒充双节点签核 | COMPLETE | 正式 signoff 待数据窗口 |
 | W-04 旧九臂等价性 | §5～§5.1 | 标准库 CLI、21 项聚焦测试、三态/退出码、自校验 receipt、未知字段与大小写 SHA fail closed、精确 non-runtime/ownership 登记 | SOURCE_IMPLEMENTED_TESTED | 等待新 manifest 才能形成最终裁决；未提交实验 |
 | W-05 三臂任务卡 | §6 | 窗口/固定项/提交前条件 | DESIGN_READY | 不提交 task |
-| W-06 D2 四格 | §7 | 四格、oracle 标记、输出与触发 | TOOLING_ACTIVE_EXPERIMENT_PENDING | 等待 D1R 才能形成真实实验结论 |
+| W-06 D2 四格 | §7～§7.4 | Parquet/manifest 文件型工具、25 项聚焦测试、八格指标、bootstrap、逐日计数、oracle 标记与 portfolio `NOT_COMPUTABLE` | SOURCE_IMPLEMENTED_TESTED | 等待真实冻结 panel 形成信号层 receipt；等待 D1R/TWAP 形成 portfolio 结论 |
 | W-07 D3 Brinson | §8 | 输入一致性、分解和缺失语义 | TOOLING_ACTIVE_EXPERIMENT_PENDING | 等待 D1R 才能形成真实归因结论 |
 | W-08 日频 Alpha 边界 | §9～§9.1 | 文件型、无 DB、无正式 QE；A-01 源码/13 tests/旧文件冒烟 | SOURCE_READY_DATA_BLOCKED | 等待含 PIT `l2_code_id` 的正式 signoff |
 | W-09 动作边界 | 全文 | process/DB/dataset/experiment 均 noop | COMPLETE | 无 |

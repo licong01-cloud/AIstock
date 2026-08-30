@@ -478,6 +478,9 @@ D1R + D2 + D3 结果
 9. **Round 9 — 实现合同复核**：固定九臂集合、fixed-anchor 规范化、九组件窗口语义、四项 release evidence、三态/退出码和自校验 receipt；禁止仅按全局 dataset id 或“窗口早于截止日”判等价。
 10. **Round 10 — fail-closed 代码复核**：补齐 manifest/arm/component/release exact-field 校验、manifest/receipt 自哈希、大小写 SHA 拒绝、输入覆盖防护和原子输出；修正 release evidence reason-code 被泛化字段错误遮蔽的问题。
 11. **Round 11 — runtime/ownership 复核**：实际 changed-files 分类为 `runtime_impact=none`；只精确登记单个离线脚本，不放宽 `scripts/qe_alpha_candidates/**`。21 项聚焦测试、ruff、py_compile、F2 validator、ownership、guardrail 和 `git diff --check` 统一执行。
+12. **Round 12 — D2 设计复核**：把等待期工具限定为 signal-level 四格，不生成或冒充 TWAP portfolio；固定 self-hashed manifest、唯一 Parquet、四格×hard/soft、稳定 tie-break、oracle 不可部署与 `NOT_COMPUTABLE_WAITING_D1R_TWAP`。
+13. **Round 13 — D2 代码复核**：修正板块表/股票表 tie-break 复用错误，补 Parquet 物理 schema 精确校验、5M 行/2GiB/10k bootstrap 不可放宽硬上限、非交易/未映射/重复键/覆盖不足 fail closed，以及 receipt 逐日 rows/sectors 计数。
+14. **Round 14 — D2 验证复核**：25 项聚焦测试覆盖八格、oracle 上界、确定性、manifest/panel hash、schema、coverage、资源、输出保护、零 DB/网络/进程与 runtime none；加入现有 `qe_read_backend` 精确测试列表，不新建 pipeline/session。
 
 ## DESIGN-COMPLIANCE-001 Review / 设计符合性审核
 
@@ -493,7 +496,7 @@ D1R + D2 + D3 结果
 | F-101 | Background、父蓝图 2.5/17 | validation-receipt: MA-E19A/B、MA-E19R2 task detail、BUG-1133/BUG-1191、node1 冻结文件只读回读 | VERIFIED | 无 |
 | F-102 | Historical Synthesis、父蓝图 2.5.3 | validation-receipt: MA-E19R2 9/12、分钟 calendar/feature/all.txt 覆盖差异、228 个明确受影响 loop 与 56 个明确保持未分类的旧 loop 分层 | VERIFIED | 无 |
 | F-103 | WP-D1R、等待包 §5～§5.1 | validation-receipt: MA-E19R2 九臂完成、三臂 metadata fail closed；`ma_e19_semantic_equivalence_audit.py` 标准库 CLI + 21 项聚焦测试；真实等价裁决仍等待新 manifest，未提交实验 | VERIFIED | 无 |
-| F-104 | WP-D2 | validation-receipt: 本文 four-cell、hard/soft、oracle identity、输出与结果触发 | DESIGN_READY | 无 |
+| F-104 | WP-D2、等待包 §7～§7.4 | validation-receipt: `p0_d2_sector_oracle.py`、25 项聚焦测试、four-cell×hard/soft、oracle identity、Parquet/manifest、稳定 tie-break、signal metrics/bootstrap/逐日计数与 portfolio `NOT_COMPUTABLE` 边界 | VERIFIED | 无 |
 | F-105 | WP-D3 | validation-receipt: 本文 absolute/active/Brinson 输入、输出、`NOT_COMPUTABLE` 和结果触发 | DESIGN_READY | 无 |
 | F-106 | Result Trigger Matrix | validation-receipt: 本文 10 行观测→最小工作包映射及禁止跳跃 | VERIFIED | 无 |
 | F-107 | A-01～A-06 | validation-receipt: 本文六张研发卡均含假设、角色、输入、PIT、公式/设计、快筛、QE 与退出条件 | VERIFIED | 无 |
@@ -501,7 +504,7 @@ D1R + D2 + D3 结果
 | F-109 | Minute Signal Deferral | validation-receipt: 本文七项重新进入条件与独立 TWAP execution contract | VERIFIED | 无 |
 | F-110 | Contracts、Production Gates | validation-receipt: 本文 zero DB/process/DDL/dependency/activation/no-platform 明细表 | VERIFIED | 无 |
 | F-111 | WP-D1R/D2/D3 end markers | validation-receipt: `MA_E19R_END_STATUS`、`P0_D2_END_STATUS`、`P0_D3_END_STATUS` 的稳定定义 | VERIFIED | 无 |
-| F-112 | Verification Plan、Review Record | validation-receipt: F2 validator、21 项聚焦测试、ruff/py_compile、runtime/ownership/guardrail、`git diff --check` 与十一轮历史/当前审核记录；提交并同步主线后在最终 HEAD 复验 | VERIFIED | 无 |
+| F-112 | Verification Plan、Review Record | validation-receipt: F2 validator、equivalence 21 项与 D2 25 项聚焦测试、ruff/py_compile、runtime/ownership/guardrail、`git diff --check` 与十四轮历史/当前审核记录；提交并同步主线后在最终 HEAD 复验 | VERIFIED | 无 |
 
 ## Rollout / Rollback / 发布与回滚
 
@@ -530,7 +533,7 @@ D1R + D2 + D3 结果
 
 | 状态项 | 本文状态 |
 |---|---|
-| source/code change | file-only MA-E19 equivalence CLI + direct tests + exact runtime/ownership registration |
+| source/code change | file-only MA-E19 equivalence + P0-D2 Sector Oracle CLIs, direct tests and exact runtime/ownership/CI registration |
 | experiment submission | noop |
 | dataset build/candidate signoff | noop |
 | production activation/symlink | noop |
@@ -556,6 +559,8 @@ D1R + D2 + D3 结果
 当前工具阶段状态：
 
 `MA_E19_EQUIVALENCE_TOOL_STATUS=SOURCE_IMPLEMENTED_TESTED`
+
+`P0_D2_TOOL_STATUS=SOURCE_IMPLEMENTED_TESTED_SIGNAL_RECEIPT_PENDING_REAL_PANEL`
 
 未来实验阶段结束：
 
