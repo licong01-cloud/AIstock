@@ -681,6 +681,23 @@ rules:
     layer: trading_runtime
     risk_level: critical
     ownership_reason: Unified simulation lifecycle and operator actions require the direct simulation runtime contract plan.
+  - rule_id: simulation_localsim_successor_core
+    priority: 120
+    include:
+      - backend/migrations/localsim_successor_core_*.sql
+      - backend/services/simulation_runtime/localsim_control.py
+      - backend/services/simulation_runtime/localsim_replay.py
+      - backend/services/simulation_runtime/successor_models.py
+      - backend/services/simulation_runtime/successor_repository.py
+      - backend/tests/simulation_runtime/test_localsim_control_plane.py
+      - backend/tests/simulation_runtime/test_localsim_replay_live_transition.py
+      - backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py
+      - backend/tests/simulation_runtime/test_localsim_successor_schema.py
+    primary_module: simulation.localsim_successor_core
+    impact_modules: [simulation_runtime, platform.db, paper_v2, strategy_package]
+    layer: trading_runtime
+    risk_level: critical
+    ownership_reason: SIM-LR-B successor account, lineage, replay, safe-boundary, and schema files require one direct L2 plan plus guarded existing-DEV-database validation.
   - rule_id: simulation_layer_foundation_tests
     priority: 110
     include:
