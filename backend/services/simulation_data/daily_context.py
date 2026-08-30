@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -788,3 +789,25 @@ class DailyTradingContextV2(BaseModel):
             "context_id": self.context_id,
             "context_hash": self.context_hash,
         }
+
+
+class DailyTradingContextCarrierError(ValueError):
+    """Raised when a frozen daily-context carrier is ambiguous or invalid."""
+
+
+def parse_daily_trading_context(
+    payload: Mapping[str, Any],
+) -> DailyTradingContextV1 | DailyTradingContextV2:
+    """Read a frozen V1 or V2 carrier without inference, upgrade, or requery."""
+
+    if not isinstance(payload, Mapping):
+        raise DailyTradingContextCarrierError("daily trading context carrier must be a mapping")
+    schema_version = payload.get("schema_version")
+    raw = dict(payload)
+    if schema_version == "daily_trading_context_v1":
+        return DailyTradingContextV1.model_validate(raw)
+    if schema_version == "daily_trading_context_v2":
+        return DailyTradingContextV2.model_validate(raw)
+    raise DailyTradingContextCarrierError(
+        "daily trading context carrier requires an explicit supported schema_version"
+    )

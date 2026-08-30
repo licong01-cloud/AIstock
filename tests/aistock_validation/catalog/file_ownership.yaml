@@ -692,6 +692,7 @@ rules:
       - backend/tests/scripts/test_strategy_package_binding_refreeze.py
       - backend/tests/simulation_architecture/**
       - backend/tests/simulation_data/**
+      - backend/tests/simulation_execution/**
       - backend/tests/simulation_signal/**
       - backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py
     primary_module: simulation.layer_foundation
