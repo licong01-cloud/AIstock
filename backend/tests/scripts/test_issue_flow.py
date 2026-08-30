@@ -314,6 +314,24 @@ def test_validation_select_maps_catalog_plans_and_production_gates(capsys: pytes
     }
 
 
+def test_validation_select_does_not_treat_dataset_release_plan_yaml_as_ddl(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert flow.main(
+        [
+            "validation-select",
+            "--changed-file",
+            "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
+        ]
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert "qlib_data" in payload["impacted_modules"]
+    assert payload["production_gates"]["ddl"] == "noop"
+    assert flow._requires_production_ddl("backend/migrations/example.sql") is True
+    assert flow._requires_production_ddl("backend/db/migrations/run_watchlist_migration.py") is True
+
+
 def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.CaptureFixture[str]) -> None:
     assert flow.main([
         "validation-select",
