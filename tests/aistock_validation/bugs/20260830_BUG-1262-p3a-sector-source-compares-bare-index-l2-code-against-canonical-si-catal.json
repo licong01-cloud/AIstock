@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1262",
-  "closed_at": null,
+  "closed_at": "2026-08-30T18:50:59.059520Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-08-30T18:20:47.887529Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a3c45d47acf7feb0da5bf48e1487aafd06c48b13",
+  "fixed_at": "2026-08-30T18:45:14Z",
   "github_issue_number": 4008,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4008",
   "last_seen_at": "2026-08-30T18:20:47.887529Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4009",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,9 +128,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1262\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1262",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "04e0fe173f8c70d5ea0327b541f6db96935bb383a8974abcff1667128f6d334b",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "a3c45d47acf7feb0da5bf48e1487aafd06c48b13",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-30T18:48:29.915647Z",
+      "mode": "read_only",
+      "observed_identity": "a3c45d47acf7feb0da5bf48e1487aafd06c48b13",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e72a0dfa49c42dec6677f1c84b9f58170db8586991facb616d0a0bea1cefd38e",
+      "receipt_sha256": "402005dcd34d12c525dba69b38959a34e41dbd93d53ca5b7fe8aff0fbcd0d9c3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "17d695b30ce6bfa68d0fc1036f771fa284198ed8c0d3a8c096f97bac7fe10d11",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -139,7 +163,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -148,6 +172,9 @@
     "fingerprint": "a2f1557461c5d1977d65acc7",
     "source_event_id": "FE-20260830-a2f1557461c5"
   },
+  "validation_evidence": [
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1262 --target worker-scheduler --expected-identity a3c45d47acf7feb0da5bf48e1487aafd06c48b13 -> passed: workflow_gate=verified"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
