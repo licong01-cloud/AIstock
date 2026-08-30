@@ -1345,7 +1345,11 @@ def test_expired_unknown_owner_is_held_and_never_reclaimed(tmp_path) -> None:
     assert processor.calls == 0
 
 
-def test_expired_dead_owner_is_requeued_only_after_quiescence_proof(tmp_path) -> None:
+@pytest.mark.parametrize("liveness_state", ["dead", "quiescent"])
+def test_expired_or_quiescent_owner_is_requeued_only_after_quiescence_proof(
+    tmp_path,
+    liveness_state: str,
+) -> None:
     clock = Clock()
     store = ControlStore.initialize(tmp_path / "control")
     run = _run(store, "dead-orphan")
@@ -1361,7 +1365,7 @@ def test_expired_dead_owner_is_requeued_only_after_quiescence_proof(tmp_path) ->
         store,
         clock=clock,
         registry=ProcessorRegistry(),
-        liveness_probe=lambda _owner: "dead",
+        liveness_probe=lambda _owner: liveness_state,
     )
 
     report = worker.run_once()
@@ -1373,8 +1377,49 @@ def test_expired_dead_owner_is_requeued_only_after_quiescence_proof(tmp_path) ->
     assert store.get_lease("release:release-dead-orphan")["state"] == "FREE"
 
 
-def test_dead_publish_owner_is_fence_handed_off_and_parent_finalizes_without_free_window(
+def test_current_worker_quiescent_resolution_orphan_is_requeued(tmp_path) -> None:
+    clock = Clock()
+    store = ControlStore.initialize(tmp_path / "control")
+    submission = _submission(store, "current-worker-quiescent")
+    past = clock() - timedelta(minutes=5)
+    claim = LeaseManager(store).claim_resolution(
+        submission_id=submission["submission_id"],
+        owner_identity="current-worker",
+        ttl_seconds=1,
+        now=past,
+    )
+    LeaseManager(store).mark_resolution_orphan_hold(
+        submission_id=submission["submission_id"],
+        resolution_attempt_id=claim.attempt_id,
+        tree_status="unknown",
+        now=past,
+    )
+    worker, _ = _worker(
+        store,
+        clock=clock,
+        registry=ProcessorRegistry(),
+        liveness_probe=lambda _owner: "quiescent",
+    )
+
+    report = worker.run_once()
+
+    assert report.kind == "orphan_resolution"
+    assert report.state == "QUEUED_RESOLUTION"
+    assert report.detail == "quiescent"
+    assert store.get_submission(submission["submission_id"])["resolution_attempt_id"] is None
+    assert store.get_resolution_attempt(claim.attempt_id)["state"] == "EXPIRED"
+    assert all(
+        row["state"] == "FREE"
+        for row in store._many("SELECT * FROM leases WHERE attempt_id=?", (claim.attempt_id,))
+    )
+    events = store.list_events(submission_id=submission["submission_id"])
+    assert events[-1]["type"] == "RESOLUTION_ORPHAN_QUIESCENT_REQUEUED"
+
+
+@pytest.mark.parametrize("liveness_state", ["dead", "quiescent"])
+def test_quiescent_publish_owner_is_fence_handed_off_and_parent_finalizes_without_free_window(
     tmp_path,
+    liveness_state: str,
 ) -> None:
     clock = Clock()
     store, _machine, _manager, candidate_root, spec = _prepared_fixture(tmp_path, "worker-finalizer")
@@ -1394,7 +1439,7 @@ def test_dead_publish_owner_is_fence_handed_off_and_parent_finalizes_without_fre
         store,
         clock=clock,
         registry=ProcessorRegistry(publish_recovery=recovery),
-        liveness_probe=lambda _owner: "dead",
+        liveness_probe=lambda _owner: liveness_state,
     )
 
     report = worker.run_once()

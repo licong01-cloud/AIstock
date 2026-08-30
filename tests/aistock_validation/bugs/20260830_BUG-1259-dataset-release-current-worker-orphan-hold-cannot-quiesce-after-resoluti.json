@@ -5,6 +5,7 @@
     "backend/services/dataset_release/worker.py",
     "backend/tests/dataset_release/test_process_liveness.py",
     "backend/tests/dataset_release/test_worker.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/bugs/20260830_BUG-1259-dataset-release-current-worker-orphan-hold-cannot-quiesce-after-resoluti.json"
   ],
   "assigned_agent": null,
@@ -30,14 +31,22 @@
   ],
   "expected": "When the exact current Worker has already exited the claimed processor into orphan reconciliation and the complete task-owned Windows/WSL child tree is quiescent, reclaim and requeue the same durable submission without requiring a Worker restart; active, reused, mismatched, incomplete or unknown process evidence must remain fail-closed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/process_liveness.py",
+      "backend/services/dataset_release/worker.py",
+      "backend/tests/dataset_release/test_process_liveness.py",
+      "backend/tests/dataset_release/test_worker.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/process_liveness.py",
       "backend/services/dataset_release/worker.py",
       "backend/tests/dataset_release/test_process_liveness.py",
-      "backend/tests/dataset_release/test_worker.py"
+      "backend/tests/dataset_release/test_worker.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/process_liveness.py",
@@ -145,16 +154,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "fresh Python process loaded task-worktree process_liveness.py and classified live dsra_00a2e7628d8d40f989890cc0e6dccc8c ORPHAN_HOLD from a valid 768-row Windows snapshot as quiescent with writes=0"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },
