@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1259",
-  "closed_at": null,
+  "closed_at": "2026-08-30T14:23:45.357936Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -165,10 +165,32 @@
       "backend-main",
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1259\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1259",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0b9ba0db52d3d183c73cb700b40440c5316ccf22c569b6715e8085fb4a2f4c26",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "45f1b4b416eacd5058a40b08f9389ad0ad97a4cb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-30T14:09:33.829299Z",
+      "mode": "read_only",
+      "observed_identity": "45f1b4b416eacd5058a40b08f9389ad0ad97a4cb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "86592e4c434c237519a92e455111feb86a4f0a7559d087a3eb7ecd2949ebc3a7",
+      "receipt_sha256": "ef3e0059a035f3ea68514c1e006574f0bc81e1e18395b252afb866d12b1b543a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6e5cbeae1968581b369a34210be5e782ffdb3eb8a1b6bb4496a382bf785e949d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -206,7 +228,7 @@
     ],
     "validation_evidence_digest": "b1d067c134e099783cc83e072cb3b3c88f4286fac62c5c2ae5965fc50d759752"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "aistock_backend"
   ],
