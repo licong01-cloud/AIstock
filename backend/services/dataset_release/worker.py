@@ -330,7 +330,7 @@ class LeaseOwnerSnapshot:
 
 
 class LivenessProbe(Protocol):
-    def __call__(self, owner: LeaseOwnerSnapshot) -> Literal["alive", "dead", "unknown"]: ...
+    def __call__(self, owner: LeaseOwnerSnapshot) -> Literal["alive", "dead", "quiescent", "unknown"]: ...
 
 
 def unknown_liveness(_owner: LeaseOwnerSnapshot) -> Literal["unknown"]:
@@ -2037,8 +2037,9 @@ class DatasetReleaseWorker:
             lease_state=str(lease["state"]),
         )
         status = self.liveness_probe(owner)
-        if status not in {"alive", "dead", "unknown"}:
+        if status not in {"alive", "dead", "quiescent", "unknown"}:
             status = "unknown"
+        tree_quiescent = status in {"dead", "quiescent"}
         resolution = self.store.get_resolution_attempt(owner.attempt_id)
         if resolution is not None:
             submission_id = str(resolution["submission_id"])
@@ -2049,7 +2050,7 @@ class DatasetReleaseWorker:
                     tree_status="alive" if status == "alive" else "unknown",
                     now=now,
                 )
-            if status == "dead":
+            if tree_quiescent:
                 self.leases.release_resolution_orphan_after_quiescence(
                     submission_id=submission_id,
                     resolution_attempt_id=owner.attempt_id,
@@ -2083,7 +2084,7 @@ class DatasetReleaseWorker:
             run = self.store.get_run(run_id)
         assert run is not None
         if run["state"] == "WAITING_PUBLISH_RECOVERY":
-            if status != "dead":
+            if not tree_quiescent:
                 return CycleReport(
                     True,
                     "orphan_publish",
@@ -2096,7 +2097,7 @@ class DatasetReleaseWorker:
                 old_attempt_id=owner.attempt_id,
                 observed=now,
             )
-        if status == "dead":
+        if tree_quiescent:
             self.leases.release_orphan_after_quiescence(
                 run_id=run_id,
                 attempt_id=owner.attempt_id,
