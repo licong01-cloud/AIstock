@@ -73,6 +73,7 @@ ARTIFACT_READY_ADJ_COVERAGE_SCHEMA = "dataset_release_artifact_ready_adj_factor_
 ARTIFACT_READY_FACTOR_OVERLAY_SCHEMA = "dataset_release_artifact_ready_factor_overlay_coverage_v1"
 ARTIFACT_READY_DAILY_COVERAGE_SCHEMA = "dataset_release_artifact_ready_daily_coverage_v2"
 ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA = STK_LIMIT_RULE_OVERLAY_SCHEMA
+STK_LIMIT_REFERENCE_PROVIDER_SCHEMA = "dataset_release_stk_limit_reference_provider_snapshot_v1"
 ARTIFACT_READY_RECHECK_SCHEMA = "dataset_release_artifact_ready_recheck_v1"
 ARTIFACT_READY_EFFECTIVE_SCHEMA = "dataset_release_artifact_ready_effective_v1"
 ARTIFACT_READY_PROVENANCE_SCHEMA = "dataset_release_artifact_ready_provenance_v1"
@@ -190,6 +191,7 @@ MinuteTushareRows = Callable[[str, date], Sequence[Mapping[str, Any]]]
 IndexTushareRows = Callable[[IndexDefinition, date, date], Sequence[Mapping[str, Any]]]
 AdjFactorTushareRows = Callable[[date], Sequence[Mapping[str, Any]]]
 DailyTushareRows = Callable[[str, date, date], Sequence[Mapping[str, Any]]]
+LimitReferenceTushareRow = Callable[[str, date, date], Mapping[str, Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -614,6 +616,7 @@ class _FrozenProviderReplay:
         self.minute: list[tuple[str, date, date, CASRef]] = []
         self.adj: dict[date, CASRef] = {}
         self.daily: dict[str, CASRef] = {}
+        self.limit_reference: dict[tuple[str, date], CASRef] = {}
         self.index: list[tuple[str, date, date, CASRef]] = []
         for raw_ref in raw_refs:
             reference = _complete_ref(cas, raw_ref, field="provider replay ref")
@@ -640,6 +643,18 @@ class _FrozenProviderReplay:
                 if not code or code in self.daily:
                     raise ArtifactReadySourceError("daily provider replay code is invalid or duplicated")
                 self.daily[code] = reference
+            elif schema == STK_LIMIT_REFERENCE_PROVIDER_SCHEMA:
+                code = str(payload.get("ts_code", "")).upper()
+                required_day = _as_date(
+                    payload.get("required_date"),
+                    field="stk_limit reference replay date",
+                )
+                key = (code, required_day)
+                if not code or key in self.limit_reference:
+                    raise ArtifactReadySourceError(
+                        "stk_limit reference provider replay identity is invalid or duplicated"
+                    )
+                self.limit_reference[key] = reference
             elif schema == "dataset_release_index_provider_snapshot_v1":
                 self.index.append(
                     (
@@ -710,6 +725,29 @@ class _FrozenProviderReplay:
             if isinstance(row, Mapping) and start <= _as_date(row.get("trade_date"), field="daily replay date") <= end
         )
 
+    def fetch_tushare_limit_reference(
+        self,
+        code: str,
+        query_start: date,
+        required_day: date,
+    ) -> Mapping[str, Any]:
+        reference = self.limit_reference.get((code.upper(), required_day))
+        if reference is None:
+            raise ArtifactReadyProviderTerminal(
+                "immutable Tushare stk_limit reference observation is unavailable"
+            )
+        payload = self.cas.get_json_bounded(reference, max_bytes=MAX_CONTROL_RECEIPT_BYTES)
+        seed = payload.get("seed") if isinstance(payload, Mapping) else None
+        if (
+            not isinstance(seed, Mapping)
+            or _as_date(payload.get("query_start"), field="stk_limit reference replay start")
+            != query_start
+        ):
+            raise ArtifactReadyProviderTerminal(
+                "immutable Tushare stk_limit reference observation is invalid"
+            )
+        return dict(seed)
+
     def fetch_tushare_index_rows(
         self, definition: IndexDefinition, start: date, end: date
     ) -> Sequence[Mapping[str, Any]]:
@@ -738,6 +776,7 @@ class ArtifactReadySourceBuilder:
         fetch_tushare_index_rows: IndexTushareRows | None = None,
         fetch_tushare_adj_factor_rows: AdjFactorTushareRows | None = None,
         fetch_tushare_daily_rows: DailyTushareRows | None = None,
+        fetch_tushare_limit_reference: LimitReferenceTushareRow | None = None,
     ) -> None:
         self.profile = profile
         self.cas = cas
@@ -747,6 +786,9 @@ class ArtifactReadySourceBuilder:
         self.fetch_tushare_index_rows = fetch_tushare_index_rows or self._fetch_tushare_index_rows
         self.fetch_tushare_adj_factor_rows = fetch_tushare_adj_factor_rows or self._fetch_tushare_adj_factor_rows
         self.fetch_tushare_daily_rows = fetch_tushare_daily_rows or self._fetch_tushare_daily_rows
+        self.fetch_tushare_limit_reference = (
+            fetch_tushare_limit_reference or self._fetch_tushare_limit_reference
+        )
         self._provider_lock = threading.Lock()
         self._active_provider_calls = 0
         self.peak_provider_calls = 0
@@ -789,7 +831,7 @@ class ArtifactReadySourceBuilder:
             checkpoint=checkpoint,
             daily_overlay_keys=daily_overlay_keys,
         )
-        limit_entries, limit_derived, limit_summary = self._limit_entries(
+        limit_entries, limit_provider, limit_derived, limit_summary = self._limit_entries(
             view,
             snapshot=snapshot,
             trading_dates=trading_dates,
@@ -810,7 +852,9 @@ class ArtifactReadySourceBuilder:
             trading_dates=trading_dates,
             checkpoint=checkpoint,
         )
-        provider_refs = _dedupe_refs((*daily_provider, *adj_provider, *minute_provider, *index_provider))
+        provider_refs = _dedupe_refs(
+            (*daily_provider, *adj_provider, *limit_provider, *minute_provider, *index_provider)
+        )
         derived_refs = _dedupe_refs(
             (
                 *adj_derived,
@@ -1085,6 +1129,7 @@ class ArtifactReadySourceBuilder:
             fetch_tushare_index_rows=replay.fetch_tushare_index_rows,
             fetch_tushare_adj_factor_rows=replay.fetch_tushare_adj_factor_rows,
             fetch_tushare_daily_rows=replay.fetch_tushare_daily_rows,
+            fetch_tushare_limit_reference=replay.fetch_tushare_limit_reference,
         )
         fresh_bundle = fresh_builder.build(
             fresh_snapshot,
@@ -1646,11 +1691,16 @@ class ArtifactReadySourceBuilder:
         daily_entries: Sequence[Mapping[str, Any]],
         adj_entries: Sequence[Mapping[str, Any]],
         checkpoint: Callable[[], None],
-    ) -> tuple[tuple[Mapping[str, Any], ...], tuple[CASRef, ...], Mapping[str, Any]]:
+    ) -> tuple[
+        tuple[Mapping[str, Any], ...],
+        tuple[CASRef, ...],
+        tuple[CASRef, ...],
+        Mapping[str, Any],
+    ]:
         """Seal deterministic, candidate-local prices for missing PIT limit keys."""
 
         if self.profile.pit_authority_status != "ACTIVE_CANONICAL":
-            return (), (), {
+            return (), (), (), {
                 "source_precedence": "legacy_database_only_v1",
                 "rule_version": None,
                 "expected_pit_keys": 0,
@@ -1658,6 +1708,7 @@ class ArtifactReadySourceBuilder:
                 "rule_derived_rows": 0,
                 "database_completion_rows": 0,
                 "database_override_rows": 0,
+                "reference_seed_rows": 0,
                 "unresolved_keys": 0,
                 "peak_code_partition_rows": 0,
             }
@@ -1670,8 +1721,58 @@ class ArtifactReadySourceBuilder:
         if not limit_descriptors:
             raise ArtifactReadyCoverageIncomplete("sealed stk_limit partitions are missing")
         entries: list[Mapping[str, Any]] = []
+        provider_refs: list[CASRef] = []
         derived_refs: list[CASRef] = []
         state: Mapping[str, LimitReferencePoint] = {}
+        reference_cache: dict[tuple[str, date], LimitReferencePoint] = {}
+
+        def resolve_reference(code: str, required_day: date) -> LimitReferencePoint | None:
+            key = (code, required_day)
+            cached = reference_cache.get(key)
+            if cached is not None:
+                return cached
+            query_start = snapshot.pit_snapshot.scope_start
+            if required_day <= query_start:
+                return None
+            try:
+                raw_seed = self._provider_call(
+                    self.fetch_tushare_limit_reference,
+                    code,
+                    query_start,
+                    required_day,
+                )
+            except Exception as exc:
+                self._raise_provider_failure(
+                    exc,
+                    code=(
+                        "WAITING_PROVIDER_RATE_LIMIT_40203"
+                        if _is_40203(exc)
+                        else ArtifactReadyCoverageIncomplete.code
+                    ),
+                    stage="stk_limit_reference_provider",
+                    subject=f"{code}:{required_day.isoformat()}",
+                )
+            point, portable_seed = _normalize_limit_reference_seed(
+                raw_seed,
+                expected_code=code,
+                query_start=query_start,
+                required_day=required_day,
+            )
+            reference = self.cas.put_json(
+                {
+                    "schema_version": STK_LIMIT_REFERENCE_PROVIDER_SCHEMA,
+                    "provider": "tushare",
+                    "ts_code": code,
+                    "query_start": query_start.isoformat(),
+                    "required_date": required_day.isoformat(),
+                    "seed": portable_seed,
+                    "safety": dict(_ZERO_SAFETY),
+                }
+            )
+            provider_refs.append(reference)
+            reference_cache[key] = point
+            return point
+
         totals: dict[str, Any] = {
             "source_precedence": "database_then_rule_derived_missing_or_incomplete_v2",
             "rule_version": PRICE_LIMIT_RULE_VERSION,
@@ -1680,6 +1781,7 @@ class ArtifactReadySourceBuilder:
             "rule_derived_rows": 0,
             "database_completion_rows": 0,
             "database_override_rows": 0,
+            "reference_seed_rows": 0,
             "unresolved_keys": 0,
             "peak_code_partition_rows": 0,
         }
@@ -1733,6 +1835,7 @@ class ArtifactReadySourceBuilder:
                         source="adj_factor",
                     ),
                     reference_state=state,
+                    reference_resolver=resolve_reference,
                 )
             state = result.reference_state
             overlay_rows = [dict(row) for row in result.overlay_rows]
@@ -1774,6 +1877,7 @@ class ArtifactReadySourceBuilder:
                 "rule_derived_rows": result.rule_derived_rows,
                 "database_completion_rows": result.database_completion_rows,
                 "database_override_rows": result.database_override_rows,
+                "reference_seed_rows": result.reference_seed_rows,
                 "unresolved_keys": result.unresolved_keys,
                 "peak_code_partition_rows": result.peak_code_partition_rows,
                 "effective_content_root": effective_root,
@@ -1802,12 +1906,18 @@ class ArtifactReadySourceBuilder:
             totals["database_rows"] += result.database_rows
             totals["rule_derived_rows"] += result.rule_derived_rows
             totals["database_completion_rows"] += result.database_completion_rows
+            totals["reference_seed_rows"] += result.reference_seed_rows
             totals["peak_code_partition_rows"] = max(
                 int(totals["peak_code_partition_rows"]),
                 result.peak_code_partition_rows,
             )
             checkpoint()
-        return tuple(entries), _dedupe_refs(derived_refs), totals
+        return (
+            tuple(entries),
+            _dedupe_refs(provider_refs),
+            _dedupe_refs(derived_refs),
+            totals,
+        )
 
     def _coverage_overlay_rows(
         self,
@@ -2917,6 +3027,74 @@ class ArtifactReadySourceBuilder:
                 raise
             raise ArtifactReadyProviderUnavailable("Tushare daily request failed") from exc
 
+    def _fetch_tushare_limit_reference(
+        self,
+        ts_code: str,
+        query_start: date,
+        required_day: date,
+    ) -> Mapping[str, Any]:
+        end = required_day - timedelta(days=1)
+        if end < query_start:
+            raise ArtifactReadyProviderTerminal("stk_limit reference lookback window is empty")
+        rows = self._fetch_tushare_daily_rows(ts_code, query_start, end)
+        candidates = [
+            _portable_daily_row(row)
+            for row in rows
+            if _as_date(row.get("trade_date"), field="stk_limit reference daily date")
+            < required_day
+        ]
+        if not candidates:
+            raise ArtifactReadyProviderTerminal(
+                "Tushare daily has no authoritative stk_limit reference close"
+            )
+        previous = max(
+            candidates,
+            key=lambda row: _as_date(row["trade_date"], field="stk_limit reference close date"),
+        )
+        close_day = _as_date(previous["trade_date"], field="stk_limit reference close date")
+        provider = self._tushare.provider()
+        try:
+            frame = provider.adj_factor(
+                ts_code=ts_code,
+                start_date=close_day.strftime("%Y%m%d"),
+                end_date=close_day.strftime("%Y%m%d"),
+                fields="ts_code,trade_date,adj_factor",
+            )
+            records = _bounded_tushare_records(
+                frame,
+                dataset="stk_limit_reference_adj_factor",
+                expected_columns=("ts_code", "trade_date", "adj_factor"),
+                date_column="trade_date",
+                start=close_day,
+                end=close_day,
+                max_rows=4,
+            )
+        except Exception as exc:
+            if _is_40203(exc):
+                raise ArtifactReadyProviderRateLimited(
+                    "Tushare stk_limit reference adj_factor request reached 40203"
+                ) from exc
+            if isinstance(exc, ArtifactReadyProviderTerminal):
+                raise
+            raise ArtifactReadyProviderUnavailable(
+                "Tushare stk_limit reference adj_factor request failed"
+            ) from exc
+        normalized = [
+            _normalize_adj_factor_row(row, source="Tushare stk_limit reference")
+            for row in records
+            if str(row.get("ts_code", "")).upper() == ts_code.upper()
+        ]
+        if len(normalized) != 1 or normalized[0]["trade_date"] != close_day:
+            raise ArtifactReadyProviderTerminal(
+                "Tushare stk_limit reference adj_factor is unavailable or ambiguous"
+            )
+        return {
+            "ts_code": ts_code.upper(),
+            "close_date": close_day.isoformat(),
+            "close_li": previous["close_li"],
+            "close_adj_factor": format(normalized[0]["adj_factor"], "f"),
+        }
+
 
 def _bounded_tushare_records(
     frame: Any,
@@ -3062,6 +3240,48 @@ def _daily_value_tuple(row: Mapping[str, Any]) -> tuple[int, ...]:
         int(normalized[field])
         for field in ("open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li")
     )
+
+
+def _normalize_limit_reference_seed(
+    raw: Mapping[str, Any],
+    *,
+    expected_code: str,
+    query_start: date,
+    required_day: date,
+) -> tuple[LimitReferencePoint, Mapping[str, Any]]:
+    if not isinstance(raw, Mapping):
+        raise ArtifactReadyProviderTerminal("Tushare stk_limit reference is not an object")
+    code = str(raw.get("ts_code", "")).upper()
+    close_day = _as_date(raw.get("close_date"), field="stk_limit reference close date")
+    if code != expected_code.upper() or not query_start <= close_day < required_day:
+        raise ArtifactReadyProviderTerminal("Tushare stk_limit reference identity is invalid")
+    try:
+        close_li = Decimal(str(raw.get("close_li")))
+        adj_factor = Decimal(str(raw.get("close_adj_factor")))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ArtifactReadyProviderTerminal("Tushare stk_limit reference values are invalid") from exc
+    if (
+        not close_li.is_finite()
+        or close_li <= 0
+        or close_li != close_li.to_integral_value()
+        or not adj_factor.is_finite()
+        or adj_factor <= 0
+    ):
+        raise ArtifactReadyProviderTerminal("Tushare stk_limit reference values are outside domain")
+    point = LimitReferencePoint(
+        close=close_li / Decimal("1000"),
+        close_adj_factor=adj_factor,
+        close_date=close_day,
+        latest_adj_factor=adj_factor,
+        latest_adj_date=close_day,
+    )
+    portable = {
+        "ts_code": code,
+        "close_date": close_day.isoformat(),
+        "close_li": int(close_li),
+        "close_adj_factor": format(adj_factor, "f"),
+    }
+    return point, portable
 
 
 def _group_minute_rows(
