@@ -82,7 +82,12 @@ def _opportunity_digest(symbols: tuple[str, ...]) -> str:
     return digest.hexdigest()
 
 
-def _write_candidate(profile, *, symbols: tuple[str, ...] = ("000001.SZ", "000002.SZ")) -> Path:
+def _write_candidate(
+    profile,
+    *,
+    symbols: tuple[str, ...] = ("000001.SZ", "000002.SZ"),
+    index_l2_code: str = "801030.SI",
+) -> Path:
     root = sector_candidate_artifact_root(profile, cutoff=TRADE_DATE)
     root.parent.mkdir(parents=True, exist_ok=True)
     sw_daily = {field: str(index + 1) for index, field in enumerate(SW_DAILY_FIELDS)}
@@ -94,7 +99,7 @@ def _write_candidate(profile, *, symbols: tuple[str, ...] = ("000001.SZ", "00000
             "trade_date": TRADE_DATE.isoformat(),
             "classification_l2_code": "220300",
             "classification_l2_identity_hash": "7" * 64,
-            "index_l2_code": "801030.SI",
+            "index_l2_code": index_l2_code,
             "index_l2_identity_hash": "8" * 64,
             "classification_authority_receipt_hash": CLASSIFICATION_RECEIPT,
             "index_membership_authority_receipt_hash": INDEX_RECEIPT,
@@ -249,6 +254,55 @@ def test_p3a_candidate_source_proves_denominator_and_streams_only_resolved_rows(
                 start=TRADE_DATE,
                 end=TRADE_DATE,
                 l2_code_map={"220300": 17},
+            )
+        )
+
+
+def test_p3a_candidate_source_maps_authoritative_bare_index_code_to_catalog_symbol(
+    tmp_path: Path,
+    dataset_profile,
+) -> None:
+    profile = _profile(dataset_profile, tmp_path)
+    _write_candidate(profile, index_l2_code="801030")
+    source = SectorCandidateSource.load(
+        profile,
+        cutoff=TRADE_DATE,
+        pit_snapshot=_pit(("000001.SZ", "000002.SZ")),
+        trading_dates=(TRADE_DATE,),
+    )
+
+    rows = list(
+        source.iter_rows(
+            start=TRADE_DATE,
+            end=TRADE_DATE,
+            l2_code_map={"801030.SI": 17},
+        )
+    )
+
+    assert rows[0]["l2_code_id"] == 17
+
+
+@pytest.mark.parametrize("index_l2_code", ["80103", "801030.si", " 801030"])
+def test_p3a_candidate_source_rejects_malformed_index_l2_code(
+    tmp_path: Path,
+    dataset_profile,
+    index_l2_code: str,
+) -> None:
+    profile = _profile(dataset_profile, tmp_path)
+    _write_candidate(profile, index_l2_code=index_l2_code)
+    source = SectorCandidateSource.load(
+        profile,
+        cutoff=TRADE_DATE,
+        pit_snapshot=_pit(("000001.SZ", "000002.SZ")),
+        trading_dates=(TRADE_DATE,),
+    )
+
+    with pytest.raises(SectorCandidateSourceError, match="index L2 code is not canonical"):
+        list(
+            source.iter_rows(
+                start=TRADE_DATE,
+                end=TRADE_DATE,
+                l2_code_map={"801030.SI": 17},
             )
         )
 
