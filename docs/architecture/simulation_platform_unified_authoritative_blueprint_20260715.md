@@ -1004,20 +1004,14 @@ K2-A-M1 PR #2753 initial run `30190525169`暴露Windows CRLF raw-byte断言与Li
 
 ### P0-J：LocalSIM 旧业务逻辑退役与三层隔离
 
-承接`F-133..F-148`并严格执行下位[`localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md`](localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md)，按以下顺序实施：
+承接`F-133..F-148`并严格执行下位[`localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md`](localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md)。`LR-0..LR-9`继续作为验收工作包，但不再逐项拆成十个PR；基于当前Paper/Simulation/Frontend规模和跨模块import事实，实施合并为四个阶段、最多六个源PR：
 
-1. **LR-0 边界冻结**：建立legacy production-entry inventory、layer import boundary、route uniqueness与single-writer测试；旧Paper day/session/replay/auto-run路径停止新增功能和backport，但不以新增人工门禁阻断现有runtime。
-2. **LR-1 Data**：抽取`simulation_data`，严格拆开TDX current-day causal minute与completed-day historical minute，移除V25 day-feature、legacy previous-close和current-day DB-minute capability；盘中market SQL/minute DB read/行情写入为零；同步迁移current MiniQMT quote context使用的共享data DTO且保持KERNEL_V2语义不变。
-3. **LR-2 Signal**：抽取`simulation_signal`，删除Selection Center到Paper portfolio service的反向依赖；信号只输出immutable selection/target/rebalance evidence，不读取broker/ledger或改变execution。
-4. **LR-3 Execution**：抽取broker contract、LocalSIM runtime、TWAP、economic coordinator与projector；拆分`simulation_runtime/scheduler.py`的LocalSIM planning/economic/projection责任，所有production caller同PR迁移且无re-export shim；current MiniQMT client切换到同一broker contract owner并运行直接不漂移矩阵。
-5. **LR-4 Control plane**：交付原子account/release/binding API、successor runtime config与lifecycle/query；StrategyPackage alpha core不变，日频/HMM/risk/fee/tail与TWAP snapshot只通过immutable release配置。
-6. **LR-5 Replay**：交付独立六个月historical replay、restart resume和safe-boundary live successor；不影响当前运行LocalSIM账户、writer、资金、持仓或run。
-7. **LR-6 Product cutover**：router/frontend/MCP/scripts/backend lifecycle一次切换到统一runtime，同时删除旧mutation routes/session-tick/auto-run UI、公开scheduler start/stop/tick mutation与旧scheduler hook；禁止dual route、shadow、translator、fallback和长期410 façade。
-8. **LR-7 Source deletion**：在fresh-process route/reference为零后删除§4.6列出的旧classes/files/tests/daemon/POC/SimGateway、Paper v2 Python产品包与router；仍有效的contract test迁到新owner，旧行为测试不作为新路径oracle。
-9. **LR-8 Schema retirement**：只读inventory后DEV-first退役旧init schema、session/auto-run/sentinel对象和无引用字段；历史migration保留，生产DDL/DML需精确授权和readback。
-10. **LR-9 Runtime acceptance**：分别闭合DEV PostgreSQL、六个月replay、capacity、用户重启、正常交易日、零旧route/import和query/write budget；只有全部证据完成才可把`SIM-P-086`标为`IMPLEMENTED_VERIFIED`。
+1. **`SIM-LR-A` Layer Foundation（LR-0..LR-2，1 PR）**：建立legacy/import/route/query/single-writer基线，交付`simulation_data`与`simulation_signal`，迁移MiniQMT共享data DTO并解除Selection Center创建Paper portfolio的反向依赖；不迁移economic writer、不开放新route。
+2. **`SIM-LR-B` Successor Core（LR-3..LR-5，2 PR）**：PR-B1交付LocalSIM execution/economic coordinator/projector并拆出scheduler经济职责；PR-B2交付account/release/binding control plane、现有正常账户唯一lineage、隔离六个月replay、safe-boundary live successor及additive successor schema/mapping source/DEV receipt。B2只交付内部command/query与contract tests，不增加dormant router/UI/MCP；生产successor DDL/DML需另行精确授权、应用/readback。
+3. **`SIM-LR-C` Atomic Product Cutover（LR-6，1 PR）**：只在successor schema/lineage生产readback和legacy session/auto-run/sentinel/scheduler active owner归零后，在non-trading safe boundary且零in-flight economic transaction时，router/frontend/MCP/scripts/application lifecycle一次切换到统一runtime；新UI固定为`/simulation/localsim`，旧`/paper-v2`business route/API/types不保留redirect/410；同PR删除旧mutation caller、session/tick/auto-run UI、公开scheduler start/stop/tick mutation与旧scheduler hook；现有正常LocalSIM复用原经济事实范围且hash不变；禁止把route增加与删除拆开，禁止dual route、shadow、translator、fallback、feature flag和长期410 façade。
+4. **`SIM-LR-D` Physical Retirement & Acceptance（LR-7..LR-9，2 PR + 独立运行验收）**：PR-D1在用户重启和active-reference zero后物理删除Paper v2 Python产品包/router/旧测试/daemon/POC/SimGateway，以及旧frontend component命名空间、MCP module/profile、script entry和Validation/CI/Nightly产品分类并更新catalog；PR-D2只提交DEV已验证的legacy schema/init retirement migration，生产DDL/DML仍需精确授权；最后分别闭合六个月replay capacity、用户重启、正常交易日、零旧route/import和query/write budget。
 
-每一LR slice使用独立小PR和适用`F-*`验收。任何阶段不得把“新目录存在”“旧autostart关闭”“旧route返回410”或设计validator通过写成legacy retirement完成。
+阶段内不按文件继续拆分；只有economic writer、产品切流和生产schema边界允许独立PR。任何阶段不得把“新目录存在”“旧autostart关闭”“旧route返回410”或设计validator通过写成legacy retirement完成。
 
 ### P1-A：Phase 0B B0 baseline observation
 
@@ -1312,12 +1306,12 @@ hot-path correction migration 必须 DEV-first，并同时完成：禁止新 KER
 | `F-139` | StrategyPackage仅冻结alpha/model/factor；日频/HMM/risk/fee/tail/runtime variant与LocalSIM TWAP snapshot通过immutable successor release配置；requested policy仅进audit metadata，runtime不读manifest policy或硬编码覆盖 |
 | `F-140` | `SimulationAccountV1`与统一control-plane原子创建account+release+binding并提供CAS lifecycle/query API；失败零orphan/双快照，UI/MCP不再创建session或主动tick，产品router不公开scheduler start/stop/tick mutation |
 | `F-141` | historical replay使用独立account/binding/job与同一日级engine；六个月追赶、restart resume、safe-boundary live successor和当前运行账户隔离完整 |
-| `F-142` | 产品切流一次完成，新旧路径无production双写/shadow/translator/fallback；cutover后旧mutation route/caller不存在 |
+| `F-142` | 产品切流一次完成，新旧路径无production双写/shadow/translator/fallback；现有正常LocalSIM通过唯一lineage在安全边界延续且经济事实hash不变；cutover后旧mutation route/caller不存在 |
 | `F-143` | 下位设计§5所列旧LocalSIM product files/classes/tests/daemon/POC/gateway/startup hook在替代证据闭合后物理删除，不保留runnable deprecated code |
 | `F-144` | 历史migration保留；旧init schema、session/auto-run/sentinel objects和无引用字段按inventory、DEV、授权production migration/readback顺序退役 |
 | `F-145` | import boundary、legacy absence、route uniqueness、query budget、single writer、source isolation与no-orphan具有直接静态/contract tests |
 | `F-146` | DEV PostgreSQL、六个月replay、capacity、用户重启和正常交易日LocalSIM证据分别闭合，source/merge/DDL/runtime/cleanup状态不混写 |
-| `F-147` | rollout按LR-0..LR-9小PR forward-only实施；切流后不恢复旧产品route，失败不改写经济事实或私增人工门禁 |
+| `F-147` | rollout按`SIM-LR-A..D`四个可验收阶段、最多六个源PR forward-only实施；LR编号是工作包而非逐项PR；切流后不恢复旧产品route，失败不改写经济事实或私增人工门禁 |
 | `F-148` | DESIGN-COMPLIANCE-001四项逐条通过；设计PR不冒充实现，后续只有全部删除和运行证据闭合才能宣布LocalSIM legacy retirement完成 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
@@ -1465,12 +1459,12 @@ hot-path correction migration 必须 DEV-first，并同时完成：禁止新 KER
 | `F-139` | §5.1、§4.6；legacy-retirement detailed §4.1、LR-4 | target `backend/tests/simulation_runtime/test_localsim_control_plane.py` | design_ready + explicitly approved design-only scope | successor release implementation pending LR-4 |
 | `F-140` | §5.12；legacy-retirement detailed §4.6、LR-4/LR-6 | target `backend/tests/simulation_runtime/test_localsim_control_plane.py` and `frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts` | design_ready + explicitly approved design-only scope | API/UI evidence pending LR-4/LR-6 |
 | `F-141` | §4.6/§5.12；legacy-retirement detailed §4.7、LR-5 | target `backend/tests/simulation_runtime/test_localsim_replay_live_transition.py` | design_ready + explicitly approved design-only scope | six-month replay/runtime evidence pending LR-5/LR-9 |
-| `F-142` | §5.12、§11；legacy-retirement detailed §4.8、LR-6 | target `backend/tests/simulation_architecture/test_localsim_route_uniqueness.py` | design_ready + explicitly approved design-only scope | cutover evidence pending LR-6 |
+| `F-142` | §5.12、§11；legacy-retirement detailed §4.8、§4.8.1、`SIM-LR-C` | target `backend/tests/simulation_architecture/test_localsim_route_uniqueness.py` and lineage economic-hash unchanged receipt | design_ready + explicitly approved design-only scope | cutover and current-account continuation evidence pending `SIM-LR-C` |
 | `F-143` | §4.6/§5.12；legacy-retirement detailed §5、LR-7 | target `backend/tests/simulation_architecture/test_legacy_localsim_absence.py` | design_ready + explicitly approved design-only scope | physical deletion only after replacement evidence |
 | `F-144` | §5.12/§11.2；legacy-retirement detailed §4.8、LR-8 | target `backend/tests/simulation_runtime/test_localsim_legacy_schema_retirement_postgres.py` | design_ready + explicitly approved design-only scope | production DDL/DML requires separate authorization |
 | `F-145` | §10.7；legacy-retirement detailed §7 | target `backend/tests/simulation_architecture/test_layer_import_boundaries.py` and `backend/tests/simulation_data/test_query_budget.py` | design_ready + explicitly approved design-only scope | CI/nightly plans pending implementation |
 | `F-146` | §10.5/§10.7；legacy-retirement detailed §7.6、LR-9 | artifact: future commit-bound DEV/replay/capacity/restart/normal-day validation receipts | design_ready + explicitly approved production-state separation | all runtime evidence pending implementation |
-| `F-147` | §11；legacy-retirement detailed §6/§8 | artifact: future LR-0..LR-9 source/merge/DDL/runtime/cleanup receipts | design_ready + explicitly approved staged implementation | no rollback to legacy route |
+| `F-147` | §11；legacy-retirement detailed §6/§8 | artifact: future `SIM-LR-A..D` source/merge/DDL/runtime/cleanup receipts | design_ready + explicitly approved four-stage implementation | no rollback to legacy route |
 | `F-148` | §0.2、§16；legacy-retirement detailed §13–§15 | artifact: `docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md` and feature-validator receipt | design_ready + explicitly approved design-only scope | implementation completion is not claimed |
 
 ## 15. Current Implementation Progress Ledger / 当前实现进度账本
@@ -1577,7 +1571,7 @@ hot-path correction migration 必须 DEV-first，并同时完成：禁止新 KER
 | `SIM-P-083` | BUG-1099 historical simulation cleanup | PR #3509 merged | production DML applied_and_verified | runtime not_required | 仅保留两个批准 package；不代表历史源码/config/artifact 已物理删除 |
 | `SIM-P-084` | daily trading context / DB storm remediation（历史V1 slice） | design PR #3651、BUG-1143 PR #3657、BUG-1144 PR #3662与BUG-1171后续形成V1冻结基础 | 既有V1 nullable pre-close、query-budget与MiniQMT日志governor证据保留 | V1共同`market.stk_limit`权威被2026-08-26用户修订，不再作为新计划目标态 | `F-126/F-127`历史只读；`F-128/F-129`热路径/日志边界继续有效；新权威见SIM-P-085 |
 | `SIM-P-085` | `F-130..F-132` broker-specific daily limit authority | 设计PR #3812 / `7905c0ab`；P1-A PR #3816 / `8e1aecf5`；P1-B PR #3823 / `eaf59b52`；BUG-1203 P1-C LocalSIM source | P1-A/P1-B CI全绿；P1-C direct=`9 passed`、`simulation_core_l2=695 passed,2 skipped`、`paper_v2_backend=1131 passed,3 skipped,2 xfailed`、registry/L0/F2全绿 | P1A_P1B_SOURCE_MERGED_RUNTIME_PENDING + P1C_SOURCE_REVIEW_PASSED_READY_FOR_PR | P1-C PR/CI/merge、P1-D、用户restart与正常交易日receipts分别pending；DDL/DML/dependency/config/broker/service-control均noop |
-| `SIM-P-086` | `F-133..F-148` LocalSIM legacy retirement与data/signal/execution隔离 | 设计：`localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md`；只读审计证据：旧run-day/replay/session tick/auto-run/sentinel可写入口、simulation_runtime对Paper broker/data/model/repository依赖、Selection到Paper portfolio反向依赖、统一control-plane缺口 | target：layer import、legacy absence、route uniqueness、query budget、single-writer、atomic create、six-month replay、safe-boundary live transition、DEV/restart/normal-day receipts | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | LR-0..LR-9均未实施；source/PR/merge、DEV/production DDL/DML、用户restart、runtime、normal-day和旧代码cleanup分别pending；本设计PR全部production gates为noop |
+| `SIM-P-086` | `F-133..F-148` LocalSIM legacy retirement与data/signal/execution隔离 | 设计：`localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md`；PR #3983 / merge `4ab2f333e1bee63718c466a81baef25e71ac07e5`已合入初版；实施基线`main@93e5f02ad`确认Paper product=43 files/25,862 lines、Simulation Runtime=24 files/45,676 lines，并存在Simulation/MiniQMT/Selection/Strategy Package/Trading Core/MCP/script跨模块旧import/route | target：`SIM-LR-A..D`四阶段、最多六个源PR；layer import、legacy absence、route uniqueness、query budget、single-writer、atomic create、six-month replay、safe-boundary live transition、DEV/restart/normal-day receipts | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | 四阶段均未实施；source/PR/merge、DEV/production DDL/DML、用户restart、runtime、normal-day和旧代码cleanup分别pending；本实施设计修订全部production gates为noop |
 
 以下为 append-only historical slice evidence：
 
@@ -1652,6 +1646,8 @@ BUG-987 source verification closure：`miniqmt_execution_runtime_l2=1346 passed,
 2026-08-26 多轮审核记录：R1修复历史V1歧义、runtime跨source对比、TDX `K.Last/K.Close`与价格单位、逻辑batch和MiniQMT orderability边界；R2修复V2混合source root、batch/symbol失败分层、forward-only rollback和BUG-1171历史状态；R3以12项反向语义清单和F2门禁复核，蓝图`132/132 rows, warnings=0`、详细设计`7/7 rows, warnings=0`，零剩余finding。该审核只证明设计可实施，不代表`F-130..F-132`源码或runtime已完成。
 
 2026-08-30 LocalSIM legacy-retirement设计复核：R1按生产入口/依赖/前端/MCP/script/schema只读审计，固定“先补齐新路径、一次切流、后物理删除”并区分迁移后删除、直接删除和历史migration保留；R2发现current MiniQMT KERNEL_V2仍借用Paper broker/data DTO、统一router仍公开scheduler mutation、旧包处置未覆盖legacy MiniQMTSim/execution/canonical PIT，已补充共享contract迁移与MiniQMT不漂移矩阵、application lifecycle唯一scheduler owner和Paper v2 Python产品包整体删除条件；R3消除requested policy audit与effective TWAP release component双truth，补齐`SimulationAccountV1`事务/CAS/单快照身份，并明确可保留既有物理schema名称但不得保留旧session/auto-run业务语义；R4反向验证不存在dual route、translator、silent fallback、旧scheduler mutation、第二份policy/account truth或以目录存在冒充切流，F2详细设计=`16/16,warnings=0`、总蓝图=`148/148,warnings=0`、changed-files guardrail=`findings=0,blocking=0`、ownership=`mapped=2,unmapped=0,ambiguous=0`且`git diff --check`通过，最终zero findings。该设计不代表`F-133..F-148`源码、DDL、用户重启、runtime或cleanup已完成。
+
+2026-08-30 LocalSIM implementation-plan修订复核：R5依据`main@93e5f02ad`的Paper product 43 files/25,862 lines、Simulation Runtime 24 files/45,676 lines及跨Simulation/MiniQMT/Selection/Strategy Package/Trading Core/MCP/script依赖，把十个LR工作包合并为`SIM-LR-A..D`四阶段、最多六个源PR，并修正successor schema/DEV/生产授权时序、Selection当前产品编排与cutover前legacy owner zero；R6移除PR-B2 dormant router/UI/MCP中间态，新增现有正常LocalSIM的唯一lineage、economic hash unchanged、零in-flight与safe-boundary owner切换；R7补齐旧包外部Strategy Package paper admission、`/paper-v2` frontend、MCP、scripts、backend lifecycle及Validation/CI/Nightly分类的迁移后删除。最终F2详细设计=`16/16,warnings=0`、总蓝图=`148/148,warnings=0`、changed-files guardrail=`findings=0,blocking=0`、ownership=`mapped=2,unmapped=0,ambiguous=0`、`git diff --check`通过，zero findings；该修订仍只证明计划可实施，不代表任何source/DDL/runtime/cleanup阶段已执行。
 
 `BUG-1197 / F-130/F-131 P1-A` source implementation逐项复核：
 
