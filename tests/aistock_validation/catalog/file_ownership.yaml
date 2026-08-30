@@ -679,6 +679,24 @@ rules:
     layer: trading_runtime
     risk_level: critical
     ownership_reason: Unified simulation lifecycle and operator actions require the direct simulation runtime contract plan.
+  - rule_id: simulation_layer_foundation_tests
+    priority: 110
+    include:
+      - backend/tests/advisory_phase1/test_stage_trace.py
+      - backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py
+      - backend/tests/qmt_strategy_ledger/test_router_summary.py
+      - backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py
+      - backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py
+      - backend/tests/scripts/test_strategy_package_binding_refreeze.py
+      - backend/tests/simulation_architecture/**
+      - backend/tests/simulation_data/**
+      - backend/tests/simulation_signal/**
+      - backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py
+    primary_module: simulation.layer_foundation
+    impact_modules: [simulation_runtime, paper_v2, miniqmt_execution_runtime, selection_center, strategy_package]
+    layer: backend_test
+    risk_level: critical
+    ownership_reason: SIM-LR-A cross-module tests must select and execute the direct simulation core L2 plan instead of remaining unmapped.
   - rule_id: simulation_daily_limit_authority
     priority: 97
     include:

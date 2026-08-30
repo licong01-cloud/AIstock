@@ -21,6 +21,10 @@ from scripts import strategy_package_binding_refreeze as refreeze
 
 ACTIVE_ON = date(2026, 7, 1)
 OLD_SHA = "b3fa7f6eed5cf929c79ad1726ade31eb80a9ad54f45bfad764c6ef52a9fe0dfe"
+MINIQMT_B0_QUOTE_CONTROL = {
+    "schema_version": "miniqmt_quote_control_binding_v1",
+    "control_revision": "B0_QUOTE_V2",
+}
 
 
 def _manifest_pair() -> tuple[object, object]:
@@ -113,6 +117,9 @@ def _repo_with_binding(
         account_group_id="ag_minqmt_62266303_sim" if broker_backend == SimulationBrokerBackend.MINIQMT_SIM else None,
         strategy_slot_id="codex_final_ms_l2_20260603",
         strategy_name="codex_final_ms_l2_20260603",
+        miniqmt_quote_control=(
+            MINIQMT_B0_QUOTE_CONTROL if broker_backend == SimulationBrokerBackend.MINIQMT_SIM else None
+        ),
         approval_state=approval_state,
         effective_from=date(2026, 6, 1),
         effective_to=effective_to,

@@ -169,6 +169,15 @@ modules:
     test_plans:
       required_on_change: [l0, simulation_core_l2]
       recommended: [localsim_unattended_l3, simulation_runtime_ops_ui, simulation_dual_backend_l4, miniqmt_sim_trading_hours_l5]
+  - module_id: simulation.layer_foundation
+    display_name: Simulation data signal execution layer foundation
+    parent_module: simulation_runtime
+    module_type: product_feature
+    risk_level: critical
+    description: Cross-module contract, source-isolation, import-boundary, and no-drift tests for the LocalSIM layer foundation.
+    description_zh: LocalSIM 数据层、信号层、执行层基础迁移的跨模块契约、数据源隔离、import 边界和无漂移测试。
+    test_plans:
+      required_on_change: [l0, simulation_core_l2]
   - module_id: paper_v2
     display_name: Paper Trading v2
     module_type: product_feature
