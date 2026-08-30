@@ -80,6 +80,7 @@ targets:
       - backend/services/dataset_release/index_sources.py
       - backend/services/dataset_release/minute_overlay.py
       - backend/services/dataset_release/process_liveness.py
+      - backend/services/dataset_release/profile.py
       - backend/services/dataset_release/resolution_processor.py
       - backend/services/dataset_release/resource_budget.py
       - backend/services/dataset_release/resource_gate.py
@@ -95,6 +96,7 @@ targets:
       - scripts/**/*scheduler*.py
       - scripts/dataset_release_worker.py
       - scripts/dataset_release_source_stage.py
+      - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
     probe_origins: [http://127.0.0.1:8001, http://localhost:8001]
     operator_runbook_ref: bug_record.runtime_contract.operator_runbook_ref
     expected_identity_ref: merged_commit
@@ -113,6 +115,7 @@ targets:
           - backend/services/dataset_release/index_sources.py
           - backend/services/dataset_release/minute_overlay.py
           - backend/services/dataset_release/process_liveness.py
+          - backend/services/dataset_release/profile.py
           - backend/services/dataset_release/resolution_processor.py
           - backend/services/dataset_release/resource_budget.py
           - backend/services/dataset_release/resource_gate.py
@@ -125,6 +128,7 @@ targets:
           - backend/services/dataset_release/worker.py
           - scripts/dataset_release_worker.py
           - scripts/dataset_release_source_stage.py
+          - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
         probe_mode: dataset_release_worker_heartbeat
         local_probe:
           profile_path: configs/datasets/qe_backtest_monthly_v2.yaml
