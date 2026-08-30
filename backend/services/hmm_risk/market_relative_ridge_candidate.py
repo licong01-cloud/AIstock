@@ -188,6 +188,7 @@ REASON_READBACK = "hmm_risk_rotation_candidate_readback_mismatch"
 REASON_UNEXPECTED = "hmm_risk_rotation_unexpected_error"
 REASON_MARKET_IDENTITY = "hmm_risk_market_conditioning_identity_mismatch"
 REASON_MARKET_REGIME = "hmm_risk_market_conditioning_regime_unavailable"
+REASON_MARKET_STATE_UNAVAILABLE = "hmm_risk_market_conditioning_state_unavailable"
 REASON_INTERACTION_NON_FINITE = "hmm_risk_market_conditioning_interaction_non_finite"
 REASON_RL1_INPUT = "hmm_risk_rotation_l1_input_identity_mismatch"
 REASON_RL1_FOLD = "hmm_risk_rotation_l1_development_fold_invalid"
@@ -752,6 +753,7 @@ def _condition_component(
     *,
     fold: str,
     phase: str,
+    allow_market_state_abstention: bool = False,
 ) -> ConditionedComponent:
     expected_dates = {day for sequence in component.sequences for day in sequence.dates}
     invalid_market_date_keys = [day for day in market_states if type(day) is not date]
@@ -784,7 +786,7 @@ def _condition_component(
             },
         )
     missing_market_dates = sorted(expected_dates - market_dates)
-    if missing_market_dates:
+    if missing_market_dates and not allow_market_state_abstention:
         raise _fail(
             REASON_MARKET_IDENTITY,
             "sector feature dates are missing same-day market states",
@@ -804,7 +806,11 @@ def _condition_component(
     unused_market_dates = sorted(market_dates - expected_dates)
     sequences: list[SequenceData] = []
     identity_rows: list[list[str]] = []
+    valid_identity_rows: list[list[str]] = []
+    missing_identity_rows: list[list[str]] = []
     matrices: list[np.ndarray] = []
+    unavailable_items = list(component.unavailable_items)
+    expected_interaction_row_count = sum(len(sequence.dates) for sequence in component.sequences)
     for sequence in component.sequences:
         base = np.asarray(sequence.values, dtype="<f8")
         if base.ndim != 2 or base.shape[1] != len(RELATIVE_FEATURES):
@@ -820,12 +826,37 @@ def _condition_component(
                 stage="interaction",
                 evidence={"fold": fold, "phase": phase, "sequence_key": sequence.key},
             )
-        labels = [market_states[day] for day in sequence.dates]
+        available_positions: list[int] = []
+        labels: list[str] = []
+        for position, day in enumerate(sequence.dates):
+            if day not in market_states:
+                missing_identity_rows.append([sequence.key, day.isoformat()])
+                unavailable_items.append(
+                    {
+                        "fold": fold,
+                        "level": component.level,
+                        "phase": phase,
+                        "reason_code": REASON_MARKET_STATE_UNAVAILABLE,
+                        "sector_code": sequence.key,
+                        "trade_date": day.isoformat(),
+                    }
+                )
+                continue
+            available_positions.append(position)
+            labels.append(market_states[day])
+        if not available_positions:
+            continue
         if any(label not in {"risk_on", "risk_off"} for label in labels):
             raise _fail(REASON_MARKET_IDENTITY, "market sign identity is invalid", stage="interaction")
+        selected_dates = tuple(sequence.dates[position] for position in available_positions)
+        selected_ordinals = tuple(sequence.ordinals[position] for position in available_positions)
+        selected_base = np.asarray(base[available_positions], dtype="<f8")
         signs = np.asarray([1.0 if label == "risk_on" else -1.0 for label in labels], dtype="<f8")
-        conditioned = np.asarray(np.concatenate([base, base * signs[:, None]], axis=1), dtype="<f8")
-        if conditioned.shape != (base.shape[0], len(P2_3C_FEATURES)) or not np.isfinite(conditioned).all():
+        conditioned = np.asarray(
+            np.concatenate([selected_base, selected_base * signs[:, None]], axis=1),
+            dtype="<f8",
+        )
+        if conditioned.shape != (selected_base.shape[0], len(P2_3C_FEATURES)) or not np.isfinite(conditioned).all():
             raise _fail(
                 REASON_INTERACTION_NON_FINITE,
                 "market-conditioned feature matrix is non-finite or has an invalid shape",
@@ -835,16 +866,32 @@ def _condition_component(
         sequences.append(
             SequenceData(
                 key=sequence.key,
-                dates=sequence.dates,
-                ordinals=sequence.ordinals,
+                dates=selected_dates,
+                ordinals=selected_ordinals,
                 values=conditioned,
             )
         )
         matrices.append(conditioned)
         identity_rows.extend(
-            [[sequence.key, day.isoformat(), label] for day, label in zip(sequence.dates, labels, strict=True)]
+            [[sequence.key, day.isoformat(), label] for day, label in zip(selected_dates, labels, strict=True)]
+        )
+        valid_identity_rows.extend([[sequence.key, day.isoformat()] for day in selected_dates])
+    if not matrices:
+        raise _fail(
+            REASON_MARKET_REGIME,
+            "market conditioning has no same-day sector observations",
+            stage="interaction",
+            evidence={
+                "fold": fold,
+                "phase": phase,
+                "expected_interaction_row_count": expected_interaction_row_count,
+                "missing_market_identity_count": len(missing_identity_rows),
+                "missing_market_identity_sha256": canonical_sha256(missing_identity_rows),
+            },
         )
     matrix = np.vstack(matrices).astype("<f8", copy=False)
+    conditioned_dates = sorted(expected_dates & market_dates)
+    missing_date_payload = [day.isoformat() for day in missing_market_dates]
     body = {
         "fold": fold,
         "phase": phase,
@@ -867,15 +914,41 @@ def _condition_component(
         "market_state_coverage_complete": True,
         "market_sign": {"risk_on": 1.0, "risk_off": -1.0},
     }
+    if allow_market_state_abstention:
+        body.update(
+            {
+                "expected_interaction_row_count": expected_interaction_row_count,
+                "conditioned_interaction_row_count": len(identity_rows),
+                "conditioned_sector_date_count": len(conditioned_dates),
+                "conditioned_sector_date_set_sha256": canonical_sha256([day.isoformat() for day in conditioned_dates]),
+                "missing_market_date_count": len(missing_market_dates),
+                "missing_market_dates": missing_date_payload,
+                "missing_market_date_set_sha256": canonical_sha256(missing_date_payload),
+                "missing_market_reason_code": REASON_MARKET_STATE_UNAVAILABLE,
+                "missing_market_identity_count": len(missing_identity_rows),
+                "missing_market_identity_sha256": canonical_sha256(missing_identity_rows),
+                "market_state_coverage_complete": not missing_market_dates,
+                "market_state_date_coverage_ratio": len(conditioned_dates) / len(sector_dates),
+                "market_state_gap_policy": "typed_unavailable_no_default_no_forward_fill",
+            }
+        )
+    if allow_market_state_abstention:
+        final_unavailable_items = tuple(sorted(unavailable_items, key=canonical_json_bytes))
+        final_valid_row_count = len(valid_identity_rows)
+        final_valid_identity_sha256 = canonical_sha256(valid_identity_rows)
+    else:
+        final_unavailable_items = component.unavailable_items
+        final_valid_row_count = component.valid_row_count
+        final_valid_identity_sha256 = component.valid_identity_sha256
     conditioned_component = ConditionedFeatureComponent(
         component=f"{component.component}_market_conditioned",
         level=component.level,
         feature_names=P2_3C_FEATURES,
         canonical_codes=component.canonical_codes,
         sequences=tuple(sequences),
-        unavailable_items=component.unavailable_items,
-        valid_row_count=component.valid_row_count,
-        valid_identity_sha256=component.valid_identity_sha256,
+        unavailable_items=final_unavailable_items,
+        valid_row_count=final_valid_row_count,
+        valid_identity_sha256=final_valid_identity_sha256,
     )
     return ConditionedComponent(
         component=conditioned_component,
@@ -1786,10 +1859,10 @@ def _run_conditioned_level_final(
         "interaction": conditioned.receipt,
         "target": targets.receipt,
         "fit": _conditioned_fit_receipt(fit),
-        "valid_row_count": component.valid_row_count,
-        "valid_identity_sha256": component.valid_identity_sha256,
-        "unavailable_items": list(component.unavailable_items),
-        "unavailable_item_count": len(component.unavailable_items),
+        "valid_row_count": conditioned.component.valid_row_count,
+        "valid_identity_sha256": conditioned.component.valid_identity_sha256,
+        "unavailable_items": list(conditioned.component.unavailable_items),
+        "unavailable_item_count": len(conditioned.component.unavailable_items),
         "holdout_accessed": False,
     }
     return {**body, "receipt_sha256": canonical_sha256(body)}
@@ -3175,7 +3248,13 @@ def _c012_rl1_level_final(
         expected_sector_count=LEVEL_SPECS["L1"]["expected_sector_count"],
         minimum_daily_count=LEVEL_SPECS["L1"]["minimum_daily_count"],
     )
-    conditioned = _condition_component(component, market_states, fold="final-development", phase="final")
+    conditioned = _condition_component(
+        component,
+        market_states,
+        fold="final-development",
+        phase="final",
+        allow_market_state_abstention=True,
+    )
     fit = _fit_ridge(
         conditioned.component,
         targets,
@@ -3253,9 +3332,19 @@ def run_c012_rl1_candidate_process(
             train, train_target, validation, validation_target = _prepare_fold(
                 panel, benchmark, calendar, level="L1", fold=fold
             )
-            conditioned_train = _condition_component(train, market.train_states, fold=fold["fold"], phase="train")
+            conditioned_train = _condition_component(
+                train,
+                market.train_states,
+                fold=fold["fold"],
+                phase="train",
+                allow_market_state_abstention=True,
+            )
             conditioned_validation = _condition_component(
-                validation, market.validation_states, fold=fold["fold"], phase="validation"
+                validation,
+                market.validation_states,
+                fold=fold["fold"],
+                phase="validation",
+                allow_market_state_abstention=True,
             )
             fit = _fit_ridge(
                 conditioned_train.component,
