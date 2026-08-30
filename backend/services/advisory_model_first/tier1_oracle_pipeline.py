@@ -2053,8 +2053,11 @@ def _load_and_verify_n1_sources(request: AdvisoryN1Tier1RequestV1) -> dict[str, 
             ready_path_count=len(ready_paths),
         )
     initialize_qlib(request.qlib_daily_root)
+    # The feature bundle's calendar identity was frozen against the P0-C market
+    # data cutoff.  Its H5 schema may extend to factor_data_cutoff, but those are
+    # separate identities and must not be conflated.
     feature_calendar = load_trading_calendar(
-        "2023-09-01", request.factor_data_cutoff.isoformat()
+        "2023-09-01", request.data_cutoff.isoformat()
     )
     calendar_hash = canonical_json_sha256(
         {"market_sessions": [item.date().isoformat() for item in feature_calendar]}
