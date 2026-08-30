@@ -28,12 +28,18 @@
   ],
   "expected": "Index source SQL and its MVCC fingerprint must apply the validated profile code-to-required_from map before manifest validation; active rows remain non-null/fail-closed and no symbol-specific exception is allowed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260830_BUG-1264-index-source-freezes-rows-before-profile-required-from.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/source_authority.py",
-      "backend/tests/dataset_release/test_source_authority.py"
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260830_BUG-1264-index-source-freezes-rows-before-profile-required-from.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -111,11 +117,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "fresh read-only production index scan passed: 22768 rows; STAR50 min_date=required_from=2020-01-02; pre_required_rows=0; database_writes=0"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

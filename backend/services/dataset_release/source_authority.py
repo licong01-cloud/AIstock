@@ -256,6 +256,10 @@ class SourceQuerySpec:
             raise ValueError("dated query requires an explicit refresh-audit dataset")
         if (self.code_column is None) != (self.code_policy is None):
             raise ValueError("source code column/policy must be specified together")
+        if self.code_policy == "profile_index_codes" and (
+            self.code_column != "ts_code" or self.date_expression is None
+        ):
+            raise ValueError("profile index source requires ts_code and a date expression")
         if type(self.max_partition_rows) is not int or not 0 < self.max_partition_rows <= 1_000_000:
             raise ValueError("source partition row limit must be in [1,1000000]")
 
@@ -307,6 +311,11 @@ class SourceQuerySpec:
             )
         if self.code_column is not None:
             clauses.append(f"{alias}.{self.code_column} = ANY(%(codes)s)")
+        if self.code_policy == "profile_index_codes":
+            clauses.append(
+                f"{self.date_expression} >= "
+                f"(%(index_required_from_json)s::jsonb ->> {alias}.{self.code_column})::date"
+            )
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         return (
             "SELECT jsonb_build_array("
@@ -399,6 +408,7 @@ def _query(
             f"{query_id}_canonical_row_code_major_v3"
             + (":derived_l2_v1" if derived_values else "")
             + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
+            + (":profile_required_from_v1" if code_policy == "profile_index_codes" else "")
             + (
                 ":nonfinite_numeric_to_null_v1"
                 if query_id in POSTGRES_NON_FINITE_TO_NULL_COLUMNS
@@ -2583,6 +2593,9 @@ class MonthlySourceAuthority:
         codes: list[str] | None = None
         if query.code_policy == "profile_index_codes":
             codes = list(self.profile.index_codes)
+            index_required_from_json = canonical_json_bytes(
+                {item.daily_code: item.required_from.isoformat() for item in self.profile.indices}
+            ).decode("utf-8")
         elif query.code_policy in {"pit_stock_codes", "pit_minute_code_batch"}:
             pit_codes = tuple(sorted({span.ts_code for span in pit_snapshot.spans}))
             codes = list(selected_stock_codes or pit_codes)
@@ -2594,6 +2607,8 @@ class MonthlySourceAuthority:
             params: dict[str, Any] = {}
             if codes is not None:
                 params["codes"] = codes
+            if query.code_policy == "profile_index_codes":
+                params["index_required_from_json"] = index_required_from_json
             yield "all", params
             return
         start = self.profile.minute_start_date if query.start_policy == "minute" else self.profile.start_date
@@ -2638,6 +2653,8 @@ class MonthlySourceAuthority:
             params = {"start": chunk.start, "end": chunk.end}
             if codes is not None:
                 params["codes"] = codes
+            if query.code_policy == "profile_index_codes":
+                params["index_required_from_json"] = index_required_from_json
             yield f"{chunk.start.isoformat()}_{chunk.end.isoformat()}", params
 
     def _seal_query_partition(

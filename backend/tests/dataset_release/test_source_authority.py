@@ -779,6 +779,51 @@ def test_minute_partition_requests_cross_date_chunks_and_stable_pit_code_batches
     assert "EXISTS (SELECT 1 FROM market.kline_daily_raw" in PRODUCTION_QUERY_SPECS["bak_basic"].sql
 
 
+def test_index_partition_requests_bind_validated_profile_required_from_map(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    store = ControlStore.initialize(tmp_path / "control")
+    authority = MonthlySourceAuthority(dataset_profile, CASStore(store.root))
+    pit = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "eligible_start": dataset_profile.start_date,
+                "eligible_end": date(2026, 7, 31),
+                "entry_reason": "listed",
+                "exit_reason": "scope_end",
+            }
+        ],
+        universe_key=dataset_profile.universe_key,
+        rule_version=dataset_profile.universe_rule_version,
+        scope_start=dataset_profile.start_date,
+        cutoff=date(2026, 7, 31),
+        state_identity="state",
+        source_fingerprint_sha256="a" * 64,
+        parameter_hash="b" * 64,
+    )
+
+    requests = list(
+        authority._partition_requests(
+            PRODUCTION_QUERY_SPECS["index_daily"],
+            date(2026, 7, 31),
+            pit_snapshot=pit,
+        )
+    )
+
+    expected_required_from = {
+        item.daily_code: item.required_from.isoformat() for item in dataset_profile.indices
+    }
+    assert requests
+    assert all(params["codes"] == list(dataset_profile.index_codes) for _key, params in requests)
+    assert all(
+        json.loads(params["index_required_from_json"]) == expected_required_from for _key, params in requests
+    )
+    assert "%(index_required_from_json)s::jsonb" in PRODUCTION_QUERY_SPECS["index_daily"].sql
+    assert PRODUCTION_QUERY_SPECS["index_daily"].query_version.endswith(":profile_required_from_v1")
+
+
 def test_minute_stable_bucket_identity_localizes_new_instrument_change(
     dataset_profile,
     tmp_path,
@@ -1344,6 +1389,18 @@ def test_source_row_non_finite_optional_value_is_rejected(
     authority, _cas = _authority(dataset_profile, tmp_path, fake)
 
     with pytest.raises(SourceManifestError, match="invalid JSON"):
+        authority.freeze(cutoff=date(2026, 7, 31))
+
+
+def test_active_index_postgres_numeric_non_finite_marker_remains_fail_closed(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.payload_overrides["index_daily"] = {"open": "NaN"}
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
+    with pytest.raises(SourceManifestError, match="numeric value is invalid"):
         authority.freeze(cutoff=date(2026, 7, 31))
 
 
