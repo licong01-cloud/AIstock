@@ -92,10 +92,7 @@ from backend.services.selection_center.runtime_profile import (
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import DbSuspendLookupProvider, TradabilityFilter
 from backend.services.simulation_runtime.repository import SimulationRuntimeRepository
-from backend.services.simulation_signal.strategy_package_selection import (
-    DailySelectionSignalService,
-    StrategyPackageSelectionService,
-)
+from backend.services.simulation_runtime.selection import DailySelectionSignalService, StrategyPackageSelectionService
 from backend.services.stock_universe_pit_service import require_live_st_pit_universe_key
 from backend.services.strategy_package.live_inference import (
     QEExperimentRuntimeAssetResolver,
@@ -478,9 +475,7 @@ class ExactDevStPitRiskDecisionProvider:
     def __init__(self, conn_factory: ConnFactory) -> None:
         self._conn_factory = conn_factory
 
-    def evaluate(
-        self, *, symbols: list[str], trade_date: date, profile: Any, current_positions: dict[str, Any] | None = None
-    ) -> dict[str, RiskDecision]:
+    def evaluate(self, *, symbols: list[str], trade_date: date, profile: Any, current_positions: dict[str, Any] | None = None) -> dict[str, RiskDecision]:
         normalized = sorted({str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()})
         if not normalized:
             return {}
@@ -636,9 +631,7 @@ class HistoricalOnboardingComponents:
 
 
 class RealDevHistoricalOnboardingService:
-    def __init__(
-        self, *, connector: Connector = psycopg2.connect, now_provider: Callable[[], datetime] | None = None
-    ) -> None:
+    def __init__(self, *, connector: Connector = psycopg2.connect, now_provider: Callable[[], datetime] | None = None) -> None:
         self._connector = connector
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
 
@@ -658,13 +651,8 @@ class RealDevHistoricalOnboardingService:
         historical_store = HistoricalOnboardingEvidenceStore(root=evidence_root)
         stored_request = historical_store.publish(request)
         onboarding = base_store.load(request.onboarding_request_ref)
-        if (
-            not isinstance(onboarding, RealDevOnboardingRequest)
-            or onboarding.request_hash != request.onboarding_request_hash
-        ):
-            raise RealDevOnboardingError(
-                REASON_PROGRAM_BINDING_INVALID, "historical request references the wrong onboarding request"
-            )
+        if not isinstance(onboarding, RealDevOnboardingRequest) or onboarding.request_hash != request.onboarding_request_hash:
+            raise RealDevOnboardingError(REASON_PROGRAM_BINDING_INVALID, "historical request references the wrong onboarding request")
         self._validate_request_parity(request=request, onboarding=onboarding)
         try:
             config = resolve_database_connection(target_label=TargetLabel.DEV, env_file=env_file)
@@ -674,19 +662,13 @@ class RealDevHistoricalOnboardingService:
             identity = FixedReadOnlyProjection(connection, config).identity()
         actual_identity_hash = database_identity_hash(identity)
         if actual_identity_hash != request.target_database_identity_hash:
-            raise RealDevOnboardingError(
-                REASON_PROGRAM_BINDING_INVALID, "historical request DEV identity differs from exact target"
-            )
+            raise RealDevOnboardingError(REASON_PROGRAM_BINDING_INVALID, "historical request DEV identity differs from exact target")
         actual_root_hash = target_package_asset_root_hash(target_package_asset_root)
         if actual_root_hash != request.target_package_asset_root_hash:
-            raise RealDevOnboardingError(
-                REASON_PROGRAM_BINDING_INVALID, "historical request package asset root differs from exact target"
-            )
+            raise RealDevOnboardingError(REASON_PROGRAM_BINDING_INVALID, "historical request package asset root differs from exact target")
         release_id, release_hash = repository_code_release(repository_root)
         if request.code_release_id != release_id or request.code_release_hash != release_hash:
-            raise RealDevOnboardingError(
-                REASON_PROGRAM_BINDING_INVALID, "historical request code release differs from the executing repository"
-            )
+            raise RealDevOnboardingError(REASON_PROGRAM_BINDING_INVALID, "historical request code release differs from the executing repository")
         components = self._build_components(
             config=config,
             expected_database_identity_hash=actual_identity_hash,
@@ -917,9 +899,7 @@ class RealDevHistoricalOnboardingService:
             or request.policy_registry_version != onboarding.policy_registry_version
             or request.policy_registry_hash != onboarding.policy_registry_hash
         ):
-            raise RealDevOnboardingError(
-                REASON_PROGRAM_BINDING_INVALID, "historical request differs from onboarding date/policy identity"
-            )
+            raise RealDevOnboardingError(REASON_PROGRAM_BINDING_INVALID, "historical request differs from onboarding date/policy identity")
         expected = {
             item.program_id: (item.package_id, item.alpha_mode, item.style, item.target_count, item.review_policy)
             for item in onboarding.target_dev_program_specs
@@ -929,9 +909,7 @@ class RealDevHistoricalOnboardingService:
             for item in request.program_specs
         }
         if actual != expected:
-            raise RealDevOnboardingError(
-                REASON_PROGRAM_BINDING_INVALID, "historical Program specs differ from onboarding request"
-            )
+            raise RealDevOnboardingError(REASON_PROGRAM_BINDING_INVALID, "historical Program specs differ from onboarding request")
 
     def _build_components(
         self,
@@ -1060,12 +1038,8 @@ class RealDevHistoricalOnboardingService:
         if existing is not None:
             binding = components.program_repository.get_active_binding_version(spec.program_id)
             if binding is None:
-                raise RealDevOnboardingError(
-                    REASON_PROGRAM_BINDING_INVALID, "existing historical Program has no active binding"
-                )
-            self._assert_program_exact(
-                spec=spec, program=existing, binding=binding, effective_from=effective_from, components=components
-            )
+                raise RealDevOnboardingError(REASON_PROGRAM_BINDING_INVALID, "existing historical Program has no active binding")
+            self._assert_program_exact(spec=spec, program=existing, binding=binding, effective_from=effective_from, components=components)
             return existing, binding
 
         config = components.program_service._validated_config(
@@ -1155,9 +1129,7 @@ class RealDevHistoricalOnboardingService:
         }
         expected = {key: normalized[key] for key in actual}
         if actual != expected or program.status == PROGRAM_STATUS_ARCHIVED:
-            raise RealDevOnboardingError(
-                REASON_PROGRAM_BINDING_INVALID, "existing historical Program payload conflicts with request"
-            )
+            raise RealDevOnboardingError(REASON_PROGRAM_BINDING_INVALID, "existing historical Program payload conflicts with request")
         if (
             binding.program_id != program.program_id
             or binding.package_mode != PACKAGE_MODE_SINGLE
@@ -1167,9 +1139,7 @@ class RealDevHistoricalOnboardingService:
             or binding.activation_status != BINDING_STATUS_ACTIVE
             or binding.runtime_config_json != spec.runtime_config
         ):
-            raise RealDevOnboardingError(
-                REASON_PROGRAM_BINDING_INVALID, "existing historical binding payload conflicts with request"
-            )
+            raise RealDevOnboardingError(REASON_PROGRAM_BINDING_INVALID, "existing historical binding payload conflicts with request")
 
     def _ensure_prospective_evidence(
         self,
@@ -1180,13 +1150,9 @@ class RealDevHistoricalOnboardingService:
         binding: AdvisoryStrategyBindingVersion,
         components: HistoricalOnboardingComponents,
     ) -> tuple[Any, str | None]:
-        context = components.program_resolver.resolve(
-            program_id=spec.program_id, decision_trade_date=request.decision_trade_date
-        )
+        context = components.program_resolver.resolve(program_id=spec.program_id, decision_trade_date=request.decision_trade_date)
         try:
-            existing = components.evidence_adapter.load(
-                context=context, decision_trade_date=request.decision_trade_date
-            )
+            existing = components.evidence_adapter.load(context=context, decision_trade_date=request.decision_trade_date)
             self._assert_evidence_code_release(
                 evidence_id=existing.evidence_id,
                 request=request,
@@ -1293,9 +1259,7 @@ class RealDevHistoricalOnboardingService:
                 )
                 row = cursor.fetchone()
         if row is None:
-            raise RealDevOnboardingError(
-                REASON_DSE_INVALID, "historical DSE disappeared during code release validation"
-            )
+            raise RealDevOnboardingError(REASON_DSE_INVALID, "historical DSE disappeared during code release validation")
         actual = {
             str(row["producer_code_release_id"] or ""),
             str(row["config_code_release_id"] or ""),
@@ -1462,10 +1426,7 @@ class RealDevHistoricalOnboardingService:
         target_trade_date: date,
         components: HistoricalOnboardingComponents,
     ) -> ProspectiveSelectionContext:
-        source_receipts = [
-            SourceReadReceipt.model_validate(item)
-            for item in (artifact.metadata or {}).get("source_read_receipts") or []
-        ]
+        source_receipts = [SourceReadReceipt.model_validate(item) for item in (artifact.metadata or {}).get("source_read_receipts") or []]
         observed = [item.available_at or item.first_observed_at for item in source_receipts]
         if not observed or any(item is None for item in observed):
             raise RealDevOnboardingError(REASON_DSE_INVALID, "score artifact source receipts are incomplete")
@@ -1518,10 +1479,7 @@ class RealDevHistoricalOnboardingService:
             "package_effective_config": package_config,
             "package_effective_config_hash": canonical_evidence_json_sha256(package_config),
             "runtime_variant_id": package_config.get("runtime_variant_id"),
-            "runtime_profile_version_id": str(
-                (package_config.get("runtime_profile_binding") or {}).get("profile_version_id")
-                or "generated_runtime_profile_v1"
-            ),
+            "runtime_profile_version_id": str((package_config.get("runtime_profile_binding") or {}).get("profile_version_id") or "generated_runtime_profile_v1"),
             "runtime_profile_hash": runtime_profile_config_sha256(package_config),
             "selection_adapter_version": "strategy_package_selection_service_v1",
             "query_template_version": "strategy_package_live_inference_v2",
@@ -1618,10 +1576,7 @@ class RealDevHistoricalOnboardingService:
         if len(rows) != 2 or not all(bool(row.get("is_trading")) for row in rows):
             raise DataUnavailableError(
                 "historical onboarding requires exact decision and target trading calendar rows",
-                context={
-                    "decision_trade_date": decision_date.isoformat(),
-                    "target_trade_date": target_date.isoformat(),
-                },
+                context={"decision_trade_date": decision_date.isoformat(), "target_trade_date": target_date.isoformat()},
             )
         return rows
 
@@ -1650,7 +1605,6 @@ class RealDevHistoricalOnboardingService:
         raw_rows = list(signal.snapshot.candidates)
         risk_rows = list(risk.candidates)
         selected_rows = list(tradability.candidates)
-
         def layer(
             name: str,
             *,

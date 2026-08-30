@@ -84,3 +84,12 @@ def test_signal_owner_has_no_portfolio_or_session_creation_method() -> None:
     assert "create_portfolio" not in source
     assert "create_session" not in source
     assert "paper_portfolio_service" not in source
+
+
+def test_runtime_selection_compatibility_surface_has_no_business_logic() -> None:
+    path = SERVICES / "simulation_runtime" / "selection.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    assert not any(isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) for node in ast.walk(tree))
+    imports = _imports(path)
+    assert imports == {"backend.services.simulation_signal.strategy_package_selection"}
