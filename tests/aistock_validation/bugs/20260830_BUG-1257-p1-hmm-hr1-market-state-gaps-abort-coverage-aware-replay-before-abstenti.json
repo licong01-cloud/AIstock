@@ -1,6 +1,8 @@
 {
   "actual": "C-012-RL1-HR1 formal 24-fit replay completed 5/24 fits then failed in fold-1 train interaction. The approved L2 market carrier retained 392/405 dates because 13 May-2022 dates had fewer than 118 valid L2 sectors; L1 retained all 405 dates. market_relative_ridge_candidate._condition_component currently maps any missing same-day market state to fatal hmm_risk_market_conditioning_identity_mismatch, so approved D4 coverage/abstention and prediction-only/outcome-only accounting never execute. Fix must retain canonical dates, L2 minimum 118, L1 denominator 31, folds, market K/lambda/seed, Ridge alpha/features/target and all product thresholds. Missing market-conditioned rows must become typed unavailable/abstention with exact date/sector/hash evidence, never default/forward-filled state, never silently dropped from coverage denominators, and invalid date keys/states must remain fatal. No HMM refit during BUG implementation; formal replay resumes only after merged verified source.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+    "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py",
     "tests/aistock_validation/bugs/20260830_BUG-1257-p1-hmm-hr1-market-state-gaps-abort-coverage-aware-replay-before-abstenti.json"
   ],
   "assigned_agent": null,
@@ -35,9 +37,15 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+      "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py"
+    ]
   },
   "first_seen_at": "2026-08-30T11:33:47.409000Z",
   "fix_branch": null,
