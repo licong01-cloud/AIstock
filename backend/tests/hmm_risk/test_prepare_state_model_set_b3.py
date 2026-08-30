@@ -17,6 +17,26 @@ from backend.services.hmm_risk.state_model_set import ALL_CORE_FEATURES, BASE_FE
 from scripts.hmm_risk import prepare_state_model_set as subject
 
 
+def test_rotation_l1_source_scope_keeps_l2_market_conditioning_carrier() -> None:
+    scope = subject._l1_source_level_scope(rotation_l1_only=True)
+
+    assert scope == {
+        "source_levels": ("L1", "L2"),
+        "rotation_levels": ("L1",),
+        "l2_usage": "market_conditioning_carrier",
+    }
+
+
+def test_full_source_scope_keeps_both_rotation_levels() -> None:
+    scope = subject._l1_source_level_scope(rotation_l1_only=False)
+
+    assert scope == {
+        "source_levels": ("L1", "L2"),
+        "rotation_levels": ("L1", "L2"),
+        "l2_usage": "rotation_and_market",
+    }
+
+
 def _request() -> dict:
     dataset = {"schema_version": "dataset_v1", "calendar_benchmark": {"schema_version": "calendar_v1"}}
     mapping = {"schema_version": "mapping_v1"}
