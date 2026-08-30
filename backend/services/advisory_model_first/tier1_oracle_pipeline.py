@@ -554,10 +554,13 @@ def run_n1_tier1_pipeline(request_path: str | Path) -> dict[str, Any]:
     # Holdout authorization intentionally precedes environment checks and every
     # prediction/Qlib/factor/suspend loader.
     _, oracle_access, learnability_access = authorize_n1_development_access(request)
-    environment = _verify_wsl_environment(request)
     progress = Tier1Progress(limit_bytes=request.resource_max_rss_bytes)
     existing = _find_existing_bundle(request)
     if existing is not None:
+        environment = _verify_wsl_environment(
+            request,
+            require_repository_identity=False,
+        )
         delivery = _deliver_bundle(request=request, bundle_path=existing)
         return {
             "status": "EXISTING_BUNDLE",
@@ -566,11 +569,13 @@ def run_n1_tier1_pipeline(request_path: str | Path) -> dict[str, Any]:
             "bundle_id": existing.name,
             "bundle_path": str(existing),
             "sealed_holdout_accessed": False,
+            "environment": environment,
             "delivery": delivery,
             "backend_restart": "noop",
             "production_ddl_gate": "noop",
             "runtime_activation": "noop",
         }
+    environment = _verify_wsl_environment(request, require_repository_identity=True)
 
     started = time.monotonic()
     sources = _load_and_verify_n1_sources(request)
@@ -2149,7 +2154,11 @@ def _load_and_verify_n1_sources(request: AdvisoryN1Tier1RequestV1) -> dict[str, 
     }
 
 
-def _verify_wsl_environment(request: AdvisoryN1Tier1RequestV1) -> dict[str, Any]:
+def _verify_wsl_environment(
+    request: AdvisoryN1Tier1RequestV1,
+    *,
+    require_repository_identity: bool,
+) -> dict[str, Any]:
     if os.name == "nt" or "microsoft" not in platform.release().lower():
         _raise(
             "N1 batch must run inside WSL",
@@ -2163,7 +2172,7 @@ def _verify_wsl_environment(request: AdvisoryN1Tier1RequestV1) -> dict[str, Any]
             conda_env=conda_env or None,
         )
     actual_commit = _git_commit_for_worktree(Path(request.repository_root))
-    if actual_commit != request.repository_commit:
+    if require_repository_identity and actual_commit != request.repository_commit:
         _raise(
             "N1 repository commit differs from the frozen request",
             "ADVISORY_N1_REQUEST_INVALID",
@@ -2174,6 +2183,12 @@ def _verify_wsl_environment(request: AdvisoryN1Tier1RequestV1) -> dict[str, Any]
         "platform_release": platform.release(),
         "conda_env": conda_env,
         "repository_commit": actual_commit,
+        "requested_repository_commit": request.repository_commit,
+        "repository_identity_check": (
+            "MATCHED_FOR_COMPUTE"
+            if require_repository_identity
+            else "NOT_REQUIRED_FOR_IMMUTABLE_DELIVERY_ONLY_RESUME"
+        ),
         "python": platform.python_version(),
         "pandas": importlib.metadata.version("pandas"),
         "numpy": importlib.metadata.version("numpy"),

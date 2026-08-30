@@ -126,6 +126,8 @@ label, cost, capacity, inference and resource policies
 
 请求创建后 hash 不得变化；同 request hash 的运行只允许 exact retry。
 
+若同 request 的不可变 bundle 已完成但 registry/route 交付中断，重试必须先验证 bundle 全部 hash、receipt 与 request 关系，然后只恢复原子 registry append 和派生 route。该 delivery-only resume 不重新调用任何市场数据 loader，也不要求当前 HEAD 等于历史 compute commit；bundle 内仍永久绑定原 compute commit，恢复环境必须单独记录当前 delivery commit。Windows 与 WSL 对同一 evidence 文件的 URI 拼写不得作为内容漂移，跨系统同一性使用 `role + sha256 + size_bytes`。
+
 ### 5.2 PIT membership 与 tradability
 
 PIT snapshot 冻结规则：

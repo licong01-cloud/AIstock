@@ -976,11 +976,16 @@ def generate_current_route(
     n0_record = n0_records[0]
     parent_ref = evidence_reference_for_file(parent_spike_path, role="n0_parent_spike")
     window_ref = evidence_reference_for_file(window_contract_path, role="n0_window_contract")
+    # Windows and WSL use different absolute URI spellings for the same file.
+    # The immutable content identity is role + hash + size; the URI remains a
+    # locator and must not make a valid cross-OS recovery look like drift.
     expected_n0_refs = {
-        (parent_ref.artifact_uri, parent_ref.sha256),
-        (window_ref.artifact_uri, window_ref.sha256),
+        (parent_ref.role, parent_ref.sha256, parent_ref.size_bytes),
+        (window_ref.role, window_ref.sha256, window_ref.size_bytes),
     }
-    actual_n0_refs = {(item.artifact_uri, item.sha256) for item in n0_record.evidence_refs}
+    actual_n0_refs = {
+        (item.role, item.sha256, item.size_bytes) for item in n0_record.evidence_refs
+    }
     if (
         actual_n0_refs != expected_n0_refs
         or n0_record.policy_identity != window.contract_sha256
