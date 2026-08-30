@@ -170,7 +170,6 @@ from backend.services.hmm_risk.stock_fact_repository import (  # noqa: E402
     MEMBER_CLASSIFICATION_CTES,
     PostgresStockFactReader,
     StockFactSourceSpec,
-    load_daily_aggregates,
     load_direct_daily_aggregates,
     load_mapping_manifest,
 )
@@ -1018,6 +1017,15 @@ def _c010_provider_absence_partition(
     return partition, [resolver_identity, pit_identity, price_identity, sw_identity]
 
 
+def _l1_source_level_scope(*, rotation_l1_only: bool) -> dict[str, Any]:
+    source_levels = ("L1", "L2")
+    return {
+        "source_levels": source_levels,
+        "rotation_levels": ("L1",) if rotation_l1_only else source_levels,
+        "l2_usage": "market_conditioning_carrier" if rotation_l1_only else "rotation_and_market",
+    }
+
+
 def _load_l1_source_inputs(
     request: dict[str, Any],
     *,
@@ -1060,6 +1068,7 @@ def _load_l1_source_inputs(
         industry_pit_adapter.bind_l1_code_projection(l1_projection)
     if rotation_l1_only and industry_pit_adapter is None:
         raise StateModelSetError("rotation L1 source requires the shared industry PIT authority")
+    level_scope = _l1_source_level_scope(rotation_l1_only=rotation_l1_only)
     security_identity_manifest = _load_security_identity_manifest(source)
     provider_absence_manifest = _load_provider_absence_manifest(source)
     source_start = _date(source.get("source_start"), "source_start")
@@ -1096,9 +1105,16 @@ def _load_l1_source_inputs(
             "price_mapping_stream": "server_side_cursor",
             "fact_lookup": "date_bounded_exact_key_maps",
             "causal_circ_mv": "python_state_from_authoritative_daily_basic_only",
-            "direct_l1_l2_single_stream": not rotation_l1_only,
-            "requested_sector_levels": ["L1"] if rotation_l1_only else ["L1", "L2"],
+            "direct_l1_l2_single_stream": True,
+            "requested_sector_levels": list(level_scope["source_levels"]),
         }
+        if rotation_l1_only:
+            source_state["query_plan_contract"].update(
+                {
+                    "requested_rotation_levels": list(level_scope["rotation_levels"]),
+                    "l2_usage": level_scope["l2_usage"],
+                }
+            )
         if industry_pit_adapter is not None:
             industry_pit_preflight = reader.run_industry_pit_preflight(
                 window_start=C010_APPROVED_TRAIN_START,
@@ -1120,22 +1136,10 @@ def _load_l1_source_inputs(
         reader.load_classification_lookup()
         reader.validate_fact_uniqueness()
         mapping_manifest, constituents = load_mapping_manifest(reader)
-        if rotation_l1_only:
-            aggregates, stock_fact_manifest = load_daily_aggregates(
-                reader,
-                min_coverage=MIN_COVERAGE,
-                sector_level="L1",
-            )
-            l2_aggregates = []
-            l2_stock_fact_manifest = {
-                "schema_version": "hmm_risk_rotation_l1_l2_not_requested_v1",
-                "status": "NOT_REQUESTED_ROTATION_L1_ONLY",
-            }
-        else:
-            aggregates, stock_fact_manifest, l2_aggregates, l2_stock_fact_manifest = load_direct_daily_aggregates(
-                reader,
-                min_coverage=MIN_COVERAGE,
-            )
+        aggregates, stock_fact_manifest, l2_aggregates, l2_stock_fact_manifest = load_direct_daily_aggregates(
+            reader,
+            min_coverage=MIN_COVERAGE,
+        )
         calendar, benchmark, benchmark_manifest = _load_calendar_and_benchmark(
             conn,
             source_spec.source_start,
@@ -1183,7 +1187,7 @@ def _load_l1_source_inputs(
                 eligibility,
                 min_coverage=MIN_COVERAGE,
                 formal_policy=c010_formal,
-                direct_levels=(("L1",) if rotation_l1_only else ("L1", "L2")),
+                direct_levels=level_scope["source_levels"],
             )
             c010_payload = {
                 "eligibility": eligibility,
@@ -1201,17 +1205,13 @@ def _load_l1_source_inputs(
         trading_dates=calendar,
         csi300_returns=benchmark,
     )
-    if rotation_l1_only:
-        l2_panel = None
-        l2_feature_definition = None
-    else:
-        l2_panel, l2_feature_definition = build_l1_feature_panel(
-            l2_aggregates,
-            trading_dates=calendar,
-            csi300_returns=benchmark,
-            expected_sector_count=131,
-            direct_sector_level="L2",
-        )
+    l2_panel, l2_feature_definition = build_l1_feature_panel(
+        l2_aggregates,
+        trading_dates=calendar,
+        csi300_returns=benchmark,
+        expected_sector_count=131,
+        direct_sector_level="L2",
+    )
     c010_diagnostic_payload = None
     if c010_payload is not None:
         diagnostic_l1_panel, diagnostic_l1_definition, diagnostic_l1_cross_section = build_c010_feature_domain_panel(
@@ -1220,29 +1220,23 @@ def _load_l1_source_inputs(
             csi300_returns=benchmark,
             diagnostic_only=c010_diagnostic,
         )
-        diagnostic_l2_panel = None
-        diagnostic_l2_definition = None
-        diagnostic_l2_cross_section = None
-        if not rotation_l1_only:
-            (
-                diagnostic_l2_panel,
-                diagnostic_l2_definition,
-                diagnostic_l2_cross_section,
-            ) = build_c010_feature_domain_panel(
-                c010_payload["l2_aggregates"],
-                trading_dates=calendar,
-                csi300_returns=benchmark,
-                expected_sector_count=131,
-                direct_sector_level="L2",
-                diagnostic_only=c010_diagnostic,
-            )
+        (
+            diagnostic_l2_panel,
+            diagnostic_l2_definition,
+            diagnostic_l2_cross_section,
+        ) = build_c010_feature_domain_panel(
+            c010_payload["l2_aggregates"],
+            trading_dates=calendar,
+            csi300_returns=benchmark,
+            expected_sector_count=131,
+            direct_sector_level="L2",
+            diagnostic_only=c010_diagnostic,
+        )
         complete_aggregate_evidence = complete_c010_domain_receipts(
             c010_payload["aggregate_evidence"],
             trading_dates=calendar,
             l1_sector_codes=diagnostic_l1_cross_section["expected_sector_codes"],
-            l2_sector_codes=(
-                None if diagnostic_l2_cross_section is None else diagnostic_l2_cross_section["expected_sector_codes"]
-            ),
+            l2_sector_codes=diagnostic_l2_cross_section["expected_sector_codes"],
         )
         c010_diagnostic_payload = {
             "eligibility": c010_payload["eligibility"].evidence(formal_policy=c010_formal),
@@ -1278,15 +1272,14 @@ def _load_l1_source_inputs(
             "l1_cross_section_receipt_sha256": c010_diagnostic_payload["l1_cross_section_evidence"]["receipt_sha256"],
             "l1_feature_definition_sha256": canonical_sha256(c010_diagnostic_payload["l1_feature_definition"]),
         }
-        if not rotation_l1_only:
-            dataset_manifest["c010_feature_domain_inputs"].update(
-                {
-                    "l2_cross_section_receipt_sha256": c010_diagnostic_payload["l2_cross_section_evidence"][
-                        "receipt_sha256"
-                    ],
-                    "l2_feature_definition_sha256": canonical_sha256(c010_diagnostic_payload["l2_feature_definition"]),
-                }
-            )
+        dataset_manifest["c010_feature_domain_inputs"].update(
+            {
+                "l2_cross_section_receipt_sha256": c010_diagnostic_payload["l2_cross_section_evidence"][
+                    "receipt_sha256"
+                ],
+                "l2_feature_definition_sha256": canonical_sha256(c010_diagnostic_payload["l2_feature_definition"]),
+            }
+        )
         panel = c010_diagnostic_payload["l1_panel"]
         l2_panel = c010_diagnostic_payload["l2_panel"]
         feature_definition = c010_diagnostic_payload["l1_feature_definition"]
