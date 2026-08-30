@@ -433,7 +433,7 @@ def prepare_n1_tier1_request(
         pit_snapshot=pit_identity,
         qlib_daily_root=policy_request.qlib_daily_root,
         factor_data_root=feature_reference.factor_data_root,
-        factor_data_cutoff=feature_reference.factor_data_cutoff,
+        factor_data_cutoff=date.fromisoformat(feature_reference.factor_data_cutoff),
         suspend_data_root=feature_reference.suspend_data_root,
         prediction_store_root=policy_request.prediction_store_root,
         market_calendar_identity=feature_reference.market_calendar_identity,
