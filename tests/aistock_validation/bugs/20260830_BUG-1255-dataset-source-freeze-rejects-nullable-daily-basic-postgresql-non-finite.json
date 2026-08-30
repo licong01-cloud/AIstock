@@ -65,12 +65,9 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "worker_heartbeat.business",
     "fresh_process_evidence": [
       "fresh Python process persistent source contract smoke -> passed"
     ],
-    "health_ref": "worker_heartbeat.health",
-    "identity_ref": "worker_heartbeat.identity",
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
