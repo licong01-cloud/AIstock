@@ -531,6 +531,7 @@ def _run_c012_rl1(args: argparse.Namespace) -> int:
                     db_prefix=str(args.db_env_prefix),
                     c010_formal=True,
                     expected_database_identity=request["input_identity"]["database_identity"],
+                    rotation_l1_only=True,
                 )
             except StateModelSetError as exc:
                 raise RidgeCandidateError(
