@@ -1898,6 +1898,59 @@ def test_c012_rl1_cli_parent_closes_two_durable_children_without_database_access
     assert report["holdout_accessed"] is False
 
 
+def test_c012_rl1_cli_child_rebuilds_exact_rotation_l1_only_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _rl1_request(artifact_root=tmp_path)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    observed_loader_kwargs: dict[str, object] = {}
+    monkeypatch.setattr(cli, "_producer_commit", lambda: "a" * 40)
+
+    def fake_loader(*args: object, **kwargs: object) -> dict[str, object]:
+        del args
+        observed_loader_kwargs.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(cli, "_load_l1_source_inputs", fake_loader)
+    monkeypatch.setattr(
+        cli,
+        "run_c012_rl1_candidate_process",
+        lambda *args, **kwargs: {"status": "child_complete", "process_index": kwargs["process_index"]},
+    )
+
+    result = cli.main(
+        [
+            "--candidate-mode",
+            "c012-rl1",
+            "--child-index",
+            "1",
+            "--request",
+            str(request_path),
+            "--output",
+            str(request["outputs"]["acceptance_path"]),
+            "--child-dir",
+            str(request["outputs"]["child_dir"]),
+            "--acceptance-core-output",
+            str(request["outputs"]["acceptance_core_path"]),
+            "--model-output",
+            str(request["outputs"]["component_model_path"]),
+            "--bundle-output",
+            str(request["outputs"]["capability_bundle_path"]),
+            "--db-env-prefix",
+            "UNIT",
+        ]
+    )
+
+    assert result == 0
+    assert observed_loader_kwargs == {
+        "db_prefix": "UNIT",
+        "c010_formal": True,
+        "expected_database_identity": request["input_identity"]["database_identity"],
+        "rotation_l1_only": True,
+    }
+
+
 def test_c012_rl1_cli_prepares_request_from_read_only_source_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
