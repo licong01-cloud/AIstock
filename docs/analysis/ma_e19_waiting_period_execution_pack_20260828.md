@@ -2,7 +2,7 @@
 
 - 文档类型：QE-only `docs-fast-new` 执行包
 - 日期：2026-08-30
-- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.11
+- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.12
 - 执行方案：`docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md` v1.2
 - 当前任务：`qe_20260825_031740_2457`
 - 当前状态：`MA_E19R2_PARTIAL_9_OF_12_WAITING_DATASET_SIGNOFF_TOOLING_ACTIVE`
@@ -30,7 +30,9 @@
 
 实时回读时间为 2026-08-30。任务 `qe_20260825_031740_2457` 状态为 `failed`，Loop1～9 `completed`，Loop10～12 `failed`；没有发现更新的 completed D1 task。BUG-1191 / Issue #3793 已完成 source/runtime/close-sync 并关闭，但该事实不等于数据 candidate 已签核或激活。
 
-回测数据集 durable workflow 的最新只读状态：profile `qe_hmm_full_v2`、submission `dss_cdc7ee95f703cb1cbd8a4faf9e8cee40`、`submission_state=BLOCKED_CONTRACT`、`run_id/run_state/outcome=null`、worker `healthy/IDLE`、`production_activation=not_requested`。因此当前仍禁止提交依赖新数据的正式 QE task；worker 空闲不能替代 terminal receipt、catalog readback、candidate signoff 或 activation。
+回测数据集 durable workflow 的最新只读状态：profile `qe_hmm_full_v2`、submission `dss_43485e68b2645562430a12f8e7ce1620`、`submission_state=BLOCKED_CONTRACT`、`run_id/run_state/outcome=null`、worker `healthy/IDLE`、`production_activation=not_requested`。因此当前仍禁止提交依赖新数据的正式 QE task；worker 空闲不能替代 terminal receipt、catalog readback、candidate signoff 或 activation。
+
+等待期三个离线工具已分别通过 PR #3984（九臂语义等价）、#3986（D2 Sector Oracle）、#3988（D3 benchmark/Brinson）合入；该状态只代表 source/test ready，不代表已有真实 signoff 输入、研究 receipt 或实验结果。
 
 固定合同：LGBM、CE3、h20、seed 123、21 交易日 purge、Top50/n_drop1、`score_weighted_topk_v2`、`TWAP/1min`、node1 串行度 1、零数据库数据面。
 
@@ -265,7 +267,9 @@ receipt 输出 portfolio/benchmark cumulative return、active arithmetic/cumulat
 
 当前长任务状态：
 
-`QE_LT8H_01_STATUS=IN_PROGRESS_DATASET_BLOCKED_TOOLING_ACTIVE`
+`QE_LT8H_01_STATUS=COMPLETE_DATASET_BLOCKED_TOOLS_READY_NO_EXPERIMENT_SUBMITTED`
+
+`QE_LT8H_01_RESUME=DATASET_SIGNOFF_AND_ACTIVATION_THEN_SEMANTIC_AUDIT`
 
 该标识只表示等待期分析和预注册已准备，不表示数据、D1、D2、D3、新 Alpha 或策略包已经完成。
 
