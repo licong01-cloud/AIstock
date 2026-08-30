@@ -18,9 +18,7 @@ from backend.tests.advisory_model_first.test_oracle_mini_contract import _reques
 
 
 def _audit_inputs():
-    dates = pd.bdate_range("2024-07-04", periods=385).append(
-        pd.DatetimeIndex([pd.Timestamp("2026-02-02")])
-    )
+    dates = pd.bdate_range("2024-07-04", periods=385).append(pd.DatetimeIndex([pd.Timestamp("2026-02-02")]))
     calendar = pd.bdate_range("2024-07-04", "2026-03-10")
     positions = {date_: index for index, date_ in enumerate(calendar)}
     rows = []
@@ -92,9 +90,7 @@ def test_fixed_crossfit_produces_exact_seven_oof_predictions_and_support() -> No
     for path in paths["paths"]:
         assert set(path["train_dates"]).isdisjoint(path["validation_dates"])
         for decision_date in path["validation_dates"]:
-            validation_multiplicity[decision_date] = (
-                validation_multiplicity.get(decision_date, 0) + 1
-            )
+            validation_multiplicity[decision_date] = validation_multiplicity.get(decision_date, 0) + 1
     assert len(paths["paths"]) == 28
     assert set(validation_multiplicity.values()) == {7}
 
@@ -126,9 +122,7 @@ def test_validation_label_poison_does_not_change_its_cross_fitted_prediction() -
         first = first[first[column] == value]
         second = second[second[column] == value]
     assert len(first) == len(second) == 1
-    assert first.iloc[0]["predicted_slot_return_bps"] == second.iloc[0][
-        "predicted_slot_return_bps"
-    ]
+    assert first.iloc[0]["predicted_slot_return_bps"] == second.iloc[0]["predicted_slot_return_bps"]
 
 
 def test_intervention_support_counts_zero_for_an_observed_regime() -> None:

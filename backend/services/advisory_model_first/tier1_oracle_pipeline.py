@@ -287,9 +287,7 @@ def freeze_canonical_pit_snapshot(
     )
     if output.exists():
         try:
-            existing = frozen_pit_snapshot_from_mapping(
-                json.loads(output.read_text(encoding="utf-8"))
-            )
+            existing = frozen_pit_snapshot_from_mapping(json.loads(output.read_text(encoding="utf-8")))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             _raise(
                 "existing PIT snapshot cannot be read",
@@ -350,18 +348,14 @@ def prepare_n1_tier1_request(
     try:
         n0 = N0CompletionReceiptV1.model_validate_json(n0_path.read_text(encoding="utf-8"))
         window = load_window_contract(window_path)
-        policy_manifest = load_policy_dataset_bundle(
-            bundle_root, expected_bundle_id=N1_DATASET_IDENTITY
-        )
+        policy_manifest = load_policy_dataset_bundle(bundle_root, expected_bundle_id=N1_DATASET_IDENTITY)
         policy_request = FrozenAdvisoryPolicyDatasetRequestV1.model_validate_json(
             (bundle_root / "request.json").read_text(encoding="utf-8")
         )
         feature_reference = FrozenAdvisoryPolicyUtilityTrainingRequestV2.model_validate_json(
             Path(feature_reference_request_path).read_text(encoding="utf-8")
         )
-        pit_snapshot = frozen_pit_snapshot_from_mapping(
-            json.loads(pit_path.read_text(encoding="utf-8"))
-        )
+        pit_snapshot = frozen_pit_snapshot_from_mapping(json.loads(pit_path.read_text(encoding="utf-8")))
     except AdvisoryModelFirstError:
         raise
     except Exception as exc:
@@ -403,9 +397,7 @@ def prepare_n1_tier1_request(
     request = build_n1_tier1_request(
         n0_completion_ref=evidence_reference_for_file(n0_path, role="n0_completion"),
         n0_completion_receipt_sha256=n0.receipt_sha256,
-        research_window_contract_ref=evidence_reference_for_file(
-            window_path, role="n0_window_contract"
-        ),
+        research_window_contract_ref=evidence_reference_for_file(window_path, role="n0_window_contract"),
         research_window_contract_sha256=window.contract_sha256,
         research_window_contract_path=str(window_path),
         registry_path=str(registry_path),
@@ -484,8 +476,7 @@ def authorize_n1_development_access(
             upstream_reason=exc.reason_code,
         )
     if (
-        sha256_file(request.research_window_contract_path)
-        != request.research_window_contract_ref.sha256
+        sha256_file(request.research_window_contract_path) != request.research_window_contract_ref.sha256
         or window.contract_sha256 != request.research_window_contract_sha256
     ):
         _raise(
@@ -542,9 +533,7 @@ def run_n1_tier1_pipeline(request_path: str | Path) -> dict[str, Any]:
     """Execute the frozen development-only N1 batch and resume delivery exactly."""
 
     try:
-        request = AdvisoryN1Tier1RequestV1.model_validate_json(
-            Path(request_path).read_text(encoding="utf-8")
-        )
+        request = AdvisoryN1Tier1RequestV1.model_validate_json(Path(request_path).read_text(encoding="utf-8"))
     except Exception as exc:
         _raise(
             "N1 request cannot be read",
@@ -596,8 +585,7 @@ def run_n1_tier1_pipeline(request_path: str | Path) -> dict[str, Any]:
             "actual": descriptor.model_dump(mode="json"),
         }
         for run_id, descriptor in descriptors.items()
-        if descriptor.model_dump(mode="json")
-        != request.prediction_artifacts[run_id].model_dump(mode="json")
+        if descriptor.model_dump(mode="json") != request.prediction_artifacts[run_id].model_dump(mode="json")
     }
     if mismatches:
         _raise(
@@ -698,9 +686,7 @@ def run_n1_tier1_pipeline(request_path: str | Path) -> dict[str, Any]:
 
     started = time.monotonic()
     top20_symbols = sorted(
-        rank_result.rankings.loc[
-            rank_result.rankings["selection_effective_rank"] <= 20, "instrument"
-        ].unique()
+        rank_result.rankings.loc[rank_result.rankings["selection_effective_rank"] <= 20, "instrument"].unique()
     )
     candidate_daily = load_qlib_daily(
         top20_symbols,
@@ -780,14 +766,12 @@ def run_n1_tier1_pipeline(request_path: str | Path) -> dict[str, Any]:
     )
     oracle_decision_use = (
         DecisionUse.DIRECTION_GATE
-        if oracle.perfect_top5_lift.evidence_state != Tier1EvidenceState.INCONCLUSIVE
-        and oracle.evidence_sufficient
+        if oracle.perfect_top5_lift.evidence_state != Tier1EvidenceState.INCONCLUSIVE and oracle.evidence_sufficient
         else DecisionUse.NAVIGATION_ONLY
     )
     learnability_decision_use = (
         DecisionUse.DIRECTION_GATE
-        if learnability.lift.evidence_state != Tier1EvidenceState.INCONCLUSIVE
-        and learnability.evidence_sufficient
+        if learnability.lift.evidence_state != Tier1EvidenceState.INCONCLUSIVE and learnability.evidence_sufficient
         else DecisionUse.NAVIGATION_ONLY
     )
     oracle_result_class = _result_class(
@@ -909,9 +893,9 @@ def filter_prediction_frame_to_pit(
     indexed.index = indexed.index.set_names(["datetime", "instrument"])
     filtered, _ = filter_frame_to_pit_spans(indexed, snapshot)
     result = filtered.reset_index().rename(columns={"datetime": "trade_date"})
-    return result[["trade_date", "instrument", "score"]].sort_values(
-        ["trade_date", "instrument"]
-    ).reset_index(drop=True)
+    return (
+        result[["trade_date", "instrument", "score"]].sort_values(["trade_date", "instrument"]).reset_index(drop=True)
+    )
 
 
 def build_tier1_outcomes_and_oracle(
@@ -979,8 +963,7 @@ def build_tier1_outcomes_and_oracle(
         known_fraction = float(known.mean()) if len(outcome) else 0.0
         full_known_fractions.append(known_fraction)
         date_evaluable = bool(
-            known_fraction
-            >= request.outcome_policy.minimum_full_universe_known_fraction
+            known_fraction >= request.outcome_policy.minimum_full_universe_known_fraction
             and int(matured.sum()) >= request.outcome_policy.winner_count
         )
         winners = (
@@ -996,17 +979,9 @@ def build_tier1_outcomes_and_oracle(
         )
         candidate_rank_frame = rank_frame
         if "target_trade_date" in rank_frame.columns:
-            rank_targets = pd.DatetimeIndex(
-                pd.to_datetime(rank_frame["target_trade_date"])
-            ).normalize().unique()
-            outcome_targets = pd.DatetimeIndex(
-                pd.to_datetime(outcome["target_trade_date"])
-            ).normalize().unique()
-            if (
-                len(rank_targets) != 1
-                or len(outcome_targets) != 1
-                or rank_targets[0] != outcome_targets[0]
-            ):
+            rank_targets = pd.DatetimeIndex(pd.to_datetime(rank_frame["target_trade_date"])).normalize().unique()
+            outcome_targets = pd.DatetimeIndex(pd.to_datetime(outcome["target_trade_date"])).normalize().unique()
+            if len(rank_targets) != 1 or len(outcome_targets) != 1 or rank_targets[0] != outcome_targets[0]:
                 _raise(
                     "parent ranking and N1 outcome disagree on the T+1 target date",
                     "ADVISORY_N1_LABEL_CLOCK_INVALID",
@@ -1028,11 +1003,7 @@ def build_tier1_outcomes_and_oracle(
             candidate.loc[missing_universe, "slot_return_bps"] = np.nan
         candidate_chunks.append(candidate)
         top_sets = {
-            depth: set(
-                candidate.loc[
-                    candidate["selection_effective_rank"] <= depth, "instrument"
-                ].astype(str)
-            )
+            depth: set(candidate.loc[candidate["selection_effective_rank"] <= depth, "instrument"].astype(str))
             for depth in (20, 40, 50)
         }
         recall_row: dict[str, Any] = {
@@ -1044,17 +1015,13 @@ def build_tier1_outcomes_and_oracle(
         for depth in (20, 40, 50):
             overlap = len(set(winners) & top_sets[depth])
             recall_row[f"top{depth}_winner_count"] = overlap
-            recall_row[f"top{depth}_winner_recall"] = (
-                overlap / len(winners) if winners else np.nan
-            )
+            recall_row[f"top{depth}_winner_recall"] = overlap / len(winners) if winners else np.nan
         recall_rows.append(recall_row)
         coverage_rows.append(
             {
                 "decision_as_of_trade_date": decision,
                 "pit_member_count": len(outcome),
-                "common_parent_prediction_count": int(
-                    (common_prediction_count_by_date or {}).get(decision, 0)
-                ),
+                "common_parent_prediction_count": int((common_prediction_count_by_date or {}).get(decision, 0)),
                 "known_outcome_count": int(known.sum()),
                 "matured_outcome_count": int(matured.sum()),
                 "not_entered_count": int(outcome["outcome_status"].isin(_KNOWN_CASH_STATUSES).sum()),
@@ -1089,9 +1056,7 @@ def build_tier1_outcomes_and_oracle(
     candidate_labels = pd.concat(candidate_chunks, ignore_index=True)
     recall_daily = pd.DataFrame(recall_rows)
     outcome_coverage = pd.DataFrame(coverage_rows)
-    oracle_daily = pd.DataFrame(oracle_rows).sort_values(
-        "decision_as_of_trade_date"
-    ).reset_index(drop=True)
+    oracle_daily = pd.DataFrame(oracle_rows).sort_values("decision_as_of_trade_date").reset_index(drop=True)
     if len(oracle_daily) < 60:
         _raise(
             "N1 produced too few evaluable Top20 oracle days",
@@ -1109,8 +1074,7 @@ def build_tier1_outcomes_and_oracle(
     oracle_daily["regime"] = oracle_daily["decision_as_of_trade_date"].map(regimes)
     intervention_support = _intervention_support(oracle_daily, request=request)
     oracle_power_sufficient = bool(
-        inference.mde_bps
-        <= max(inference.point_estimate_bps, inference.economic_threshold_bps)
+        inference.mde_bps <= max(inference.point_estimate_bps, inference.economic_threshold_bps)
     )
     evidence_reasons = list(intervention_support.reason_codes)
     if not oracle_power_sufficient:
@@ -1124,9 +1088,7 @@ def build_tier1_outcomes_and_oracle(
         "pit_snapshot_instrument_count": pit_snapshot.unique_instruments,
         "decision_date_count": len(decisions),
         "mean_pit_member_count": float(outcome_coverage["pit_member_count"].mean()),
-        "mean_common_parent_prediction_count": float(
-            outcome_coverage["common_parent_prediction_count"].mean()
-        ),
+        "mean_common_parent_prediction_count": float(outcome_coverage["common_parent_prediction_count"].mean()),
         "mean_known_outcome_fraction": float(np.mean(full_known_fractions)),
         "minimum_known_outcome_fraction": float(np.min(full_known_fractions)),
         "oracle_evaluable_day_count": len(oracle_daily),
@@ -1201,9 +1163,7 @@ def run_fixed_learnability_audit(
             label_rows=len(labels),
             merged_rows=len(matrix),
         )
-    matrix["decision_as_of_trade_date"] = pd.to_datetime(
-        matrix["decision_as_of_trade_date"]
-    ).dt.normalize()
+    matrix["decision_as_of_trade_date"] = pd.to_datetime(matrix["decision_as_of_trade_date"]).dt.normalize()
     paths = [item for item in cpcv_payload.get("paths", ()) if item.get("status") == "READY"]
     if len(paths) != request.learnability_spec.expected_ready_path_count:
         _raise(
@@ -1211,9 +1171,7 @@ def run_fixed_learnability_audit(
             "ADVISORY_N1_CROSSFIT_INVALID",
             ready_path_count=len(paths),
         )
-    categorical = [
-        column for column in CATEGORICAL_FEATURE_COLUMNS if column in MODEL_FEATURE_COLUMNS
-    ]
+    categorical = [column for column in CATEGORICAL_FEATURE_COLUMNS if column in MODEL_FEATURE_COLUMNS]
     numeric = [column for column in MODEL_FEATURE_COLUMNS if column not in categorical]
     if any(column in {"slot_return_bps", "economic_net_excess_bps"} for column in MODEL_FEATURE_COLUMNS):
         _raise(
@@ -1230,9 +1188,7 @@ def run_fixed_learnability_audit(
                 "ADVISORY_N1_CROSSFIT_INVALID",
                 path_id=path.get("path_id"),
             )
-        train_mask = matrix["decision_as_of_trade_date"].isin(train_dates) & matrix[
-            "outcome_known"
-        ].astype(bool)
+        train_mask = matrix["decision_as_of_trade_date"].isin(train_dates) & matrix["outcome_known"].astype(bool)
         validation_mask = matrix["decision_as_of_trade_date"].isin(validation_dates)
         train = matrix.loc[train_mask]
         validation = matrix.loc[validation_mask]
@@ -1292,9 +1248,7 @@ def run_fixed_learnability_audit(
                 "ADVISORY_N1_CROSSFIT_INVALID",
                 path_id=path.get("path_id"),
             )
-        item = validation[
-            ["decision_as_of_trade_date", "instrument", "selection_effective_rank"]
-        ].copy()
+        item = validation[["decision_as_of_trade_date", "instrument", "selection_effective_rank"]].copy()
         item["path_id"] = str(path["path_id"])
         item["predicted_slot_return_bps"] = predicted
         predictions.append(item)
@@ -1357,8 +1311,7 @@ def run_fixed_learnability_audit(
     support = _intervention_support(daily, request=request)
     lift = infer_daily_lift(daily["learnability_lift_bps"].to_numpy(dtype=float), request=request)
     evidence_sufficient = bool(
-        support.support_sufficient
-        and lift.mde_bps <= max(lift.point_estimate_bps, lift.economic_threshold_bps)
+        support.support_sufficient and lift.mde_bps <= max(lift.point_estimate_bps, lift.economic_threshold_bps)
     )
     reasons = list(support.reason_codes)
     if lift.mde_bps > max(lift.point_estimate_bps, lift.economic_threshold_bps):
@@ -1379,9 +1332,7 @@ def build_n1_cpcv_payload(
     trading_calendar: Sequence[pd.Timestamp],
     request: AdvisoryN1Tier1RequestV1,
 ) -> dict[str, Any]:
-    top20 = candidate_labels[
-        candidate_labels["selection_effective_rank"] <= 20
-    ].copy()
+    top20 = candidate_labels[candidate_labels["selection_effective_rank"] <= 20].copy()
     required = {
         "decision_as_of_trade_date",
         "target_trade_date",
@@ -1399,9 +1350,7 @@ def build_n1_cpcv_payload(
     effective_exit = pd.to_datetime(top20["effective_exit_trade_date"])
     entry = pd.to_datetime(top20["target_trade_date"])
     top20["label_information_start"] = entry
-    top20["label_information_end"] = effective_exit.where(
-        effective_exit.notna(), entry
-    )
+    top20["label_information_end"] = effective_exit.where(effective_exit.notna(), entry)
     top20["label_status"] = np.where(known, "MATURED", "DATA_UNAVAILABLE")
     top20["take_label"] = np.where(
         known & (pd.to_numeric(top20["slot_return_bps"], errors="coerce") > 0),
@@ -1415,17 +1364,14 @@ def build_n1_cpcv_payload(
         request_sha256=request.request_sha256,
     )
     paths = tuple(result.paths)
-    if (
-        len(paths) != request.learnability_spec.expected_ready_path_count
-        or any(item.get("status") != "READY" for item in paths)
+    if len(paths) != request.learnability_spec.expected_ready_path_count or any(
+        item.get("status") != "READY" for item in paths
     ):
         _raise(
             "N1 label intervals do not produce the frozen 28 READY paths",
             "ADVISORY_N1_CROSSFIT_INVALID",
             path_count=len(paths),
-            status_counts=pd.Series(
-                [str(item.get("status")) for item in paths]
-            ).value_counts().to_dict(),
+            status_counts=pd.Series([str(item.get("status")) for item in paths]).value_counts().to_dict(),
         )
     return {
         "schema_version": "advisory_n1_label_interval_cpcv_v1",
@@ -1570,10 +1516,7 @@ def _build_one_date_outcomes(
     entry_cross = _market_cross_section(market, entry_date)
     entry_rows = entry_cross.reindex(frame.index)
     entry_open = pd.to_numeric(entry_rows.get("open"), errors="coerce")
-    missing_entry = (
-        frame["outcome_status"].eq("PENDING_EXIT")
-        & (~np.isfinite(entry_open) | (entry_open <= 0))
-    )
+    missing_entry = frame["outcome_status"].eq("PENDING_EXIT") & (~np.isfinite(entry_open) | (entry_open <= 0))
     frame.loc[missing_entry, "outcome_status"] = "DATA_UNAVAILABLE_ENTRY"
     one_price_up = _one_price_limit_mask(entry_rows, direction="up")
     blocked_up = frame["outcome_status"].eq("PENDING_EXIT") & one_price_up
@@ -1616,18 +1559,12 @@ def _build_one_date_outcomes(
         if benchmark_exit is None or benchmark_exit <= 0:
             frame.loc[indexes, "outcome_status"] = "DATA_UNAVAILABLE_BENCHMARK_EXIT"
             continue
-        stock_return = (
-            frame.loc[indexes, "exit_price"] / frame.loc[indexes, "entry_price"] - 1.0
-        ) * 10_000.0
+        stock_return = (frame.loc[indexes, "exit_price"] / frame.loc[indexes, "entry_price"] - 1.0) * 10_000.0
         benchmark_return = (benchmark_exit / benchmark_entry - 1.0) * 10_000.0
         gross_excess = stock_return - benchmark_return
         frame.loc[indexes, "gross_excess_return_bps"] = gross_excess
-        frame.loc[indexes, "economic_net_excess_bps"] = (
-            gross_excess - round_trip - policy.capacity_haircut_bps
-        )
-    frame["outcome_known"] = frame["outcome_status"].eq("MATURED") | frame[
-        "outcome_status"
-    ].isin(_KNOWN_CASH_STATUSES)
+        frame.loc[indexes, "economic_net_excess_bps"] = gross_excess - round_trip - policy.capacity_haircut_bps
+    frame["outcome_known"] = frame["outcome_status"].eq("MATURED") | frame["outcome_status"].isin(_KNOWN_CASH_STATUSES)
     frame["slot_return_bps"] = np.where(
         frame["outcome_status"].eq("MATURED"),
         frame["economic_net_excess_bps"],
@@ -1714,10 +1651,7 @@ def _suspend_map(frame: pd.DataFrame) -> dict[pd.Timestamp, frozenset[str]]:
     normalized = frame.copy()
     normalized["trade_date"] = pd.to_datetime(normalized["trade_date"]).dt.normalize()
     normalized["instrument"] = normalized["instrument"].astype(str).str.upper()
-    return {
-        value: frozenset(group["instrument"])
-        for value, group in normalized.groupby("trade_date", sort=False)
-    }
+    return {value: frozenset(group["instrument"]) for value, group in normalized.groupby("trade_date", sort=False)}
 
 
 def _eligible_symbols_by_date(
@@ -1766,9 +1700,7 @@ def _summarize_rank_buckets(candidate_labels: pd.DataFrame) -> tuple[dict[str, A
     buckets = ((1, 5), (6, 10), (11, 20), (21, 40), (41, 50))
     rows: list[dict[str, Any]] = []
     for start, end in buckets:
-        frame = candidate_labels[
-            candidate_labels["selection_effective_rank"].between(start, end)
-        ]
+        frame = candidate_labels[candidate_labels["selection_effective_rank"].between(start, end)]
         known = frame[frame["outcome_known"].fillna(False)]
         values = known["slot_return_bps"].astype(float)
         rows.append(
@@ -1830,9 +1762,7 @@ def _benchmark_regimes(
         if current is None or prior is None or prior <= 0:
             result[pd.Timestamp(decision).normalize()] = "UNAVAILABLE"
         else:
-            result[pd.Timestamp(decision).normalize()] = (
-                "UP_OR_FLAT" if current / prior - 1.0 >= 0 else "DOWN"
-            )
+            result[pd.Timestamp(decision).normalize()] = "UP_OR_FLAT" if current / prior - 1.0 >= 0 else "DOWN"
     return result
 
 
@@ -1843,16 +1773,9 @@ def _intervention_support(
 ) -> Tier1InterventionSupportV1:
     policy = request.inference_policy
     interventions = daily[daily["intervened"].astype(bool)]
-    observed_regimes = sorted(
-        str(value)
-        for value in daily["regime"].dropna().unique()
-        if str(value) != "UNAVAILABLE"
-    )
+    observed_regimes = sorted(str(value) for value in daily["regime"].dropna().unique() if str(value) != "UNAVAILABLE")
     intervention_counts = interventions["regime"].value_counts()
-    counts = {
-        regime: int(intervention_counts.get(regime, 0))
-        for regime in observed_regimes
-    }
+    counts = {regime: int(intervention_counts.get(regime, 0)) for regime in observed_regimes}
     fraction = float(len(interventions) / len(daily))
     reasons: list[str] = []
     if len(interventions) < policy.min_intervention_days:
@@ -1948,9 +1871,7 @@ def _validate_policy_and_feature_reference(
                 "actual": getattr(feature_reference, key),
             }
     if feature_reference.policy_dataset_bundle_id != N1_DATASET_IDENTITY:
-        mismatches["feature_reference.policy_dataset_bundle_id"] = (
-            feature_reference.policy_dataset_bundle_id
-        )
+        mismatches["feature_reference.policy_dataset_bundle_id"] = feature_reference.policy_dataset_bundle_id
     expected_feature_hash = feature_schema_hash(
         market_calendar_identity=feature_reference.market_calendar_identity.model_dump(mode="json"),
         suspend_sidecar_identity=feature_reference.suspend_sidecar_identity.model_dump(mode="json"),
@@ -1983,15 +1904,11 @@ def _load_and_verify_n1_sources(request: AdvisoryN1Tier1RequestV1) -> dict[str, 
     bundle_root = Path(request.policy_dataset_bundle_root)
     pit_path = Path(request.pit_snapshot.artifact_ref.artifact_uri)
     try:
-        manifest = load_policy_dataset_bundle(
-            bundle_root, expected_bundle_id=request.policy_dataset_bundle_id
-        )
+        manifest = load_policy_dataset_bundle(bundle_root, expected_bundle_id=request.policy_dataset_bundle_id)
         policy_request = FrozenAdvisoryPolicyDatasetRequestV1.model_validate_json(
             (bundle_root / "request.json").read_text(encoding="utf-8")
         )
-        pit_snapshot = frozen_pit_snapshot_from_mapping(
-            json.loads(pit_path.read_text(encoding="utf-8"))
-        )
+        pit_snapshot = frozen_pit_snapshot_from_mapping(json.loads(pit_path.read_text(encoding="utf-8")))
         historical_rankings = pd.read_parquet(bundle_root / "candidate_rankings.parquet")
         cpcv_payload = json.loads((bundle_root / "cpcv_paths.json").read_text(encoding="utf-8"))
     except AdvisoryModelFirstError:
@@ -2029,8 +1946,7 @@ def _load_and_verify_n1_sources(request: AdvisoryN1Tier1RequestV1) -> dict[str, 
         sha256_file(pit_path) != request.pit_snapshot.artifact_ref.sha256
         or pit_path.stat().st_size != request.pit_snapshot.artifact_ref.size_bytes
         or pit_snapshot.spans_sha256 != request.pit_snapshot.spans_sha256
-        or pit_snapshot.source_fingerprint_sha256
-        != request.pit_snapshot.source_fingerprint_sha256
+        or pit_snapshot.source_fingerprint_sha256 != request.pit_snapshot.source_fingerprint_sha256
         or pit_snapshot.parameter_hash != request.pit_snapshot.parameter_hash
         or len(pit_snapshot.spans) != request.pit_snapshot.span_count
         or pit_snapshot.unique_instruments != request.pit_snapshot.instrument_count
@@ -2042,22 +1958,29 @@ def _load_and_verify_n1_sources(request: AdvisoryN1Tier1RequestV1) -> dict[str, 
             "ADVISORY_N1_SOURCE_IDENTITY_MISMATCH",
             mismatches=mismatches,
         )
-    candidate_dates = pd.DatetimeIndex(
-        pd.to_datetime(
-            historical_rankings.loc[
-                historical_rankings["is_candidate_decision"],
-                "decision_as_of_trade_date",
-            ]
+    candidate_dates = (
+        pd.DatetimeIndex(
+            pd.to_datetime(
+                historical_rankings.loc[
+                    historical_rankings["is_candidate_decision"],
+                    "decision_as_of_trade_date",
+                ]
+            )
         )
-    ).normalize().sort_values().unique()
+        .normalize()
+        .sort_values()
+        .unique()
+    )
     candidate_counts = (
         historical_rankings.loc[historical_rankings["is_candidate_decision"]]
-        .groupby(pd.to_datetime(
-            historical_rankings.loc[
-                historical_rankings["is_candidate_decision"],
-                "decision_as_of_trade_date",
-            ]
-        ).dt.normalize())
+        .groupby(
+            pd.to_datetime(
+                historical_rankings.loc[
+                    historical_rankings["is_candidate_decision"],
+                    "decision_as_of_trade_date",
+                ]
+            ).dt.normalize()
+        )
         .size()
     )
     if (
@@ -2084,12 +2007,8 @@ def _load_and_verify_n1_sources(request: AdvisoryN1Tier1RequestV1) -> dict[str, 
     # The feature bundle's calendar identity was frozen against the P0-C market
     # data cutoff.  Its H5 schema may extend to factor_data_cutoff, but those are
     # separate identities and must not be conflated.
-    feature_calendar = load_trading_calendar(
-        "2023-09-01", request.data_cutoff.isoformat()
-    )
-    calendar_hash = canonical_json_sha256(
-        {"market_sessions": [item.date().isoformat() for item in feature_calendar]}
-    )
+    feature_calendar = load_trading_calendar("2023-09-01", request.data_cutoff.isoformat())
+    calendar_hash = canonical_json_sha256({"market_sessions": [item.date().isoformat() for item in feature_calendar]})
     suspend_path = Path(request.suspend_data_root) / "suspend_d.parquet"
     try:
         suspend_row_count = len(pd.read_parquet(suspend_path, columns=["trade_date"]))
@@ -2113,8 +2032,7 @@ def _load_and_verify_n1_sources(request: AdvisoryN1Tier1RequestV1) -> dict[str, 
             suspend_row_count=suspend_row_count,
         )
     n1_calendar = feature_calendar[
-        (feature_calendar >= pd.Timestamp("2023-09-01"))
-        & (feature_calendar <= pd.Timestamp(N1_DATA_CUTOFF))
+        (feature_calendar >= pd.Timestamp("2023-09-01")) & (feature_calendar <= pd.Timestamp(N1_DATA_CUTOFF))
     ]
     factor_schema = validate_factor_file_schemas(
         request.factor_data_root,
@@ -2185,9 +2103,7 @@ def _verify_wsl_environment(
         "repository_commit": actual_commit,
         "requested_repository_commit": request.repository_commit,
         "repository_identity_check": (
-            "MATCHED_FOR_COMPUTE"
-            if require_repository_identity
-            else "NOT_REQUIRED_FOR_IMMUTABLE_DELIVERY_ONLY_RESUME"
+            "MATCHED_FOR_COMPUTE" if require_repository_identity else "NOT_REQUIRED_FOR_IMMUTABLE_DELIVERY_ONLY_RESUME"
         ),
         "python": platform.python_version(),
         "pandas": importlib.metadata.version("pandas"),
@@ -2205,8 +2121,10 @@ def _common_prediction_counts(
         keys = keys.rename(columns={"instrument": f"instrument__{leg_id}"})
         keys["instrument"] = keys[f"instrument__{leg_id}"]
         keys = keys[["trade_date", "instrument"]]
-        aligned = keys if aligned is None else aligned.merge(
-            keys, on=["trade_date", "instrument"], how="inner", validate="one_to_one"
+        aligned = (
+            keys
+            if aligned is None
+            else aligned.merge(keys, on=["trade_date", "instrument"], how="inner", validate="one_to_one")
         )
     if aligned is None or aligned.empty:
         _raise(
@@ -2215,8 +2133,7 @@ def _common_prediction_counts(
         )
     aligned["trade_date"] = pd.to_datetime(aligned["trade_date"]).dt.normalize()
     return {
-        pd.Timestamp(value).normalize(): int(count)
-        for value, count in aligned.groupby("trade_date").size().items()
+        pd.Timestamp(value).normalize(): int(count) for value, count in aligned.groupby("trade_date").size().items()
     }
 
 
@@ -2227,9 +2144,7 @@ def _result_class(
     if decision_use == DecisionUse.NAVIGATION_ONLY:
         return ResearchResultClass.EXPLORATORY
     return (
-        ResearchResultClass.CONTROL_READY
-        if evidence_state == Tier1EvidenceState.HIGH
-        else ResearchResultClass.NEGATIVE
+        ResearchResultClass.CONTROL_READY if evidence_state == Tier1EvidenceState.HIGH else ResearchResultClass.NEGATIVE
     )
 
 
@@ -2462,9 +2377,7 @@ def _read_n1_bundle(path: Path) -> dict[str, Any]:
                 "schema_version": manifest.get("schema_version"),
                 "request_sha256": manifest.get("request_sha256"),
                 "oracle_receipt_sha256": manifest.get("oracle_receipt_sha256"),
-                "learnability_receipt_sha256": manifest.get(
-                    "learnability_receipt_sha256"
-                ),
+                "learnability_receipt_sha256": manifest.get("learnability_receipt_sha256"),
                 "quadrant_receipt_sha256": manifest.get("quadrant_receipt_sha256"),
             }
         )
@@ -2477,9 +2390,7 @@ def _read_n1_bundle(path: Path) -> dict[str, Any]:
         )
     _validate_bundle_files(path, manifest)
     try:
-        request = AdvisoryN1Tier1RequestV1.model_validate_json(
-            (path / "request.json").read_text(encoding="utf-8")
-        )
+        request = AdvisoryN1Tier1RequestV1.model_validate_json((path / "request.json").read_text(encoding="utf-8"))
         oracle = AdvisoryTier1OracleReceiptV1.model_validate_json(
             (path / "oracle_receipt.json").read_text(encoding="utf-8")
         )
@@ -2491,9 +2402,7 @@ def _read_n1_bundle(path: Path) -> dict[str, Any]:
         )
         raw_records = json.loads((path / "registry_records.json").read_text(encoding="utf-8"))
         records = tuple(AdvisoryResearchTrialRecordV1.model_validate(item) for item in raw_records)
-        resource_report = json.loads(
-            (path / "resource_report.json").read_text(encoding="utf-8")
-        )
+        resource_report = json.loads((path / "resource_report.json").read_text(encoding="utf-8"))
     except Exception as exc:
         _raise(
             "N1 bundle contract readback failed",
@@ -2503,14 +2412,12 @@ def _read_n1_bundle(path: Path) -> dict[str, Any]:
         )
     if (
         len(records) != 2
-        or {item.experiment_id for item in records}
-        != {N1_ORACLE_EXPERIMENT_ID, N1_LEARNABILITY_EXPERIMENT_ID}
+        or {item.experiment_id for item in records} != {N1_ORACLE_EXPERIMENT_ID, N1_LEARNABILITY_EXPERIMENT_ID}
         or request.request_sha256 != manifest["request_sha256"]
         or oracle.receipt_sha256 != manifest["oracle_receipt_sha256"]
         or learnability.receipt_sha256 != manifest["learnability_receipt_sha256"]
         or quadrant.receipt_sha256 != manifest["quadrant_receipt_sha256"]
-        or int(resource_report.get("peak_rss_bytes") or 0)
-        > request.resource_max_rss_bytes
+        or int(resource_report.get("peak_rss_bytes") or 0) > request.resource_max_rss_bytes
     ):
         _raise(
             "N1 bundle relational identity is invalid",
@@ -2644,19 +2551,19 @@ def _write_parquet(path: Path, frame: pd.DataFrame) -> None:
     for column in normalized.columns:
         if normalized[column].dtype != object:
             continue
-        if normalized[column].map(
-            lambda value: isinstance(value, (dict, list, tuple))
-        ).any():
+        if normalized[column].map(lambda value: isinstance(value, (dict, list, tuple))).any():
             normalized[column] = normalized[column].map(
-                lambda value: json.dumps(
-                    value,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    allow_nan=False,
+                lambda value: (
+                    json.dumps(
+                        value,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    )
+                    if isinstance(value, (dict, list, tuple))
+                    else value
                 )
-                if isinstance(value, (dict, list, tuple))
-                else value
             )
     normalized.to_parquet(path, index=False)
 
@@ -2704,13 +2611,17 @@ def _git_commit_for_worktree(repository_root: Path) -> str:
                 )
         command.append(f"--git-dir={git_dir}")
     try:
-        commit = subprocess.run(
-            [*command, "rev-parse", "HEAD"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip().lower()
+        commit = (
+            subprocess.run(
+                [*command, "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            .stdout.strip()
+            .lower()
+        )
     except (OSError, subprocess.CalledProcessError) as exc:
         _raise(
             "N1 repository commit cannot be read",
@@ -2735,12 +2646,15 @@ def _write_immutable_json_model(
     reason_code: str,
 ) -> Any:
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(
-        model.model_dump(mode="json"),
-        ensure_ascii=False,
-        sort_keys=True,
-        indent=2,
-    ) + "\n"
+    payload = (
+        json.dumps(
+            model.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n"
+    )
     if path.exists():
         try:
             existing = model_type.model_validate_json(path.read_text(encoding="utf-8"))

@@ -49,9 +49,7 @@ def _evidence(role: str) -> EvidenceReferenceV1:
     )
 
 
-def test_freeze_windows_cli_prints_one_json_summary_and_exact_retry_is_stable(
-    tmp_path, capsys
-):
+def test_freeze_windows_cli_prints_one_json_summary_and_exact_retry_is_stable(tmp_path, capsys):
     output = tmp_path / "windows.json"
 
     assert main(["freeze-windows", "--output", str(output)]) == 0
@@ -129,9 +127,7 @@ def test_complete_n0_cli_appends_control_record_and_derives_route(tmp_path, caps
                 selected_trial_count=0,
                 consumed_windows=(),
                 result_class=(
-                    ResearchResultClass.FAMILY_FROZEN
-                    if experiment_id.endswith("L")
-                    else ResearchResultClass.NEGATIVE
+                    ResearchResultClass.FAMILY_FROZEN if experiment_id.endswith("L") else ResearchResultClass.NEGATIVE
                 ),
                 decision_use=DecisionUse.NAVIGATION_ONLY,
                 evidence_refs=(_evidence(f"p0-{index}"),),
@@ -309,9 +305,7 @@ def test_complete_n0_cli_appends_control_record_and_derives_route(tmp_path, caps
     n1_route = json.loads(capsys.readouterr().out)
     assert n1_route["n1_state"] == "COMPLETE"
     assert n1_route["next_task"] == "N2_ENTRY_EXIT_QE_PREPARATION"
-    assert "N1 Tier-1 oracle + learnability | `COMPLETE`" in route_path.read_text(
-        encoding="utf-8"
-    )
+    assert "N1 Tier-1 oracle + learnability | `COMPLETE`" in route_path.read_text(encoding="utf-8")
 
     parent_path.write_text(parent_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     poisoned_result = main(

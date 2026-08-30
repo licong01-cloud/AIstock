@@ -33,9 +33,7 @@ class _TypedArgumentParser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _TypedArgumentParser(
-        description="Development-only Advisory N1 Tier-1 oracle and learnability audit"
-    )
+    parser = _TypedArgumentParser(description="Development-only Advisory N1 Tier-1 oracle and learnability audit")
     commands = parser.add_subparsers(dest="command", required=True)
 
     pit = commands.add_parser("freeze-pit-snapshot")

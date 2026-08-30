@@ -41,9 +41,7 @@ class Tier1Quadrant(str, Enum):
     THEORETICAL_LOW_LEARNABILITY_LOW = "THEORETICAL_LOW__LEARNABILITY_LOW"
     THEORETICAL_HIGH_LEARNABILITY_LOW = "THEORETICAL_HIGH__LEARNABILITY_LOW"
     THEORETICAL_HIGH_LEARNABILITY_HIGH = "THEORETICAL_HIGH__LEARNABILITY_HIGH"
-    THEORETICAL_LOW_LEARNABILITY_HIGH_ANOMALY = (
-        "THEORETICAL_LOW__LEARNABILITY_HIGH_ANOMALY"
-    )
+    THEORETICAL_LOW_LEARNABILITY_HIGH_ANOMALY = "THEORETICAL_LOW__LEARNABILITY_HIGH_ANOMALY"
 
 
 class Tier1PitSnapshotIdentityV1(BaseModel):
@@ -53,12 +51,8 @@ class Tier1PitSnapshotIdentityV1(BaseModel):
     spans_sha256: str = Field(pattern=SHA256_PATTERN)
     source_fingerprint_sha256: str = Field(pattern=SHA256_PATTERN)
     parameter_hash: str = Field(pattern=SHA256_PATTERN)
-    universe_key: Literal["aistock_equity_pit_canonical_v2"] = (
-        "aistock_equity_pit_canonical_v2"
-    )
-    rule_version: Literal["shsz_a_252td_st_delist_asof_v2"] = (
-        "shsz_a_252td_st_delist_asof_v2"
-    )
+    universe_key: Literal["aistock_equity_pit_canonical_v2"] = "aistock_equity_pit_canonical_v2"
+    rule_version: Literal["shsz_a_252td_st_delist_asof_v2"] = "shsz_a_252td_st_delist_asof_v2"
     scope_start: date
     cutoff: date
     span_count: int = Field(gt=0)
@@ -76,12 +70,8 @@ class Tier1PitSnapshotIdentityV1(BaseModel):
 class Tier1OutcomePolicyV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["advisory_tier1_outcome_policy_v1"] = (
-        "advisory_tier1_outcome_policy_v1"
-    )
-    label_semantics: Literal["ADVISORY_TIER1_H20_OPEN_TO_OPEN_V1"] = (
-        "ADVISORY_TIER1_H20_OPEN_TO_OPEN_V1"
-    )
+    schema_version: Literal["advisory_tier1_outcome_policy_v1"] = "advisory_tier1_outcome_policy_v1"
+    label_semantics: Literal["ADVISORY_TIER1_H20_OPEN_TO_OPEN_V1"] = "ADVISORY_TIER1_H20_OPEN_TO_OPEN_V1"
     entry_offset_trading_days: Literal[1] = 1
     holding_period_trading_days: Literal[20] = 20
     max_exit_defer_trading_days: Literal[5] = 5
@@ -104,9 +94,7 @@ class Tier1OutcomePolicyV1(BaseModel):
 class Tier1InferencePolicyV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["advisory_tier1_inference_policy_v1"] = (
-        "advisory_tier1_inference_policy_v1"
-    )
+    schema_version: Literal["advisory_tier1_inference_policy_v1"] = "advisory_tier1_inference_policy_v1"
     confidence_level: Literal[0.95] = 0.95
     block_length_trading_days: Literal[20] = 20
     bootstrap_repetitions: Literal[2000] = 2000
@@ -124,9 +112,7 @@ class Tier1InferencePolicyV1(BaseModel):
 class Tier1LearnabilitySpecV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["advisory_tier1_learnability_spec_v1"] = (
-        "advisory_tier1_learnability_spec_v1"
-    )
+    schema_version: Literal["advisory_tier1_learnability_spec_v1"] = "advisory_tier1_learnability_spec_v1"
     feature_schema_version: Literal["advisory_feature_schema_v2_suspension_aware"] = (
         "advisory_feature_schema_v2_suspension_aware"
     )
@@ -135,15 +121,9 @@ class Tier1LearnabilitySpecV1(BaseModel):
     solver: Literal["svd"] = "svd"
     fit_intercept: Literal[True] = True
     numeric_imputer: Literal["TRAIN_FOLD_MEDIAN"] = "TRAIN_FOLD_MEDIAN"
-    numeric_scaler: Literal["TRAIN_FOLD_STANDARD_SCALER"] = (
-        "TRAIN_FOLD_STANDARD_SCALER"
-    )
-    categorical_encoder: Literal["TRAIN_FOLD_ONE_HOT_UNKNOWN_IGNORE_DENSE"] = (
-        "TRAIN_FOLD_ONE_HOT_UNKNOWN_IGNORE_DENSE"
-    )
-    oof_aggregation: Literal["MEAN_ACROSS_VALIDATION_PATHS"] = (
-        "MEAN_ACROSS_VALIDATION_PATHS"
-    )
+    numeric_scaler: Literal["TRAIN_FOLD_STANDARD_SCALER"] = "TRAIN_FOLD_STANDARD_SCALER"
+    categorical_encoder: Literal["TRAIN_FOLD_ONE_HOT_UNKNOWN_IGNORE_DENSE"] = "TRAIN_FOLD_ONE_HOT_UNKNOWN_IGNORE_DENSE"
+    oof_aggregation: Literal["MEAN_ACROSS_VALIDATION_PATHS"] = "MEAN_ACROSS_VALIDATION_PATHS"
     expected_ready_path_count: Literal[28] = 28
     expected_oof_predictions_per_row: Literal[7] = 7
     model_trial_count: Literal[1] = 1
@@ -152,15 +132,11 @@ class Tier1LearnabilitySpecV1(BaseModel):
 class AdvisoryN1Tier1RequestV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    schema_version: Literal["frozen_advisory_n1_tier1_request_v1"] = (
-        "frozen_advisory_n1_tier1_request_v1"
-    )
+    schema_version: Literal["frozen_advisory_n1_tier1_request_v1"] = "frozen_advisory_n1_tier1_request_v1"
     request_id: str = Field(pattern=r"^advn1req_[0-9a-f]{24}$")
     request_sha256: str = Field(pattern=SHA256_PATTERN)
     created_at: datetime
-    objective_contract: Literal[ObjectiveContract.ALPHA_RANKING] = (
-        ObjectiveContract.ALPHA_RANKING
-    )
+    objective_contract: Literal[ObjectiveContract.ALPHA_RANKING] = ObjectiveContract.ALPHA_RANKING
     n0_completion_ref: EvidenceReferenceV1
     n0_completion_receipt_sha256: str = Field(pattern=SHA256_PATTERN)
     research_window_contract_ref: EvidenceReferenceV1
@@ -205,14 +181,12 @@ class AdvisoryN1Tier1RequestV1(BaseModel):
     data_cutoff: date = N1_DATA_CUTOFF
     window_id: Literal[N1_WINDOW_ID] = N1_WINDOW_ID
     dataset_identity: Literal[N1_DATASET_IDENTITY] = N1_DATASET_IDENTITY
-    policy_rank_semantics_version: Literal[
+    policy_rank_semantics_version: Literal["advisory_exact_weighted_pit_top50_v1"] = (
         "advisory_exact_weighted_pit_top50_v1"
-    ] = "advisory_exact_weighted_pit_top50_v1"
+    )
     outcome_policy: Tier1OutcomePolicyV1 = Field(default_factory=Tier1OutcomePolicyV1)
     inference_policy: Tier1InferencePolicyV1 = Field(default_factory=Tier1InferencePolicyV1)
-    learnability_spec: Tier1LearnabilitySpecV1 = Field(
-        default_factory=Tier1LearnabilitySpecV1
-    )
+    learnability_spec: Tier1LearnabilitySpecV1 = Field(default_factory=Tier1LearnabilitySpecV1)
     resource_max_rss_bytes: Literal[N1_RESOURCE_LIMIT_BYTES] = N1_RESOURCE_LIMIT_BYTES
 
     @model_validator(mode="after")
@@ -251,9 +225,7 @@ class AdvisoryN1Tier1RequestV1(BaseModel):
         if set(self.prediction_artifacts) != set(self.representative_seed_run_ids.values()):
             raise ValueError("N1 prediction descriptors differ from representative runs")
         weight_sum = sum(float(value) for value in self.terminal_weights.values())
-        if abs(weight_sum - 1.0) > 1e-10 or any(
-            float(value) <= 0 for value in self.terminal_weights.values()
-        ):
+        if abs(weight_sum - 1.0) > 1e-10 or any(float(value) <= 0 for value in self.terminal_weights.values()):
             raise ValueError("N1 terminal weights must be positive and sum to one")
         expected = canonical_json_sha256(self.functional_payload())
         if self.request_sha256 != expected:
@@ -273,11 +245,7 @@ def build_n1_tier1_request(**values: Any) -> AdvisoryN1Tier1RequestV1:
     payload = dict(values)
     payload.setdefault("schema_version", "frozen_advisory_n1_tier1_request_v1")
     payload.setdefault("created_at", datetime.now(timezone.utc))
-    draft = {
-        key: value
-        for key, value in payload.items()
-        if key not in {"request_id", "request_sha256", "created_at"}
-    }
+    draft = {key: value for key, value in payload.items() if key not in {"request_id", "request_sha256", "created_at"}}
     normalized = AdvisoryN1Tier1RequestV1.model_construct(
         request_id="advn1req_" + "0" * 24,
         request_sha256="0" * 64,
@@ -304,11 +272,7 @@ class Tier1MetricInferenceV1(BaseModel):
 
     @model_validator(mode="after")
     def validate_interval(self) -> "Tier1MetricInferenceV1":
-        if not (
-            self.confidence_lower_bps
-            <= self.point_estimate_bps
-            <= self.confidence_upper_bps
-        ):
+        if not (self.confidence_lower_bps <= self.point_estimate_bps <= self.confidence_upper_bps):
             raise ValueError("point estimate must lie inside the confidence interval")
         expected = (
             Tier1EvidenceState.HIGH
@@ -339,9 +303,7 @@ class Tier1InterventionSupportV1(BaseModel):
 class AdvisoryTier1OracleReceiptV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    schema_version: Literal["advisory_tier1_oracle_receipt_v1"] = (
-        "advisory_tier1_oracle_receipt_v1"
-    )
+    schema_version: Literal["advisory_tier1_oracle_receipt_v1"] = "advisory_tier1_oracle_receipt_v1"
     receipt_id: str = Field(pattern=r"^advn1oracle_[0-9a-f]{24}$")
     request_sha256: str = Field(pattern=SHA256_PATTERN)
     status: Literal["COMPLETE"] = "COMPLETE"
@@ -376,17 +338,13 @@ class AdvisoryTier1OracleReceiptV1(BaseModel):
         return _validate_hashed_receipt(self, "advn1oracle_")
 
     def functional_payload(self) -> dict[str, Any]:
-        return self.model_dump(
-            mode="json", exclude={"receipt_id", "created_at", "receipt_sha256"}
-        )
+        return self.model_dump(mode="json", exclude={"receipt_id", "created_at", "receipt_sha256"})
 
 
 class AdvisoryTier1LearnabilityReceiptV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    schema_version: Literal["advisory_tier1_learnability_receipt_v1"] = (
-        "advisory_tier1_learnability_receipt_v1"
-    )
+    schema_version: Literal["advisory_tier1_learnability_receipt_v1"] = "advisory_tier1_learnability_receipt_v1"
     receipt_id: str = Field(pattern=r"^advn1learn_[0-9a-f]{24}$")
     request_sha256: str = Field(pattern=SHA256_PATTERN)
     status: Literal["COMPLETE"] = "COMPLETE"
@@ -423,17 +381,13 @@ class AdvisoryTier1LearnabilityReceiptV1(BaseModel):
         return _validate_hashed_receipt(self, "advn1learn_")
 
     def functional_payload(self) -> dict[str, Any]:
-        return self.model_dump(
-            mode="json", exclude={"receipt_id", "created_at", "receipt_sha256"}
-        )
+        return self.model_dump(mode="json", exclude={"receipt_id", "created_at", "receipt_sha256"})
 
 
 class AdvisoryTier1QuadrantReceiptV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["advisory_tier1_quadrant_receipt_v1"] = (
-        "advisory_tier1_quadrant_receipt_v1"
-    )
+    schema_version: Literal["advisory_tier1_quadrant_receipt_v1"] = "advisory_tier1_quadrant_receipt_v1"
     receipt_id: str = Field(pattern=r"^advn1quadrant_[0-9a-f]{24}$")
     request_sha256: str = Field(pattern=SHA256_PATTERN)
     oracle_receipt_sha256: str = Field(pattern=SHA256_PATTERN)
@@ -442,9 +396,7 @@ class AdvisoryTier1QuadrantReceiptV1(BaseModel):
     typed_result: str = Field(min_length=1)
     direction_ready: bool
     reason_codes: tuple[str, ...]
-    next_task: Literal["N2_ENTRY_EXIT_QE_PREPARATION"] = (
-        "N2_ENTRY_EXIT_QE_PREPARATION"
-    )
+    next_task: Literal["N2_ENTRY_EXIT_QE_PREPARATION"] = "N2_ENTRY_EXIT_QE_PREPARATION"
     sealed_holdout_accessed: Literal[False] = False
     created_at: datetime
     receipt_sha256: str = Field(pattern=SHA256_PATTERN)
@@ -454,9 +406,7 @@ class AdvisoryTier1QuadrantReceiptV1(BaseModel):
         return _validate_hashed_receipt(self, "advn1quadrant_")
 
     def functional_payload(self) -> dict[str, Any]:
-        return self.model_dump(
-            mode="json", exclude={"receipt_id", "created_at", "receipt_sha256"}
-        )
+        return self.model_dump(mode="json", exclude={"receipt_id", "created_at", "receipt_sha256"})
 
 
 def build_oracle_receipt(**values: Any) -> AdvisoryTier1OracleReceiptV1:

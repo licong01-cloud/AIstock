@@ -124,9 +124,7 @@ def _fixture_frames():
 
 
 def test_oracle_preserves_suspension_and_missing_rows_without_future_leakage() -> None:
-    rankings, daily, benchmark, suspend, snapshot, calendar, decisions, symbols = (
-        _fixture_frames()
-    )
+    rankings, daily, benchmark, suspend, snapshot, calendar, decisions, symbols = _fixture_frames()
 
     result = build_tier1_outcomes_and_oracle(
         rankings=rankings,
@@ -141,9 +139,7 @@ def test_oracle_preserves_suspension_and_missing_rows_without_future_leakage() -
     )
 
     assert len(result.candidate_labels) == 60 * 50
-    suspended = result.candidate_labels[
-        result.candidate_labels["instrument"] == symbols[0]
-    ]
+    suspended = result.candidate_labels[result.candidate_labels["instrument"] == symbols[0]]
     assert set(suspended["outcome_status"]) == {"NOT_ENTERED_SUSPENDED"}
     assert suspended["outcome_known"].all()
     assert (suspended["slot_return_bps"] == 0.0).all()
@@ -174,9 +170,9 @@ def test_rank_bucket_output_includes_the_derived_top41_to_top50_slice() -> None:
 
 def test_parent_and_outcome_target_date_mismatch_fails_closed() -> None:
     rankings, daily, benchmark, suspend, snapshot, calendar, decisions, _ = _fixture_frames()
-    rankings.loc[
-        rankings["decision_as_of_trade_date"] == decisions[0], "target_trade_date"
-    ] = calendar[calendar.get_loc(decisions[0]) + 2]
+    rankings.loc[rankings["decision_as_of_trade_date"] == decisions[0], "target_trade_date"] = calendar[
+        calendar.get_loc(decisions[0]) + 2
+    ]
 
     with pytest.raises(AdvisoryModelFirstError) as captured:
         build_tier1_outcomes_and_oracle(
@@ -217,9 +213,7 @@ def test_immutable_bundle_records_real_parquet_rows_and_exact_retry(tmp_path) ->
         reason_codes=(),
     )
     oracle = Tier1OracleResult(
-        candidate_labels=pd.DataFrame(
-            {"instrument": ["000001.SZ"], "outcome_known": [True]}
-        ),
+        candidate_labels=pd.DataFrame({"instrument": ["000001.SZ"], "outcome_known": [True]}),
         oracle_daily=pd.DataFrame(
             {
                 "decision_as_of_trade_date": [pd.Timestamp("2024-07-04")],
@@ -237,9 +231,7 @@ def test_immutable_bundle_records_real_parquet_rows_and_exact_retry(tmp_path) ->
         evidence_reason_codes=(),
     )
     learnability = Tier1LearnabilityResult(
-        oof_predictions=pd.DataFrame(
-            {"instrument": ["000001.SZ"], "oof_prediction_count": [7]}
-        ),
+        oof_predictions=pd.DataFrame({"instrument": ["000001.SZ"], "oof_prediction_count": [7]}),
         daily=pd.DataFrame({"learnability_lift_bps": [10.0]}),
         lift=metric,
         intervention_support=support,
@@ -284,9 +276,7 @@ def test_immutable_bundle_records_real_parquet_rows_and_exact_retry(tmp_path) ->
         "request": request,
         "environment": {"python": "test"},
         "source_receipt": {"sealed_holdout_accessed": False},
-        "rankings": pd.DataFrame(
-            {"instrument": ["000001.SZ"], "selection_effective_rank": [1]}
-        ),
+        "rankings": pd.DataFrame({"instrument": ["000001.SZ"], "selection_effective_rank": [1]}),
         "oracle": oracle,
         "learnability": learnability,
         "n1_cpcv_payload": {"schema_version": "test", "paths": []},
@@ -302,9 +292,7 @@ def test_immutable_bundle_records_real_parquet_rows_and_exact_retry(tmp_path) ->
     loaded = _read_n1_bundle(first)
 
     assert first == second
-    assert loaded["manifest"]["files"]["candidate_rankings_top50.parquet"][
-        "row_count"
-    ] == 1
+    assert loaded["manifest"]["files"]["candidate_rankings_top50.parquet"]["row_count"] == 1
     assert loaded["manifest"]["files"]["oracle_daily.parquet"]["row_count"] == 1
 
 
@@ -391,9 +379,7 @@ def test_h20_last_decision_exits_on_data_cutoff_not_one_session_later() -> None:
         calendar=calendar,
         positions={value: index for index, value in enumerate(calendar)},
         eligible_by_date=_eligible_symbols_by_date(snapshot, calendar),
-        market=_normalize_market_frame(
-            pd.DataFrame(rows).set_index(["datetime", "instrument"])
-        ),
+        market=_normalize_market_frame(pd.DataFrame(rows).set_index(["datetime", "instrument"])),
         benchmark_open=_benchmark_series(benchmark_frame, "open"),
         suspended_by_date={},
         request=_request(),
