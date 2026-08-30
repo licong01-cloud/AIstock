@@ -399,7 +399,11 @@ def _query(
             f"{query_id}_canonical_row_code_major_v3"
             + (":derived_l2_v1" if derived_values else "")
             + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
-            + (":nonfinite_numeric_to_null_v1" if query_id == "stk_limit" else "")
+            + (
+                ":nonfinite_numeric_to_null_v1"
+                if query_id in POSTGRES_NON_FINITE_TO_NULL_COLUMNS
+                else ""
+            )
         ),
         audit_dataset=audit_dataset,
         audit_eligible_sources=tuple(audit_eligible_sources),
@@ -441,6 +445,11 @@ _DAILY_BASIC_VALUES = (
     "total_mv",
     "circ_mv",
 )
+DAILY_BASIC_NULLABLE_NUMERIC_COLUMNS = frozenset(_DAILY_BASIC_VALUES)
+POSTGRES_NON_FINITE_TO_NULL_COLUMNS = {
+    "daily_basic": DAILY_BASIC_NULLABLE_NUMERIC_COLUMNS,
+    "stk_limit": STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS,
+}
 _MONEYFLOW_VALUES = (
     "buy_sm_vol",
     "buy_sm_amount",
@@ -4175,7 +4184,7 @@ def _validate_query_row(
             raise SourceManifestError(f"source query key/payload identity differs: {spec.identity}:{column}")
     non_null = set(query.non_null_value_columns)
     for column in query.value_columns:
-        value = _normalize_repairable_source_value(query, column, payload[column])
+        value = _normalize_postgres_non_finite_source_value(query, column, payload[column])
         payload[column] = value
         if column in non_null and value is None:
             raise SourceManifestError(f"source query required value is NULL: {spec.identity}:{column}")
@@ -4215,12 +4224,11 @@ def _validate_query_row(
     }
 
 
-def _normalize_repairable_source_value(query: SourceQuerySpec, column: str, value: Any) -> Any:
-    """Expose exact PostgreSQL numeric non-finite markers as missing overlay inputs."""
+def _normalize_postgres_non_finite_source_value(query: SourceQuerySpec, column: str, value: Any) -> Any:
+    """Canonicalize allowlisted PostgreSQL non-finite markers to nullable source values."""
 
     if (
-        query.query_id == "stk_limit"
-        and column in STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS
+        column in POSTGRES_NON_FINITE_TO_NULL_COLUMNS.get(query.query_id, ())
         and isinstance(value, str)
         and value in POSTGRES_NUMERIC_NON_FINITE_MARKERS
     ):
@@ -4394,6 +4402,8 @@ __all__ = [
     "SourceSnapshotSession",
     "SourceSnapshotRevised",
     "SourceTableSchema",
+    "DAILY_BASIC_NULLABLE_NUMERIC_COLUMNS",
+    "POSTGRES_NON_FINITE_TO_NULL_COLUMNS",
     "STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS",
     "build_source_authority",
     "production_source_session_factory",
