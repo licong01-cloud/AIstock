@@ -579,6 +579,9 @@ def test_market_conditioning_builds_exact_ten_dimensions_and_slope_identity() ->
     assert np.array_equal(values[1], np.concatenate([base[1], -base[1]]))
     assert "market_sign" not in conditioned.component.feature_names
     assert conditioned.receipt["dtype"] == "float64_le"
+    assert "market_state_gap_policy" not in conditioned.receipt
+    assert conditioned.component.valid_row_count == component.valid_row_count
+    assert conditioned.component.valid_identity_sha256 == component.valid_identity_sha256
     assert conditioned.receipt["unused_market_date_count"] == 0
     assert conditioned.receipt["unused_market_date_first"] is None
     assert conditioned.receipt["unused_market_date_last"] is None
@@ -620,6 +623,77 @@ def test_market_conditioning_accepts_market_date_superset_and_records_unused_ide
     assert receipt["unused_market_date_last"] == unused_day.isoformat()
     assert receipt["unused_market_date_set_sha256"] == subject.canonical_sha256([unused_day.isoformat()])
     assert receipt["market_state_coverage_complete"] is True
+
+
+def test_market_conditioning_missing_date_becomes_typed_unavailable_without_state_fill() -> None:
+    base = np.asarray(
+        [
+            [1.0, 2.0, 3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0, 9.0, 10.0],
+        ],
+        dtype=np.float64,
+    )
+    component = _prepared_relative_component(base)
+    dates = component.sequences[0].dates
+
+    conditioned = subject._condition_component(
+        component,
+        {dates[0]: "risk_on"},
+        fold="unit",
+        phase="validation",
+        allow_market_state_abstention=True,
+    )
+
+    sequence = conditioned.component.sequences[0]
+    assert sequence.dates == (dates[0],)
+    assert np.array_equal(sequence.values[0], np.concatenate([base[0], base[0]]))
+    assert conditioned.component.valid_row_count == 1
+    assert conditioned.component.valid_identity_sha256 == subject.canonical_sha256(
+        [[sequence.key, dates[0].isoformat()]]
+    )
+    unavailable = [
+        item
+        for item in conditioned.component.unavailable_items
+        if item.get("reason_code") == subject.REASON_MARKET_STATE_UNAVAILABLE
+    ]
+    assert unavailable == [
+        {
+            "fold": "unit",
+            "level": "L1",
+            "phase": "validation",
+            "reason_code": subject.REASON_MARKET_STATE_UNAVAILABLE,
+            "sector_code": sequence.key,
+            "trade_date": dates[1].isoformat(),
+        }
+    ]
+    receipt = conditioned.receipt
+    assert receipt["market_state_coverage_complete"] is False
+    assert receipt["missing_market_date_count"] == 1
+    assert receipt["missing_market_dates"] == [dates[1].isoformat()]
+    assert receipt["missing_market_reason_code"] == subject.REASON_MARKET_STATE_UNAVAILABLE
+    assert receipt["missing_market_identity_count"] == 1
+    assert receipt["conditioned_interaction_row_count"] == 1
+    assert receipt["expected_interaction_row_count"] == 2
+    assert receipt["market_state_date_coverage_ratio"] == 0.5
+    assert receipt["market_state_gap_policy"] == "typed_unavailable_no_default_no_forward_fill"
+
+
+def test_market_conditioning_all_dates_unavailable_fails_without_empty_success() -> None:
+    component = _prepared_relative_component(np.ones((2, 5), dtype=np.float64))
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject._condition_component(
+            component,
+            {},
+            fold="unit",
+            phase="train",
+            allow_market_state_abstention=True,
+        )
+
+    assert captured.value.reason_code == subject.REASON_MARKET_REGIME
+    assert captured.value.stage == "interaction"
+    assert captured.value.evidence["expected_interaction_row_count"] == 2
+    assert captured.value.evidence["missing_market_identity_count"] == 2
 
 
 def test_market_conditioning_identity_and_non_finite_fail_typed() -> None:
@@ -1735,7 +1809,13 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
         "_prepare_fold",
         lambda *args, **kwargs: (dummy_component, dummy_target, dummy_component, dummy_target),
     )
-    monkeypatch.setattr(subject, "_condition_component", lambda *args, **kwargs: conditioned)
+    conditioning_abstention_flags: list[bool] = []
+
+    def fake_condition(*args: object, **kwargs: object) -> subject.ConditionedComponent:
+        conditioning_abstention_flags.append(bool(kwargs.get("allow_market_state_abstention")))
+        return conditioned
+
+    monkeypatch.setattr(subject, "_condition_component", fake_condition)
 
     def fake_fit(*args: object, **kwargs: object) -> subject.RidgeFit:
         kwargs["attempt_log"].append({"component": "L1", "status": "fit_completed"})
@@ -1807,6 +1887,7 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
 
     payload = child["reproducibility_payload"]
     assert payload["process_fit_count"] == 12
+    assert conditioning_abstention_flags == [True] * 10
     assert payload["selection_performed"] is False
     assert payload["parameter_search_performed"] is False
     assert payload["holdout_accessed"] is False
