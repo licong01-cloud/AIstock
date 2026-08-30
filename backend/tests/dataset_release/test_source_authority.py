@@ -1435,6 +1435,43 @@ def test_daily_basic_arbitrary_text_numeric_value_remains_fail_closed(
         authority.freeze(cutoff=date(2026, 7, 31))
 
 
+@pytest.mark.parametrize(
+    "column",
+    ["rzye", "rqye", "rzmre", "rqyl", "rzche", "rqchl", "rqmcl", "rzrqye"],
+)
+@pytest.mark.parametrize("marker", ["NaN", "Infinity", "-Infinity"])
+def test_margin_detail_postgres_numeric_non_finite_marker_becomes_nullable_source_null(
+    dataset_profile,
+    tmp_path,
+    column,
+    marker,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.payload_overrides["margin_detail"] = {column: marker}
+    authority, cas = _authority(dataset_profile, tmp_path, fake)
+
+    frozen = authority.freeze(cutoff=date(2026, 7, 31))
+    partition = next(item.as_build_input() for item in frozen.partitions if item.spec.dataset == "margin_detail")
+    reader = CASSealedPartitionReader(cas, [partition], max_partition_rows=10)
+    with reader.iter_rows("margin_detail", partition["partition_key"]) as rows:
+        row = next(rows)
+
+    assert row[column] is None
+    assert PRODUCTION_QUERY_SPECS["margin_detail"].query_version.endswith(":nonfinite_numeric_to_null_v1")
+
+
+def test_margin_detail_arbitrary_text_numeric_value_remains_fail_closed(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    fake = FakeSnapshotSession()
+    fake.payload_overrides["margin_detail"] = {"rqye": "not-a-number"}
+    authority, _cas = _authority(dataset_profile, tmp_path, fake)
+
+    with pytest.raises(SourceManifestError, match="numeric value is invalid"):
+        authority.freeze(cutoff=date(2026, 7, 31))
+
+
 def test_postgres_numeric_marker_outside_allowlisted_datasets_remains_fail_closed(
     dataset_profile,
     tmp_path,

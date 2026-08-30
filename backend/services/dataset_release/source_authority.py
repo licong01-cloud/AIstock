@@ -445,9 +445,20 @@ _DAILY_BASIC_VALUES = (
     "total_mv",
     "circ_mv",
 )
+_MARGIN_DETAIL_VALUES = (
+    "rzye",
+    "rqye",
+    "rzmre",
+    "rqyl",
+    "rzche",
+    "rqchl",
+    "rqmcl",
+    "rzrqye",
+)
 DAILY_BASIC_NULLABLE_NUMERIC_COLUMNS = frozenset(_DAILY_BASIC_VALUES)
 POSTGRES_NON_FINITE_TO_NULL_COLUMNS = {
     "daily_basic": DAILY_BASIC_NULLABLE_NUMERIC_COLUMNS,
+    "margin_detail": frozenset(_MARGIN_DETAIL_VALUES),
     "stk_limit": STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS,
 }
 _MONEYFLOW_VALUES = (
@@ -652,7 +663,7 @@ _QUERY_SPECS = (
         "margin_detail",
         (Component.FACTOR_H5_STATIC,),
         ("ts_code", "trade_date"),
-        values=("rzye", "rqye", "rzmre", "rqyl", "rzche", "rqchl", "rqmcl", "rzrqye"),
+        values=_MARGIN_DETAIL_VALUES,
         date_expression="source_row.trade_date",
         audit_dataset="margin_detail",
         audit_eligible_sources=("physical_audit_seed", "tushare"),
