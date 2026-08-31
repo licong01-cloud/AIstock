@@ -221,6 +221,7 @@ def build_contract_evidence(
     )
     ci_preparation_text = ci_preparation_match.group("body") if ci_preparation_match else ""
     ci_verdict_text = ci_preparation_text
+    frontend_quality_text = ci_verdict_text
     issue_workflow_text = issue_workflow_path.read_text(encoding="utf-8") if issue_workflow_path.exists() else ""
     workflow_findings = scan_workflows(path_list)
     combined_workflow_text = "\n".join(workflow_text.values())
@@ -398,12 +399,14 @@ def build_contract_evidence(
         and ci_verdict_text.count("actions/checkout@v7") == 1
         and ci_verdict_text.count("ci_environment_verify.py") == 1
         and "id: backend_validation" in ci_verdict_text
+        and "id: frontend_dependencies" in ci_verdict_text
         and "id: frontend_validation" in ci_verdict_text
         and "id: go_validation" in ci_verdict_text
         and "id: prompt_validation" in ci_verdict_text
         and "id: workflow_validation" in ci_verdict_text
         and "id: workflow_policy" in ci_verdict_text
         and "BACKEND_RESULT: ${{ steps.backend_validation.outcome }}" in ci_verdict_text
+        and "FRONTEND_DEPENDENCIES_RESULT: ${{ steps.frontend_dependencies.outcome }}" in ci_verdict_text
         and "FRONTEND_RESULT: ${{ steps.frontend_validation.outcome }}" in ci_verdict_text
         and "GO_RESULT: ${{ steps.go_validation.outcome }}" in ci_verdict_text
         and "PROMPT_RESULT: ${{ steps.prompt_validation.outcome }}" in ci_verdict_text
@@ -411,6 +414,19 @@ def build_contract_evidence(
         and "WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}" in ci_verdict_text
         and "workflow_validation=${WORKFLOW_TEST_RESULT}" in ci_verdict_text
         and "workflow_policy=${WORKFLOW_POLICY_RESULT}" in ci_verdict_text,
+        "pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout": bool(frontend_quality_text)
+        and "AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock" in test_text
+        and "actions/checkout@v7" in frontend_quality_text
+        and "Attach lockfile-matched prebuilt frontend dependencies" in frontend_quality_text
+        and "Run selected frontend quality" in frontend_quality_text
+        and frontend_quality_text.find("actions/checkout@v7")
+        < frontend_quality_text.find("Attach lockfile-matched prebuilt frontend dependencies")
+        < frontend_quality_text.find("Run selected frontend quality")
+        and '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"'
+        in frontend_quality_text
+        and "--attach-frontend-only" in frontend_quality_text
+        and "npm ci" not in frontend_quality_text.casefold()
+        and "npm install" not in frontend_quality_text.casefold(),
         "pr_workflows_no_external_report_action_dependency": all(
             marker not in pr_combined
             for marker in ("actions/upload-artifact@", "actions/download-artifact@", "actions/github-script@")
@@ -445,6 +461,9 @@ def build_contract_evidence(
         ),
         "self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe": (
             "def _materialize_frontend_node_modules" in workspace_prepare_text
+            and "def attach_frontend_dependencies" in workspace_prepare_text
+            and "--attach-frontend-only" in workspace_prepare_text
+            and "frontend_checkout_commit_mismatch" in workspace_prepare_text
             and "REQUIRED_FRONTEND_ENTRYPOINTS" in workspace_prepare_text
             and "frontend_lock_mismatch" in workspace_prepare_text
             and "source_lock_sha256 != destination_lock_sha256" in workspace_prepare_text

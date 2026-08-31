@@ -1165,6 +1165,14 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "WORKFLOW_TEST_TARGETS" in workflow_runs
     assert 'python -m pytest "${workflow_test_targets[@]}"' in workflow_runs
     assert "backend/tests/scripts/test_llm_provider_adapter.py \\" not in workflow_runs
+    frontend_steps = verdict["steps"]
+    attach_step = next(
+        step for step in frontend_steps if step.get("name") == "Attach lockfile-matched prebuilt frontend dependencies"
+    )
+    assert attach_step["id"] == "frontend_dependencies"
+    assert attach_step["shell"] == "powershell"
+    assert "--attach-frontend-only" in attach_step["run"]
+    assert '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in attach_step["run"]
     frontend_runs = str(next(step for step in verdict["steps"] if step.get("id") == "frontend_validation")["run"])
     assert "node_modules/.bin/tsc" in frontend_runs
     assert "npm run lint" in frontend_runs
