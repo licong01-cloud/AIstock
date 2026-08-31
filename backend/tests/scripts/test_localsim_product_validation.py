@@ -24,6 +24,8 @@ def test_validation_is_read_only_and_uses_successor_product_surface(monkeypatch:
         calls.append((self.base_url, path))
         if path == "/openapi.json":
             return {"paths": {name: {"get": {}} for name in subject.REQUIRED_PATHS}}
+        if path == "/runtime-identity":
+            return {"status": "ready", "merge_commit": "a" * 40}
         if path.endswith("/cutover-readiness"):
             return {"readiness": {"schema_version": "localsim_cutover_readiness_v1", "ready": True}}
         if "/accounts/" in path:
@@ -44,8 +46,12 @@ def test_validation_is_read_only_and_uses_successor_product_surface(monkeypatch:
     assert receipt["ok"] is True
     assert receipt["read_only"] is True
     assert receipt["scheduler_control_api_enabled"] is False
-    assert all(path == "/openapi.json" or path.startswith("/simulation-runtime/") for _, path in calls)
+    assert all(
+        path in {"/openapi.json", "/runtime-identity"} or path.startswith("/simulation-runtime/")
+        for _, path in calls
+    )
     assert not any("/paper-v2" in path for _, path in calls)
+    assert receipt["source_commit"] == "a" * 40
 
 
 def test_validation_fails_closed_when_legacy_or_scheduler_mutation_path_remains(
@@ -62,6 +68,22 @@ def test_validation_fails_closed_when_legacy_or_scheduler_mutation_path_remains(
     monkeypatch.setattr(subject.ApiClient, "get", fake_get)
     with pytest.raises(subject.LocalSimValidationError, match="legacy or mutation"):
         subject.validate(_args())
+
+
+def test_validation_fails_closed_when_runtime_source_identity_does_not_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get(self: subject.ApiClient, path: str) -> dict[str, object]:
+        del self
+        if path == "/openapi.json":
+            return {"paths": {name: {"get": {}} for name in subject.REQUIRED_PATHS}}
+        if path == "/runtime-identity":
+            return {"status": "ready", "merge_commit": "b" * 40}
+        raise AssertionError("business reads must not start after runtime identity rejection")
+
+    monkeypatch.setattr(subject.ApiClient, "get", fake_get)
+    with pytest.raises(subject.LocalSimValidationError, match="runtime source identity mismatch"):
+        subject.validate(_args(expected_source_commit="a" * 40))
 
 
 def test_parser_has_no_mutating_switch() -> None:

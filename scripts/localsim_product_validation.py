@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ REQUIRED_PATHS = frozenset(
         "/api/v1/simulation-runtime/localsim/replays/{replay_job_id}",
         "/api/v1/simulation-runtime/scheduler/status",
         "/api/v1/simulation-runtime/scheduler/verification-status",
+        "/api/v1/runtime-identity",
     }
 )
 FORBIDDEN_PATH_PREFIXES = (
@@ -37,6 +39,7 @@ FORBIDDEN_PATH_PREFIXES = (
     "/api/v1/simulation-runtime/scheduler/stop",
     "/api/v1/simulation-runtime/scheduler/tick",
 )
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class LocalSimValidationError(RuntimeError):
@@ -81,6 +84,19 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     forbidden = sorted(path for path in paths if any(path.startswith(prefix) for prefix in FORBIDDEN_PATH_PREFIXES))
     _require(not forbidden, f"legacy or mutation OpenAPI paths remain: {forbidden}")
 
+    expected_source_commit = str(args.expected_source_commit or "").strip().lower()
+    _require(
+        bool(_GIT_SHA_RE.fullmatch(expected_source_commit)),
+        "expected source commit must be a canonical 40-character SHA",
+    )
+    runtime_identity = client.get("/runtime-identity")
+    observed_source_commit = str(runtime_identity.get("merge_commit") or "").strip().lower()
+    _require(runtime_identity.get("status") == "ready", "runtime identity is not ready")
+    _require(
+        observed_source_commit == expected_source_commit,
+        f"runtime source identity mismatch: expected={expected_source_commit} observed={observed_source_commit or '<missing>'}",
+    )
+
     readiness = client.get("/simulation-runtime/localsim/cutover-readiness").get("readiness")
     _require(isinstance(readiness, dict), "cutover readiness payload is missing")
     accounts = client.get("/simulation-runtime/localsim/accounts?limit=200")
@@ -107,7 +123,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": "localsim_product_validation_receipt_v1",
         "ok": True,
         "validated_at": datetime.now(UTC).isoformat(),
-        "source_commit": args.expected_source_commit,
+        "source_commit": observed_source_commit,
         "api_base": args.api_base,
         "read_only": True,
         "required_path_count": len(REQUIRED_PATHS),
@@ -132,7 +148,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--account-id")
     result.add_argument("--replay-id")
-    result.add_argument("--expected-source-commit")
+    result.add_argument("--expected-source-commit", required=True)
     result.add_argument("--timeout-seconds", type=float, default=30.0)
     return result
 
