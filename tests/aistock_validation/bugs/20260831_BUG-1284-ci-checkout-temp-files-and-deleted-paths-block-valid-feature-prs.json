@@ -29,12 +29,16 @@
   ],
   "expected": "CI scratch data remains outside the checkout or uses process substitution; Semgrep scans only existing changed files while preserving fail-closed rule findings.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_issue_flow.py"
+    ],
     "added_files": [],
     "changed_files": [
       ".github/workflows/test.yml",
       "backend/tests/scripts/test_issue_flow.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/test.yml",
@@ -119,10 +123,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
