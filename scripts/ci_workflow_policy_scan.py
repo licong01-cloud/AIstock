@@ -45,12 +45,10 @@ BASE_FETCH_RETRY_WORKFLOWS = {
     "dependency-update-validate.yml",
     "pr-quality.yml",
 }
-PR_ONLY_QUALITY_WORKFLOWS = {"test.yml", "semgrep.yml"}
+PR_ONLY_QUALITY_WORKFLOWS = {"test.yml"}
 STABLE_MERGE_QUALITY_CONTEXTS = (
     "CI verdict",
     "CodeQL verdict",
-    "AIstock Semgrep guardrails",
-    "Context, scope, and open-source tooling dry-run",
 )
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
@@ -295,18 +293,20 @@ def build_contract_evidence(
             and bool(re.search(r"(?m)^  codeql-verdict:\s*$", codeql_text))
             and "name: CodeQL verdict" in codeql_text
             and "if: always()" in codeql_text
-            and "  pull_request:\n    branches: [main]" in workflow_text.get("semgrep.yml", "")
-            and "name: AIstock Semgrep guardrails" in workflow_text.get("semgrep.yml", "")
-            and "name: Context, scope, and open-source tooling dry-run" in pr_quality_text
-            and all(
-                "github.event_name != 'pull_request'" in workflow_text.get(name, "")
-                and "startsWith(github.head_ref, 'chore/BUG-')" in workflow_text.get(name, "")
-                and "contains(github.head_ref, '-close-sync-')" in workflow_text.get(name, "")
-                for name in ("pr-quality.yml", "semgrep.yml", "codeql.yml")
-            )
+            and "pull_request:" not in workflow_text.get("semgrep.yml", "")
+            and "workflow_dispatch:" in workflow_text.get("semgrep.yml", "")
+            and "pull_request:" not in pr_quality_text
+            and "workflow_dispatch:" in pr_quality_text
+            and "github.event_name != 'pull_request'" in codeql_text
+            and "startsWith(github.head_ref, 'chore/BUG-')" in codeql_text
+            and "contains(github.head_ref, '-close-sync-')" in codeql_text
             and "github_hosted_metadata" in test_text
             and "ubuntu-latest" in test_text
             and "name: CI verdict" in test_text
+            and "id: pr_quality_validation" in test_text
+            and "id: semgrep_validation" in test_text
+            and "PR_QUALITY_RESULT: ${{ steps.pr_quality_validation.outcome }}" in test_text
+            and "SEMGREP_RESULT: ${{ steps.semgrep_validation.outcome }}" in test_text
             and not re.search(r"(?m)^  classify-changes:\s*$", test_text)
             and "scripts/bug_registry_metadata_check.py" in test_text
             and "_merge_quality_contexts_for_head_ref" in issue_workflow_text
