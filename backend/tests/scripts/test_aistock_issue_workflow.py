@@ -5678,6 +5678,7 @@ def test_runtime_close_sync_preserves_source_fixed_time_and_uses_verification_cl
         },
     )
     monkeypatch.setattr(workflow, "_utc_now", lambda: "2026-08-01T02:00:00Z")
+    monkeypatch.setattr(workflow, "_sync_github_issue_after_close", lambda *args, **kwargs: {"status": "synced"})
 
     payload = workflow.build_close_sync_plan(
         bug_id=None,
@@ -10422,6 +10423,40 @@ def test_close_sync_rest_only_mode_still_runs_github_issue_sync(
     assert updated["fixed_at"]
 
 
+def test_close_sync_blocks_when_github_issue_label_sync_is_incomplete(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    merge_commit = "a" * 40
+    monkeypatch.setattr(workflow, "_sync_github_issue_after_close", lambda *args, **kwargs: {"status": "warning"})
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda *args, **kwargs: {
+            "checked": True,
+            "merged": True,
+            "source": "github_rest",
+            "pr": {"mergeCommit": {"oid": merge_commit}, "mergedAt": "2026-08-31T07:00:00Z"},
+        },
+    )
+    monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
+    monkeypatch.setattr(workflow, "_merged_commit_changed_files", lambda _commit: ["scripts/aistock_issue_workflow.py"])
+
+    with pytest.raises(workflow.WorkflowError, match="state/label synchronization is incomplete"):
+        workflow.build_close_sync_plan(
+            bug_id=None,
+            issue_json=str(issue),
+            pr_url="https://github.example/pull/1",
+            apply=True,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+            merge_commit=merge_commit,
+            production_gates={"production_ddl_gate": "noop"},
+            skip_github_check=True,
+        )
+
+
 def test_close_sync_retry_preserves_fixed_time_and_structured_evidence(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -12738,10 +12773,11 @@ def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(
 ) -> None:
     issue = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
-        _bug(status="fixed", fix_commit="merge123", pr_url="https://github.example/pull/199"),
+        _bug(status="fixed", fix_commit="merge123", pr_url="https://github.example/pull/199", github_issue_number=199),
     )
     close_sync_calls: list[dict[str, Any]] = []
     commit_calls: list[dict[str, Any]] = []
+    compensated: list[int | str] = []
 
     monkeypatch.setattr(
         workflow,
@@ -12782,6 +12818,12 @@ def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(
     monkeypatch.setattr(workflow, "_maybe_commit_and_pr_close_sync", fail_commit)
     monkeypatch.setattr(
         workflow,
+        "_sync_closed_issue_status_labels",
+        lambda issue_number, **kwargs: compensated.append(issue_number)
+        or {"ok": True, "skipped": False, "attempts": 1, "verified": True},
+    )
+    monkeypatch.setattr(
+        workflow,
         "build_cleanup_after_merge_plan",
         lambda **kwargs: {"workflow_gate": "ready_for_cleanup", "branch": kwargs["branch"]},
     )
@@ -12803,6 +12845,8 @@ def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(
 
     assert close_sync_calls == []
     assert commit_calls == []
+    assert compensated == [199]
+    assert payload["close_sync"]["github_issue_compensation"]["verified"] is True
     assert payload["close_sync"]["workflow_gate"] == "already_close_synced"
     assert payload["close_sync_commit"]["workflow_gate"] == "already_merged"
     assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
@@ -15982,8 +16026,10 @@ def test_ci_issue_janitor_superseded_only_leaves_infra_for_manual_ops(
 
 def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
+    edited = False
 
     def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal edited
         commands.append(args)
         if args[:3] == ["gh", "issue", "view"]:
             return {
@@ -15991,15 +16037,18 @@ def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: py
                 "stdout": json.dumps(
                     {
                         "state": "CLOSED",
-                        "labels": [{"name": "auto-filed"}, {"name": "ci"}, {"name": "status:open"}],
+                        "labels": [{"name": "auto-filed"}, {"name": "ci"}]
+                        if edited
+                        else [{"name": "auto-filed"}, {"name": "ci"}, {"name": "status:open"}],
                     }
                 ),
             }
         if args[:3] == ["gh", "issue", "edit"]:
+            edited = True
             return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         raise AssertionError(args)
 
-    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_run_command", fake_execute)
 
     result = workflow._sync_closed_auto_filed_issue_labels(853)
 
@@ -16009,8 +16058,10 @@ def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: py
 
 def test_sync_closed_issue_status_labels_marks_generic_bug_fixed(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
+    edited = False
 
     def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal edited
         commands.append(args)
         if args[:3] == ["gh", "issue", "view"]:
             return {
@@ -16018,15 +16069,18 @@ def test_sync_closed_issue_status_labels_marks_generic_bug_fixed(monkeypatch: py
                 "stdout": json.dumps(
                     {
                         "state": "CLOSED",
-                        "labels": [{"name": "aistock:bug"}, {"name": "status:open"}],
+                        "labels": [{"name": "aistock:bug"}, {"name": "status:fixed"}]
+                        if edited
+                        else [{"name": "aistock:bug"}, {"name": "status:open"}],
                     }
                 ),
             }
         if args[:3] == ["gh", "issue", "edit"]:
+            edited = True
             return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         raise AssertionError(args)
 
-    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_run_command", fake_execute)
 
     result = workflow._sync_closed_issue_status_labels(931)
 
@@ -16034,6 +16088,54 @@ def test_sync_closed_issue_status_labels_marks_generic_bug_fixed(monkeypatch: py
     edit = [command for command in commands if command[:3] == ["gh", "issue", "edit"]][0]
     assert edit[edit.index("--remove-label") + 1] == "status:open"
     assert edit[edit.index("--add-label") + 1] == "status:fixed"
+
+
+def test_sync_closed_issue_status_labels_retries_transport_failure_and_verifies_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    edit_attempts = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal edit_attempts
+        if args[:3] == ["gh", "issue", "view"]:
+            labels = [{"name": "status:fixed"}] if edit_attempts >= 2 else [{"name": "status:open"}]
+            return {"ok": True, "returncode": 0, "stdout": json.dumps({"state": "CLOSED", "labels": labels}), "stderr": ""}
+        if args[:3] == ["gh", "issue", "edit"]:
+            edit_attempts += 1
+            if edit_attempts == 1:
+                return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post api.github.com: EOF"}
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+
+    result = workflow._sync_closed_issue_status_labels(932)
+
+    assert result["ok"] is True
+    assert result["verified"] is True
+    assert result["attempts"] == 2
+    assert edit_attempts == 2
+
+
+def test_sync_closed_issue_status_labels_fails_when_readback_remains_misaligned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["gh", "issue", "view"]:
+            return {"ok": True, "returncode": 0, "stdout": json.dumps({"state": "CLOSED", "labels": [{"name": "status:open"}]}), "stderr": ""}
+        if args[:3] == ["gh", "issue", "edit"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post api.github.com: EOF"}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+
+    result = workflow._sync_closed_issue_status_labels(933)
+
+    assert result["ok"] is False
+    assert result["attempts"] == 2
+    assert result["reason"] == "issue status labels remain unverified"
 
 
 def test_sync_closed_auto_filed_issue_labels_skips_non_auto_or_open(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -16047,7 +16149,7 @@ def test_sync_closed_auto_filed_issue_labels_skips_non_auto_or_open(monkeypatch:
             edit_called = True
         return {"ok": True, "returncode": 0}
 
-    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_run_command", fake_execute)
 
     result = workflow._sync_closed_auto_filed_issue_labels(853)
 
