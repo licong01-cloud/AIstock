@@ -22,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260831-df19242d2e72",
       "timestamp": "2026-08-31T05:13:02.130902Z"
+    },
+    {
+      "action": "correct_provisional_runtime_contract_after_catalog_fix",
+      "actor": "Codex",
+      "note": "BUG-1275 / PR #4046 registered index_contract.py as an exact worker-scheduler source and dataset_release_worker_heartbeat probe input; replace the stale provisional backend-main plan before final changed-file inference.",
+      "timestamp": "2026-08-31T06:46:12.6151251Z"
     }
   ],
   "evidence_uris": [
@@ -29,13 +35,20 @@
   ],
   "expected": "Database-authoritative overlap accepts only field-unit-equivalent historical vol/amount representations, preserves strict price/return conflict detection, records the comparison contract, and still fails closed for material differences.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/index_contract.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_index_context.py",
+      "tests/aistock_validation/bugs/20260831_BUG-1272-index-provider-overlap-rejects-canonical-historical-vol-and-amount-preci.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/index_contract.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
       "backend/tests/dataset_release/test_index_context.py",
-      "backend/tests/dataset_release/test_artifact_ready_source.py"
+      "tests/aistock_validation/bugs/20260831_BUG-1272-index-provider-overlap-rejects-canonical-historical-vol-and-amount-preci.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/index_contract.py",
@@ -128,16 +141,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "BUG1272_FINAL_OK loaded task-worktree index_contract; read-only 399102 replay database=29 provider=63 merged=63 provider_fill=34 mismatch=0 database_writes=0"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main"
+      "worker-scheduler"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
