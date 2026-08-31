@@ -96,6 +96,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
     "backend/tests/scripts/test_validate_changed_requirements.py",
     "backend/tests/scripts/test_verify_aistock_feature_guardrail_scan.py",
+    "backend/tests/test_aistock_mcp_server.py",
     "backend/tests/test_aistock_guardrail_scan.py",
     "configs/validation/llm_triage.yaml",
     "configs/validation/design_drift_audit.yaml",
@@ -157,6 +158,7 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py": (
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     ),
+    "backend/tests/test_aistock_mcp_server.py": ("backend/tests/test_aistock_mcp_server.py",),
     "scripts/aistock_bug_id_allocator.py": (
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
         "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
@@ -219,7 +221,6 @@ PROMPT_EVALUATION_FILES = {
 }
 DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "backend/db/pg_pool.py": ("platform_api_backend",),
-    "backend/tests/test_aistock_mcp_server.py": ("validation_center_backend",),
     "backend/tests/test_pg_pool_audit.py": ("platform_api_backend",),
     "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
     "scripts/advisory_p0k_build_training_request.py": ("advisory_modeling_backend",),
