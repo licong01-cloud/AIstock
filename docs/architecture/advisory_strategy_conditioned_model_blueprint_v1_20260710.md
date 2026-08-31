@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.11
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.12
 
 > 初始日期：2026-07-10
 > 修订日期：2026-08-31
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`P0_RESEARCH_FAMILY_FROZEN_N1_FORMAL_COMPLETE_N2_ROUTED`
+> 当前状态：`P0_RESEARCH_FAMILY_FROZEN_N1_FORMAL_COMPLETE_N2_ROUTED_N2A_LOCAL_IMPLEMENTED_COMPUTE_PENDING`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；两个 ENABLED Program 均已形成真实每日 `PUBLISHED` 推荐、target-open settlement 和 active episode。P0-D exact bundle 已通过安全 descriptor rotation 接入并完成真实在线 shadow 推理；自动成熟结算/指标闭环已随 PR #3697 合入。自然 future OOS 仍按交易日积累，同时新增历史虚拟前向验证以解除每次模型演进必须等待20个自然交易日的阻塞，但两类证据严格分开
 > 当前源码/运行时：P0-A/P0-B/P0-C/P0-D、descriptor rotation/maturity修复、forward evaluation、历史虚拟前向、P0-E至P0-L Stage A和N0控制面均已进入`main`；N0正式root已生成completion `9b460c29...`并确认父包`FROZEN_MODEL_CAN_INFER`。N1源码与F2设计已在任务分支完成，真实开发窗口bundle `74827d03...`、两条registry记录和N2路线均已闭合，源码PR/合入仍是独立待完成状态。生产descriptor仍指向P0-D exact bundle；N1只是不可部署诊断，不修改baseline、Selection或运行时
 > P0-J权威结果：正式request `advselpriorresreq_3a50e2f6fd9cf43cb1f6ad3e`在首条outer path的inner block 3形成完全平坦的decreasing-isotonic prior，按预登记条件以`ADVISORY_P0J_SELECTION_PRIOR_DEGENERATE`停止；evidence-only bundle为`eb8ade9b...`，exact retry返回同identity，零trial、无winner/PBO/Stage B。该结果证明rank-to-return单调关系跨时间分区不稳定，不证明Selection全局无效
@@ -14,7 +14,7 @@
 > 演进结果：P0-D历史虚拟前向证明二分类概率不能稳定表达收益幅度；P0-E outcome weighting同样负向停止。P0-F/P0-G保留收益提升但未满足换手。P0-H把相对P0-D换手压低`0.022708`并改善MDD `0.010688`，但return head日Spearman仅`0.041731`、PBO `0.90`；P0-I/P0-J证明grouped rank与Selection rank收益先验跨分区不稳定。P0-K证明liability信号虽稳定，但绝对阈值策略退化为Selection identity；P0-L进一步证明在冻结P0-G anchor、最大位移1和每日一次相邻交换的动作空间内，真实干预会降低coverage并增加cash day，冻结可行集合为空。P0-D至P0-L研究族已经事实收敛并正式冻结，不再派生P0-M或继续同数据、同候选、同特征和同模型族的局部变体
 > 历史验证执行方向：44 日 A/B/C v6 golden 已冻结；P0-D 历史虚拟前向复用正式 scorer 与 shared policy kernel，24决策日+20日tail的权威 artifact 为 `fbf072f0d8c4a637a48aa8c2ed63c3b61c245abd08ac4e1417b2a0fcc8eb59a9`。该窗口现已被 P0-D 质量判断消费，不得在后续调模后继续标为新的 OOT
 > N1权威结果：canonical PIT覆盖5067只股票/5077段；386个决策日、19300条Top50标签、382个可评价日。全市场Top5赢家的Top20/40/50平均召回仅`0.8808%/1.6062%/1.7617%`；Top20内perfect Top5成本后增量为`1314.27 bps/五槽日`，95%区间`[1136.61,1516.57]`，oracle为`HIGH/DIRECTION_GATE`。固定Ridge cross-fit增量为`98.83 bps/五槽日`，95%区间`[1.18,193.73]`，MDE `136.01 bps`，为`INCONCLUSIVE/EXPLORATORY`。综合typed结果为`INCONCLUSIVE__THEORETICAL_HIGH__LEARNABILITY_HIGH`、`direction_ready=false`；不得据此激活ranker或跳过N2
-> 当前双轨目标：自然future OOS与H0同核执行优化继续独立运行；模型研究已由N1路线进入N2 Entry Guard、Exit-label与QE上游无证据准备工作包，补齐动作空间诊断后再按综合结果只选择一条主线。Alpha/排名与Risk-managed Advisory使用独立目标合同、标签、激活状态和展示语义；动态资金仓位不在当前授权范围
+> 当前双轨目标：自然future OOS与H0同核执行优化继续独立运行；模型研究已由N1路线进入N2。N2先以固定LSTM腿、FUNDGROWTH腿和当前IC加权父包完成同窗口Alpha信号归因，再在同一辅助工作包中推进Entry Guard、Exit-label与QE上游无证据准备，补齐候选来源和动作空间诊断后再按综合结果只选择一条主线。Alpha/排名与Risk-managed Advisory使用独立目标合同、标签、激活状态和展示语义；动态资金仓位不在当前授权范围
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
 ## 0. 权威边界与本次纠偏
@@ -39,7 +39,7 @@ M0-M5C 已完成模型组件、固定日期推理和三轮负面质量实验。�
 12. P0-L冻结P0-G收益anchor与P0-K liability head，用relative liability rank执行有界局部ENTER重排；源码、BUG-1251修复和正式Stage A均已完成，结果为`NEGATIVE_STOP_INCOMPLETE_CPCV`，不进入Stage B。
 13. P0-D至P0-L作为一个共享开发数据、候选、特征和模型族的研究族正式冻结；负面结果与已消费窗口保持原结论，不派生P0-M，不以结果后阈值、gain、family、seed或新loss改判。
 14. 新主线先建立最小JSONL trial registry、可由其生成的单页活动路线和父包预测延伸可行性spike，再在开发窗口执行分层clairvoyant oracle与固定cross-fitted learnability audit；oracle、探索和模型trial分类计数，sealed holdout不参与诊断。
-15. Tier 1完成后，Entry Guard MVE与Exit-label oracle可组成一个边界明确的辅助工作包，补齐Entry/Exit动作空间诊断；同一时刻只允许其中一个进入candidate训练/confirmation。QE上游alpha MVE准备件可以与N0/N1并行，但不产生研究证据、不计作实验线。候选/排名与Entry/Exit诊断齐全后再按四象限只选择一条模型主线。前向residual成熟后执行P1-A，两个以上兼容包具备独立bundle后执行P1-B，长期趋势包就绪后执行P2。
+15. Tier 1完成后，N2辅助工作包先对当前父包的LSTM腿、FUNDGROWTH腿和exact IC加权组合执行一次固定三臂共同窗口Alpha信号审计，Top25/Top50不得重复计作信号，结果只用于导航。随后Entry Guard MVE与Exit-label oracle补齐Entry/Exit动作空间诊断；同一时刻只允许其中一个进入candidate训练/confirmation。QE上游alpha MVE准备件不产生研究证据、不计作实验线。候选来源与Entry/Exit诊断齐全后再按四象限只选择一条模型主线。前向residual成熟后执行P1-A，两个以上兼容包具备独立bundle后执行P1-B，长期趋势包就绪后执行P2。
 16. H0以已冻结44日A/B/C结果作为golden baseline实施实盘单日/历史批量双执行形态；它只优化调度、数据读取、工作区复用和重复raw计算，不改变逐日业务逻辑，也不决定模型方向。
 17. 上述真实功能、新模型路线和H0均不自动解禁历史补账、历史归档、ModelOps、旧任务清理、动态资金仓位或通用数据/缓存平台；这些任务仍必须由用户针对具体目标重新确认。
 
@@ -108,7 +108,7 @@ H0 的权威详细设计为
 | 多 Program 模型分发 | `DYNAMIC_BINDING_VERIFIED_ONE_P0D_PACKAGE` | active binding动态解析已完成；目标多Alpha Program绑定P0-D exact bundle `e555903e...`，单Alpha无bundle时基线继续且模型typed unavailable。P0-E至P0-L均未接入descriptor |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 | P0-D至P0-L研究族 | `FROZEN_NO_ACTIVATABLE_WINNER` | 同一P0-C开发数据/候选/feature schema/CORE家族上的九轮自适应研究已事实收敛；旧结果、合同和消费窗口不改写，不派生P0-M |
-| 新模型演进路线 | `N1_FORMAL_COMPLETE_N2_ROUTED_SOURCE_PR_PENDING` | N0正式completion为`9b460c29...`；N1不可变bundle为`74827d03...`，oracle登记为`CONTROL_READY/DIRECTION_GATE`，固定learnability登记为`EXPLORATORY/NAVIGATION_ONLY`，sealed holdout未读，route next task为`N2_ENTRY_EXIT_QE_PREPARATION`。N1源码PR/合入仍与科学结果、运行时激活分别报告 |
+| 新模型演进路线 | `N1_FORMAL_COMPLETE_N2_ROUTED_N2A_LOCAL_IMPLEMENTED_COMPUTE_PENDING` | N0正式completion为`9b460c29...`；N1不可变bundle为`74827d03...`，oracle登记为`CONTROL_READY/DIRECTION_GATE`，固定learnability登记为`EXPLORATORY/NAVIGATION_ONLY`，sealed holdout未读，route next task仍为`N2_ENTRY_EXIT_QE_PREPARATION`。N2-A本地实现与回归门禁已闭合，正式三臂结果仍须绑定已提交clean compute commit；当前没有结果，不改变route、不计模型trial。N1源码PR/合入仍与科学结果、运行时激活分别报告 |
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
 
@@ -998,7 +998,13 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 
 优先级：`AFTER_N1_BEFORE_N3_AUXILIARY_DIAGNOSTICS`。
 
-状态：`DESIGN_READY_NOT_IMPLEMENTED`。
+状态：`N2A_LOCAL_IMPLEMENTED_REVIEWED_COMMITTED_COMPUTE_PENDING`。
+
+- N2-A 的权威详细设计为`docs/architecture/advisory_strategy_package_three_arm_alpha_audit_f2_detailed_design_20260831.md`。它固定比较`LSTM_ONLY`、`FUNDGROWTH_ONLY`和`IC_WEIGHTED_PARENT`，复用N1 development window、canonical PIT、H20 outcome、成本和benchmark，在共同预测交集上报告full-universe IC/RankIC、Top20/40/50赢家召回、Top5、oracle、腿间相关和组合配对边际增量。
+- N2-A是零模型trial的`ORACLE_DIAGNOSTIC/NAVIGATION_ONLY`。Top25与Top50引用同一prediction identity，只能作为候选深度/政策参数，不能冒充两个Alpha；季度只作预冻结sensitivity，不允许结果后选择窗口、权重或arm。
+- N2-A不替代Entry Guard或Exit-label诊断，也不提前生成QE新Alpha。它先回答现有父包的Alpha由哪条腿贡献、组合是否优于最佳单腿，再把结果作为N3上游StrategyPackage/QE分流的输入之一。
+- 2026-08-31只读清单为19个registry包、7个未退役包；当前Top25/Top50父包共享prediction SHA256 `e0c571f...`，仍只算一个组合信号。除当前两腿外的三条未退役独立旧单Alpha均无现成Prediction Store历史预测，但单日frozen-runtime可产性已逐一通过：`pkg_378eb9...`（57因子、自定义LSTM、1,210个有限分数）、`pkg_5a5ccb...`（57因子、LGB、1,210个有限分数）、`pkg_b668f8...`（50因子、LGB、1,475个有限分数），都在故意伪造旧QE source id后仅靠package CAS完成2026-02-02推理。这些只是`NAVIGATION_ONLY`可产性事实，不是共同窗口Alpha证据。
+- 后续旧包同窗扩展顺序固定为：先`pkg_378eb9...`（除当前父包及其两腿外的未退役独立旧单Alpha中Sharpe 2.6488、年化0.5375最高，且模型代码/权重/因子CAS完整），再`pkg_5a5ccb...`（同一口径旧包中原生RankIC 0.11595最高；资产列表API当前因历史`protected_asset_ledger_evidence`枚举不兼容而500，但frozen inference成功），最后`pkg_b668f8...`。三包原生label、窗口、执行和成本不一致，原生指标不得直接横比；必须以一次模型加载、批量覆盖N1 development window的Prediction Store扩展后复用同一PIT/H20/cost审计。12个`RETIRED`包不属于当前可用包；即使个别原生年化/RankIC更高，也不得绕过退役身份直接进入比较或运行，若未来确有独特信息价值须新lineage单独立项。
 
 - N1的候选/排名身份和typed结果闭合后，一个边界明确的辅助工作包可以并行包含：Entry Guard最小matched研究闭环，以及Exit增量标签/oracle；二者分别冻结Selection/下游动作、目标合同和policy hash，同一时刻只允许一个进入candidate训练/confirmation。
 - Entry Guard比较无保护、固定阈值、动态阈值、现金/空槽和补位，不输出资金权重；Exit先验证“现在退出相对继续基线policy”的动作空间和信息可学性，不把liability预测直接当Exit模型。
@@ -1366,7 +1372,7 @@ Stage A源码已由PR #3758合入；停牌语义BUG-1180/1181已修复、完成�
 10. `FAMILY_FROZEN`：P0-D至P0-L没有可激活winner，正式冻结为一个研究族；不创建P0-M或继续同数据、同候选、同特征和同模型族的局部派生。
 11. `COMPLETED_N0`：正式registry/路线、父包prediction spike、window contract和sealed holdout访问边界已闭合；不产生模型收益证据。
 12. `COMPLETED_N1_INCONCLUSIVE`：开发窗口Tier 1 oracle与固定cross-fitted learnability已完成；oracle为高上限，learnability欠功效且综合`direction_ready=false`，不激活、不提前选主线。
-13. `NEXT_N2_AUXILIARY`：在一个边界明确的辅助工作包中完成Entry Guard MVE与Exit-label oracle；同一时刻只允许一个进入candidate训练/confirmation。QE alpha只做无证据准备，不得在N3前生成或评价候选。
+13. `NEXT_N2_AUXILIARY`：先完成现有父包LSTM/FUND/IC加权组合的固定三臂共同窗口Alpha审计，再在同一边界明确的辅助工作包中完成Entry Guard MVE与Exit-label oracle；同一时刻只允许一个进入candidate训练/confirmation。QE alpha只做无证据准备，不得在N3前生成或评价候选。
 14. `ROUTED_MAIN`：综合N1与所需N2诊断后，只选择上游alpha、Top20新信息ranker、Entry或Exit中的一条主线；一个角色确认增量前不组合。
 15. `CONDITIONAL`：确认信号后运行种子/正交/LOO/重训窗口与prospective activation；前向标签成熟后运行P1-A，至少两个兼容策略包具备独立bundle后运行P1-B，LONG_TREND包就绪后运行P2。
 
@@ -1445,7 +1451,8 @@ historical_batch_activation = separate user-confirmed action after source merge;
 | learnability audit演变为新模型搜索 | 单一冻结family/超参/特征/cross-fitting/判定线；任何变化创建新experiment并计入trial |
 | 完美上限高但干预证据稀疏 | 确认性实验预注册MDE推导的动作数、日期比例和regime覆盖，使用block/cluster推断；不足只作探索 |
 | liability被误当Exit alpha | Exit先构造退出相对继续policy的直接增量标签和oracle；liability仅作候选risk特征 |
-| 多弱信号伪独立 | 检查独立时段残差、逐种子/种子平均相关、LOO、成本和regime；不同role/clock不得任意加总 |
+| 多弱信号伪独立 | N2-A先在同一PIT/window/outcome上检查两腿score/result相关和组合配对边际；后续组合再检查独立时段残差、逐种子/种子平均相关、LOO、成本和regime，不同role/clock不得任意加总 |
+| 相同预测或不同取样区间被当作不同Alpha | prediction identity相同的Top25/Top50只算一个信号；横向主结论固定共同窗口与共同预测交集，各包原生Sharpe只作inventory，季度只作描述性sensitivity |
 | 父包预测延伸改变模型身份 | spike区分冻结模型推理、历史预测不足和重训新lineage；禁止用新模型补出的预测冒充旧包自然OOS |
 | 空槽现金被扩展为未授权仓位 | 当前只允许固定等权槽位`SKIP/WAITING`；动态资金权重、组合仓位和交易输入需用户另行扩权 |
 
@@ -1457,11 +1464,12 @@ M0-M5C的代码、真实WSL实验和固定日期推理已形成当前基线；M5
 
 1. **冻结旧研究族**：P0-D至P0-L保持已完成负向/未激活结论，不创建P0-M，不放宽旧合同，不重用已消费窗口声称新OOS。
 2. **完成N1源码交付**：保持正式bundle/registry/route不变，完成当前分支的多轮审核、PR、CI和用户授权后的合入/清理；源码合入不得被描述为模型激活，且无需后端重启、DDL或descriptor变更。
-3. **执行N2辅助诊断**：以一个工作包分别冻结Entry Guard与Exit增量标签、decision clock、policy hash和动作空间；先完成clairvoyant/learnability诊断，再决定其中是否有一个进入candidate训练。二者都不得形成动态仓位、下单或Selection写入。
-4. **并行完成QE上游无证据准备**：只冻结数据身份、表达式/operator白名单、生成预算、原创性/衰减约束和registry lineage；N3前不生成、筛选或评价alpha候选。
-5. **按路由选择唯一主线**：综合N1与N2后，极低候选召回支持优先评估上游QE/StrategyPackage alpha；只有召回改善且新信息learnability确认后才开发Top20 ranker；Entry/Exit空间更高则只攻对应层。
-6. **确认后才组合**：一个角色在新lineage形成确认增量后，才执行种子稳定性、正交、LOO、成本后组合、重训窗口对照和prospective activation；frontier只选点一次。
-7. **继续自然前向与H0**：自然observation/outcome按交易日形成且不回填；H0在独立revision按冻结v6完成同核、未来毒化、恢复和性能验收，但不决定模型方向。
-8. **只修阻碍演进的正确性BUG**：不恢复历史证据固化、归档、通用平台或旧任务清理。P1-A、P1-B和LONG_TREND仍按各自真实输入条件启动。
+3. **执行N2-A三臂Alpha审计**：在N1共同开发窗口固定比较LSTM腿、FUNDGROWTH腿和当前IC加权父包，报告共同样本IC/RankIC、赢家召回、Top5、oracle、regime和组合配对增量；零训练、零选权重、零sealed读取，结果只导航。
+4. **继续N2 Entry/Exit辅助诊断**：以同一个辅助工作包分别冻结Entry Guard与Exit增量标签、decision clock、policy hash和动作空间；先完成clairvoyant/learnability诊断，再决定其中是否有一个进入candidate训练。二者都不得形成动态仓位、下单或Selection写入。
+5. **并行完成QE上游无证据准备**：只冻结数据身份、表达式/operator白名单、生成预算、原创性/衰减约束和registry lineage；N3前不生成、筛选或评价新alpha候选。
+6. **按路由选择唯一主线**：综合N1与N2后，极低候选召回以及N2-A现有信号归因共同决定是否优先上游QE/StrategyPackage alpha；只有召回改善且新信息learnability确认后才开发Top20 ranker；Entry/Exit空间更高则只攻对应层。
+7. **确认后才组合**：一个角色在新lineage形成确认增量后，才执行种子稳定性、正交、LOO、成本后组合、重训窗口对照和prospective activation；frontier只选点一次。
+8. **继续自然前向与H0**：自然observation/outcome按交易日形成且不回填；H0在独立revision按冻结v6完成同核、未来毒化、恢复和性能验收，但不决定模型方向。
+9. **只修阻碍演进的正确性BUG**：不恢复历史证据固化、归档、通用平台或旧任务清理。P1-A、P1-B和LONG_TREND仍按各自真实输入条件启动。
 
 当前无需等待动态资金仓位授权即可完成N1源码交付并执行N2 Entry Guard固定槽位现金研究、Exit-label oracle和QE无证据准备；只有把空槽/现金扩展为动态资金权重、组合仓位或交易执行输入时，才需用户另行扩权。继续禁止未授权历史补账/归档、旧batch/root清理、通用缓存/调度/ModelOps、角色审批和额外门禁。Historical Range仅按H0详细设计执行已授权验证优化。

@@ -202,6 +202,16 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert n1_payload["dev_db_required"] is False
     assert n1_payload["unmapped_code_files"] == []
 
+    alpha_audit_payload = classifier.classify_changed_files(
+        ["scripts/advisory_strategy_package_alpha_audit.py"],
+        repo_root=tmp_path,
+    )
+    assert alpha_audit_payload["classification"] == "targeted_ci_required"
+    assert alpha_audit_payload["backend_required"] is True
+    assert alpha_audit_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert alpha_audit_payload["dev_db_required"] is False
+    assert alpha_audit_payload["unmapped_code_files"] == []
+
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
         repo_root=tmp_path,
