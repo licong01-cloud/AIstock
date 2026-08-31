@@ -81,14 +81,14 @@ P2_3B_NOT_AVAILABLE_REPORT_SHA256 = "d3298654ed9f2080f4623c2c50721ebf9951d2034d4
 P2_3C_INTERACTION_FEATURES = tuple(f"market_sign_x_{name}" for name in RELATIVE_FEATURES)
 P2_3C_FEATURES = (*RELATIVE_FEATURES, *P2_3C_INTERACTION_FEATURES)
 
-RL1_CONTRACT_VERSION = "C-012-RL1-HR1-D1-D6"
-RL1_ALGORITHM_VERSION = "hmm_risk_rotation_l1_market_conditioned_ridge_v1"
-RL1_MODEL_ORIGIN = "rotation_l1_market_conditioned_ridge_v1"
-RL1_REQUEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_replay_request_v1"
-RL1_REPORT_SCHEMA_VERSION = "hmm_risk_rotation_l1_replay_child_v1"
-RL1_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_replay_acceptance_v1"
-RL1_COMPONENT_SCHEMA_VERSION = "hmm_risk_rotation_l1_component_model_v2"
-RL1_BUNDLE_SCHEMA_VERSION = "hmm_risk_capability_bundle_v2"
+RL1_CONTRACT_VERSION = "C-012-RL1-RW1-D1-D6"
+RL1_ALGORITHM_VERSION = "hmm_risk_rotation_l1_market_conditioned_rolling_ridge_v1"
+RL1_MODEL_ORIGIN = "rotation_l1_market_conditioned_rolling_ridge_v1"
+RL1_REQUEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_rolling_replay_request_v1"
+RL1_REPORT_SCHEMA_VERSION = "hmm_risk_rotation_l1_rolling_replay_child_v1"
+RL1_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_rolling_replay_acceptance_v1"
+RL1_COMPONENT_SCHEMA_VERSION = "hmm_risk_rotation_l1_component_model_v3"
+RL1_BUNDLE_SCHEMA_VERSION = "hmm_risk_capability_bundle_v3"
 RL1_MARKET_COMPONENT_SCHEMA_VERSION = "hmm_risk_rotation_l1_market_component_v1"
 RL1_DEVELOPMENT_START = date(2022, 1, 4)
 RL1_DEVELOPMENT_END = date(2026, 3, 31)
@@ -104,6 +104,8 @@ RL1_NEWEY_WEST_LAG = 9
 RL1_REQUIRED_POSITIVE_FOLDS = 4
 RL1_REPLAY_DAILY_COVERAGE_RATIO = 0.90
 RL1_REPLAY_SECTOR_COVERAGE_RATIO = 0.80
+RL1_ROLLING_WINDOW_OPEN_DAYS = 252
+RL1_FEATURE_WARMUP_OPEN_DAYS = 120
 RL1_PROCESS_FIT_COUNT = 12
 RL1_TOTAL_FIT_COUNT = 24
 RL1_AVAILABLE_CAPABILITIES = {
@@ -141,6 +143,7 @@ RL1_CANDIDATE_PAYLOAD_KEYS = frozenset(
         "development_start",
         "development_end",
         "development_trading_day_count",
+        "ridge_training_contract",
         "folds",
         "fold_receipt_sha256s",
         "development_acceptance",
@@ -201,6 +204,9 @@ REASON_RL1_REPRODUCIBILITY = "hmm_risk_rotation_l1_fresh_process_mismatch"
 REASON_RL1_COLLISION = "hmm_risk_rotation_l1_output_collision"
 REASON_RL1_READBACK = "hmm_risk_rotation_l1_readback_mismatch"
 REASON_RL1_UNEXPECTED = "hmm_risk_rotation_l1_unexpected_error"
+REASON_RL1_ROLLING_WINDOW = "hmm_risk_rotation_l1_rolling_window_incomplete"
+REASON_RL1_HISTORICAL_INELIGIBLE = "hmm_risk_rotation_l1_historical_structure_ineligible_at_fold_start"
+REASON_RL1_ELIGIBILITY_MISMATCH = "hmm_risk_rotation_l1_historical_eligibility_mismatch"
 
 
 class RidgeCandidateError(RuntimeError):
@@ -496,6 +502,41 @@ def build_target_rows(
         start=start,
         end=end,
         eligible_dates=eligible_dates,
+        values=values,
+        receipt={**body, "receipt_sha256": canonical_sha256(body)},
+    )
+
+
+def _project_target_rows_to_eligible_codes(targets: TargetRows, eligible_codes: Sequence[str]) -> TargetRows:
+    """Project an already centered canonical target without recomputing its cross-section."""
+
+    codes = tuple(sorted(str(value) for value in eligible_codes))
+    if len(codes) != len(set(codes)) or len(codes) < LEVEL_SPECS["L1"]["minimum_daily_count"]:
+        raise _fail(REASON_RL1_ELIGIBILITY_MISMATCH, "rotation L1 target eligibility is invalid", stage="target")
+    allowed = frozenset(codes)
+    values = {key: value for key, value in targets.values.items() if key[0] in allowed}
+    rows = [
+        [day.isoformat(), code, values[(code, day)]] for code, day in sorted(values, key=lambda key: (key[1], key[0]))
+    ]
+    body = {
+        "schema_version": "hmm_risk_rotation_target_rows_eligible_projection_v1",
+        "contract_version": RL1_CONTRACT_VERSION,
+        "level": targets.level,
+        "start": targets.start.isoformat(),
+        "end": targets.end.isoformat(),
+        "eligible_dates": [day.isoformat() for day in targets.eligible_dates],
+        "eligible_sector_count": len(codes),
+        "eligible_sector_sha256": canonical_sha256(list(codes)),
+        "parent_target_receipt_sha256": targets.receipt.get("receipt_sha256"),
+        "target_row_count": len(rows),
+        "target_rows_sha256": canonical_sha256(rows),
+        "target_formula_recomputed": False,
+    }
+    return TargetRows(
+        level=targets.level,
+        start=targets.start,
+        end=targets.end,
+        eligible_dates=targets.eligible_dates,
         values=values,
         receipt={**body, "receipt_sha256": canonical_sha256(body)},
     )
@@ -1358,6 +1399,210 @@ def _component_panel(inputs: Mapping[str, Any], level: str) -> pd.DataFrame:
     if not isinstance(panel, pd.DataFrame):
         raise _fail(REASON_INPUT_IDENTITY, f"{level} panel is missing", stage="input")
     return panel
+
+
+def _project_prepared_component_to_eligible_codes(
+    component: PreparedComponent,
+    eligible_codes: Sequence[str],
+    *,
+    minimum_daily_count: int,
+) -> PreparedComponent:
+    """Project canonical-relative feature sequences without recomputing their cross-section."""
+
+    codes = tuple(sorted(str(value) for value in eligible_codes))
+    if (
+        len(codes) != len(set(codes))
+        or len(codes) < LEVEL_SPECS["L1"]["minimum_daily_count"]
+        or not set(codes).issubset(component.canonical_codes)
+        or minimum_daily_count
+        != max(LEVEL_SPECS["L1"]["minimum_daily_count"], math.ceil(RL1_REPLAY_DAILY_COVERAGE_RATIO * len(codes)))
+    ):
+        raise _fail(REASON_RL1_ELIGIBILITY_MISMATCH, "rotation L1 feature eligibility is invalid", stage="preprocess")
+    allowed = frozenset(codes)
+    sequences = tuple(item for item in component.sequences if item.key in allowed)
+    identities = [[item.key, day.isoformat()] for item in sequences for day in item.dates]
+    unavailable = tuple(
+        item
+        for item in component.unavailable_items
+        if str(item.get("sector_code") or "") in allowed or str(item.get("sector_code") or "") == "*"
+    )
+    return PreparedComponent(
+        component=component.component,
+        level=component.level,
+        feature_names=component.feature_names,
+        expected_sector_count=len(codes),
+        minimum_daily_count=minimum_daily_count,
+        canonical_codes=codes,
+        sequences=sequences,
+        preprocessor=component.preprocessor,
+        unavailable_items=unavailable,
+        valid_row_count=len(identities),
+        valid_identity_sha256=canonical_sha256(identities),
+    )
+
+
+def _c012_rw1_fold_eligibility(
+    panel: pd.DataFrame,
+    *,
+    fold: Mapping[str, Any],
+    authority_sha256: str,
+) -> dict[str, Any]:
+    """Freeze historical sector eligibility before any validation outcome is read."""
+
+    frame = _panel_frame(panel)
+    missing_features = [name for name in RELATIVE_FEATURES if name not in frame.columns]
+    if missing_features:
+        raise _fail(
+            REASON_RL1_INPUT,
+            "rotation L1 eligibility feature schema is incomplete",
+            stage="eligibility",
+            evidence={"missing_features": missing_features},
+        )
+    canonical_codes = tuple(sorted(frame["sector_code"].unique().tolist()))
+    if len(canonical_codes) != LEVEL_SPECS["L1"]["expected_sector_count"]:
+        raise _fail(
+            REASON_RL1_ELIGIBILITY_MISMATCH, "rotation L1 canonical eligibility universe drifted", stage="eligibility"
+        )
+    authority_date = fold["validation_first_trading_date"]
+    feature_cutoff_date = fold["eligibility_feature_cutoff_date"]
+    authority_rows = frame[frame["trade_date"] == feature_cutoff_date].set_index("sector_code", drop=False)
+    eligible: list[str] = []
+    ineligible: list[dict[str, Any]] = []
+    for code in canonical_codes:
+        if code not in authority_rows.index:
+            detail = "feature_row_missing"
+        else:
+            row = authority_rows.loc[code]
+            if isinstance(row, pd.DataFrame):
+                raise _fail(
+                    REASON_RL1_ELIGIBILITY_MISMATCH, "rotation L1 eligibility row is duplicated", stage="eligibility"
+                )
+            try:
+                values = np.asarray([float(row[name]) for name in RELATIVE_FEATURES], dtype=np.float64)
+            except (TypeError, ValueError):
+                values = np.asarray([], dtype=np.float64)
+            detail = (
+                "feature_non_finite"
+                if values.shape != (len(RELATIVE_FEATURES),) or not np.isfinite(values).all()
+                else ""
+            )
+        if detail:
+            ineligible.append(
+                {
+                    "sector_code": code,
+                    "authority_date": authority_date.isoformat(),
+                    "feature_cutoff_date": feature_cutoff_date.isoformat(),
+                    "reason_code": REASON_RL1_HISTORICAL_INELIGIBLE,
+                    "detail": detail,
+                }
+            )
+        else:
+            eligible.append(code)
+    minimum_count = max(
+        LEVEL_SPECS["L1"]["minimum_daily_count"], math.ceil(RL1_REPLAY_DAILY_COVERAGE_RATIO * len(eligible))
+    )
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_historical_eligibility_v1",
+        "contract_version": RL1_CONTRACT_VERSION,
+        "fold": str(fold["fold"]),
+        "authority_date": authority_date.isoformat(),
+        "feature_cutoff_date": feature_cutoff_date.isoformat(),
+        "authority_basis": "validation_first_canonical_trading_date_t_minus_1_pit_features",
+        "authority_sha256": _require_sha256(authority_sha256, "eligibility.authority_sha256"),
+        "validation_outcome_accessed": False,
+        "metric_accessed": False,
+        "validation_feature_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+        "validation_target_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+        "canonical_sector_count": len(canonical_codes),
+        "canonical_sector_codes": list(canonical_codes),
+        "canonical_sector_sha256": canonical_sha256(list(canonical_codes)),
+        "eligible_sector_count": len(eligible),
+        "eligible_sector_codes": eligible,
+        "eligible_sector_sha256": canonical_sha256(eligible),
+        "historical_structural_eligibility_ratio": len(eligible) / len(canonical_codes),
+        "ineligible_sector_count": len(ineligible),
+        "ineligible_sectors": ineligible,
+        "ineligible_sector_sha256": canonical_sha256(ineligible),
+        "daily_minimum_available_count": minimum_count,
+    }
+    receipt = {**body, "receipt_sha256": canonical_sha256(body)}
+    if len(eligible) < LEVEL_SPECS["L1"]["minimum_daily_count"]:
+        raise _fail(
+            REASON_RL1_COVERAGE,
+            "rotation L1 historical eligible sector count is below the fixed daily minimum",
+            stage="coverage",
+            evidence={"eligibility": receipt},
+        )
+    return receipt
+
+
+def _prepare_c012_rw1_fold(
+    panel: pd.DataFrame,
+    benchmark: Mapping[date, float],
+    calendar: tuple[date, ...],
+    *,
+    fold: Mapping[str, Any],
+    authority_sha256: str,
+) -> tuple[PreparedComponent, TargetRows, PreparedComponent, TargetRows, dict[str, Any]]:
+    eligibility = _c012_rw1_fold_eligibility(panel, fold=fold, authority_sha256=authority_sha256)
+    train = prepare_component(
+        panel,
+        component="L1_ridge",
+        level="L1",
+        feature_names=RELATIVE_FEATURES,
+        calendar=calendar,
+        start=fold["ridge_train_start"],
+        end=fold["ridge_train_end"],
+        expected_days=fold["ridge_train_days"],
+        expected_sector_count=LEVEL_SPECS["L1"]["expected_sector_count"],
+        minimum_daily_count=LEVEL_SPECS["L1"]["minimum_daily_count"],
+        relative=True,
+    )
+    train_target = build_target_rows(
+        panel,
+        benchmark,
+        calendar,
+        level="L1",
+        start=fold["ridge_train_start"],
+        end=fold["ridge_train_end"],
+        expected_days=fold["ridge_train_days"],
+        expected_sector_count=LEVEL_SPECS["L1"]["expected_sector_count"],
+        minimum_daily_count=LEVEL_SPECS["L1"]["minimum_daily_count"],
+    )
+    eligible_codes = tuple(str(value) for value in eligibility["eligible_sector_codes"])
+    minimum_daily_count = int(eligibility["daily_minimum_available_count"])
+    canonical_validation = prepare_component(
+        panel,
+        component="L1_ridge",
+        level="L1",
+        feature_names=RELATIVE_FEATURES,
+        calendar=calendar,
+        start=fold["validation_start"],
+        end=fold["validation_end"],
+        expected_days=fold["validation_days"],
+        expected_sector_count=LEVEL_SPECS["L1"]["expected_sector_count"],
+        minimum_daily_count=LEVEL_SPECS["L1"]["minimum_daily_count"],
+        relative=True,
+        preprocessor=train.preprocessor,
+    )
+    validation = _project_prepared_component_to_eligible_codes(
+        canonical_validation,
+        eligible_codes,
+        minimum_daily_count=minimum_daily_count,
+    )
+    canonical_validation_target = build_target_rows(
+        panel,
+        benchmark,
+        calendar,
+        level="L1",
+        start=fold["validation_start"],
+        end=fold["validation_end"],
+        expected_days=fold["validation_days"],
+        expected_sector_count=LEVEL_SPECS["L1"]["expected_sector_count"],
+        minimum_daily_count=LEVEL_SPECS["L1"]["minimum_daily_count"],
+    )
+    validation_target = _project_target_rows_to_eligible_codes(canonical_validation_target, eligible_codes)
+    return train, train_target, validation, validation_target, eligibility
 
 
 def _prepare_fold(
@@ -2423,8 +2668,11 @@ def build_c012_rl1_replay_request(
     for name, train_start, train_end, validation_start, validation_end in RL1_FOLD_BOUNDARIES:
         train_dates = tuple(day for day in calendar if train_start <= day <= train_end)
         validation_dates = tuple(day for day in calendar if validation_start <= day <= validation_end)
-        if not train_dates or not validation_dates:
+        if len(train_dates) < RL1_ROLLING_WINDOW_OPEN_DAYS or not validation_dates:
             raise _fail(REASON_RL1_FOLD, f"rotation L1 {name} calendar is incomplete", stage="request_preparation")
+        rolling_dates = train_dates[-RL1_ROLLING_WINDOW_OPEN_DAYS:]
+        rolling_start_index = len(train_dates) - RL1_ROLLING_WINDOW_OPEN_DAYS
+        warmup_dates = train_dates[max(0, rolling_start_index - RL1_FEATURE_WARMUP_OPEN_DAYS) : rolling_start_index]
         fold_rows.append(
             {
                 "fold": name,
@@ -2432,8 +2680,18 @@ def build_c012_rl1_replay_request(
                 "train_end": train_end.isoformat(),
                 "validation_start": validation_start.isoformat(),
                 "validation_end": validation_end.isoformat(),
+                "validation_first_trading_date": validation_dates[0].isoformat(),
+                "eligibility_feature_cutoff_date": train_dates[-1].isoformat(),
                 "train_trading_day_count": len(train_dates),
                 "train_date_set_sha256": canonical_sha256([day.isoformat() for day in train_dates]),
+                "ridge_train_start": rolling_dates[0].isoformat(),
+                "ridge_train_end": rolling_dates[-1].isoformat(),
+                "ridge_train_trading_day_count": len(rolling_dates),
+                "ridge_train_date_set_sha256": canonical_sha256([day.isoformat() for day in rolling_dates]),
+                "feature_warmup_start": warmup_dates[0].isoformat() if warmup_dates else None,
+                "feature_warmup_end": warmup_dates[-1].isoformat() if warmup_dates else None,
+                "feature_warmup_trading_day_count": len(warmup_dates),
+                "feature_warmup_date_set_sha256": canonical_sha256([day.isoformat() for day in warmup_dates]),
                 "validation_trading_day_count": len(validation_dates),
                 "validation_date_set_sha256": canonical_sha256([day.isoformat() for day in validation_dates]),
             }
@@ -2470,6 +2728,14 @@ def build_c012_rl1_replay_request(
             "trading_day_count": len(development_dates),
             "date_set_sha256": canonical_sha256([day.isoformat() for day in development_dates]),
         },
+        "ridge_training_contract": {
+            "ridge_train_scope": "fixed_rolling_canonical_open_days",
+            "rolling_window_open_days": RL1_ROLLING_WINDOW_OPEN_DAYS,
+            "feature_warmup_max_open_days": RL1_FEATURE_WARMUP_OPEN_DAYS,
+            "market_train_scope": "anchored_expanding",
+            "window_search_performed": False,
+            "validation_outcome_accessed_for_window": False,
+        },
         "folds": fold_rows,
         "new_holdout": {
             "state_start": RL1_HOLDOUT_START.isoformat(),
@@ -2505,6 +2771,7 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
         "feature_names",
         "target_contract",
         "development_calendar",
+        "ridge_training_contract",
         "folds",
         "new_holdout",
         "source",
@@ -2548,6 +2815,15 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
         "score_direction": "higher_is_future_relative_strength",
     }:
         raise _fail(REASON_RL1_INPUT, "rotation L1 feature or target identity drifted", stage="input")
+    if request.get("ridge_training_contract") != {
+        "ridge_train_scope": "fixed_rolling_canonical_open_days",
+        "rolling_window_open_days": RL1_ROLLING_WINDOW_OPEN_DAYS,
+        "feature_warmup_max_open_days": RL1_FEATURE_WARMUP_OPEN_DAYS,
+        "market_train_scope": "anchored_expanding",
+        "window_search_performed": False,
+        "validation_outcome_accessed_for_window": False,
+    }:
+        raise _fail(REASON_RL1_ROLLING_WINDOW, "rotation L1 rolling training contract drifted", stage="input")
     development = request.get("development_calendar")
     if not isinstance(development, Mapping) or (
         set(development) != {"start", "end", "trading_day_count", "date_set_sha256"}
@@ -2574,8 +2850,18 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
             *expected_boundaries,
             "train_trading_day_count",
             "train_date_set_sha256",
+            "ridge_train_start",
+            "ridge_train_end",
+            "ridge_train_trading_day_count",
+            "ridge_train_date_set_sha256",
+            "feature_warmup_start",
+            "feature_warmup_end",
+            "feature_warmup_trading_day_count",
+            "feature_warmup_date_set_sha256",
             "validation_trading_day_count",
             "validation_date_set_sha256",
+            "validation_first_trading_date",
+            "eligibility_feature_cutoff_date",
         }
         if (
             not isinstance(observed, Mapping)
@@ -2590,6 +2876,17 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
             ):
                 raise _fail(REASON_RL1_FOLD, f"rotation L1 {name} day count is invalid", stage="input")
             _require_sha256(observed.get(f"{prefix}_date_set_sha256"), f"{name}.{prefix}_date_set_sha256")
+        if (
+            observed.get("ridge_train_end") != train_end.isoformat()
+            or observed.get("eligibility_feature_cutoff_date") != train_end.isoformat()
+            or observed.get("ridge_train_trading_day_count") != RL1_ROLLING_WINDOW_OPEN_DAYS
+            or not isinstance(observed.get("ridge_train_start"), str)
+            or not isinstance(observed.get("feature_warmup_trading_day_count"), int)
+            or not 0 <= int(observed["feature_warmup_trading_day_count"]) <= RL1_FEATURE_WARMUP_OPEN_DAYS
+        ):
+            raise _fail(REASON_RL1_ROLLING_WINDOW, f"rotation L1 {name} rolling authority is invalid", stage="input")
+        _require_sha256(observed.get("ridge_train_date_set_sha256"), f"{name}.ridge_train_date_set_sha256")
+        _require_sha256(observed.get("feature_warmup_date_set_sha256"), f"{name}.feature_warmup_date_set_sha256")
     holdout = request.get("new_holdout")
     if holdout != {
         "state_start": RL1_HOLDOUT_START.isoformat(),
@@ -2769,6 +3066,7 @@ def validate_c012_rl1_static_request(request: Mapping[str, Any]) -> dict[str, An
         "algorithm_version": RL1_ALGORITHM_VERSION,
         "request_sha256": request_hash,
         "development_calendar": dict(development),
+        "ridge_training_contract": dict(request["ridge_training_contract"]),
         "folds": [dict(item) for item in folds],
         "fixed_market_parameters": dict(request["fixed_market_parameters"]),
         "fixed_ridge_parameters": dict(request["fixed_ridge_parameters"]),
@@ -2856,8 +3154,15 @@ def _c012_rl1_folds(calendar: tuple[date, ...], request: Mapping[str, Any]) -> t
         name, train_start, train_end, validation_start, validation_end = boundary
         train_dates = tuple(day for day in calendar if train_start <= day <= train_end)
         validation_dates = tuple(day for day in calendar if validation_start <= day <= validation_end)
+        if len(train_dates) < RL1_ROLLING_WINDOW_OPEN_DAYS:
+            raise _fail(REASON_RL1_ROLLING_WINDOW, f"rotation L1 {name} rolling window is incomplete", stage="input")
+        rolling_dates = train_dates[-RL1_ROLLING_WINDOW_OPEN_DAYS:]
+        rolling_start_index = len(train_dates) - RL1_ROLLING_WINDOW_OPEN_DAYS
+        warmup_dates = train_dates[max(0, rolling_start_index - RL1_FEATURE_WARMUP_OPEN_DAYS) : rolling_start_index]
         train_hash = canonical_sha256([day.isoformat() for day in train_dates])
         validation_hash = canonical_sha256([day.isoformat() for day in validation_dates])
+        rolling_hash = canonical_sha256([day.isoformat() for day in rolling_dates])
+        warmup_hash = canonical_sha256([day.isoformat() for day in warmup_dates])
         if (
             len(train_dates) != authority["train_trading_day_count"]
             or len(validation_dates) != authority["validation_trading_day_count"]
@@ -2865,6 +3170,16 @@ def _c012_rl1_folds(calendar: tuple[date, ...], request: Mapping[str, Any]) -> t
             or not validation_dates
             or train_hash != authority["train_date_set_sha256"]
             or validation_hash != authority["validation_date_set_sha256"]
+            or authority.get("validation_first_trading_date") != validation_dates[0].isoformat()
+            or authority.get("eligibility_feature_cutoff_date") != train_dates[-1].isoformat()
+            or authority.get("ridge_train_start") != rolling_dates[0].isoformat()
+            or authority.get("ridge_train_end") != rolling_dates[-1].isoformat()
+            or authority.get("ridge_train_trading_day_count") != len(rolling_dates)
+            or authority.get("ridge_train_date_set_sha256") != rolling_hash
+            or authority.get("feature_warmup_start") != (warmup_dates[0].isoformat() if warmup_dates else None)
+            or authority.get("feature_warmup_end") != (warmup_dates[-1].isoformat() if warmup_dates else None)
+            or authority.get("feature_warmup_trading_day_count") != len(warmup_dates)
+            or authority.get("feature_warmup_date_set_sha256") != warmup_hash
         ):
             raise _fail(
                 REASON_RL1_FOLD,
@@ -2889,6 +3204,12 @@ def _c012_rl1_folds(calendar: tuple[date, ...], request: Mapping[str, Any]) -> t
                     "observed_validation_end": validation_dates[-1].isoformat() if validation_dates else None,
                     "observed_validation_trading_day_count": len(validation_dates),
                     "observed_validation_date_set_sha256": validation_hash,
+                    "observed_ridge_train_start": rolling_dates[0].isoformat(),
+                    "observed_ridge_train_end": rolling_dates[-1].isoformat(),
+                    "observed_ridge_train_trading_day_count": len(rolling_dates),
+                    "observed_ridge_train_date_set_sha256": rolling_hash,
+                    "observed_feature_warmup_trading_day_count": len(warmup_dates),
+                    "observed_feature_warmup_date_set_sha256": warmup_hash,
                 },
             )
         output.append(
@@ -2899,6 +3220,16 @@ def _c012_rl1_folds(calendar: tuple[date, ...], request: Mapping[str, Any]) -> t
                 "validation_start": validation_start,
                 "validation_end": validation_end,
                 "train_days": len(train_dates),
+                "ridge_train_start": rolling_dates[0],
+                "ridge_train_end": rolling_dates[-1],
+                "ridge_train_days": len(rolling_dates),
+                "ridge_train_date_set_sha256": rolling_hash,
+                "feature_warmup_start": warmup_dates[0] if warmup_dates else None,
+                "feature_warmup_end": warmup_dates[-1] if warmup_dates else None,
+                "feature_warmup_days": len(warmup_dates),
+                "feature_warmup_date_set_sha256": warmup_hash,
+                "validation_first_trading_date": validation_dates[0],
+                "eligibility_feature_cutoff_date": train_dates[-1],
                 "validation_days": len(validation_dates),
             }
         )
@@ -2909,21 +3240,34 @@ def _c012_rl1_fold_metrics(
     scores: Mapping[tuple[str, date], float],
     targets: TargetRows,
     states: Mapping[tuple[str, date], str],
+    *,
+    eligible_sector_count: int = LEVEL_SPECS["L1"]["expected_sector_count"],
+    minimum_daily_count: int = LEVEL_SPECS["L1"]["minimum_daily_count"],
 ) -> dict[str, Any]:
+    if (
+        not LEVEL_SPECS["L1"]["minimum_daily_count"]
+        <= eligible_sector_count
+        <= LEVEL_SPECS["L1"]["expected_sector_count"]
+    ):
+        raise _fail(REASON_RL1_ELIGIBILITY_MISMATCH, "rotation L1 metric eligibility count is invalid", stage="metric")
     metrics = fold_metrics(scores, targets, states)
     denominator_rows: list[list[Any]] = []
     insufficient_dates: list[str] = []
     for day in targets.eligible_dates:
         count = len({code for code, score_day in scores if score_day == day and (code, day) in targets.values})
-        denominator_rows.append([day.isoformat(), count, LEVEL_SPECS["L1"]["expected_sector_count"]])
-        if count < LEVEL_SPECS["L1"]["minimum_daily_count"]:
+        denominator_rows.append(
+            [day.isoformat(), count, eligible_sector_count, LEVEL_SPECS["L1"]["expected_sector_count"]]
+        )
+        if count < minimum_daily_count:
             insufficient_dates.append(day.isoformat())
     body = {key: value for key, value in metrics.items() if key != "receipt_sha256"}
     body.update(
         {
             "daily_denominator": denominator_rows,
             "daily_denominator_sha256": canonical_sha256(denominator_rows),
-            "minimum_daily_count": LEVEL_SPECS["L1"]["minimum_daily_count"],
+            "eligible_sector_count": eligible_sector_count,
+            "canonical_sector_count": LEVEL_SPECS["L1"]["expected_sector_count"],
+            "minimum_daily_count": minimum_daily_count,
             "insufficient_denominator_dates": insufficient_dates,
             "metric_valid": metrics.get("metric_valid") is True and not insufficient_dates,
         }
@@ -2936,21 +3280,44 @@ def _c012_rl1_fold_replay_coverage(
     fold: str,
     validation_dates: Sequence[date],
     canonical_codes: Sequence[str],
+    eligibility: Mapping[str, Any] | None = None,
     states: Mapping[tuple[str, date], str],
     targets: TargetRows,
 ) -> dict[str, Any]:
-    """Measure replay state availability against the full 31 x state-date denominator."""
+    """Measure replay availability without hiding pre-frozen structural ineligibility."""
 
     dates = tuple(validation_dates)
     codes = tuple(sorted(str(value) for value in canonical_codes))
+    eligibility = dict(eligibility or {})
+    if eligibility:
+        receipt_hash = eligibility.get("receipt_sha256")
+        if (
+            canonical_sha256({key: value for key, value in eligibility.items() if key != "receipt_sha256"})
+            != receipt_hash
+            or eligibility.get("fold") != fold
+            or eligibility.get("canonical_sector_codes") != list(codes)
+        ):
+            raise _fail(REASON_RL1_ELIGIBILITY_MISMATCH, "rotation L1 eligibility receipt is invalid", stage="coverage")
+        eligible_codes = tuple(str(value) for value in eligibility.get("eligible_sector_codes") or ())
+        minimum_daily_count = int(eligibility.get("daily_minimum_available_count") or 0)
+    else:
+        eligible_codes = codes
+        minimum_daily_count = LEVEL_SPECS["L1"]["minimum_daily_count"]
     if (
         not dates
         or dates != tuple(sorted(set(dates)))
         or len(codes) != LEVEL_SPECS["L1"]["expected_sector_count"]
         or len(set(codes)) != len(codes)
+        or not set(eligible_codes).issubset(codes)
+        or len(eligible_codes) < LEVEL_SPECS["L1"]["minimum_daily_count"]
+        or minimum_daily_count
+        != max(
+            LEVEL_SPECS["L1"]["minimum_daily_count"],
+            math.ceil(RL1_REPLAY_DAILY_COVERAGE_RATIO * len(eligible_codes)),
+        )
     ):
         raise _fail(REASON_RL1_COVERAGE, "rotation L1 replay denominator is invalid", stage="coverage")
-    expected = {(code, day) for day in dates for code in codes}
+    expected = {(code, day) for day in dates for code in eligible_codes}
     state_keys = set(states)
     target_keys = set(targets.values)
     if not state_keys.issubset(expected) or not target_keys.issubset(expected):
@@ -2961,16 +3328,17 @@ def _c012_rl1_fold_replay_coverage(
     outcome_only: list[list[str]] = []
     both_unavailable: list[list[str]] = []
     for day in dates:
-        available = sorted(code for code in codes if (code, day) in state_keys)
+        available = sorted(code for code in eligible_codes if (code, day) in state_keys)
         daily_rows.append(
             [
                 day.isoformat(),
                 len(available),
+                len(eligible_codes),
                 len(codes),
                 canonical_sha256(available),
             ]
         )
-        for code in codes:
+        for code in eligible_codes:
             identity = (code, day)
             has_prediction = identity in state_keys
             has_outcome = identity in target_keys
@@ -2982,12 +3350,14 @@ def _c012_rl1_fold_replay_coverage(
             elif not has_prediction and not has_outcome:
                 both_unavailable.append(row)
     for code in codes:
-        count = sum((code, day) in state_keys for day in dates)
-        sector_rows.append([code, count, len(dates), count / len(dates)])
-    full_coverage = all(int(row[1]) == len(codes) for row in daily_rows)
-    daily_qualified_count = sum(int(row[1]) >= LEVEL_SPECS["L1"]["minimum_daily_count"] for row in daily_rows)
+        is_eligible = code in set(eligible_codes)
+        count = sum((code, day) in state_keys for day in dates) if is_eligible else 0
+        denominator = len(dates) if is_eligible else 0
+        sector_rows.append([code, is_eligible, count, denominator, count / denominator if denominator else None])
+    full_coverage = len(eligible_codes) == len(codes) and all(int(row[1]) == len(codes) for row in daily_rows)
+    daily_qualified_count = sum(int(row[1]) >= minimum_daily_count for row in daily_rows)
     daily_qualified_ratio = daily_qualified_count / len(dates)
-    minimum_sector_ratio = min(float(row[3]) for row in sector_rows)
+    minimum_sector_ratio = min(float(row[4]) for row in sector_rows if row[1] is True)
     coverage_available = bool(
         daily_qualified_ratio >= RL1_REPLAY_DAILY_COVERAGE_RATIO
         and minimum_sector_ratio >= RL1_REPLAY_SECTOR_COVERAGE_RATIO
@@ -3001,6 +3371,12 @@ def _c012_rl1_fold_replay_coverage(
         "state_date_set_sha256": canonical_sha256([day.isoformat() for day in dates]),
         "canonical_sector_count": len(codes),
         "canonical_sector_sha256": canonical_sha256(list(codes)),
+        "eligible_sector_count": len(eligible_codes),
+        "eligible_sector_sha256": canonical_sha256(list(eligible_codes)),
+        "historical_structural_eligibility_ratio": len(eligible_codes) / len(codes),
+        "structurally_ineligible_sector_count": len(codes) - len(eligible_codes),
+        "structurally_ineligible_sector_sha256": canonical_sha256(sorted(set(codes) - set(eligible_codes))),
+        "eligibility_receipt_sha256": eligibility.get("receipt_sha256"),
         "expected_identity_count": len(expected),
         "available_state_count": len(state_keys),
         "available_state_identity_sha256": canonical_sha256(
@@ -3008,7 +3384,7 @@ def _c012_rl1_fold_replay_coverage(
         ),
         "daily_denominator": daily_rows,
         "daily_denominator_sha256": canonical_sha256(daily_rows),
-        "daily_minimum_available_count": LEVEL_SPECS["L1"]["minimum_daily_count"],
+        "daily_minimum_available_count": minimum_daily_count,
         "daily_qualified_count": daily_qualified_count,
         "daily_qualified_ratio": daily_qualified_ratio,
         "daily_qualified_ratio_minimum": RL1_REPLAY_DAILY_COVERAGE_RATIO,
@@ -3035,6 +3411,9 @@ def _c012_rl1_replay_coverage(folds: Sequence[Mapping[str, Any]]) -> dict[str, A
         raise _fail(REASON_RL1_COVERAGE, "rotation L1 replay coverage is incomplete", stage="coverage")
     daily_rows: list[list[Any]] = []
     sector_counts: dict[str, list[int]] = {}
+    eligibility_receipts: list[list[str]] = []
+    eligible_identity_count = 0
+    canonical_identity_count = 0
     identity_count = 0
     available_count = 0
     category_counts = {"prediction_only": 0, "outcome_only": 0, "both_unavailable": 0}
@@ -3056,10 +3435,17 @@ def _c012_rl1_replay_coverage(folds: Sequence[Mapping[str, Any]]) -> dict[str, A
                 raise _fail(REASON_RL1_COVERAGE, "rotation L1 replay dates overlap", stage="coverage")
             date_hashes.add(str(row[0]))
             daily_rows.append(list(row))
-        for code, count, denominator, _ratio in fold_sectors:
+        for code, is_eligible, count, denominator, _ratio in fold_sectors:
             aggregate = sector_counts.setdefault(str(code), [0, 0])
             aggregate[0] += int(count)
             aggregate[1] += int(denominator)
+            if bool(is_eligible) != (int(denominator) > 0):
+                raise _fail(
+                    REASON_RL1_ELIGIBILITY_MISMATCH, "rotation L1 sector eligibility row drifted", stage="coverage"
+                )
+        eligibility_receipts.append([str(item["fold"]), str(coverage.get("eligibility_receipt_sha256") or "")])
+        eligible_identity_count += int(coverage["eligible_sector_count"]) * int(coverage["state_date_count"])
+        canonical_identity_count += int(coverage["canonical_sector_count"]) * int(coverage["state_date_count"])
         identity_count += int(coverage["expected_identity_count"])
         available_count += int(coverage["available_state_count"])
         for category in category_counts:
@@ -3067,18 +3453,24 @@ def _c012_rl1_replay_coverage(folds: Sequence[Mapping[str, Any]]) -> dict[str, A
             category_hash_inputs[category].append([str(item["fold"]), str(coverage[f"{category}_sha256"])])
     daily_rows.sort(key=lambda row: str(row[0]))
     sector_rows = [
-        [code, values[0], values[1], values[0] / values[1]] for code, values in sorted(sector_counts.items())
+        [code, values[0], values[1], values[0] / values[1] if values[1] else None]
+        for code, values in sorted(sector_counts.items())
     ]
     if len(sector_rows) != LEVEL_SPECS["L1"]["expected_sector_count"]:
         raise _fail(REASON_RL1_COVERAGE, "rotation L1 replay sector denominator is incomplete", stage="coverage")
-    full_coverage = all(int(row[1]) == LEVEL_SPECS["L1"]["expected_sector_count"] for row in daily_rows)
-    daily_qualified_count = sum(int(row[1]) >= LEVEL_SPECS["L1"]["minimum_daily_count"] for row in daily_rows)
-    daily_qualified_ratio = daily_qualified_count / len(daily_rows)
-    minimum_sector_ratio = min(float(row[3]) for row in sector_rows)
-    coverage_available = bool(
-        daily_qualified_ratio >= RL1_REPLAY_DAILY_COVERAGE_RATIO
-        and minimum_sector_ratio >= RL1_REPLAY_SECTOR_COVERAGE_RATIO
+    full_coverage = all(item["replay_coverage"]["coverage_status"] == "FULL_COVERAGE" for item in folds)
+    daily_qualified_count = sum(
+        int(row[1])
+        >= max(
+            LEVEL_SPECS["L1"]["minimum_daily_count"],
+            math.ceil(int(row[2]) * RL1_REPLAY_DAILY_COVERAGE_RATIO),
+        )
+        for row in daily_rows
     )
+    daily_qualified_ratio = daily_qualified_count / len(daily_rows)
+    eligible_sector_ratios = [float(row[3]) for row in sector_rows if row[3] is not None]
+    minimum_sector_ratio = min(eligible_sector_ratios)
+    coverage_available = all(item["replay_coverage"]["coverage_accepted"] is True for item in folds)
     status = (
         "FULL_COVERAGE" if full_coverage else "COVERAGE_AVAILABLE" if coverage_available else "INSUFFICIENT_COVERAGE"
     )
@@ -3089,6 +3481,11 @@ def _c012_rl1_replay_coverage(folds: Sequence[Mapping[str, Any]]) -> dict[str, A
         "state_date_set_sha256": canonical_sha256([str(row[0]) for row in daily_rows]),
         "canonical_sector_count": len(sector_rows),
         "canonical_sector_sha256": canonical_sha256([str(row[0]) for row in sector_rows]),
+        "historical_structural_eligible_identity_count": eligible_identity_count,
+        "historical_structural_canonical_identity_count": canonical_identity_count,
+        "historical_structural_eligibility_ratio": eligible_identity_count / canonical_identity_count,
+        "fold_eligibility_receipt_sha256s": eligibility_receipts,
+        "fold_eligibility_receipt_set_sha256": canonical_sha256(eligibility_receipts),
         "expected_identity_count": identity_count,
         "available_state_count": available_count,
         "daily_denominator": daily_rows,
@@ -3224,15 +3621,19 @@ def _c012_rl1_level_final(
     attempt_log: list[dict[str, Any]],
 ) -> dict[str, Any]:
     panel = _component_panel(inputs, "L1")
+    development_dates = tuple(day for day in calendar if RL1_DEVELOPMENT_START <= day <= RL1_DEVELOPMENT_END)
+    if len(development_dates) < RL1_ROLLING_WINDOW_OPEN_DAYS:
+        raise _fail(REASON_RL1_ROLLING_WINDOW, "final rolling window is incomplete", stage="finalization")
+    rolling_dates = development_dates[-RL1_ROLLING_WINDOW_OPEN_DAYS:]
     component = prepare_component(
         panel,
         component="L1_ridge",
         level="L1",
         feature_names=RELATIVE_FEATURES,
         calendar=calendar,
-        start=RL1_DEVELOPMENT_START,
+        start=rolling_dates[0],
         end=RL1_DEVELOPMENT_END,
-        expected_days=expected_days,
+        expected_days=len(rolling_dates),
         expected_sector_count=LEVEL_SPECS["L1"]["expected_sector_count"],
         minimum_daily_count=LEVEL_SPECS["L1"]["minimum_daily_count"],
         relative=True,
@@ -3242,9 +3643,9 @@ def _c012_rl1_level_final(
         benchmark,
         calendar,
         level="L1",
-        start=RL1_DEVELOPMENT_START,
+        start=rolling_dates[0],
         end=RL1_DEVELOPMENT_END,
-        expected_days=expected_days,
+        expected_days=len(rolling_dates),
         expected_sector_count=LEVEL_SPECS["L1"]["expected_sector_count"],
         minimum_daily_count=LEVEL_SPECS["L1"]["minimum_daily_count"],
     )
@@ -3267,6 +3668,14 @@ def _c012_rl1_level_final(
         "component": "rotation_L1",
         "level": "L1",
         "phase": "final-development",
+        "ridge_training_contract": {
+            "rolling_window_open_days": RL1_ROLLING_WINDOW_OPEN_DAYS,
+            "ridge_train_start": rolling_dates[0].isoformat(),
+            "ridge_train_end": rolling_dates[-1].isoformat(),
+            "ridge_train_date_set_sha256": canonical_sha256([day.isoformat() for day in rolling_dates]),
+            "market_train_scope": "anchored_expanding",
+            "window_search_performed": False,
+        },
         "selected_alpha": RL1_FIXED_ALPHA,
         "canonical_sector_count": len(component.canonical_codes),
         "canonical_sector_sha256": canonical_sha256(list(component.canonical_codes)),
@@ -3318,6 +3727,13 @@ def run_c012_rl1_candidate_process(
     attempt_log: list[dict[str, Any]] = []
     fold_receipts: list[dict[str, Any]] = []
     market_folds: list[MarketConditioningFold] = []
+    eligibility_authority_sha256 = canonical_sha256(
+        {
+            "source_sha256": request_identity["source_sha256"],
+            "input_identity": request_identity["input_identity"],
+            "c010_formal_evidence": request_identity["c010_formal_evidence"],
+        }
+    )
     try:
         folds = _c012_rl1_folds(calendar, request)
         for fold in folds:
@@ -3329,8 +3745,12 @@ def run_c012_rl1_candidate_process(
             raise _fail(REASON_RL1_FOLD, "market fold fit count is not exactly five", stage="development")
         panel = _component_panel(inputs, "L1")
         for fold, market in zip(folds, market_folds, strict=True):
-            train, train_target, validation, validation_target = _prepare_fold(
-                panel, benchmark, calendar, level="L1", fold=fold
+            train, train_target, validation, validation_target, eligibility = _prepare_c012_rw1_fold(
+                panel,
+                benchmark,
+                calendar,
+                fold=fold,
+                authority_sha256=eligibility_authority_sha256,
             )
             conditioned_train = _condition_component(
                 train,
@@ -3357,14 +3777,21 @@ def run_c012_rl1_candidate_process(
             states, state_receipt = project_daily_states(
                 scores, level="L1", minimum_daily_count=LEVEL_SPECS["L1"]["minimum_daily_count"]
             )
-            metrics = _c012_rl1_fold_metrics(scores, validation_target, states)
+            metrics = _c012_rl1_fold_metrics(
+                scores,
+                validation_target,
+                states,
+                eligible_sector_count=int(eligibility["eligible_sector_count"]),
+                minimum_daily_count=int(eligibility["daily_minimum_available_count"]),
+            )
             validation_dates = tuple(
                 day for day in calendar if fold["validation_start"] <= day <= fold["validation_end"]
             )
             replay_coverage = _c012_rl1_fold_replay_coverage(
                 fold=str(fold["fold"]),
                 validation_dates=validation_dates,
-                canonical_codes=conditioned_validation.component.canonical_codes,
+                canonical_codes=train.canonical_codes,
+                eligibility=eligibility,
                 states=states,
                 targets=validation_target,
             )
@@ -3372,8 +3799,21 @@ def run_c012_rl1_candidate_process(
                 "fold": fold["fold"],
                 "train_start": fold["train_start"].isoformat(),
                 "train_end": fold["train_end"].isoformat(),
+                "ridge_train_start": fold["ridge_train_start"].isoformat(),
+                "ridge_train_end": fold["ridge_train_end"].isoformat(),
+                "ridge_train_trading_day_count": fold["ridge_train_days"],
+                "ridge_train_date_set_sha256": fold["ridge_train_date_set_sha256"],
+                "feature_warmup_start": (
+                    fold["feature_warmup_start"].isoformat() if fold["feature_warmup_start"] is not None else None
+                ),
+                "feature_warmup_end": (
+                    fold["feature_warmup_end"].isoformat() if fold["feature_warmup_end"] is not None else None
+                ),
+                "feature_warmup_trading_day_count": fold["feature_warmup_days"],
+                "feature_warmup_date_set_sha256": fold["feature_warmup_date_set_sha256"],
                 "validation_start": fold["validation_start"].isoformat(),
                 "validation_end": fold["validation_end"].isoformat(),
+                "eligibility_feature_cutoff_date": fold["eligibility_feature_cutoff_date"].isoformat(),
                 "alpha": RL1_FIXED_ALPHA,
                 "preprocess": train.preprocessor.payload(),
                 "preprocess_sha256": canonical_sha256(train.preprocessor.payload()),
@@ -3381,6 +3821,7 @@ def run_c012_rl1_candidate_process(
                 "validation_target": validation_target.receipt,
                 "train_interaction": conditioned_train.receipt,
                 "validation_interaction": conditioned_validation.receipt,
+                "historical_eligibility": eligibility,
                 "market_fold_receipt_sha256": market.receipt["receipt_sha256"],
                 "fit": _conditioned_fit_receipt(fit),
                 "scores": score_receipt,
@@ -3465,6 +3906,7 @@ def run_c012_rl1_candidate_process(
         "development_start": RL1_DEVELOPMENT_START.isoformat(),
         "development_end": RL1_DEVELOPMENT_END.isoformat(),
         "development_trading_day_count": development_days,
+        "ridge_training_contract": dict(request_identity["ridge_training_contract"]),
         "folds": fold_receipts,
         "fold_receipt_sha256s": [item["receipt_sha256"] for item in fold_receipts],
         "development_acceptance": acceptance,
@@ -3544,6 +3986,7 @@ def close_c012_rl1_candidate_children(
             or payload.get("mapping_manifest_sha256") != request_identity["input_identity"]["mapping_manifest_sha256"]
             or payload.get("database_identity") != request_identity["input_identity"]["database_identity"]
             or payload.get("c010_formal_evidence") != request_identity["c010_formal_evidence"]
+            or payload.get("ridge_training_contract") != request_identity["ridge_training_contract"]
             or payload.get("process_fit_count") != RL1_PROCESS_FIT_COUNT
             or payload.get("selection_performed") is not False
             or payload.get("parameter_search_performed") is not False
@@ -3586,6 +4029,78 @@ def close_c012_rl1_candidate_children(
             or not isinstance(rotation, Mapping)
         ):
             raise _fail(REASON_RL1_REPRODUCIBILITY, "fresh process development closure is invalid", stage="closure")
+        authority_by_fold = {str(item["fold"]): item for item in request_identity["folds"]}
+        eligibility_authority_sha256 = canonical_sha256(
+            {
+                "source_sha256": request_identity["source_sha256"],
+                "input_identity": request_identity["input_identity"],
+                "c010_formal_evidence": request_identity["c010_formal_evidence"],
+            }
+        )
+        for item in folds:
+            fold_name = str(item.get("fold") or "")
+            authority = authority_by_fold.get(fold_name)
+            eligibility = item.get("historical_eligibility")
+            coverage = item.get("replay_coverage")
+            canonical_codes = eligibility.get("canonical_sector_codes") if isinstance(eligibility, Mapping) else None
+            eligible_codes = eligibility.get("eligible_sector_codes") if isinstance(eligibility, Mapping) else None
+            ineligible = eligibility.get("ineligible_sectors") if isinstance(eligibility, Mapping) else None
+            if (
+                not isinstance(authority, Mapping)
+                or item.get("ridge_train_start") != authority.get("ridge_train_start")
+                or item.get("ridge_train_end") != authority.get("ridge_train_end")
+                or item.get("ridge_train_trading_day_count") != RL1_ROLLING_WINDOW_OPEN_DAYS
+                or item.get("ridge_train_date_set_sha256") != authority.get("ridge_train_date_set_sha256")
+                or item.get("eligibility_feature_cutoff_date") != authority.get("eligibility_feature_cutoff_date")
+                or item.get("feature_warmup_trading_day_count") != authority.get("feature_warmup_trading_day_count")
+                or item.get("feature_warmup_date_set_sha256") != authority.get("feature_warmup_date_set_sha256")
+                or not isinstance(eligibility, Mapping)
+                or canonical_sha256({key: value for key, value in eligibility.items() if key != "receipt_sha256"})
+                != eligibility.get("receipt_sha256")
+                or eligibility.get("contract_version") != RL1_CONTRACT_VERSION
+                or eligibility.get("fold") != fold_name
+                or eligibility.get("authority_date") != authority.get("validation_first_trading_date")
+                or eligibility.get("feature_cutoff_date") != authority.get("eligibility_feature_cutoff_date")
+                or eligibility.get("authority_basis")
+                != "validation_first_canonical_trading_date_t_minus_1_pit_features"
+                or eligibility.get("authority_sha256") != eligibility_authority_sha256
+                or eligibility.get("validation_outcome_accessed") is not False
+                or eligibility.get("metric_accessed") is not False
+                or eligibility.get("validation_feature_cross_section_denominator")
+                != "canonical_L1_31_before_eligibility_projection"
+                or eligibility.get("validation_target_cross_section_denominator")
+                != "canonical_L1_31_before_eligibility_projection"
+                or eligibility.get("canonical_sector_count") != LEVEL_SPECS["L1"]["expected_sector_count"]
+                or not isinstance(canonical_codes, list)
+                or canonical_codes != sorted(set(str(value) for value in canonical_codes))
+                or len(canonical_codes) != LEVEL_SPECS["L1"]["expected_sector_count"]
+                or eligibility.get("canonical_sector_sha256") != canonical_sha256(canonical_codes)
+                or not isinstance(eligible_codes, list)
+                or eligible_codes != sorted(set(str(value) for value in eligible_codes))
+                or not set(eligible_codes).issubset(canonical_codes)
+                or eligibility.get("eligible_sector_count") != len(eligible_codes)
+                or eligibility.get("eligible_sector_sha256") != canonical_sha256(eligible_codes)
+                or eligibility.get("historical_structural_eligibility_ratio")
+                != len(eligible_codes) / len(canonical_codes)
+                or len(eligible_codes) < LEVEL_SPECS["L1"]["minimum_daily_count"]
+                or not isinstance(ineligible, list)
+                or eligibility.get("ineligible_sector_count") != len(ineligible)
+                or eligibility.get("ineligible_sector_sha256") != canonical_sha256(ineligible)
+                or {str(row.get("sector_code") or "") for row in ineligible}
+                != set(canonical_codes) - set(eligible_codes)
+                or eligibility.get("daily_minimum_available_count")
+                != max(
+                    LEVEL_SPECS["L1"]["minimum_daily_count"],
+                    math.ceil(RL1_REPLAY_DAILY_COVERAGE_RATIO * len(eligible_codes)),
+                )
+                or not isinstance(coverage, Mapping)
+                or coverage.get("eligibility_receipt_sha256") != eligibility.get("receipt_sha256")
+                or coverage.get("canonical_sector_count") != len(canonical_codes)
+                or coverage.get("eligible_sector_count") != len(eligible_codes)
+            ):
+                raise _fail(
+                    REASON_RL1_REPRODUCIBILITY, "fresh process rolling eligibility closure is invalid", stage="closure"
+                )
         for label, receipt in (
             ("development_acceptance", acceptance),
             ("replay_coverage", replay_coverage),
