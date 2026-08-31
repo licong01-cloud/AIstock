@@ -141,7 +141,7 @@ jobs:
           if (-not (Test-Path -LiteralPath $codeql -PathType Leaf)) {
             throw "Verified CodeQL CLI is missing: $codeql"
           }
-          $languages = @($env:CODEQL_LANGUAGES | ConvertFrom-Json)
+          [string[]]$languages = ($env:CODEQL_LANGUAGES | ConvertFrom-Json)
           if ($languages.Count -eq 0) { throw "CodeQL analysis was selected without a language" }
 
           foreach ($language in $languages) {

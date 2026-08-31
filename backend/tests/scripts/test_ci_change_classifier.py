@@ -1468,7 +1468,7 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert direct_analysis["env"]["CODEQL_LANGUAGES"] == "${{ steps.fast_lane.outputs.languages }}"
     assert direct_analysis["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
     direct_run = direct_analysis["run"]
-    assert "$languages = @($env:CODEQL_LANGUAGES | ConvertFrom-Json)" in direct_run
+    assert "[string[]]$languages = ($env:CODEQL_LANGUAGES | ConvertFrom-Json)" in direct_run
     assert "foreach ($language in $languages)" in direct_run
     assert "database create" in direct_run
     assert '"--build-mode=none"' in direct_run
