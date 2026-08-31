@@ -1157,6 +1157,25 @@ def test_pr_quality_ruff_ignores_deleted_python_files() -> None:
     assert "xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude" in run
 
 
+def test_ci_workflow_keeps_scratch_targets_outside_checkout_and_semgrep_ignores_deleted_paths() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["ci-verdict"]["steps"]
+    runs = {str(step.get("name") or ""): str(step.get("run") or "") for step in steps}
+
+    semgrep_run = runs["Run Semgrep guardrails"]
+    assert 'if [ -f "${path}" ]; then' in semgrep_run
+    assert 'semgrep_files+=("${path}")' in semgrep_run
+    assert 'semgrep "${semgrep_files[@]}"' in semgrep_run
+    assert "xargs -a tmp/validation/ci_change_classifier/changed_files.txt semgrep" not in semgrep_run
+
+    assert "backend_sessions.txt" not in runs["Run selected backend sessions"]
+    assert "module_test_targets.txt" not in runs["Run selected frontend quality"]
+    assert "workflow_test_targets.txt" not in runs["Run focused workflow validation tests"]
+    assert "mapfile -t backend_sessions < <(" in runs["Run selected backend sessions"]
+    assert "mapfile -t module_test_targets < <(" in runs["Run selected frontend quality"]
+    assert "mapfile -t workflow_test_targets < <(" in runs["Run focused workflow validation tests"]
+
+
 def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
