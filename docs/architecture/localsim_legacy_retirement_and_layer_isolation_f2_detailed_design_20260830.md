@@ -1,6 +1,6 @@
 # AIstock LocalSIM 旧业务逻辑退役与三层隔离 F2 详细设计
 
-> 文档状态：`sim_lr_c_contract_revision_merge_ready`
+> 文档状态：`sim_lr_c_runtime_profile_contract_merge_ready`
 >
 > 上位权威：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)
 >
@@ -191,6 +191,34 @@ LocalSIM账户不再以`PaperPortfolio`/session作为运行身份。新control p
 
 account、initial release和binding在同一数据库事务创建并独立readback；任一identity/hash/FK冲突整体rollback。successor release/binding使用append-only identity和effective window，pause/resume/retire通过显式CAS lifecycle transition，不恢复session状态机。
 
+### 4.1.2 `LocalSimRuntimeProfileV1` 配置权威
+
+`SIM-LR-C`不能继续把`paper_v2.runtime_profile/runtime_profile_version`作为新账户配置权威：旧profile外键绑定`paper_v2.portfolio`，复用它会让native `SimulationAccountV1`重新依赖旧账户truth。C bridge migration必须新增中性、package-scoped且不可变版本的：
+
+- `paper_v2.localsim_runtime_profile_v1`：`profile_id`、`package_id/manifest_sha256`、profile name、`ACTIVE|RETIRED` CAS lifecycle、created/updated actor/time；不含account、portfolio、cash、position或active release副本；
+- `paper_v2.localsim_runtime_profile_version_v1`：content-addressed `profile_version_id/hash`、profile/package/manifest identity、严格`config_json`、`validation_status=VALIDATED|INVALID|RETIRED`、bounded validation evidence、immutable version number/created metadata；同profile+hash幂等且已被release引用的version不得更新或删除。
+
+`config_json`只允许以下顶层配置，并对嵌套字段执行`extra=forbid`：
+
+- `daily_strategy`：daily strategy id/version、top-k、明确的行业/板块过滤和selection参数；
+- `hmm`：`enabled`、明确snapshot/model version、preset和状态映射；关闭时仍冻结`enabled=false`，不能用字段缺失表达；
+- `risk_policy`、`fee_policy`；
+- 可空`runtime_variant_id/hash`，只能引用同package且`VALIDATION_PASSED`的既有Strategy Package runtime variant；其variant_config只允许`strategy_config/portfolio_policy/notes`，在profile version创建时验证并物化进canonical config；包含`execution_policy/minute_execution_policy/risk_policy`或任何core/HMM字段的variant拒绝，runtime不做第二次动态merge；
+- 非执行语义的bounded notes/metadata。
+
+禁止出现或嵌套携带`alpha_components`、alpha weight/combination、factor set、model code/weight/artifact、manifest、package identity覆盖、broker/account/ledger、order/fill/cash/position、execution algo/policy、tail/unfilled handler或行情数据。HMM snapshot/version、runtime variant和所有外部引用必须由server repository解析并绑定hash；缺失/retired/cross-package/hash drift时version保持`INVALID`且不能创建release。
+
+LocalSIM execution/tail继续由同package的`strategy_pkg.validated_execution_policy`权威解析，且effective algo必须是TWAP；`tail_policy_version_id/hash`从该validated policy的unfilled/tail snapshot确定性派生。`daily_strategy_profile_version_id`从validated LocalSim profile version的daily strategy identity派生。product request只提交`runtime_profile_version_id + execution_policy_version_id`，不能提交四个component hash、daily/tail衍生id或effective JSON。
+
+统一API增加：
+
+- `POST /api/v1/simulation-runtime/localsim/runtime-profiles`：创建package-scoped profile；
+- `POST /api/v1/simulation-runtime/localsim/runtime-profiles/{profile_id}/versions`：append-only创建并验证version；
+- `POST /api/v1/simulation-runtime/localsim/runtime-profiles/{profile_id}/retire`：CAS停止新release引用，不影响已冻结release；
+- profile/version stable-cursor read-only GET。
+
+旧Paper profile/activation route在C删除mutation caller并转只读历史；D1删除Python DTO/repository，D2再迁移或退役旧物理表。不得把旧profile复制成native默认配置；retained account继续使用其已冻结release，只有用户创建successor release时才明确选择新的LocalSim profile version。
+
 ### 4.2 Data layer contract
 
 数据层只输出以下不可变对象：
@@ -291,13 +319,13 @@ execution planning 只消费 frozen release/binding、DailySelectionEvidence、T
 `LocalSimAccountCreateRequestV1` 固定包含：
 
 - `account_name`、`package_id`、`initial_capital`；
-- `runtime_profile_version_id`、`daily_strategy_profile_version_id`、`execution_policy_version_id`、`tail_policy_version_id`；
+- `runtime_profile_version_id`、`execution_policy_version_id`；daily strategy与tail component id/hash由服务端从两个validated version确定性派生；
 - `effective_from`、可空 `effective_to`、可空 `created_reason`；
 - 可空 `requested_execution_policy_audit` 只作为未参与执行的审计输入，service 必须覆盖写入 `consulted_for_execution=false`。
 
-客户端不得提交 `manifest_sha256`、`admission_receipt_id`、任何 component SHA-256、`release_id/hash`、`binding_id/hash`、`account_id/hash`、effective execution JSON、broker account、ledger scope 或 lifecycle status/version。router 必须通过 Strategy Package admission、runtime profile、daily/HMM、TWAP execution 和 tail-policy 权威 repository 在一个一致快照内解析这些字段；缺失、退役、跨 package、hash 漂移或非 TWAP effective policy 均 typed fail loud，禁止信任客户端副本、manifest execution policy、旧 portfolio config 或默认策略。
+客户端不得提交 `manifest_sha256`、`admission_receipt_id`、任何 component SHA-256、daily/tail衍生id、`release_id/hash`、`binding_id/hash`、`account_id/hash`、effective execution JSON、broker account、ledger scope 或 lifecycle status/version。router 必须通过 Strategy Package admission、LocalSim runtime profile/version、daily/HMM引用、同package validated TWAP policy 和派生tail authority在一个一致快照内解析这些字段；`admission_receipt_id`由当前durable package/manifest/status-event/asset-eligibility facts的canonical payload生成，bounded receipt payload/hash同时冻结到release validation evidence，后续可独立重算，不以瞬时warning/governance展示字段作为identity。缺失、退役、跨 package、hash 漂移或非 TWAP effective policy 均 typed fail loud，禁止信任客户端副本、manifest execution policy、旧 portfolio config 或默认策略。
 
-`LocalSimSuccessorReleaseRequestV1` 固定包含 `base_release_id`、`base_binding_id`、四个可配置 profile/policy version id、`effective_from`、可空 reason/audit；服务端读取 account/package/admission/hash/ledger scope，并以 source binding hash CAS 原子关闭旧 window 后插入 successor。单项 `pause|resume|retire` 只接收 `expected_version`；bulk lifecycle包含1..200个exact item并在一个transaction按稳定account id顺序锁定，任一CAS/state冲突整体零更新，禁止部分成功列表冒充成功。不新增 complete、delete、run-day、readiness、session、tick、auto-run 或 scheduler mutation。
+`LocalSimSuccessorReleaseRequestV1` 固定包含 `base_release_id`、`base_binding_id`、`runtime_profile_version_id`、`execution_policy_version_id`、`effective_from`、可空 reason/audit；服务端读取 account/package/admission/hash/ledger scope并派生daily/tail component，以 source binding hash CAS 原子关闭旧 window 后插入 successor。单项 `pause|resume|retire` 只接收 `expected_version`；bulk lifecycle包含1..200个exact item并在一个transaction按稳定account id顺序锁定，任一CAS/state冲突整体零更新，禁止部分成功列表冒充成功。不新增 complete、delete、run-day、readiness、session、tick、auto-run 或 scheduler mutation。
 
 #### 4.6.2 Historical replay product command
 
@@ -680,7 +708,7 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 | `F-136` | 信号层只消费 package alpha assets、frozen input 和 runtime profile，只输出 immutable selection/target/rebalance evidence，不创建模拟盘、不读 broker/ledger、不重选补位 |
 | `F-137` | 执行层只消费 frozen release/binding、signal/target、daily context 和 causal minute；TWAP-only、方向数量、T+1、limit/suspend、失败隔离不漂移 |
 | `F-138` | LocalSimEconomicCoordinator 是 state/order/fill/cash/position/mark/receipt/outbox 唯一 writer；account/lineage只解析唯一`SimulationLedgerScopeV1`，不读写影子Paper portfolio，projector/read API 无 broker/signal/第二写路径 |
-| `F-139` | StrategyPackage 仅冻结 alpha/model/factor；日频/HMM/risk/fee/tail/runtime variant 与 LocalSIM TWAP snapshot 通过 immutable successor release 配置；requested policy仅进audit metadata，runtime不读manifest policy或硬编码覆盖 |
+| `F-139` | StrategyPackage仅冻结alpha/model/factor；package-scoped `LocalSimRuntimeProfileV1/version`权威管理可修改的日频/HMM/risk/fee/runtime variant，validated TWAP policy派生execution/tail，全部通过immutable successor release冻结；新配置不依赖Paper portfolio/profile，requested policy仅进audit metadata |
 | `F-140` | `SimulationAccountV1`与统一control-plane按§4.6冻结server-resolved request/response/error/query合同；普通创建原子写account+release+binding，replay创建原子写四实体bundle，失败零orphan/双快照；UI/MCP不再创建session或主动tick，产品router不公开scheduler start/stop/tick mutation |
 | `F-141` | historical replay 使用独立 account/binding/job 和同一日级 engine；六个月追赶、restart resume、safe-boundary live successor、当前运行账户隔离完整 |
 | `F-142` | 产品切流一次完成，新旧路径无生产双写/shadow/translator/fallback；retained inventory只由服务端权威生成，现有正常LocalSIM通过lineage复用唯一ledger scope且经济事实hash不变，native account不创建影子Paper portfolio；production preparation/readback缺失时新mutation自动503且旧route仍不存在 |
@@ -701,7 +729,7 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 | `F-136` | signal evidence owner、StrategyPackage selection owner、immutable target/rebalance services、Selection/Paper side-effect separation | `pytest backend/tests/simulation_signal/test_target_rebalance_isolation.py`; Selection/StrategyPackage cases included in `337 passed` matrix | stage_a_source_complete | explicitly approved Stage A phased boundary: implementation owner is uniquely `simulation_signal`; an import-only `simulation_runtime.selection` compatibility surface remains temporarily for out-of-scope DEV-onboarding consumers and must be removed by `SIM-LR-D/PR-D1`; unified successor runtime consumption remains pending `SIM-LR-B` scope |
 | `F-137` | `backend/services/simulation_execution/localsim/runtime.py`、`planning.py`、execution-owned models、neutral minute provider | PR #4015 / `6ec349a19`; `pytest backend/tests/simulation_execution`=`66 passed`; lifecycle scheduler与直接execution合计`382 passed, 2 skipped`; Paper v2与MiniQMT current-head CI全绿 | pr_b1_merged | explicitly approved phased gap：PR-B1 source已合入并清理；用户重启与正常交易日证据仍按`SIM-LR-C/D`独立记录 |
 | `F-138` | `backend/services/simulation_execution/localsim/economic.py`、`persistence.py`、`projection.py`、`valuation.py`；§4.5.1 C ledger-scope composition | PR #4015 / `6ec349a19`; `pytest backend/tests/simulation_execution/test_localsim_economic_transaction.py backend/tests/simulation_execution/test_localsim_projection.py`与current-head Simulation Core CI全绿；C target `backend/tests/simulation_runtime/test_localsim_ledger_scope_bridge_postgres.py` | pr_b1_merged | explicitly approved phased gap：PR-B1唯一writer source已合入并清理；C仍须迁出neutral repository/query composition并闭合native/retained ledger scope，production DDL/DML、restart和runtime activation仍未执行 |
-| `F-139` | `backend/services/simulation_runtime/localsim_control.py`、`successor_models.py`、`successor_repository.py`、`SIM-LR-B/PR-B2` | `pytest backend/tests/simulation_runtime/test_localsim_control_plane.py`=`9 passed`; account/release/binding原子零orphan、TWAP effective policy、requested V25 audit-only、CAS lifecycle与successor binding window直接覆盖 | pr_b2_source_complete | explicitly approved phased gap：internal command/query与immutable successor source完成；产品API/UI注册留在`SIM-LR-C`，production DDL/DML与runtime未执行 |
+| `F-139` | B2 control source；§4.1.2 C `LocalSimRuntimeProfileV1/version`与server authority resolver | B2 control=`9 passed`; C target `backend/tests/simulation_runtime/test_localsim_runtime_profile.py`、`test_localsim_product_authority.py`和DEV PostgreSQL profile/version transaction/readback | pr_b2_source_complete | explicitly approved phased gap：B2 release snapshot完成；C必须交付neutral profile schema/API、HMM/daily/risk/fee validation、same-package TWAP/tail派生和旧Paper profile零新引用 |
 | `F-140` | 同上；§4.6 versioned product contract、additive migration `localsim_successor_core_20260831.sql`及bootstrap owner | B2 schema/control证据同前；C target `backend/tests/simulation_runtime/test_localsim_product_control_plane.py`、`test_localsim_replay_product_transaction.py`和frontend request inventory | pr_b2_source_complete | explicitly approved phased gap：内部control plane与DEV schema闭合；C须实现server-resolved authority、replay四实体原子bundle、cursor GET与统一error，不得让router信任客户端hash/inventory或暴露manual replay tick |
 | `F-141` | `backend/services/simulation_runtime/localsim_replay.py`、`successor_repository.py` | `pytest backend/tests/simulation_runtime/test_localsim_replay_live_transition.py`=`5 passed`; 126交易日独立回放、restart resume、失败日精确重试、source/calendar/current-day隔离、atomic live successor与safe-boundary覆盖 | pr_b2_source_complete | explicitly approved phased gap：replay/safe-boundary source完成；真实六个月capacity、用户重启及正常交易日live transition证据仍按`SIM-LR-D`独立验收 |
 | `F-142` | §4.5.1、§4.6.4、§4.8、§4.8.1、`SIM-LR-C` | target `backend/tests/simulation_architecture/test_localsim_route_uniqueness.py`、`backend/tests/simulation_runtime/test_localsim_ledger_scope_bridge_postgres.py`、cutover preparation/readiness PostgreSQL tests和lineage economic-hash unchanged receipt | design_ready | explicitly approved design-only stage; source merge可先于production preparation，但user restart/activation严格后置；缺B2/C schema和lineage readback时新mutation 503且无旧route fallback |
@@ -784,6 +812,11 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 | R28 | ledger-scope migration最小业务影响复核 | 对8个base Paper FK和MiniQMT binding FK逐项分类后，确认successor runtime只需要重定向`run`与`intraday_snapshots`两个active-write FK；其余均属待退役session/config/reset或MiniQMT产品合同。已把migration缩到exact 2 FK，并要求另外约束逐字节不变及D2单独inventory，避免为LocalSIM切流改动MiniQMT/legacy只读schema | findings fixed; exact catalog tests required |
 | R29 | ledger-scope identity与lineage replay审核 | 发现把legacy scope从`LEGACY_READ_ONLY`更新为`SUCCESSOR_RETAINED`会让immutable scope身份/哈希漂移。已固定scope只有`LEGACY_PORTFOLIO`/`SUCCESSOR_NATIVE`两种不可变来源；retained关系只由hashed lineage表达，scope/economic row均不更新；native source/account/scope三identity相等且唯一 | findings fixed; tamper/idempotency tests required |
 | R30 | SIM-LR-C合同修订最终fix-point与DESIGN-COMPLIANCE-001 | 逐项反证server/client authority、普通/replay/bulk transaction、ledger FK、retained/native identity、Selection provenance、TWAP-only、旧route/script/MCP/lifecycle、MiniQMT不漂移和production/restart时序；未发现剩余dual truth、orphan、silent fallback、影子portfolio或新增人工gate。详细F2=`16/16,warnings=0`、父蓝图=`148/148,warnings=0`、L0=`0 findings/0 blocking`、ownership=`2/2`、diff-check通过 | zero findings; design revision merge-ready |
+| R31 | runtime configuration authority可运行性反证 | C实现审计发现B2 release只保存profile version引用，而现有唯一profile/version表仍FK绑定旧Paper portfolio；native account既无法创建可修改配置，复用旧表又会恢复旧account truth。已新增§4.1.2 package-scoped neutral profile/version schema、append-only API与daily/HMM/risk/fee/runtime-variant严格边界 | findings fixed |
+| R32 | component解析、TWAP/tail与客户端伪造审核 | 发现此前product request仍让客户端提交daily/tail component id，且admission receipt无独立authority。已收窄为runtime-profile+validated-execution-policy两个version输入；server从package admission summary派生receipt，从validated profile派生daily，从同package TWAP policy派生tail，hash/JSON/身份均不可由客户端覆盖 | findings fixed; final validator/no-drift review pending |
+| R33 | runtime variant双配置truth审核 | 发现既有variant允许execution/risk字段，若profile只保存variant引用会与profile/TWAP policy形成运行时merge顺序。已限制可引用variant为同package validated且仅`strategy_config/portfolio_policy/notes`，创建profile version时物化并哈希；execution/minute/risk/core/HMM variant全部拒绝，runtime不动态merge | findings fixed |
+| R34 | admission receipt持久可复核性 | 发现直接hash完整`paper_simulation_admission`会纳入可漂移warning/governance，且account只存receipt id不足以重算。已固定identity只含durable package/manifest/status-event/asset facts，并把bounded payload/hash冻结进release validation evidence；展示性诊断不进入identity | findings fixed; final validators pending |
+| R35 | runtime-profile修订最终fix-point与四项符合性 | 逐项复核native account零Paper profile FK、profile/version append-only、alpha core不可变、HMM显式状态、variant物化无双merge、same-package TWAP/tail、durable admission receipt、retained release不被默认迁移及production/restart状态分离。详细F2=`16/16,warnings=0`、父蓝图=`148/148,warnings=0`、L0/changed-files=`0/0`、ownership=`2/2`、diff-check通过 | zero findings; design correction merge-ready |
 
 ## 15. 合入条件
 
