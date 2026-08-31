@@ -535,13 +535,23 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "dependency installation is prohibited in Nightly" in workflow
     assert "conda run -n AIstock-CI python scripts/nightly_adaptive_scheduler.py" in workflow
     assert "conda run -n AIstock-CI python scripts/nightly_session_runner.py" in workflow
-    assert 'gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml --branch main --event schedule --status completed' in workflow
-    assert 'if ($LASTEXITCODE -ne 0) { throw "Failed to query prior completed scheduled Nightly runs." }' in workflow
-    assert 'gh run download $candidateRunId --repo "${env:GITHUB_REPOSITORY}"' in workflow
-    assert "ConvertFrom-Json -ErrorAction Stop" in workflow
+    assert "Select prior durable Nightly L3 receipt" in workflow
+    assert "retry_run_id: ${{ steps.select_nightly_receipt.outputs.run_id }}" in workflow
+    assert "retry_source_head: ${{ steps.select_nightly_receipt.outputs.head_sha }}" in workflow
+    assert "--json databaseId,headSha" in workflow
+    assert "--jq '.[] | [.databaseId, .headSha] | @tsv'" in workflow
+    assert 'gh run download "${candidate_run_id}"' in workflow
+    assert "ConvertFrom-Json -ErrorAction Stop" not in workflow
+    assert "Upload selected Nightly L3 retry receipt" in workflow
+    assert "Download selected Nightly L3 retry receipt" in workflow
+    assert "nightly-l3-retry-source-${{ github.run_id }}" in workflow
+    assert "RETRY_SOURCE_RUN_ID: ${{ needs.runner-preflight.outputs.retry_run_id }}" in workflow
+    assert "RETRY_SOURCE_HEAD: ${{ needs.runner-preflight.outputs.retry_source_head }}" in workflow
+    assert 'gh run list --repo "${env:GITHUB_REPOSITORY}"' not in workflow
+    assert 'if (-not $retryRunId -or -not $watermark)' in workflow
+    assert "Runner preflight Nightly receipt artifact is incomplete" in workflow
     assert "No prior scheduled Nightly run with a durable session receipt is available" in workflow
     assert 'if ($env:FULL_NIGHTLY_RUN -eq "true")' in workflow
-    assert '-or -not $watermark' not in workflow
     assert "--plan-selection-output" in workflow
     assert "--fail-on-blocked" in workflow
     assert 'git cat-file -e "$watermark^{commit}"' in workflow

@@ -114,6 +114,22 @@ def test_dual_runner_policy_does_not_lock_nightly_job_count(tmp_path: Path) -> N
     assert evidence["bounded_dual_runner_roles"] is True
 
 
+def test_nightly_receipt_policy_rejects_non_scalar_candidate_stream(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "nightly.yml":
+            text = text.replace(
+                "--jq '.[] | [.databaseId, .headSha] | @tsv'",
+                "--jq '.'",
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed"] is False
+
+
 def test_workflow_validation_runner_reacquisition_is_detected(tmp_path: Path) -> None:
     for source in Path(".github/workflows").glob("*.yml"):
         text = source.read_text(encoding="utf-8")
