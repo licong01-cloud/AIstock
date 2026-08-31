@@ -703,6 +703,7 @@ class MonthlyResolutionProcessor:
                 artifact_fingerprint=self.artifact_fingerprint,
                 sample_policy=SAMPLE_POLICY,
                 source_snapshot_catalog=catalog_spec,
+                artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
                 attestation_renewal=fresh_attestation.renewal,
                 now=self._aware_now(),
             )
@@ -726,6 +727,7 @@ class MonthlyResolutionProcessor:
                 sample_policy=SAMPLE_POLICY,
                 attestation_target_key=target.target_key,
                 source_snapshot_catalog=catalog_spec,
+                artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
                 now=self._aware_now(),
             )
             return ProcessorResult.durable_success()
@@ -750,6 +752,7 @@ class MonthlyResolutionProcessor:
             sample_policy=SAMPLE_POLICY,
             build_inputs=build_inputs,
             source_snapshot_catalog=catalog_spec,
+            artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
             now=self._aware_now(),
         )
         return ProcessorResult.durable_success()
