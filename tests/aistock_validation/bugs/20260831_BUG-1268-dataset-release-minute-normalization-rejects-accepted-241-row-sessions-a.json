@@ -49,8 +49,8 @@
   },
   "first_seen_at": "2026-08-31T02:05:05.916008Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1fa27c9191bf986f3879760885e0440b29b78bd0",
+  "fixed_at": "2026-08-31T03:16:28Z",
   "github_issue_number": 4025,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4025",
   "last_seen_at": "2026-08-31T02:05:05.916008Z",
@@ -58,6 +58,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4026",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -81,6 +82,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -92,7 +94,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1268",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c1c6753b8f13992a",
+    "recorded_at": "2026-08-31T03:29:07.497024Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8948ee065a79b73d278cae2c628b10e4dda3489a",
+    "source_merge_commit": "1fa27c9191bf986f3879760885e0440b29b78bd0",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4026",
+    "validation_evidence": [
+      "GitHub PR #4026 required checks -> PASS"
+    ],
+    "validation_evidence_digest": "28e1d0549bb269a3d56c7666f7fb98dbaefb62a4ed57b032386df403c4652294"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -101,6 +124,9 @@
     "fingerprint": "0c7d5b25448834d1fc4fa83c",
     "source_event_id": "FE-20260831-0c7d5b254488"
   },
+  "validation_evidence": [
+    "GitHub PR #4026 required checks -> PASS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
