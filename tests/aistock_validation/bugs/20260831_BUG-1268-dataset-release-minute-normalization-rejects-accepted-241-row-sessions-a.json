@@ -1,6 +1,14 @@
 {
   "actual": "2026-07-31 qe_hmm_full_v2 six-instrument initial-migration sample dss_b46f29a4f0bf5dae71d78be473137c7f failed before candidate construction with BLOCKED_MINUTE_PROVIDER_INVALID. The exact message fingerprint resolves to `MinuteProviderInvalid\\0database contains out-of-session minute keys: [Timestamp('2024-01-02 09:30:00')]`.\n\nRead-only frozen-CAS audit proves three coupled implementation defects in the dataset-release minute preparation path:\n1. Ingestion and the approved PIT-v2 contract accept either 240 core bars or one 09:30 auction row plus 240 core bars. The artifact-ready validator and canonical transformer do not share that exact normalization. In the six-stock snapshot, 1,411 expected PIT stock-days have the valid 241-row shape and 774 have the valid 240-row shape.\n2. The raw minute snapshot is code-batched, not span-filtered. It contains 761 valid trading stock-days outside frozen PIT spans (600462.SH 364, 300379.SZ 145, 600930.SH 252). Artifact-ready scanning rejects these rows even though the canonical transformer correctly excludes them.\n3. `/api/kline-all/tdx` applies `limit` as recent-N bars, but `_fetch_tdx_rows` sizes it only from the target window width. Two true gaps, 688981.SH on 2026-07-08 and 2026-07-10, therefore cannot be reached with a 2-day-sized recent window. A bounded 25,000-row read returns exact 240-bar sessions for both dates within the existing 32 MiB cap.\n\nRequired behavior:\n- Normalize only one exact 09:30 auction row per stock-day, preserving exact 09:31..11:30 and 13:01..15:00 240-bar canonical output. Duplicate auction rows, any other out-of-session timestamp, incomplete core sessions, invalid values and conflicts remain fail-closed.\n- Exclude only raw stock-days proven to be outside the frozen PIT spans but inside the descriptor code bucket and frozen trading calendar. Wrong-bucket codes, non-trading dates and PIT-in-scope anomalies remain fail-closed. Persist compact exclusion counts in immutable coverage evidence.\n- Size TDX recent-N requests to reach the target start from the observation date, bounded by MAX_TDX_WINDOW_BARS and MAX_TDX_RESPONSE_BYTES, then filter exact target dates. TDX remains first; Tushare remains missing-only fallback.\n- Canonical source/effective hashes remain deterministic and cover only the consumed 240-row session while raw source provenance continues to bind the auction/out-of-PIT inputs.\n- Add RED-to-GREEN tests for 240/241 equivalence, duplicate/unexpected timestamp rejection, PIT exclusion versus wrong-code/non-trading rejection, bounded historical TDX retrieval, provider fallback, and canonical transformer output.\n- No DB write, DDL, production activation, dataset overwrite/delete, backend-main restart, or scope reduction.\n\nRefs: BUG-1266 / Issue #4019; blocked submission dss_b46f29a4f0bf5dae71d78be473137c7f.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/artifact_ready_source.py",
+    "backend/services/dataset_release/canonical_stock_transformer.py",
+    "backend/services/dataset_release/minute_overlay.py",
+    "backend/tests/dataset_release/test_artifact_ready_source.py",
+    "backend/tests/dataset_release/test_canonical_stock_transformer.py",
+    "backend/tests/dataset_release/test_minute_overlay.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/bugs/20260831_BUG-1268-dataset-release-minute-normalization-rejects-accepted-241-row-sessions-a.json"
   ],
   "assigned_agent": null,
@@ -57,20 +65,30 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "data_sync_autonomy_backend"
+    "validation_module_registry_l0",
+    "qlib_data_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "fresh Python process imported the modified dataset-release modules, read the immutable six-stock CAS to exact denominator closure, and fetched exact 240-row TDX sessions for 688981.SH on 2026-07-08 and 2026-07-10"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
