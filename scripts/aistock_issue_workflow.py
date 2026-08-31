@@ -78,8 +78,6 @@ NON_BLOCKING_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 MERGE_QUALITY_CHECK_CONTEXTS = (
     "CI verdict",
     "CodeQL verdict",
-    "AIstock Semgrep guardrails",
-    "Context, scope, and open-source tooling dry-run",
 )
 ARTIFACT_PATH_PATTERNS = (
     ".codex_tmp",
@@ -12021,46 +12019,64 @@ def _sync_closed_issue_status_labels(
     *,
     required_label: str | None = None,
     add_fixed: bool = True,
+    require_closed: bool = False,
 ) -> dict[str, Any]:
     """Keep a closed issue from retaining active workflow labels."""
-    try:
-        view = _execute_checked(
-            [
-                "gh",
-                "issue",
-                "view",
-                str(issue_number),
-                "--repo",
-                GITHUB_REPO,
-                "--json",
-                "state,labels",
-            ],
-            cwd=REPO_ROOT,
-            timeout=60,
+    view_args = ["gh", "issue", "view", str(issue_number), "--repo", GITHUB_REPO, "--json", "state,labels"]
+    last_result: dict[str, Any] = {"ok": False, "skipped": False, "reason": "not run"}
+    for attempt in range(1, 3):
+        view = _run_transport_read_with_retry(view_args, cwd=REPO_ROOT, timeout=60, attempts=2)
+        if not view.get("ok"):
+            return {**view, "ok": False, "skipped": False, "attempts": attempt}
+        try:
+            payload = json.loads(str(view.get("stdout") or "{}"))
+        except json.JSONDecodeError as exc:
+            return {"ok": False, "skipped": False, "reason": f"invalid issue label readback: {exc}", "attempts": attempt}
+        labels = {
+            str(item.get("name") or "")
+            for item in payload.get("labels") or []
+            if isinstance(item, dict)
+        }
+        if str(payload.get("state") or "").upper() != "CLOSED":
+            if require_closed:
+                return {"ok": False, "skipped": False, "attempts": attempt, "reason": "GitHub Issue is not CLOSED"}
+            return {"ok": True, "skipped": True, "attempts": attempt, "verified": True}
+        if required_label and required_label not in labels:
+            return {"ok": True, "skipped": True, "attempts": attempt, "verified": True}
+        remove_labels = [label for label in ("status:open", "status:in_progress") if label in labels]
+        add_labels = ["status:fixed"] if add_fixed and "status:fixed" not in labels else []
+        if not remove_labels and not add_labels:
+            return {"ok": True, "skipped": attempt == 1, "attempts": attempt, "verified": True}
+        args = ["gh", "issue", "edit", str(issue_number), "--repo", GITHUB_REPO]
+        for label in remove_labels:
+            args.extend(["--remove-label", label])
+        for label in add_labels:
+            args.extend(["--add-label", label])
+        last_result = _run_command(args, cwd=REPO_ROOT, timeout=60)
+        message = str(last_result.get("stderr") or last_result.get("stdout") or "")
+        if not last_result.get("ok") and not _looks_like_github_transport_failure(message):
+            return {**last_result, "ok": False, "skipped": False, "attempts": attempt}
+        if attempt < 2:
+            time.sleep(0.5)
+    final_view = _run_transport_read_with_retry(view_args, cwd=REPO_ROOT, timeout=60, attempts=2)
+    if final_view.get("ok"):
+        try:
+            final_payload = json.loads(str(final_view.get("stdout") or "{}"))
+        except json.JSONDecodeError:
+            final_payload = {}
+        final_labels = {
+            str(item.get("name") or "")
+            for item in final_payload.get("labels") or []
+            if isinstance(item, dict)
+        }
+        aligned = (
+            str(final_payload.get("state") or "").upper() == "CLOSED"
+            and not final_labels.intersection({"status:open", "status:in_progress"})
+            and (not add_fixed or "status:fixed" in final_labels)
         )
-        payload = json.loads(str(view.get("stdout") or "{}"))
-    except Exception as exc:
-        return {"ok": False, "skipped": False, "reason": str(exc)}
-    labels = {
-        str(item.get("name") or "")
-        for item in payload.get("labels") or []
-        if isinstance(item, dict)
-    }
-    if str(payload.get("state") or "").upper() != "CLOSED":
-        return {"ok": True, "skipped": True}
-    if required_label and required_label not in labels:
-        return {"ok": True, "skipped": True}
-    remove_labels = [label for label in ("status:open", "status:in_progress") if label in labels]
-    add_labels = ["status:fixed"] if add_fixed and "status:fixed" not in labels else []
-    if not remove_labels and not add_labels:
-        return {"ok": True, "skipped": True}
-    args = ["gh", "issue", "edit", str(issue_number), "--repo", GITHUB_REPO]
-    for label in remove_labels:
-        args.extend(["--remove-label", label])
-    for label in add_labels:
-        args.extend(["--add-label", label])
-    result = _execute_checked(args, cwd=REPO_ROOT, timeout=60)
-    return {**result, "removed_labels": remove_labels, "added_labels": add_labels}
+        if aligned:
+            return {**last_result, "ok": True, "skipped": False, "attempts": 2, "verified": True}
+    return {**last_result, "ok": False, "skipped": False, "attempts": 2, "reason": "issue status labels remain unverified"}
 
 
 def _sync_closed_auto_filed_issue_labels(issue_number: int | str) -> dict[str, Any]:
@@ -14775,7 +14791,7 @@ def _sync_github_issue_after_close(
         timeout=60,
     )
     close = _run_command(["gh", "issue", "close", str(issue_number), "--repo", GITHUB_REPO], cwd=root, timeout=60)
-    label_sync = _sync_closed_issue_status_labels(issue_number)
+    label_sync = _sync_closed_issue_status_labels(issue_number, require_closed=True)
     return {
         "status": "synced" if comment.get("ok") and close.get("ok") and label_sync.get("ok") else "warning",
         "comment": comment,
@@ -17015,6 +17031,30 @@ def build_merge_finalizer_plan(
                     auto_merge=merge_close_sync_pr,
                 )
 
+    if close_sync.get("close_sync_pr") or close_sync.get("snapshot_source") == "origin_main_ref":
+        completed_record, _ = find_bug_record(bug_id=canonical_bug_id, issue_json=issue_json)
+        completed_status = str(completed_record.get("status") or "")
+        if completed_status != "fixed_source_pending_user_restart":
+            issue_number = completed_record.get("github_issue_number")
+            compensation = (
+                _sync_closed_issue_status_labels(issue_number, require_closed=True)
+                if issue_number
+                else {"ok": False, "reason": "missing github_issue_number"}
+            )
+            close_sync["github_issue_compensation"] = _pick(
+                compensation,
+                "ok",
+                "skipped",
+                "attempts",
+                "verified",
+                "reason",
+            )
+            if not compensation.get("ok"):
+                payload["workflow_gate"] = "blocked"
+                payload["blocking"] = ["merged close-sync GitHub Issue state/labels are not aligned"]
+                payload["close_sync"] = close_sync
+                return payload
+
     source_merge_receipt = _source_merge_receipt_from_close_sync(
         close_sync,
         bug_id=canonical_bug_id,
@@ -17798,6 +17838,11 @@ def build_close_sync_plan(
         )
         evidence_payload["github_issue_sync"] = github_sync
         _write_json(output_dir / "close-sync-evidence.json", evidence_payload)
+        if not runtime_pending and github_sync.get("status") != "synced":
+            raise WorkflowError(
+                "close-sync GitHub Issue state/label synchronization is incomplete; "
+                f"status={github_sync.get('status') or 'unknown'}"
+            )
         timing = _workflow_timing_summary(canonical_bug_id, root=close_sync_root)
         _write_state(
             canonical_bug_id,

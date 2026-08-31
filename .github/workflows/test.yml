@@ -141,6 +141,58 @@ jobs:
         if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true' && steps.classify.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_catalog_integrity
 
+      - name: Run PR quality enforcement
+        id: pr_quality_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.docs_lite_required != 'true' && steps.classify.outputs.close_sync_metadata_only != 'true'
+        continue-on-error: true
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
+          AISTOCK_PR_TITLE: ${{ github.event.pull_request.title || '' }}
+          AISTOCK_PR_BODY: ${{ github.event.pull_request.body || '' }}
+          AISTOCK_PR_QUALITY_ENFORCE_P0P1: ${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}
+        run: |
+          mkdir -p tmp/validation/pr_quality
+          BASE_COMMIT="origin/${BASE_REF}"
+          ENFORCE_ARGS=()
+          if [ "${AISTOCK_PR_QUALITY_ENFORCE_P0P1}" = "true" ]; then
+            ENFORCE_ARGS+=(--enforce-p0-p1-evidence)
+          fi
+          python scripts/issue_flow.py pr-check \
+            --base "${BASE_COMMIT}" \
+            --head HEAD \
+            --output-json tmp/validation/pr_quality/summary.json \
+            --output-md tmp/validation/pr_quality/summary.md \
+            "${ENFORCE_ARGS[@]}"
+          cat tmp/validation/pr_quality/summary.md
+          python scripts/code_intelligence_adapter.py summary \
+            --item-id "PR-${{ github.event.pull_request.number || github.run_id }}" \
+            --query "AIstock PR ${{ github.event.pull_request.number || github.run_id }} impact and affected tests" \
+            --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
+            --skip-external \
+            --output tmp/validation/pr_quality/code-intelligence-summary.json \
+            --output-md tmp/validation/pr_quality/code-intelligence-summary.md
+          cat tmp/validation/pr_quality/code-intelligence-summary.md
+          git diff --name-only --diff-filter=ACMRT "${BASE_COMMIT}...HEAD" -- '*.py' > tmp/validation/pr_quality/changed_python.txt
+          if [ -s tmp/validation/pr_quality/changed_python.txt ]; then
+            xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude
+          fi
+
+      - name: Run Semgrep guardrails
+        id: semgrep_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.docs_lite_required != 'true' && steps.classify.outputs.close_sync_metadata_only != 'true'
+        continue-on-error: true
+        run: |
+          command -v semgrep >/dev/null || { echo 'semgrep is not preinstalled on aistock-ci runner' >&2; exit 1; }
+          mkdir -p tmp/validation/semgrep
+          if [ -s tmp/validation/ci_change_classifier/changed_files.txt ]; then
+            xargs -a tmp/validation/ci_change_classifier/changed_files.txt semgrep \
+              --config .semgrep.yml \
+              --json \
+              --output tmp/validation/semgrep/semgrep.json
+          else
+            printf '{"results":[],"errors":[],"paths":{"scanned":[]}}\n' > tmp/validation/semgrep/semgrep.json
+          fi
+
       - name: Run selected backend sessions
         id: backend_validation
         if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.backend_required != 'false'
@@ -253,6 +305,8 @@ jobs:
           FRONTEND_RESULT: ${{ steps.frontend_validation.outcome }}
           GO_RESULT: ${{ steps.go_validation.outcome }}
           PROMPT_RESULT: ${{ steps.prompt_validation.outcome }}
+          PR_QUALITY_RESULT: ${{ steps.pr_quality_validation.outcome }}
+          SEMGREP_RESULT: ${{ steps.semgrep_validation.outcome }}
           WORKFLOW_REQUIRED: ${{ steps.classify.outputs.workflow_validation_required }}
           WORKFLOW_TEST_TARGETS: ${{ steps.classify.outputs.workflow_test_targets }}
           WORKFLOW_TEST_RESULT: ${{ steps.workflow_validation.outcome }}
@@ -269,7 +323,9 @@ jobs:
             "frontend_dependencies:${FRONTEND_DEPENDENCIES_RESULT}" \
             "frontend:${FRONTEND_RESULT}" \
             "go:${GO_RESULT}" \
-            "prompt:${PROMPT_RESULT}"; do
+            "prompt:${PROMPT_RESULT}" \
+            "pr_quality:${PR_QUALITY_RESULT}" \
+            "semgrep:${SEMGREP_RESULT}"; do
             lane="${entry%%:*}"
             result="${entry#*:}"
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then

@@ -709,6 +709,20 @@ def test_pg_pool_source_and_regression_select_shared_platform_backend_session(tm
     assert payload["unmapped_code_files"] == []
 
 
+def test_aistock_mcp_server_test_uses_direct_workflow_target(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/tests/test_aistock_mcp_server.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
+    assert payload["workflow_test_targets"] == ["backend/tests/test_aistock_mcp_server.py"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
     payload = classifier.classify_changed_files(
         [
@@ -1506,18 +1520,38 @@ def test_codeql_pr_skips_frontend_test_only_language(tmp_path: Path) -> None:
 def test_non_security_quality_workflows_do_not_repeat_on_merge_commit() -> None:
     import yaml
 
-    for relative_path in (
-        ".github/workflows/test.yml",
-        ".github/workflows/semgrep.yml",
-    ):
-        workflow = yaml.safe_load(Path(relative_path).read_text(encoding="utf-8"))
-        triggers = workflow[True]
-        assert "pull_request" in triggers
-        assert "push" not in triggers
+    ci_triggers = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))[True]
+    assert "pull_request" in ci_triggers
+    assert "push" not in ci_triggers
+
+    for relative_path in (".github/workflows/pr-quality.yml", ".github/workflows/semgrep.yml"):
+        triggers = yaml.safe_load(Path(relative_path).read_text(encoding="utf-8"))[True]
+        assert set(triggers) == {"workflow_dispatch"}
 
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))[True]
     assert "pull_request" in codeql
     assert codeql["push"]["branches"] == ["main"]
+
+
+def test_pr_quality_and_semgrep_enforcement_share_ci_verdict_runner() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    assert set(workflow["jobs"]) == {"ci-verdict"}
+    steps = workflow["jobs"]["ci-verdict"]["steps"]
+    pr_quality = next(step for step in steps if step.get("id") == "pr_quality_validation")
+    semgrep = next(step for step in steps if step.get("id") == "semgrep_validation")
+    verdict = next(step for step in steps if step.get("name") == "Require every selected CI lane to pass")
+    assert pr_quality["continue-on-error"] is True
+    assert semgrep["continue-on-error"] is True
+    assert "scripts/issue_flow.py pr-check" in pr_quality["run"]
+    assert "ruff check --force-exclude" in pr_quality["run"]
+    assert "semgrep" in semgrep["run"]
+    assert "--config .semgrep.yml" in semgrep["run"]
+    assert verdict["env"]["PR_QUALITY_RESULT"] == "${{ steps.pr_quality_validation.outcome }}"
+    assert verdict["env"]["SEMGREP_RESULT"] == "${{ steps.semgrep_validation.outcome }}"
+    assert '"pr_quality:${PR_QUALITY_RESULT}"' in verdict["run"]
+    assert '"semgrep:${SEMGREP_RESULT}"' in verdict["run"]
 
 
 def test_semgrep_uses_registry_sync_fast_lane() -> None:
@@ -1598,17 +1632,16 @@ def test_javascript_actions_use_native_node24_major_versions() -> None:
         assert refs == {expected_ref}
 
 
-def test_merge_quality_workflows_publish_context_for_pure_bug_registry_changes() -> None:
-    for relative_path in (
-        ".github/workflows/codeql.yml",
-        ".github/workflows/semgrep.yml",
-        ".github/workflows/pr-quality.yml",
-    ):
+def test_merge_quality_workflows_do_not_duplicate_close_sync_runner_work() -> None:
+    codeql_text = Path(".github/workflows/codeql.yml").read_text(encoding="utf-8")
+    assert "pull_request:" in codeql_text
+    pull_request_block = codeql_text.split("  pull_request:\n", 1)[1].split("\n  ", 1)[0]
+    assert "tests/aistock_validation/bugs/**" not in pull_request_block
+
+    for relative_path in (".github/workflows/semgrep.yml", ".github/workflows/pr-quality.yml"):
         text = Path(relative_path).read_text(encoding="utf-8")
-        assert "pull_request:" in text
-        pull_request_block = text.split("  pull_request:\n", 1)[1]
-        pull_request_block = pull_request_block.split("\n  ", 1)[0]
-        assert "tests/aistock_validation/bugs/**" not in pull_request_block
+        assert "pull_request:" not in text
+        assert "workflow_dispatch:" in text
 
     issue_link_text = Path(".github/workflows/issue-auto-link.yml").read_text(encoding="utf-8")
     assert "- 'tests/aistock_validation/bugs/**'" in issue_link_text
