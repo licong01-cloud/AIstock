@@ -1,0 +1,329 @@
+{
+  "actual": "The query treats all 64 historical non-RETIRED daily bindings as competing current authority and reports LOCALSIM_CUTOVER_INVENTORY_NOT_UNIQUE; arbitrarily deleting history or selecting without an explicit cutoff would violate binding semantics.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/localsim_cutover_inventory.py",
+    "scripts/prepare_localsim_successor_cutover.py",
+    "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
+    "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py",
+    "tests/aistock_validation/bugs/20260831_BUG-1291-localsim-cutover-inventory-rejects-valid-daily-binding-history.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1291",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-31T16:45:27.853547Z",
+  "description": "The query treats all 64 historical non-RETIRED daily bindings as competing current authority and reports LOCALSIM_CUTOVER_INVENTORY_NOT_UNIQUE; arbitrarily deleting history or selecting without an explicit cutoff would violate binding semantics.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260831-c0699791af0a",
+      "timestamp": "2026-08-31T16:45:27.853526Z"
+    }
+  ],
+  "evidence_uris": [
+    "production read-only repeatable-read snapshot 2026-08-31; source f2eb8ed03694fd1eb856052a79a25499be74910b"
+  ],
+  "expected": "Cutover inventory resolves exactly one broker-bound daily authority at an explicit trade-date cutoff, preserves historical bindings and economic rows, and rejects same-date ambiguity, future-only authority, or release/binding/package/hash drift.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py"
+    ],
+    "changed_files": [
+      "backend/services/simulation_runtime/localsim_cutover_inventory.py",
+      "scripts/prepare_localsim_successor_cutover.py",
+      "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
+      "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/localsim_cutover_inventory.py",
+        "scripts/prepare_localsim_successor_cutover.py",
+        "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
+        "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+        "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py"
+      ],
+      "impacted_modules": [
+        "simulation.localsim_successor_core",
+        "simulation_runtime",
+        "platform.db",
+        "paper_v2",
+        "strategy_package",
+        "docs.architecture",
+        "validation.module_quality",
+        "miniqmt_execution_runtime"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/localsim_cutover_inventory.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "scripts/prepare_localsim_successor_cutover.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/localsim_cutover_inventory.py",
+        "scripts/prepare_localsim_successor_cutover.py",
+        "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
+        "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+        "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_runtime/localsim_cutover_inventory.py",
+      "scripts/prepare_localsim_successor_cutover.py",
+      "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
+      "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+      "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/localsim_cutover_inventory.py",
+      "scripts/prepare_localsim_successor_cutover.py",
+      "backend/tests/scripts/test_prepare_localsim_successor_cutover.py",
+      "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+      "backend/tests/simulation_runtime/test_localsim_cutover_inventory.py"
+    ]
+  },
+  "first_seen_at": "2026-08-31T16:45:27.853547Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4094,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4094",
+  "last_seen_at": "2026-08-31T16:45:27.853547Z",
+  "module": "Simulation Runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "read-only production inventory: READY account paper_b26d2312d986441f8497f7484c05f0ec has 64 SIM_VALIDATING bindings across 64 effective dates and zero in-flight runs",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2",
+    "localsim_successor_core_dev_db"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness",
+    "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/simulation_runtime/test_localsim_cutover_inventory.py backend/tests/scripts/test_prepare_localsim_successor_cutover.py -q -> 8 passed",
+      "python -m nox -s simulation_core_l2 -> 760 passed, 3 skipped; cross-module 63 passed, 1 skipped"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "planned_scope_conservative_backend_services_rule",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "Simulation Runtime"
+  ],
+  "title": "LocalSIM cutover inventory rejects valid daily binding history",
+  "trigger_condition": {
+    "fingerprint": "c0699791af0a28fdfcc3f419",
+    "source_event_id": "FE-20260831-c0699791af0a"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core",
+        "localsim_successor_core_dev_db"
+      ],
+      "plans": [
+        "simulation_core_l2",
+        "localsim_successor_core_dev_db"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core",
+          "localsim_successor_core_dev_db"
+        ],
+        "plans": [
+          "simulation_core_l2",
+          "localsim_successor_core_dev_db"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
