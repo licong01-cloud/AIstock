@@ -15870,7 +15870,12 @@ def _create_pr_with_transport_fallback(
     }
 
 
-def _open_pr_for_branch(branch: str, *, root: Path) -> dict[str, Any] | None:
+def _open_pr_for_branch(
+    branch: str,
+    *,
+    root: Path,
+    expected_head: str | None = None,
+) -> dict[str, Any] | None:
     if not branch:
         return None
     existing = _run_command(
@@ -15885,7 +15890,7 @@ def _open_pr_for_branch(branch: str, *, root: Path) -> dict[str, Any] | None:
             "--state",
             "open",
             "--json",
-            "number,url,headRefName,title",
+            "number,url,headRefName,headRefOid,title",
             "--limit",
             "1",
         ],
@@ -15893,103 +15898,154 @@ def _open_pr_for_branch(branch: str, *, root: Path) -> dict[str, Any] | None:
         timeout=60,
     )
     if not existing.get("ok"):
-        return _rest_open_pr_for_branch(branch, root=root)
+        return _rest_open_pr_for_branch(branch, root=root, expected_head=expected_head)
     try:
         rows = json.loads(str(existing.get("stdout") or "[]"))
     except json.JSONDecodeError:
-        return _rest_open_pr_for_branch(branch, root=root)
+        return _rest_open_pr_for_branch(branch, root=root, expected_head=expected_head)
     if not isinstance(rows, list):
-        return _rest_open_pr_for_branch(branch, root=root)
-    return rows[0] if isinstance(rows, list) and rows else None
+        return _rest_open_pr_for_branch(branch, root=root, expected_head=expected_head)
+    row = rows[0] if isinstance(rows, list) and rows else None
+    if not isinstance(row, dict):
+        return None
+    observed_head = str(row.get("headRefOid") or "").strip()
+    if expected_head and observed_head != expected_head:
+        return _rest_open_pr_for_branch(branch, root=root, expected_head=expected_head)
+    return row
 
 
-def _maybe_commit_and_pr_close_sync(
-    *,
-    bug_id: str,
-    close_sync: dict[str, Any],
-    validation_evidence: list[str],
-) -> dict[str, Any]:
-    root = Path(str(close_sync.get("registry_root") or ""))
-    branch = ((close_sync.get("registry_worktree_plan") or {}).get("branch") or "")
-    if not root.exists() or not branch:
-        return {"workflow_gate": "skipped", "reason": "missing_close_sync_worktree"}
-    bug_ids = flow._unique_strings(flow._as_list(close_sync.get("bug_ids")) or [bug_id])
-    label = str(close_sync.get("batch_id") or bug_id)
-    title_label = label if len(bug_ids) > 1 else bug_id
-    changed_files = _close_sync_changed_files(close_sync)
-    if not changed_files:
-        return {"workflow_gate": "no_changes", "root": str(root), "branch": branch}
-    dirty = _dirty_files(root)
-    unexpected_dirty = sorted(
-        path for path in dirty if not path.replace("\\", "/").startswith("tests/aistock_validation/bugs/")
+def _close_sync_expected_registry_files(close_sync: dict[str, Any]) -> list[str]:
+    files = flow._unique_strings(
+        [
+            close_sync.get("updated_bug_json"),
+            close_sync.get("source_bug_json"),
+            *[
+                item.get("source_bug_json")
+                for item in close_sync.get("per_issue") or []
+                if isinstance(item, dict)
+            ],
+        ]
     )
-    if unexpected_dirty:
+    return sorted(
+        path.replace("\\", "/")
+        for path in files
+        if path.replace("\\", "/").startswith("tests/aistock_validation/bugs/")
+    )
+
+
+def _inspect_pending_close_sync_commit(
+    *,
+    root: Path,
+    branch: str,
+    expected_subject: str,
+    expected_files: list[str],
+) -> dict[str, Any] | None:
+    """Validate the clean local close-sync HEAD left after a transport failure."""
+    commands = {
+        "branch": ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        "head": ["git", "rev-parse", "HEAD"],
+        "merge_base": ["git", "merge-base", "HEAD", "origin/main"],
+    }
+    results = {name: _run_command(args, cwd=root, timeout=30) for name, args in commands.items()}
+    for name, result in results.items():
+        if not result.get("ok"):
+            raise WorkflowError(
+                result.get("stderr") or result.get("stdout") or f"cannot inspect close-sync {name}"
+            )
+    observed_branch = str(results["branch"].get("stdout") or "").strip()
+    if observed_branch != branch:
         raise WorkflowError(
-            "close-sync worktree has unexpected dirty files outside BUG registry: "
-            + ", ".join(unexpected_dirty[:10])
+            f"close-sync worktree branch changed: expected {branch}, observed {observed_branch or 'missing'}"
         )
-    existing_pr = _open_pr_for_branch(branch, root=root)
-    if existing_pr and not dirty:
-        return {
-            "workflow_gate": "pr_opened",
-            "reason": "existing_open_close_sync_pr_for_branch",
-            "root": str(root),
-            "branch": branch,
-            "changed_files": changed_files,
-            "pr_url": existing_pr.get("url"),
-            "open_pr": existing_pr,
-            "commit": None,
-        }
-
-    started = time.monotonic()
-    actions: list[dict[str, Any]] = []
-    add = _run_command(["git", "add", *changed_files], cwd=root, timeout=60)
-    actions.append({"command": f"git add {' '.join(changed_files)}", "result": add})
-    if not add.get("ok"):
-        raise WorkflowError(add.get("stderr") or add.get("stdout") or "close-sync git add failed")
-    commit_message = f"chore(issue): close-sync {title_label} after merge"
-    commit = _run_command(["git", "commit", "-m", commit_message], cwd=root, timeout=120)
-    actions.append({"command": f"git commit -m {commit_message}", "result": commit})
-    if not commit.get("ok") and "nothing to commit" not in f"{commit.get('stdout')}\n{commit.get('stderr')}".lower():
-        raise WorkflowError(commit.get("stderr") or commit.get("stdout") or "close-sync git commit failed")
-    commit_sha = _run_command(["git", "rev-parse", "HEAD"], cwd=root, timeout=30)
-    expected_head = str(commit_sha.get("stdout") or "").strip()
-    if not commit_sha.get("ok") or not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head):
-        raise WorkflowError(commit_sha.get("stderr") or "cannot resolve close-sync commit SHA")
-
-    push = _run_command(["git", "push", "-u", "origin", branch], cwd=root, timeout=180)
-    actions.append({"command": f"git push -u origin {branch}", "result": push})
-    if not push.get("ok"):
-        raise WorkflowError(push.get("stderr") or push.get("stdout") or "close-sync git push failed")
-
-    if existing_pr:
-        result = {
-            "workflow_gate": "pr_opened",
-            "reason": "updated_existing_open_close_sync_pr",
-            "root": str(root),
-            "branch": branch,
-            "changed_files": changed_files,
-            "actions": actions,
-            "commit": expected_head,
-            "pr_url": existing_pr.get("url"),
-            "open_pr": existing_pr,
-            "duration_seconds": round(time.monotonic() - started, 3),
-        }
-        _append_event(
-            bug_id,
-            event="close_sync_existing_pr_updated",
-            state="close_synced",
-            root=root,
-            duration_seconds=result["duration_seconds"],
-            evidence={
-                "branch": branch,
-                "commit": expected_head,
-                "pr_url": existing_pr.get("url"),
-                "changed_files": changed_files,
-            },
+    head = str(results["head"].get("stdout") or "").strip()
+    merge_base = str(results["merge_base"].get("stdout") or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", head) or not re.fullmatch(r"[0-9a-fA-F]{40}", merge_base):
+        raise WorkflowError("cannot resolve close-sync HEAD or merge-base identity")
+    count = _run_command(["git", "rev-list", "--count", f"{merge_base}..HEAD"], cwd=root, timeout=30)
+    if not count.get("ok"):
+        raise WorkflowError(count.get("stderr") or count.get("stdout") or "cannot count close-sync commits")
+    try:
+        ahead_count = int(str(count.get("stdout") or "").strip())
+    except ValueError as exc:
+        raise WorkflowError("cannot parse close-sync ahead commit count") from exc
+    if ahead_count == 0:
+        return None
+    parents = _run_command(["git", "rev-list", "--parents", "-n", "1", "HEAD"], cwd=root, timeout=30)
+    if not parents.get("ok") or len(str(parents.get("stdout") or "").split()) != 2:
+        raise WorkflowError("close-sync recovery refuses a merge commit or missing parent identity")
+    subject = _run_command(["git", "show", "-s", "--format=%s", "HEAD"], cwd=root, timeout=30)
+    observed_subject = str(subject.get("stdout") or "").strip()
+    if not subject.get("ok") or observed_subject != expected_subject:
+        raise WorkflowError(
+            f"close-sync recovery commit subject mismatch: expected {expected_subject!r}, observed {observed_subject!r}"
         )
-        return result
+    diff = _run_command(
+        ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+        cwd=root,
+        timeout=30,
+    )
+    if not diff.get("ok"):
+        raise WorkflowError(diff.get("stderr") or diff.get("stdout") or "cannot inspect close-sync commit files")
+    observed_files = sorted(
+        path.strip().replace("\\", "/")
+        for path in str(diff.get("stdout") or "").splitlines()
+        if path.strip()
+    )
+    if not expected_files or observed_files != sorted(expected_files):
+        raise WorkflowError(
+            "close-sync recovery commit files differ from the current BUG registry identity: "
+            f"expected={sorted(expected_files)}, observed={observed_files}"
+        )
+    return {
+        "commit": head,
+        "changed_files": observed_files,
+        "merge_base": merge_base,
+        "ahead_of_merge_base": ahead_count,
+    }
 
+
+def _remote_close_sync_branch_head(branch: str, *, root: Path) -> str | None:
+    result = _run_transport_read_with_retry(
+        ["git", "ls-remote", "--heads", "origin", branch],
+        cwd=root,
+        timeout=60,
+        attempts=2,
+    )
+    if not result.get("ok"):
+        raise WorkflowError(result.get("stderr") or result.get("stdout") or "cannot read close-sync remote branch")
+    rows = [line.split() for line in str(result.get("stdout") or "").splitlines() if line.strip()]
+    if not rows:
+        return None
+    if len(rows) != 1 or len(rows[0]) != 2 or rows[0][1] != f"refs/heads/{branch}":
+        raise WorkflowError("close-sync remote branch readback returned an ambiguous ref")
+    sha = rows[0][0]
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+        raise WorkflowError("close-sync remote branch readback returned an invalid SHA")
+    return sha
+
+
+def _is_single_commit_fast_forward(*, root: Path, ancestor: str, descendant: str) -> bool:
+    relation = _run_command(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=root,
+        timeout=30,
+    )
+    if not relation.get("ok"):
+        return False
+    count = _run_command(["git", "rev-list", "--count", f"{ancestor}..{descendant}"], cwd=root, timeout=30)
+    return bool(count.get("ok") and str(count.get("stdout") or "").strip() == "1")
+
+
+def _write_close_sync_pr_body(
+    *,
+    root: Path,
+    close_sync: dict[str, Any],
+    label: str,
+    title_label: str,
+    bug_ids: list[str],
+    changed_files: list[str],
+    validation_evidence: list[str],
+) -> Path:
     body_path = root / WORKFLOW_ROOT / label / "close-sync-pr-body.md"
     status_rows: list[str] = []
     for changed_file in changed_files:
@@ -16034,6 +16090,189 @@ def _maybe_commit_and_pr_close_sync(
         ]
     )
     _write_text(body_path, "\n".join(body_lines) + "\n")
+    return body_path
+
+
+def _maybe_commit_and_pr_close_sync(
+    *,
+    bug_id: str,
+    close_sync: dict[str, Any],
+    validation_evidence: list[str],
+) -> dict[str, Any]:
+    root = Path(str(close_sync.get("registry_root") or ""))
+    branch = ((close_sync.get("registry_worktree_plan") or {}).get("branch") or "")
+    if not root.exists() or not branch:
+        return {"workflow_gate": "skipped", "reason": "missing_close_sync_worktree"}
+    bug_ids = flow._unique_strings(flow._as_list(close_sync.get("bug_ids")) or [bug_id])
+    label = str(close_sync.get("batch_id") or bug_id)
+    title_label = label if len(bug_ids) > 1 else bug_id
+    changed_files = _close_sync_changed_files(close_sync)
+    dirty = _dirty_files(root)
+    unexpected_dirty = sorted(
+        path for path in dirty if not path.replace("\\", "/").startswith("tests/aistock_validation/bugs/")
+    )
+    if unexpected_dirty:
+        raise WorkflowError(
+            "close-sync worktree has unexpected dirty files outside BUG registry: "
+            + ", ".join(unexpected_dirty[:10])
+        )
+    commit_message = f"chore(issue): close-sync {title_label} after merge"
+    if not changed_files:
+        if dirty:
+            raise WorkflowError("close-sync worktree is dirty but no BUG registry change could be resolved")
+        pending = _inspect_pending_close_sync_commit(
+            root=root,
+            branch=branch,
+            expected_subject=commit_message,
+            expected_files=_close_sync_expected_registry_files(close_sync),
+        )
+        if not pending:
+            return {"workflow_gate": "no_changes", "root": str(root), "branch": branch}
+        expected_head = str(pending["commit"])
+        remote_head = _remote_close_sync_branch_head(branch, root=root)
+        actions: list[dict[str, Any]] = []
+        push_required = not remote_head
+        if remote_head and remote_head != expected_head:
+            if not _is_single_commit_fast_forward(
+                root=root,
+                ancestor=remote_head,
+                descendant=expected_head,
+            ):
+                raise WorkflowError(
+                    "close-sync remote branch diverges from the verified local recovery commit: "
+                    f"local={expected_head}, remote={remote_head}"
+                )
+            push_required = True
+        elif not remote_head and int(pending.get("ahead_of_merge_base") or 0) != 1:
+            raise WorkflowError(
+                "close-sync recovery without a remote branch requires exactly one local commit; "
+                f"observed {pending.get('ahead_of_merge_base') or 0}"
+            )
+        if push_required:
+            push = _run_command(["git", "push", "-u", "origin", branch], cwd=root, timeout=180)
+            actions.append({"command": f"git push -u origin {branch}", "result": push})
+            if not push.get("ok"):
+                raise WorkflowError(push.get("stderr") or push.get("stdout") or "close-sync recovery push failed")
+            remote_head = _remote_close_sync_branch_head(branch, root=root)
+            if remote_head != expected_head:
+                raise WorkflowError(
+                    "close-sync recovery push readback mismatch: "
+                    f"expected={expected_head}, observed={remote_head or 'missing'}"
+                )
+        existing_pr = _open_pr_for_branch(branch, root=root, expected_head=expected_head)
+        if existing_pr:
+            return {
+                "workflow_gate": "pr_opened",
+                "reason": "recovered_existing_close_sync_commit_and_pr",
+                "root": str(root),
+                "branch": branch,
+                "changed_files": pending["changed_files"],
+                "actions": actions,
+                "commit": expected_head,
+                "pr_url": existing_pr.get("url"),
+                "open_pr": existing_pr,
+            }
+        body_path = _write_close_sync_pr_body(
+            root=root,
+            close_sync=close_sync,
+            label=label,
+            title_label=title_label,
+            bug_ids=bug_ids,
+            changed_files=pending["changed_files"],
+            validation_evidence=validation_evidence,
+        )
+        pr = _create_pr_with_transport_fallback(
+            branch=branch,
+            base="main",
+            title=f"chore(issue): close-sync {title_label}",
+            body_path=body_path,
+            expected_head=expected_head,
+            root=root,
+        )
+        actions.append({"command": "gh pr create close-sync recovery", "result": pr})
+        pr_url = _pr_url_from_create_output(pr)
+        if not pr.get("ok") or not pr_url:
+            raise WorkflowError(pr.get("stderr") or pr.get("stdout") or "close-sync recovery PR create failed")
+        return {
+            "workflow_gate": "pr_opened",
+            "reason": "recovered_unpushed_close_sync_commit",
+            "root": str(root),
+            "branch": branch,
+            "changed_files": pending["changed_files"],
+            "actions": actions,
+            "commit": expected_head,
+            "pr_url": pr_url,
+        }
+    existing_pr = _open_pr_for_branch(branch, root=root)
+    if existing_pr and not dirty:
+        return {
+            "workflow_gate": "pr_opened",
+            "reason": "existing_open_close_sync_pr_for_branch",
+            "root": str(root),
+            "branch": branch,
+            "changed_files": changed_files,
+            "pr_url": existing_pr.get("url"),
+            "open_pr": existing_pr,
+            "commit": None,
+        }
+
+    started = time.monotonic()
+    actions: list[dict[str, Any]] = []
+    add = _run_command(["git", "add", *changed_files], cwd=root, timeout=60)
+    actions.append({"command": f"git add {' '.join(changed_files)}", "result": add})
+    if not add.get("ok"):
+        raise WorkflowError(add.get("stderr") or add.get("stdout") or "close-sync git add failed")
+    commit = _run_command(["git", "commit", "-m", commit_message], cwd=root, timeout=120)
+    actions.append({"command": f"git commit -m {commit_message}", "result": commit})
+    if not commit.get("ok") and "nothing to commit" not in f"{commit.get('stdout')}\n{commit.get('stderr')}".lower():
+        raise WorkflowError(commit.get("stderr") or commit.get("stdout") or "close-sync git commit failed")
+    commit_sha = _run_command(["git", "rev-parse", "HEAD"], cwd=root, timeout=30)
+    expected_head = str(commit_sha.get("stdout") or "").strip()
+    if not commit_sha.get("ok") or not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head):
+        raise WorkflowError(commit_sha.get("stderr") or "cannot resolve close-sync commit SHA")
+
+    push = _run_command(["git", "push", "-u", "origin", branch], cwd=root, timeout=180)
+    actions.append({"command": f"git push -u origin {branch}", "result": push})
+    if not push.get("ok"):
+        raise WorkflowError(push.get("stderr") or push.get("stdout") or "close-sync git push failed")
+
+    if existing_pr:
+        result = {
+            "workflow_gate": "pr_opened",
+            "reason": "updated_existing_open_close_sync_pr",
+            "root": str(root),
+            "branch": branch,
+            "changed_files": changed_files,
+            "actions": actions,
+            "commit": expected_head,
+            "pr_url": existing_pr.get("url"),
+            "open_pr": existing_pr,
+            "duration_seconds": round(time.monotonic() - started, 3),
+        }
+        _append_event(
+            bug_id,
+            event="close_sync_existing_pr_updated",
+            state="close_synced",
+            root=root,
+            duration_seconds=result["duration_seconds"],
+            evidence={
+                "branch": branch,
+                "commit": expected_head,
+                "pr_url": existing_pr.get("url"),
+                "changed_files": changed_files,
+            },
+        )
+        return result
+
+    body_path = _write_close_sync_pr_body(
+        root=root,
+        close_sync=close_sync,
+        label=label,
+        title_label=title_label,
+        bug_ids=bug_ids,
+        changed_files=changed_files,
+        validation_evidence=validation_evidence,
+    )
     pr = _create_pr_with_transport_fallback(
         branch=branch,
         base="main",
