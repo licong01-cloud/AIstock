@@ -26,8 +26,12 @@ from backend.services.advisory_model_first.independent_package_alpha_audit_contr
 from backend.services.advisory_model_first.research_control_contracts import EvidenceReferenceV1
 from backend.services.advisory_model_first.strategy_package_batch_prediction import (
     BatchSourcePanels,
+    FACTOR_IO_MODE_FILE_BACKED,
+    FACTOR_IO_MODE_IN_MEMORY,
     StrategyPackageBatchPredictionRunner,
+    _assert_file_backed_feature_parity,
     _publish_prediction_store,
+    _virtualized_factor_io,
     run_factor_group_batch,
 )
 from backend.services.dataset_release.pit import freeze_pit_snapshot
@@ -51,6 +55,10 @@ def _decisions() -> pd.DatetimeIndex:
     anchors = {pd.Timestamp("2024-07-04"), pd.Timestamp("2025-04-22"), pd.Timestamp("2026-02-02")}
     available = [item for item in pd.bdate_range("2024-07-04", "2026-02-02") if item not in anchors]
     return pd.DatetimeIndex(sorted([*anchors, *available[:383]]))
+
+
+def _history_start(decisions: pd.DatetimeIndex) -> date:
+    return pd.bdate_range(end=decisions[0], periods=66)[0].date()
 
 
 def _pit_snapshot():
@@ -172,8 +180,12 @@ def _request(tmp_path: Path, snapshot) -> object:  # noqa: ANN001
 
 
 def _source(decisions: pd.DatetimeIndex) -> BatchSourcePanels:
+    lookback = pd.bdate_range(end=decisions[0], periods=66)
+    source_dates = pd.DatetimeIndex(sorted(set(lookback).union(decisions)))
     instruments = [f"{index:06d}.SZ" for index in range(1, 61)]
-    index = pd.MultiIndex.from_product([decisions, instruments], names=["datetime", "instrument"])
+    index = pd.MultiIndex.from_product(
+        [source_dates, instruments], names=["datetime", "instrument"]
+    )
     daily = pd.DataFrame(
         {
             "open": 1.0,
@@ -190,9 +202,10 @@ def _source(decisions: pd.DatetimeIndex) -> BatchSourcePanels:
     return BatchSourcePanels(
         daily=daily,
         static_raw=static,
-        history_start=date(2023, 1, 1),
+        history_start=_history_start(decisions),
         decision_end=date(2026, 2, 2),
         source_receipts=({"source_role": "fake"},),
+        static_precomputed=True,
     )
 
 
@@ -216,12 +229,18 @@ def _fake_factor_runner(
     )
 
 
-def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(tmp_path: Path) -> None:
+def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.services.advisory_model_first.strategy_package_batch_prediction as batch_module
+
     decisions = _decisions()
     assert len(decisions) == 386
     snapshot = _pit_snapshot()
     request = _request(tmp_path, snapshot)
     counts = {"source": 0, "factor": 0, "model": 0}
+    exact_window_day_counts: list[int] = []
 
     def source_loader(_universe, _start, _end):  # noqa: ANN001, ANN202
         counts["source"] += 1
@@ -229,19 +248,33 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(tmp_path
 
     def factor_runner(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         counts["factor"] += 1
-        return _fake_factor_runner(*args, **kwargs)
+        virtualize_io = kwargs.pop("virtualize_io", True)
+        if args[2].decision_end == args[3][0]:
+            exact_window_day_counts.append(
+                len(args[2].daily.index.get_level_values("datetime").unique())
+            )
+        frame = _fake_factor_runner(*args, **kwargs)
+        frame.attrs["factor_resource_receipt"] = {
+            "factor_io_mode": (
+                FACTOR_IO_MODE_IN_MEMORY
+                if virtualize_io
+                else FACTOR_IO_MODE_FILE_BACKED
+            ),
+            "temp_peak_bytes": 0,
+        }
+        return frame
 
     def model_loader(path: Path):  # noqa: ANN202
         counts["model"] += 1
         order = json.loads((path.parents[1] / "factor_order.json").read_text(encoding="utf-8"))["factor_order"]
         return object(), "fake", None, len(order)
 
+    monkeypatch.setattr(batch_module, "run_factor_group_batch", factor_runner)
     runner = StrategyPackageBatchPredictionRunner(
         source_loader=source_loader,
-        factor_runner=factor_runner,
         model_loader=model_loader,
         model_predictor=lambda _model, _inner, _kind, frame: frame.iloc[:, 0].to_numpy(),
-        history_start_resolver=lambda _start, _window: date(2023, 1, 1),
+        history_start_resolver=lambda _start, _window: _history_start(decisions),
     )
     result = runner.run(
         request=request,
@@ -250,13 +283,25 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(tmp_path
         temp_root=tmp_path / "temp",
     )
 
-    assert counts == {"source": 1, "factor": 778, "model": 3}
+    assert counts == {"source": 1, "factor": 780, "model": 3}
     assert result.batch_receipt["primary_factor_group_run_count"] == 772
     assert result.batch_receipt["primary_decision_batch_count"] == 386
     assert result.batch_receipt["primary_factor_group_run_count_per_decision"] == 2
     assert result.batch_receipt["diagnostic_factor_group_run_count"] == 6
     assert result.batch_receipt["daily_wsl_process_count"] == 0
     assert result.batch_receipt["daily_db_query_count"] == 0
+    assert result.batch_receipt["factor_io_mode"] == FACTOR_IO_MODE_IN_MEMORY
+    assert len(result.batch_receipt["factor_resource_receipts"]) == 778
+    assert result.batch_receipt["file_backed_parity_factor_group_run_count"] == 2
+    assert result.batch_receipt["all_factor_group_run_count"] == 780
+    assert len(result.batch_receipt["file_backed_parity_receipts"]) == 2
+    assert {
+        item["status"] for item in result.batch_receipt["file_backed_parity_receipts"]
+    } == {"PASS"}
+    assert set(result.batch_receipt["required_window_by_closure"].values()) == {61}
+    assert result.batch_receipt["window_buffer_trading_days"] == 5
+    assert result.batch_receipt["rolling_live_window_semantics"] is True
+    assert set(exact_window_day_counts) == {66}
     assert set(result.predictions) == {PKG_378_ARM_ID, PKG_5A5_ARM_ID, PKG_B668_ARM_ID}
     assert all(len(frame) == 386 * 60 for frame in result.predictions.values())
     assert all(descriptor.row_count == 386 * 60 for descriptor in result.prediction_descriptors.values())
@@ -289,7 +334,7 @@ def test_batch_runner_rejects_workspace_file_roster_drift(tmp_path: Path) -> Non
             factor_runner=_fake_factor_runner,
             model_loader=lambda _path: (object(), "fake", None, 57),
             model_predictor=lambda _model, _inner, _kind, frame: frame.iloc[:, 0].to_numpy(),
-            history_start_resolver=lambda _start, _window: date(2023, 1, 1),
+            history_start_resolver=lambda _start, _window: _history_start(decisions),
         ).run(
             request=request,
             pit_snapshot=snapshot,
@@ -328,7 +373,7 @@ def test_batch_runner_rejects_future_sensitive_factor_output(tmp_path: Path) -> 
             len(json.loads((path.parents[1] / "factor_order.json").read_text(encoding="utf-8"))["factor_order"]),
         ),
         model_predictor=lambda _model, _inner, _kind, frame: frame.iloc[:, 0].to_numpy(),
-        history_start_resolver=lambda _start, _window: date(2023, 1, 1),
+        history_start_resolver=lambda _start, _window: _history_start(decisions),
     )
     with pytest.raises(AdvisoryModelFirstError) as raised:
         runner.run(
@@ -355,7 +400,7 @@ def test_batch_runner_rejects_factor_order_drift_inside_shared_closure(tmp_path:
             factor_runner=_fake_factor_runner,
             model_loader=lambda _path: (object(), "fake", None, 57),
             model_predictor=lambda _model, _inner, _kind, frame: frame.iloc[:, 0].to_numpy(),
-            history_start_resolver=lambda _start, _window: date(2023, 1, 1),
+            history_start_resolver=lambda _start, _window: _history_start(decisions),
         ).run(
             request=request,
             pit_snapshot=snapshot,
@@ -393,7 +438,13 @@ def test_real_factor_batch_uses_one_physical_static_h5_with_hardlink_aliases(
                 f"_FACTOR_FILES = {{'factor_000': {str(factor_source)!r}}}",
                 "def calculate_001_factor_000():",
                 "    frame = pd.read_hdf(Path.cwd() / 'daily_pv.h5')",
-                "    return frame[['close']].rename(columns={'close': 'factor_000'})",
+                "    static = pd.read_parquet(Path.cwd() / 'static_factors.parquet', columns=['db_turnover_rate'])",
+                "    momentum = frame['close'].groupby(level='instrument').pct_change(fill_method=None)",
+                "    combined = momentum.add(static['db_turnover_rate'] * 0.001)",
+                "    result = combined.groupby(level='datetime').rank(pct=True).to_frame('factor_000')",
+                "    path = Path.cwd() / 'result.h5'",
+                "    result.to_hdf(path, key='data', mode='w')",
+                "    return pd.read_hdf(path)",
             ]
         )
         + "\n",
@@ -424,17 +475,179 @@ def test_real_factor_batch_uses_one_physical_static_h5_with_hardlink_aliases(
     monkeypatch.setattr(batch_module, "compute_precomputed_factors", lambda static, _daily: static)
     monkeypatch.setattr(batch_module, "validate_precomputed_factors", lambda _static: (True, []))
 
+    file_backed = run_factor_group_batch(
+        workspace,
+        HASH_A,
+        source,
+        [date(2025, 4, 22)],
+        tmp_path / "temp_file",
+        virtualize_io=False,
+    )
     features = run_factor_group_batch(
         workspace,
         HASH_A,
         source,
         [date(2025, 4, 22)],
-        tmp_path / "temp",
+        tmp_path / "temp_memory",
+        virtualize_io=True,
     )
 
+    pd.testing.assert_frame_equal(features, file_backed)
     assert features.shape == (60, 1)
     assert features["factor_000"].notna().all()
     receipt = features.attrs["factor_resource_receipt"]
     assert receipt["static_h5_physical_file_count"] == 1
     assert receipt["static_h5_hardlink_alias_count"] == 6
     assert receipt["temp_peak_bytes"] > 0
+    assert receipt["factor_io_mode"] == FACTOR_IO_MODE_IN_MEMORY
+    assert file_backed.attrs["factor_resource_receipt"]["factor_io_mode"] == FACTOR_IO_MODE_FILE_BACKED
+
+
+def test_virtual_factor_io_restores_pandas_after_exception() -> None:
+    original_read_hdf = pd.read_hdf
+    original_read_parquet = pd.read_parquet
+    original_frame_to_hdf = pd.DataFrame.to_hdf
+    original_series_to_hdf = pd.Series.to_hdf
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2025-04-22"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [1.0]}, index=index)
+    static = pd.DataFrame({"db_turnover_rate": [1.0]}, index=index)
+
+    with pytest.raises(RuntimeError, match="forced"):
+        with _virtualized_factor_io(daily=daily, static=static):
+            assert pd.read_hdf is not original_read_hdf
+            assert pd.read_parquet is not original_read_parquet
+            raise RuntimeError("forced")
+
+    assert pd.read_hdf is original_read_hdf
+    assert pd.read_parquet is original_read_parquet
+    assert pd.DataFrame.to_hdf is original_frame_to_hdf
+    assert pd.Series.to_hdf is original_series_to_hdf
+
+
+def test_real_closure_parity_rejects_value_drift() -> None:
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2025-04-22"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    in_memory = pd.DataFrame({"factor": [1.0]}, index=index)
+    file_backed = pd.DataFrame({"factor": [1.000001]}, index=index)
+
+    with pytest.raises(AdvisoryModelFirstError) as raised:
+        _assert_file_backed_feature_parity(
+            in_memory=in_memory,
+            file_backed=file_backed,
+            closure_sha256=HASH_A,
+            decision_date=date(2025, 4, 22),
+        )
+
+    assert raised.value.reason_code == "ADVISORY_PACKAGE_BATCH_LIVE_PARITY_FAILED"
+
+
+def test_real_factor_batch_rejects_unsupported_virtual_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.services.advisory_model_first.strategy_package_batch_prediction as batch_module
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    factor_source = workspace / "factor_source.py"
+    factor_source.write_text("import h5py\n", encoding="utf-8")
+    (workspace / "factor_order.json").write_text(
+        json.dumps(
+            {
+                "factor_order": ["factor_000"],
+                "alpha158_factors": [],
+                "dynamic_factors": ["factor_000"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (workspace / "strategy_package_factor_entry.py").write_text(
+        "\n".join(
+            [
+                f"_FACTOR_FILES = {{'factor_000': {str(factor_source)!r}}}",
+                "def calculate_001_factor_000():",
+                "    raise AssertionError('must not run')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    days = pd.DatetimeIndex(["2025-04-22"])
+    index = pd.MultiIndex.from_product(
+        [days, ["000001.SZ"]], names=["datetime", "instrument"]
+    )
+    source = BatchSourcePanels(
+        daily=pd.DataFrame(
+            {
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.0,
+                "volume": 100.0,
+                "amount": 1000.0,
+                "factor": 1.0,
+            },
+            index=index,
+        ),
+        static_raw=pd.DataFrame({"turnover_rate": 1.0}, index=index),
+        history_start=date(2025, 4, 22),
+        decision_end=date(2025, 4, 22),
+        source_receipts=(),
+    )
+    monkeypatch.setattr(batch_module, "compute_precomputed_factors", lambda static, _daily: static)
+    monkeypatch.setattr(batch_module, "validate_precomputed_factors", lambda _static: (True, []))
+
+    with pytest.raises(AdvisoryModelFirstError) as raised:
+        run_factor_group_batch(
+            workspace,
+            HASH_A,
+            source,
+            [date(2025, 4, 22)],
+            tmp_path / "temp",
+        )
+
+    assert raised.value.reason_code == "ADVISORY_PACKAGE_BATCH_ASSET_INVALID"
+
+
+def test_batch_runner_checks_wall_limit_after_each_pit_day(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.services.advisory_model_first.strategy_package_batch_prediction as batch_module
+
+    decisions = _decisions()
+    snapshot = _pit_snapshot()
+    request = _request(tmp_path, snapshot)
+    clock = iter([0.0, float(request.resource_max_wall_seconds) + 1.0])
+    monkeypatch.setattr(batch_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(AdvisoryModelFirstError) as raised:
+        StrategyPackageBatchPredictionRunner(
+            source_loader=lambda _universe, _start, _end: _source(decisions),
+            factor_runner=_fake_factor_runner,
+            model_loader=lambda path: (
+                object(),
+                "fake",
+                None,
+                len(
+                    json.loads(
+                        (path.parents[1] / "factor_order.json").read_text(encoding="utf-8")
+                    )["factor_order"]
+                ),
+            ),
+            model_predictor=lambda _model, _inner, _kind, frame: frame.iloc[:, 0].to_numpy(),
+            history_start_resolver=lambda _start, _window: _history_start(decisions),
+        ).run(
+            request=request,
+            pit_snapshot=snapshot,
+            decision_dates=decisions,
+            temp_root=tmp_path / "temp",
+        )
+
+    assert raised.value.reason_code == "ADVISORY_PACKAGE_ALPHA_AUDIT_RESOURCE_LIMIT_EXCEEDED"
+    assert raised.value.context["completed_decision_count"] == 1

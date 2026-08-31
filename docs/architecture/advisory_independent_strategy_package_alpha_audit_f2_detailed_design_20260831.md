@@ -1,4 +1,4 @@
-# AIstock Advisory 独立 StrategyPackage 同窗 Alpha 审计 F2 详细设计 v1.2
+# AIstock Advisory 独立 StrategyPackage 同窗 Alpha 审计 F2 详细设计 v1.3
 
 - 日期：2026-08-31
 - Feature tier：F2
@@ -22,6 +22,7 @@
 6. 三包原生 label、回测窗口、执行策略、成本与候选池不同。原生 Sharpe、年化收益和 RankIC 只能作 inventory，不得替代共同 N1 window/PIT/H20/cost 结果。
 7. 本任务消费已用过的 development window，只作导航诊断；不读取 sealed holdout、不训练或调参、不改变 Selection、StrategyPackage、Advisory、Paper 或生产运行时。
 8. 实现期 package-owned 源码审核确认三包均包含按 `datetime` 横截面 rank/z-score/波动聚合的因子。把 386 日 instrument union 一次性计算后再做每日 PIT 过滤，会改变这些因子的横截面支持集，不能与“在历史 T 按 T 的 canonical PIT 股票池运行单日业务逻辑”等价。v1.2 因此冻结为一次区间读取、单进程内 386 个 PIT 日批处理、每个 T 两个 closure；禁止退回 union-wide factor matrix。
+9. v1.2 首次真实运行显示 file-backed wrapper 约需 8 分钟/PIT 日，线性外推明显超过 8 小时。复审同时发现其后续 T 使用从首个 warm-up 日起不断扩张的输入，而单日业务语义是每个 T 独立使用该 closure 的 `required_window + 5` 滚动交易日窗口；扩张窗口既浪费计算，也可能改变 expanding/分位类结果，因此旧运行不得形成正式证据。v1.3 固定为一次完整区间读取后按 T/closure 切出滚动窗口、在该窗口内只预计算一次 static 派生，再使用受限 in-memory I/O adapter。adapter 只虚拟化已知 `daily_pv/static aliases/result.h5` 的 pandas read/write，冻结因子源码、输入值、执行顺序和返回值不变；必须用 file-backed reference 做逐值 parity，遇到 HDFStore/h5py/外部 reader 即 fail closed。
 
 ## 2. Goal and scope
 
@@ -136,10 +137,10 @@ QEExperimentRuntimeAssetResolver.prepare_workspace(...)
    - 日线 OHLCVA/factor read；
    - 基本面、资金流与行业 read。
 3. 外部行情 fallback、Tushare fallback、Selection data cache、逐日 DB query 均关闭；receipt 记录 query contract、范围、row count 与内容 hash。
-4. 基本面/资金流/行业宽表只写一份 canonical static H5；`daily_basic.h5`、`moneyflow.h5`、`sector_data.h5`、`bak_basic.h5`、`cyq_perf.h5`、`margin_detail.h5` 必须是同卷 hard-link alias，不得复制六份相同宽表。hard link 不可建立时 typed 失败，不退化为静默复制。
-5. 对每个 decision T，先按该日 canonical PIT member set 从已读 panel 切出截至 T 的同一批历史输入，再运行 exact factor closure `977c...` 和 `f19c...`；前两包共享同日 factor matrix 只因资产闭包精确相同。完整窗口固定为 `386 × 2 = 772` 次 primary closure evaluation。每个 factor result 读取后立即并入当日有序矩阵并释放临时文件，不同时保留 57 份重复索引 DataFrame，也不得先在 union 上算横截面因子后再过滤。
+4. 正式 batch 默认使用受限 in-memory pandas I/O adapter 提供 canonical daily/static DataFrame；完整区间只 canonicalize 一次，每个 T 按该 closure 的 `required_window + 5` 个交易日切片，随后在已切片的 PIT 股票池内只计算一次 static 派生，同窗口的两个 closure 可共享该输入。工作目录只创建兼容冻结 wrapper 路径检查所需的一份 physical static marker 与 `daily_basic.h5`、`moneyflow.h5`、`sector_data.h5`、`bak_basic.h5`、`cyq_perf.h5`、`margin_detail.h5` 六个同卷 hard-link alias，不复制宽表。
+5. 对每个 decision T，先按该日 canonical PIT member set 和各 closure 冻结滚动窗口从已读 panel 切出业务等价输入，再运行 exact factor closure `977c...` 和 `f19c...`；前两包共享同日 factor matrix 只因资产闭包精确相同。完整窗口固定为 `386 × 2 = 772` 次 primary closure evaluation。首个冻结 T 对两个真实 closure 各追加一次 `FILE_BACKED_REFERENCE`，与同输入内存矩阵逐 key、column、dtype、value 精确比较；两次 reference 只是实现等价门禁，不计研究 trial。冻结因子对 `result.h5` 的 `DataFrame/Series.to_hdf` 被同作用域捕获，wrapper 首次 `read_hdf` 后立即消费并释放；作用域结束必须恢复 pandas 原函数。hard link、受支持 I/O roster、单次消费或 parity 任一失败即 typed 失败。不得使用从首日 warm-up 起扩张的历史窗口，也不得先在 union 上算横截面因子后再过滤。
 6. 每个 package model 只调用一次 `load_model_from_pkl`；模型对象跨 386 日复用，每日矩阵使用同一冻结 infer processor 和 `predict`，不重新加载模型、来源、CAS 或 workspace。
-7. 正式 receipt 必须满足：`market_interval_read_count=1`、`static_interval_read_count=1`、单次计算峰值 `static_h5_physical_file_count=1` 与 `static_h5_hardlink_alias_count=6`、`primary_decision_batch_count=386`、`primary_factor_group_run_count_per_decision=2`、`primary_factor_group_run_count=772`、`diagnostic_factor_group_run_count=6`、`factor_group_total_run_count=778`、每包 `model_load_count=1`、`daily_wsl_process_count=0`、`daily_db_query_count=0`。诊断重算只切已读内存 panel，不再次访问 DB、CAS 或加载模型。
+7. 正式 receipt 必须满足：`market_interval_read_count=1`、`static_interval_read_count=1`、`rolling_live_window_semantics=true`、逐 closure `required_window_by_closure`、`window_buffer_trading_days=5`、单次计算峰值 `static_h5_physical_file_count=1` 与 `static_h5_hardlink_alias_count=6`、`factor_io_mode=IN_MEMORY_EQUIVALENT`、`primary_decision_batch_count=386`、`primary_factor_group_run_count_per_decision=2`、`primary_factor_group_run_count=772`、`diagnostic_factor_group_run_count=6`、`factor_group_total_run_count=778`、`file_backed_parity_factor_group_run_count=2`、`all_factor_group_run_count=780`、每包 `model_load_count=1`、`daily_wsl_process_count=0`、`daily_db_query_count=0`。两条 parity receipt 的 closure roster 和 feature hash 必须成对一致。诊断重算只切已读内存 panel，保持与 primary 相同下界并只为 poison 扩展上界，不再次访问 DB、CAS 或加载模型；每个 PIT 日结束后检查 8 小时 wall 上限，不得等到全部 386 日后才失败。
 
 ### 6.2 PIT and missing-data semantics
 
@@ -330,6 +331,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 ### 12.2 Batch / causality / PIT
 
 - fake loader 证明一次 market/static read、386 个 PIT 日 × 两个 primary closure、六次固定诊断重算、每包一次 model load、零逐日 WSL process/DB query/workspace rebuild；
+- 同一微型 frozen factor 分别以 `FILE_BACKED_REFERENCE` 与 `IN_MEMORY_EQUIVALENT` 运行，keys、columns、dtype 与 values 精确一致；正式 batch 首个 T 对两个真实 closure 重复该门禁并固化配对 hash；pandas 原 I/O 函数在异常和成功路径都恢复；不支持的直接 HDF/外部 reader 拒绝；fake batch 证明每个 T 使用固定 `required_window + 5` 日而非扩张窗口；
 - 相同 factor count 但不同 asset hash 不得共享；相同 closure 必须共享；
 - 三个固定 anchor 的 full/prefix poison 正负测试；
 - isolated end-date exact Top50 与 score tolerance 正负测试；
@@ -406,7 +408,8 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 | package source 已失效 | 偷偷回退旧 QE workspace | package-owned CAS-only；所有 fallback 禁止 |
 | 缺失特征被静默填充 | 虚高覆盖与收益 | 不填值，typed dropped coverage，Top50 不足当日 unavailable |
 | 386 日退化为 386 个独立任务 | 超时且重复 DB/进程/模型/workspace | 单个 batch 进程、一次区间读、三模型各加载一次；仅 PIT-day factor evaluation 为按日，因为横截面业务语义要求如此；8 小时 wall fail closed |
-| static 宽表复制成六份 H5 | 磁盘膨胀与无谓写入 | 一份 physical H5 + 六个同卷 hard link；temp peak 32GB fail closed |
+| 从首日 warm-up 起扩张输入 | 后续日偏离单日业务窗口且计算量持续增长 | 每个 T/closure 使用冻结 `required_window + 5` 滚动交易日窗口；static 派生在切片后计算；receipt 固化窗口语义 |
+| file-backed 因子 result/H5 往返导致约 8 分钟/日 | 超过 8 小时且产生无业务价值的 TB 级瞬时 I/O | 受限 in-memory pandas I/O adapter + file-backed parity；源码/输入/输出不变；未知 I/O API fail closed；逐 PIT 日 wall 检查 |
 | 诊断变成 winner 选择 | 多重检验与方向漂移 | 0 trial、navigation only、不选权重/包、不进 sealed |
 | artifacts 变成新平台 | 延误模型演进 | task-local store + 一个 CLI + JSON/Parquet；无 DB/UI/scheduler |
 

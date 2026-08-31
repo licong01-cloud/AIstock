@@ -30,6 +30,7 @@ from backend.services.advisory_model_first.independent_package_alpha_audit_pipel
     _read_bundle,
     _freeze_package_roster,
     build_independent_package_metrics,
+    _valid_batch_execution_receipt,
 )
 from backend.services.advisory_model_first.strategy_package_batch_prediction import (
     PackagePredictionBatchResult,
@@ -243,8 +244,48 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
     batch_receipt = {
         "prediction_identity_sha256": prediction_identity,
         "causality_parity_sha256": causality["receipt_sha256"],
+        "market_interval_read_count": 1,
+        "static_interval_read_count": 1,
+        "rolling_live_window_semantics": True,
+        "window_buffer_trading_days": 5,
+        "required_window_by_closure": {
+            FACTOR_CLOSURE_57: 260,
+            FACTOR_CLOSURE_50: 260,
+        },
+        "factor_io_mode": "IN_MEMORY_EQUIVALENT",
+        "static_h5_physical_file_count": 1,
+        "static_h5_hardlink_alias_count": 6,
+        "primary_decision_batch_count": 386,
+        "primary_factor_group_run_count_per_decision": 2,
+        "primary_factor_group_run_count": 772,
+        "diagnostic_factor_group_run_count": 6,
+        "factor_group_total_run_count": 778,
+        "file_backed_parity_factor_group_run_count": 2,
+        "all_factor_group_run_count": 780,
+        "file_backed_parity_receipts": [
+            {
+                "closure_sha256": FACTOR_CLOSURE_57,
+                "in_memory_feature_sha256": "8" * 64,
+                "file_backed_feature_sha256": "8" * 64,
+                "status": "PASS",
+            },
+            {
+                "closure_sha256": FACTOR_CLOSURE_50,
+                "in_memory_feature_sha256": "7" * 64,
+                "file_backed_feature_sha256": "7" * 64,
+                "status": "PASS",
+            },
+        ],
+        "daily_wsl_process_count": 0,
+        "daily_db_query_count": 0,
+        "model_load_count_by_arm": {arm_id: 1 for arm_id in PACKAGE_ARM_IDS},
         "temp_peak_bytes": 1,
     }
+    assert _valid_batch_execution_receipt(batch_receipt, request=request)
+    assert not _valid_batch_execution_receipt(
+        {**batch_receipt, "rolling_live_window_semantics": False},
+        request=request,
+    )
     batch = PackagePredictionBatchResult(
         predictions={},
         coverage_daily=pd.DataFrame(),

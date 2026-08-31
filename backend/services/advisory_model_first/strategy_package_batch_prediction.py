@@ -8,9 +8,10 @@ import re
 import sys
 import tempfile
 import time
-from functools import lru_cache
-from dataclasses import dataclass
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass, replace
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -52,6 +53,8 @@ REASON_SOURCE_READ_FAILED = "ADVISORY_PACKAGE_BATCH_SOURCE_READ_FAILED"
 REASON_PREDICTION_INVALID = "ADVISORY_PACKAGE_BATCH_PREDICTION_INVALID"
 REASON_FUTURE_DEPENDENCY = "ADVISORY_PACKAGE_BATCH_FUTURE_DEPENDENCY_DETECTED"
 REASON_LIVE_PARITY = "ADVISORY_PACKAGE_BATCH_LIVE_PARITY_FAILED"
+FACTOR_IO_MODE_IN_MEMORY = "IN_MEMORY_EQUIVALENT"
+FACTOR_IO_MODE_FILE_BACKED = "FILE_BACKED_REFERENCE"
 
 _STATIC_ALIASES = (
     "daily_basic.h5",
@@ -66,6 +69,12 @@ _FORBIDDEN_FACTOR_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("centered_rolling", re.compile(r"\.rolling\s*\([^\n)]*center\s*=\s*True")),
     ("backward_fill", re.compile(r"\.bfill\s*\(")),
     ("reverse_slice", re.compile(r"\[\s*::\s*-1\s*\]")),
+)
+_UNSUPPORTED_VIRTUAL_IO_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("hdf_store", re.compile(r"\bHDFStore\b")),
+    ("h5py", re.compile(r"\bh5py\b")),
+    ("pytables_direct", re.compile(r"\btables\.")),
+    ("external_tabular_reader", re.compile(r"\bread_(?:csv|pickle|feather|excel|sql)\s*\(")),
 )
 
 _STATIC_FIELD_MAPPING = {
@@ -99,19 +108,30 @@ class BatchSourcePanels:
     market_interval_read_count: int = 1
     static_interval_read_count: int = 1
     static_precomputed: bool = False
+    canonicalized: bool = False
 
     def prefix(self, cutoff: date, *, instruments: set[str] | None = None) -> "BatchSourcePanels":
-        daily = _slice_panel(self.daily, cutoff=cutoff, instruments=instruments)
-        static = _slice_panel(self.static_raw, cutoff=cutoff, instruments=instruments)
+        return self.between(self.history_start, cutoff, instruments=instruments)
+
+    def between(
+        self,
+        start: date,
+        cutoff: date,
+        *,
+        instruments: set[str] | None = None,
+    ) -> "BatchSourcePanels":
+        daily = _slice_panel(self.daily, start=start, cutoff=cutoff, instruments=instruments)
+        static = _slice_panel(self.static_raw, start=start, cutoff=cutoff, instruments=instruments)
         return BatchSourcePanels(
             daily=daily,
             static_raw=static,
-            history_start=self.history_start,
+            history_start=start,
             decision_end=cutoff,
             source_receipts=self.source_receipts,
             market_interval_read_count=0,
             static_interval_read_count=0,
             static_precomputed=self.static_precomputed,
+            canonicalized=self.canonicalized,
         )
 
 
@@ -162,6 +182,7 @@ class StrategyPackageBatchPredictionRunner:
         self._model_predictor = model_predictor
         self._history_start_resolver = history_start_resolver or resolve_batch_history_start
         self._requires_factor_resource_receipt = factor_runner is None
+        self._reference_factor_runner = run_factor_group_batch if factor_runner is None else None
 
     def run(
         self,
@@ -194,12 +215,19 @@ class StrategyPackageBatchPredictionRunner:
                     arm_id=arm.arm_id,
                 )
         _verify_factor_group_equivalence(request.packages, factor_orders)
-        required_window = max(get_strategy_package_inference_required_window(order) for order in factor_orders.values())
+        required_window_by_closure = {
+            closure: get_strategy_package_inference_required_window(
+                factor_orders[group[0].arm_id]
+            )
+            for closure, group in _packages_by_factor_closure(request.packages).items()
+        }
+        required_window = max(required_window_by_closure.values())
         history_start = self._history_start_resolver(request.decision_date_start, required_window)
         universe = sorted({span.ts_code for span in pit_snapshot.spans})
         source = self._source_loader(universe, history_start, request.decision_date_end)
         if source.market_interval_read_count != 1 or source.static_interval_read_count != 1:
             _raise("batch source loader did not perform exactly one bounded interval read", REASON_SOURCE_READ_FAILED)
+        source = _ensure_canonical_source_panels(source)
         _validate_source_panels(source, universe=universe, decision_end=request.decision_date_end)
         if source.history_start != history_start:
             _raise(
@@ -207,6 +235,23 @@ class StrategyPackageBatchPredictionRunner:
                 REASON_SOURCE_READ_FAILED,
                 expected=history_start.isoformat(),
                 actual=source.history_start.isoformat(),
+            )
+        trading_dates = pd.DatetimeIndex(
+            source.daily.index.get_level_values("datetime").unique()
+        )
+        window_starts = {
+            (decision.date(), window): _resolve_loaded_history_start(
+                trading_dates,
+                decision.date(),
+                trading_day_count=window + 5,
+            )
+            for decision in decisions
+            for window in set(required_window_by_closure.values())
+        }
+        if window_starts[(decisions[0].date(), required_window)] != history_start:
+            _raise(
+                "loaded interval does not reproduce the frozen first live inference window",
+                REASON_SOURCE_READ_FAILED,
             )
 
         loaded_models: dict[str, LoadedPackageModel] = {}
@@ -235,6 +280,7 @@ class StrategyPackageBatchPredictionRunner:
         packages_by_closure = _packages_by_factor_closure(request.packages)
         temp_peak_bytes = 0
         factor_resource_receipts: list[dict[str, Any]] = []
+        file_backed_parity_receipts: list[dict[str, Any]] = []
 
         # Cross-sectional factors in the frozen packages make one union-wide
         # factor matrix semantically different from running the live policy on
@@ -242,12 +288,22 @@ class StrategyPackageBatchPredictionRunner:
         # read and loaded models, while evaluating both closures in-process for
         # each decision date. It does not create per-day processes, DB reads,
         # workspaces, or models.
-        for decision in decisions:
+        for decision_index, decision in enumerate(decisions, start=1):
             active = _pit_members(pit_snapshot, decision.date())
-            day_source = source.prefix(decision.date(), instruments=active)
+            day_sources: dict[int, BatchSourcePanels] = {}
             for closure in request.factor_group_closures:
                 group = packages_by_closure[closure]
                 representative = group[0]
+                window = required_window_by_closure[closure]
+                if window not in day_sources:
+                    day_sources[window] = _precompute_source_static(
+                        source.between(
+                            window_starts[(decision.date(), window)],
+                            decision.date(),
+                            instruments=active,
+                        )
+                    )
+                day_source = day_sources[window]
                 features = self._factor_runner(
                     workspaces[representative.arm_id],
                     closure,
@@ -277,6 +333,45 @@ class StrategyPackageBatchPredictionRunner:
                         temp_peak_bytes,
                         int(resource_receipt.get("temp_peak_bytes") or 0),
                     )
+                if decision_index == 1 and self._reference_factor_runner is not None:
+                    reference = self._reference_factor_runner(
+                        workspaces[representative.arm_id],
+                        closure,
+                        day_source,
+                        [decision.date()],
+                        temp_path,
+                        virtualize_io=False,
+                    )
+                    reference_resource = dict(
+                        reference.attrs.get("factor_resource_receipt") or {}
+                    )
+                    if reference_resource.get("factor_io_mode") != FACTOR_IO_MODE_FILE_BACKED:
+                        _raise(
+                            "file-backed parity run omitted its reference I/O receipt",
+                            REASON_SOURCE_READ_FAILED,
+                            closure_sha256=closure,
+                        )
+                    _assert_file_backed_feature_parity(
+                        in_memory=features,
+                        file_backed=reference,
+                        closure_sha256=closure,
+                        decision_date=decision.date(),
+                    )
+                    file_backed_parity_receipts.append(
+                        {
+                            "closure_sha256": closure,
+                            "decision_date": decision.date().isoformat(),
+                            "in_memory_feature_sha256": _frame_sha256(features),
+                            "file_backed_feature_sha256": _frame_sha256(reference),
+                            "reference_resource_receipt": reference_resource,
+                            "status": "PASS",
+                        }
+                    )
+                    temp_peak_bytes = max(
+                        temp_peak_bytes,
+                        int(reference_resource.get("temp_peak_bytes") or 0),
+                    )
+                    del reference
                 for arm in group:
                     scored, coverage = self._score_package_features(
                         loaded_models[arm.arm_id],
@@ -287,7 +382,16 @@ class StrategyPackageBatchPredictionRunner:
                     prediction_parts[arm.arm_id].append(scored)
                     coverage_parts.append(coverage)
                 del features
-            del day_source
+            del day_sources
+            elapsed = time.monotonic() - started
+            if elapsed > request.resource_max_wall_seconds:
+                _raise(
+                    "package batch exceeded its frozen wall-time limit between PIT days",
+                    "ADVISORY_PACKAGE_ALPHA_AUDIT_RESOURCE_LIMIT_EXCEEDED",
+                    completed_decision_count=decision_index,
+                    elapsed_seconds=round(elapsed, 3),
+                    wall_limit_seconds=request.resource_max_wall_seconds,
+                )
 
         predictions = {
             arm_id: pd.concat(parts).sort_index()
@@ -300,10 +404,17 @@ class StrategyPackageBatchPredictionRunner:
             representative = group[0]
             for anchor in request.causality_anchor_dates:
                 active = _pit_members(pit_snapshot, anchor)
+                window = required_window_by_closure[closure]
                 diagnostic_cutoff = (
                     anchor if anchor == request.decision_date_end else request.decision_date_end
                 )
-                prefix = source.prefix(diagnostic_cutoff, instruments=active)
+                prefix = _precompute_source_static(
+                    source.between(
+                        window_starts[(anchor, window)],
+                        diagnostic_cutoff,
+                        instruments=active,
+                    )
+                )
                 features = self._factor_runner(
                     workspaces[representative.arm_id],
                     closure,
@@ -391,12 +502,42 @@ class StrategyPackageBatchPredictionRunner:
             "status": "PASS",
         }
         causality_payload["receipt_sha256"] = canonical_json_sha256(causality_payload)
+        factor_io_mode: str | None = None
+        if self._requires_factor_resource_receipt:
+            expected_resource_receipts = factor_group_primary_count + factor_group_diagnostic_count
+            if len(factor_resource_receipts) != expected_resource_receipts:
+                _raise(
+                    "factor batch resource receipt count is incomplete",
+                    REASON_SOURCE_READ_FAILED,
+                    expected=expected_resource_receipts,
+                    actual=len(factor_resource_receipts),
+                )
+            factor_io_modes = {
+                str(item.get("factor_io_mode") or "") for item in factor_resource_receipts
+            }
+            if factor_io_modes != {FACTOR_IO_MODE_IN_MEMORY}:
+                _raise(
+                    "formal factor batch did not use the frozen in-memory-equivalent I/O mode",
+                    REASON_SOURCE_READ_FAILED,
+                    modes=sorted(factor_io_modes),
+                )
+            factor_io_mode = FACTOR_IO_MODE_IN_MEMORY
+            if len(file_backed_parity_receipts) != len(request.factor_group_closures):
+                _raise(
+                    "real closure file-backed parity coverage is incomplete",
+                    REASON_LIVE_PARITY,
+                    expected=len(request.factor_group_closures),
+                    actual=len(file_backed_parity_receipts),
+                )
         batch_receipt: dict[str, Any] = {
             "schema_version": "advisory_strategy_package_batch_prediction_receipt_v1",
             "request_sha256": request.request_sha256,
             "query_contract_sha256": CANONICAL_HISTORICAL_QUERY_CONTRACT_HASH,
             "history_start": source.history_start.isoformat(),
             "decision_end": source.decision_end.isoformat(),
+            "required_window_by_closure": required_window_by_closure,
+            "window_buffer_trading_days": 5,
+            "rolling_live_window_semantics": True,
             "decision_date_count": len(decisions),
             "pit_instrument_count": len(universe),
             "market_interval_read_count": source.market_interval_read_count,
@@ -412,6 +553,14 @@ class StrategyPackageBatchPredictionRunner:
             "model_load_count_by_arm": model_load_counts,
             "daily_wsl_process_count": 0,
             "daily_db_query_count": 0,
+            "factor_io_mode": factor_io_mode,
+            "file_backed_parity_factor_group_run_count": len(file_backed_parity_receipts),
+            "all_factor_group_run_count": (
+                factor_group_primary_count
+                + factor_group_diagnostic_count
+                + len(file_backed_parity_receipts)
+            ),
+            "file_backed_parity_receipts": file_backed_parity_receipts,
             "source_receipts": list(source.source_receipts),
             "factor_resource_receipts": factor_resource_receipts,
             "prediction_identity_sha256": canonical_json_sha256(prediction_identity),
@@ -546,7 +695,6 @@ def load_bounded_source_panels(universe: Sequence[str], start: date, end: date) 
             daily_rows=len(daily),
             static_rows=len(static),
         )
-    static = _prepare_static_panel(static, daily)
     receipts = (
         {
             "source_role": "market_history",
@@ -573,7 +721,8 @@ def load_bounded_source_panels(universe: Sequence[str], start: date, end: date) 
         history_start=start,
         decision_end=end,
         source_receipts=receipts,
-        static_precomputed=True,
+        static_precomputed=False,
+        canonicalized=True,
     )
 
 
@@ -610,6 +759,8 @@ def run_factor_group_batch(
     source: BatchSourcePanels,
     decision_dates: Sequence[date],
     temp_root: Path,
+    *,
+    virtualize_io: bool = True,
 ) -> pd.DataFrame:
     workspace = Path(workspace)
     order, calculations = _validated_factor_group(
@@ -617,15 +768,23 @@ def run_factor_group_batch(
         closure_sha256,
         _sha256_file(workspace / "factor_order.json"),
         _sha256_file(workspace / "strategy_package_factor_entry.py"),
+        virtualize_io,
     )
-    daily = _canonical_panel_index(source.daily, label="factor market input")
-    static = (
-        _canonical_panel_index(source.static_raw, label="precomputed static input")
-        if source.static_precomputed
-        else _prepare_static_panel(source.static_raw, daily)
+    daily = (
+        source.daily
+        if source.canonicalized
+        else _canonical_panel_index(source.daily, label="factor market input")
     )
+    if source.static_precomputed:
+        static = (
+            source.static_raw
+            if source.canonicalized
+            else _canonical_panel_index(source.static_raw, label="precomputed static input")
+        )
+    else:
+        static = _prepare_static_panel(source.static_raw, daily)
     decisions = pd.DatetimeIndex(pd.to_datetime(list(decision_dates))).normalize()
-    base = daily[pd.to_datetime(daily.index.get_level_values("datetime")).normalize().isin(decisions)]
+    base = daily[daily.index.get_level_values("datetime").isin(decisions)]
     if base.empty:
         _raise("factor batch has no market rows on requested decision dates", REASON_SOURCE_READ_FAILED)
     feature_index = base.index.sort_values()
@@ -635,10 +794,15 @@ def run_factor_group_batch(
     temp_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f"n2b_factor_{closure_sha256[:8]}_", dir=temp_root) as tmp:
         root = Path(tmp)
-        daily.to_hdf(root / "daily_pv.h5", key="data", mode="w")
-        static.to_parquet(root / "static_factors.parquet")
         physical_h5 = root / "static_factors.h5"
-        static.to_hdf(physical_h5, key="data", mode="w")
+        if virtualize_io:
+            (root / "daily_pv.h5").touch()
+            (root / "static_factors.parquet").touch()
+            physical_h5.touch()
+        else:
+            daily.to_hdf(root / "daily_pv.h5", key="data", mode="w")
+            static.to_parquet(root / "static_factors.parquet")
+            static.to_hdf(physical_h5, key="data", mode="w")
         physical_inode = physical_h5.stat().st_ino
         for alias in _STATIC_ALIASES:
             target = root / alias
@@ -658,19 +822,25 @@ def run_factor_group_batch(
         old_tempdir = tempfile.tempdir
         factor_work_root = root / "factor_work"
         factor_work_root.mkdir()
+        io_context = (
+            _virtualized_factor_io(daily=daily, static=static)
+            if virtualize_io
+            else nullcontext()
+        )
         try:
-            tempfile.tempdir = str(factor_work_root)
-            os.chdir(root)
-            for column_index, (factor_name, calculation) in enumerate(zip(order, calculations)):
-                part = calculation()
-                series = _factor_series(part, factor_name=factor_name)
-                dates = pd.to_datetime(series.index.get_level_values("datetime")).normalize()
-                series = series[dates.isin(decisions)]
-                feature_values[:, column_index] = series.reindex(feature_index).to_numpy(dtype="float64")
-                factor_temp_peak = max(
-                    factor_temp_peak,
-                    _tree_physical_size(root) + int(series.memory_usage(index=True, deep=True)),
-                )
+            with io_context:
+                tempfile.tempdir = str(factor_work_root)
+                os.chdir(root)
+                for column_index, (factor_name, calculation) in enumerate(zip(order, calculations)):
+                    part = calculation()
+                    series = _factor_series(part, factor_name=factor_name)
+                    dates = pd.to_datetime(series.index.get_level_values("datetime")).normalize()
+                    series = series[dates.isin(decisions)]
+                    feature_values[:, column_index] = series.reindex(feature_index).to_numpy(dtype="float64")
+                    factor_temp_peak = max(
+                        factor_temp_peak,
+                        _tree_physical_size(root) + int(series.memory_usage(index=True, deep=True)),
+                    )
         finally:
             os.chdir(old_cwd)
             tempfile.tempdir = old_tempdir
@@ -681,8 +851,170 @@ def run_factor_group_batch(
         "temp_peak_bytes": factor_temp_peak,
         "feature_row_count": len(features),
         "feature_count": len(order),
+        "factor_io_mode": (
+            FACTOR_IO_MODE_IN_MEMORY if virtualize_io else FACTOR_IO_MODE_FILE_BACKED
+        ),
     }
     return features
+
+
+@contextmanager
+def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noqa: ANN202
+    """Replace only known factor input/result H5 operations with in-memory equivalents."""
+
+    original_read_hdf = pd.read_hdf
+    original_read_parquet = pd.read_parquet
+    original_frame_to_hdf = pd.DataFrame.to_hdf
+    original_series_to_hdf = pd.Series.to_hdf
+    captured_results: dict[Path, pd.DataFrame | pd.Series] = {}
+    consumed_results: set[Path] = set()
+    clean_daily: pd.DataFrame | None = None
+
+    def _path(value: Any) -> Path:
+        path = Path(os.fspath(value))
+        return (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
+
+    def _subset(frame: pd.DataFrame, columns: Any) -> pd.DataFrame:
+        if columns is None:
+            return frame.copy(deep=True)
+        selected = [columns] if isinstance(columns, str) else list(columns)
+        return frame.loc[:, selected].copy(deep=True)
+
+    def _hdf_columns(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Any:
+        if len(args) > 1:
+            _raise(
+                "virtual factor HDF read used unsupported positional options",
+                REASON_ASSET_INVALID,
+            )
+        unsupported = set(kwargs) - {"key", "mode", "errors", "columns"}
+        if unsupported:
+            _raise(
+                "virtual factor HDF read used unsupported options",
+                REASON_ASSET_INVALID,
+                options=sorted(unsupported),
+            )
+        key = kwargs.get("key", args[0] if args else None)
+        if key not in {None, "data", "/data"}:
+            _raise(
+                "virtual factor HDF read used an unsupported key",
+                REASON_ASSET_INVALID,
+                key=str(key),
+            )
+        if kwargs.get("mode", "r") != "r" or kwargs.get("errors", "strict") != "strict":
+            _raise(
+                "virtual factor HDF read changed its frozen read semantics",
+                REASON_ASSET_INVALID,
+            )
+        return kwargs.get("columns")
+
+    def _validate_hdf_write(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> None:
+        if len(args) > 1:
+            _raise(
+                "virtual factor HDF write used unsupported positional options",
+                REASON_ASSET_INVALID,
+            )
+        key = kwargs.get("key", args[0] if args else None)
+        if key not in {None, "data", "/data"}:
+            _raise(
+                "virtual factor HDF write used an unsupported key",
+                REASON_ASSET_INVALID,
+                key=str(key),
+            )
+        if bool(kwargs.get("append", False)):
+            _raise(
+                "virtual factor HDF write requested append semantics",
+                REASON_ASSET_INVALID,
+            )
+
+    def read_hdf(path_or_buf, *args, **kwargs):  # noqa: ANN001, ANN202
+        path = _path(path_or_buf)
+        if path.name == "daily_pv_clean.h5":
+            columns = _hdf_columns(args, kwargs)
+            return _subset(clean_daily if clean_daily is not None else daily, columns)
+        if path.name == "daily_pv.h5":
+            columns = _hdf_columns(args, kwargs)
+            return _subset(daily, columns)
+        if path.name in {*_STATIC_ALIASES, "static_factors.h5"}:
+            columns = _hdf_columns(args, kwargs)
+            return _subset(static, columns)
+        if path.name == "result.h5" and path in captured_results:
+            columns = _hdf_columns(args, kwargs)
+            captured = captured_results.pop(path)
+            consumed_results.add(path)
+            if isinstance(captured, pd.DataFrame):
+                return captured if columns is None else _subset(captured, columns)
+            if columns is not None:
+                _raise(
+                    "virtual factor Series result cannot apply a columns projection",
+                    REASON_ASSET_INVALID,
+                )
+            return captured
+        if path.name == "result.h5" and path in consumed_results:
+            _raise(
+                "virtual factor result was read more than once",
+                REASON_ASSET_INVALID,
+                path=str(path),
+            )
+        return original_read_hdf(path_or_buf, *args, **kwargs)
+
+    def read_parquet(path, *args, **kwargs):  # noqa: ANN001, ANN202
+        resolved = _path(path)
+        if resolved.name == "static_factors.parquet":
+            if args or set(kwargs) - {"columns", "engine"}:
+                _raise(
+                    "virtual factor parquet read used unsupported options",
+                    REASON_ASSET_INVALID,
+                    options=sorted(set(kwargs) - {"columns", "engine"}),
+                )
+            if kwargs.get("engine", "auto") not in {None, "auto"}:
+                _raise(
+                    "virtual factor parquet read selected a non-default engine",
+                    REASON_ASSET_INVALID,
+                    engine=str(kwargs.get("engine")),
+                )
+            return _subset(static, kwargs.get("columns"))
+        return original_read_parquet(path, *args, **kwargs)
+
+    def capture_frame(frame, path_or_buf, *args, **kwargs):  # noqa: ANN001, ANN202
+        nonlocal clean_daily
+        path = _path(path_or_buf)
+        if path.name == "daily_pv_clean.h5":
+            _validate_hdf_write(args, kwargs)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+            clean_daily = frame.copy(deep=True)
+            return None
+        if path.name == "result.h5":
+            _validate_hdf_write(args, kwargs)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+            consumed_results.discard(path)
+            captured_results[path] = frame.copy(deep=True)
+            return None
+        return original_frame_to_hdf(frame, path_or_buf, *args, **kwargs)
+
+    def capture_series(series, path_or_buf, *args, **kwargs):  # noqa: ANN001, ANN202
+        path = _path(path_or_buf)
+        if path.name == "result.h5":
+            _validate_hdf_write(args, kwargs)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+            consumed_results.discard(path)
+            captured_results[path] = series.copy(deep=True)
+            return None
+        return original_series_to_hdf(series, path_or_buf, *args, **kwargs)
+
+    pd.read_hdf = read_hdf
+    pd.read_parquet = read_parquet
+    pd.DataFrame.to_hdf = capture_frame
+    pd.Series.to_hdf = capture_series
+    try:
+        yield
+    finally:
+        pd.read_hdf = original_read_hdf
+        pd.read_parquet = original_read_parquet
+        pd.DataFrame.to_hdf = original_frame_to_hdf
+        pd.Series.to_hdf = original_series_to_hdf
 
 
 @lru_cache(maxsize=16)
@@ -691,6 +1023,7 @@ def _validated_factor_group(
     closure_sha256: str,
     _factor_order_sha256: str,
     _factor_entry_sha256: str,
+    virtualize_io: bool,
 ) -> tuple[tuple[str, ...], tuple[Callable[[], Any], ...]]:
     workspace = Path(workspace_text)
     order = tuple(_factor_order(workspace))
@@ -709,7 +1042,12 @@ def _validated_factor_group(
     factor_files = getattr(module, "_FACTOR_FILES", None)
     if not isinstance(factor_files, dict) or tuple(factor_files) != order:
         _raise("factor entry mapping differs from factor_order", REASON_ASSET_INVALID)
-    _scan_factor_sources(factor_files, workspace=workspace)
+    _scan_factor_sources(
+        factor_files,
+        workspace=workspace,
+        require_virtual_io=virtualize_io,
+        entry_path=workspace / "strategy_package_factor_entry.py",
+    )
     calculations = tuple(
         getattr(module, name)
         for name in sorted(dir(module))
@@ -725,8 +1063,17 @@ def _validated_factor_group(
     return order, calculations
 
 
-def _prepare_static_panel(static_raw: pd.DataFrame, daily: pd.DataFrame) -> pd.DataFrame:
-    static = _canonical_panel_index(static_raw, label="static raw input").rename(columns=_STATIC_FIELD_MAPPING)
+def _prepare_static_panel(
+    static_raw: pd.DataFrame,
+    daily: pd.DataFrame,
+    *,
+    canonicalized: bool = False,
+) -> pd.DataFrame:
+    static = (
+        static_raw.copy()
+        if canonicalized
+        else _canonical_panel_index(static_raw, label="static raw input")
+    ).rename(columns=_STATIC_FIELD_MAPPING)
     try:
         static = compute_precomputed_factors(static, daily)
     except Exception as exc:
@@ -770,8 +1117,15 @@ def _factor_series(value: Any, *, factor_name: str) -> pd.Series:
     return pd.to_numeric(frame[factor_name], errors="coerce")
 
 
-def _scan_factor_sources(factor_files: Mapping[str, Any], *, workspace: Path) -> None:
+def _scan_factor_sources(
+    factor_files: Mapping[str, Any],
+    *,
+    workspace: Path,
+    require_virtual_io: bool,
+    entry_path: Path,
+) -> None:
     findings: list[dict[str, str]] = []
+    unsupported_io: list[dict[str, str]] = []
     workspace_root = workspace.resolve()
     for factor_name, raw_path in sorted(factor_files.items()):
         path = Path(str(raw_path)).resolve()
@@ -793,6 +1147,25 @@ def _scan_factor_sources(factor_files: Mapping[str, Any], *, workspace: Path) ->
         for pattern_name, pattern in _FORBIDDEN_FACTOR_PATTERNS:
             if pattern.search(text):
                 findings.append({"factor_name": str(factor_name), "pattern": pattern_name})
+        if require_virtual_io:
+            for pattern_name, pattern in _UNSUPPORTED_VIRTUAL_IO_PATTERNS:
+                if pattern.search(text):
+                    unsupported_io.append(
+                        {"factor_name": str(factor_name), "pattern": pattern_name}
+                    )
+    if require_virtual_io:
+        entry_text = entry_path.read_text(encoding="utf-8")
+        for pattern_name, pattern in _UNSUPPORTED_VIRTUAL_IO_PATTERNS:
+            if pattern.search(entry_text):
+                unsupported_io.append(
+                    {"factor_name": "__factor_entry__", "pattern": pattern_name}
+                )
+    if unsupported_io:
+        _raise(
+            "frozen factor closure uses an input API unsupported by exact in-memory batch I/O",
+            REASON_ASSET_INVALID,
+            findings=unsupported_io,
+        )
     if findings:
         _raise(
             "frozen factor closure contains an explicit future-looking operator",
@@ -1118,6 +1491,77 @@ def _validate_source_panels(source: BatchSourcePanels, *, universe: Sequence[str
         _raise("batch market panel contains instruments outside the PIT union", REASON_SOURCE_READ_FAILED)
 
 
+def _ensure_canonical_source_panels(source: BatchSourcePanels) -> BatchSourcePanels:
+    if source.canonicalized:
+        _assert_canonical_panel(source.daily, label="market history")
+        _assert_canonical_panel(source.static_raw, label="fundamental/static")
+        return source
+    return replace(
+        source,
+        daily=_canonical_panel_index(source.daily, label="market history"),
+        static_raw=_canonical_panel_index(source.static_raw, label="fundamental/static"),
+        canonicalized=True,
+    )
+
+
+def _precompute_source_static(source: BatchSourcePanels) -> BatchSourcePanels:
+    if source.static_precomputed:
+        return source
+    return replace(
+        source,
+        static_raw=_prepare_static_panel(
+            source.static_raw,
+            source.daily,
+            canonicalized=source.canonicalized,
+        ),
+        static_precomputed=True,
+        canonicalized=True,
+    )
+
+
+def _resolve_loaded_history_start(
+    trading_dates: pd.DatetimeIndex,
+    cutoff: date,
+    *,
+    trading_day_count: int,
+) -> date:
+    if trading_day_count <= 0 or not trading_dates.is_monotonic_increasing:
+        _raise("loaded trading calendar is invalid", REASON_SOURCE_READ_FAILED)
+    target = pd.Timestamp(cutoff)
+    position = int(trading_dates.searchsorted(target, side="left"))
+    if position >= len(trading_dates) or trading_dates[position] != target:
+        _raise(
+            "decision date is absent from the loaded market interval",
+            REASON_SOURCE_READ_FAILED,
+            decision_date=cutoff.isoformat(),
+        )
+    start_position = position - trading_day_count + 1
+    if start_position < 0:
+        _raise(
+            "loaded market interval has insufficient live-inference lookback",
+            REASON_SOURCE_READ_FAILED,
+            decision_date=cutoff.isoformat(),
+            trading_day_count=trading_day_count,
+        )
+    return trading_dates[start_position].date()
+
+
+def _assert_canonical_panel(frame: pd.DataFrame, *, label: str) -> None:
+    if (
+        frame is None
+        or not isinstance(frame, pd.DataFrame)
+        or frame.empty
+        or not isinstance(frame.index, pd.MultiIndex)
+        or list(frame.index.names) != ["datetime", "instrument"]
+        or frame.index.has_duplicates
+        or not frame.index.is_monotonic_increasing
+    ):
+        _raise(f"{label} does not satisfy the canonical batch index", REASON_SOURCE_READ_FAILED)
+    dates = frame.index.get_level_values("datetime")
+    if not pd.api.types.is_datetime64_any_dtype(dates.dtype):
+        _raise(f"{label} canonical datetime level has the wrong dtype", REASON_SOURCE_READ_FAILED)
+
+
 def _validate_feature_matrix(
     features: pd.DataFrame,
     factor_order: Sequence[str],
@@ -1132,6 +1576,32 @@ def _validate_feature_matrix(
     observed_dates = pd.DatetimeIndex(pd.to_datetime(features.index.get_level_values("datetime")).normalize().unique())
     if not set(observed_dates).issubset(set(decisions)):
         _raise("batch factor matrix contains dates outside the requested decisions", REASON_FUTURE_DEPENDENCY)
+
+
+def _assert_file_backed_feature_parity(
+    *,
+    in_memory: pd.DataFrame,
+    file_backed: pd.DataFrame,
+    closure_sha256: str,
+    decision_date: date,
+) -> None:
+    try:
+        pd.testing.assert_frame_equal(
+            in_memory,
+            file_backed,
+            check_dtype=True,
+            check_exact=True,
+            check_names=True,
+            check_like=False,
+        )
+    except AssertionError as exc:
+        _raise(
+            "in-memory factor I/O differs from the real file-backed closure",
+            REASON_LIVE_PARITY,
+            closure_sha256=closure_sha256,
+            decision_date=decision_date.isoformat(),
+            error=str(exc)[:2000],
+        )
 
 
 def _canonical_panel_index(frame: pd.DataFrame, *, label: str) -> pd.DataFrame:
@@ -1156,10 +1626,17 @@ def _canonical_panel_index(frame: pd.DataFrame, *, label: str) -> pd.DataFrame:
     return value
 
 
-def _slice_panel(frame: pd.DataFrame, *, cutoff: date, instruments: set[str] | None) -> pd.DataFrame:
-    dates = pd.DatetimeIndex(pd.to_datetime(frame.index.get_level_values("datetime"))).normalize()
+def _slice_panel(
+    frame: pd.DataFrame,
+    *,
+    start: date,
+    cutoff: date,
+    instruments: set[str] | None,
+) -> pd.DataFrame:
+    dates = frame.index.get_level_values("datetime")
+    begin = int(dates.searchsorted(pd.Timestamp(start), side="left"))
     stop = int(dates.searchsorted(pd.Timestamp(cutoff), side="right"))
-    bounded = frame.iloc[:stop]
+    bounded = frame.iloc[begin:stop]
     if instruments is not None:
         normalized = {normalize_ts_code(item) for item in instruments}
         keep = bounded.index.get_level_values("instrument").astype(str).isin(normalized)

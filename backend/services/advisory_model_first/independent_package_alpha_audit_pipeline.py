@@ -80,6 +80,7 @@ from backend.services.advisory_model_first.research_control_contracts import (
     build_trial_record,
 )
 from backend.services.advisory_model_first.strategy_package_batch_prediction import (
+    FACTOR_IO_MODE_IN_MEMORY,
     PackagePredictionBatchResult,
     StrategyPackageBatchPredictionRunner,
 )
@@ -1722,6 +1723,7 @@ def _read_bundle(path: Path) -> dict[str, Any]:
         or receipt.prediction_identity_sha256 != batch_receipt.get("prediction_identity_sha256")
         or receipt.causality_parity_sha256 != batch_receipt.get("causality_parity_sha256")
         or batch_receipt.get("causality_parity_sha256") != causality_receipt.get("receipt_sha256")
+        or not _valid_batch_execution_receipt(batch_receipt, request=request)
         or receipt.result_files_sha256 != canonical_json_sha256(result_descriptors)
         or record.registry_entry_id != raw_record.get("registry_entry_id")
         or record.record_sha256 != raw_record.get("record_sha256")
@@ -1761,6 +1763,53 @@ def _read_bundle(path: Path) -> dict[str, Any]:
         "causality_receipt": causality_receipt,
         "resource_report": resource_report,
     }
+
+
+def _valid_batch_execution_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    request: AdvisoryIndependentPackageAlphaAuditRequestV1,
+) -> bool:
+    windows = receipt.get("required_window_by_closure")
+    model_loads = receipt.get("model_load_count_by_arm")
+    return bool(
+        receipt.get("market_interval_read_count") == 1
+        and receipt.get("static_interval_read_count") == 1
+        and receipt.get("rolling_live_window_semantics") is True
+        and receipt.get("window_buffer_trading_days") == 5
+        and isinstance(windows, dict)
+        and set(windows) == set(request.factor_group_closures)
+        and all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in windows.values())
+        and receipt.get("factor_io_mode") == FACTOR_IO_MODE_IN_MEMORY
+        and receipt.get("static_h5_physical_file_count") == 1
+        and receipt.get("static_h5_hardlink_alias_count") == 6
+        and receipt.get("primary_decision_batch_count") == 386
+        and receipt.get("primary_factor_group_run_count_per_decision") == 2
+        and receipt.get("primary_factor_group_run_count") == 772
+        and receipt.get("diagnostic_factor_group_run_count") == 6
+        and receipt.get("factor_group_total_run_count") == 778
+        and receipt.get("file_backed_parity_factor_group_run_count") == 2
+        and receipt.get("all_factor_group_run_count") == 780
+        and isinstance(receipt.get("file_backed_parity_receipts"), list)
+        and len(receipt["file_backed_parity_receipts"]) == 2
+        and all(
+            isinstance(item, dict)
+            and item.get("status") == "PASS"
+            and item.get("in_memory_feature_sha256") == item.get("file_backed_feature_sha256")
+            and isinstance(item.get("in_memory_feature_sha256"), str)
+            and len(item["in_memory_feature_sha256"]) == 64
+            for item in receipt["file_backed_parity_receipts"]
+        )
+        and {
+            item.get("closure_sha256") for item in receipt["file_backed_parity_receipts"]
+        }
+        == set(request.factor_group_closures)
+        and receipt.get("daily_wsl_process_count") == 0
+        and receipt.get("daily_db_query_count") == 0
+        and isinstance(model_loads, dict)
+        and set(model_loads) == set(PACKAGE_ARM_IDS)
+        and all(model_loads[arm_id] == 1 for arm_id in PACKAGE_ARM_IDS)
+    )
 
 
 def _find_existing_bundle(request: AdvisoryIndependentPackageAlphaAuditRequestV1) -> Path | None:
