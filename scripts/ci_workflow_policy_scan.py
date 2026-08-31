@@ -411,17 +411,30 @@ def build_contract_evidence(
             and "child.rmdir()" in workspace_prepare_text
         ),
         "nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed": (
-            'gh run list --repo "${env:GITHUB_REPOSITORY}" --workflow nightly.yml' in nightly_text
+            "Select prior durable Nightly L3 receipt" in nightly_text
+            and nightly_text.index("Select prior durable Nightly L3 receipt")
+            < nightly_text.index("  dr-snapshot:")
+            and 'prior_runs_tsv=$(gh run list \\' in nightly_text
+            and '--repo "${GITHUB_REPOSITORY}"' in nightly_text
+            and "--workflow nightly.yml" in nightly_text
             and "--status completed" in nightly_text
-            and 'gh run download $candidateRunId --repo "${env:GITHUB_REPOSITORY}"' in nightly_text
-            and 'throw "Failed to query prior completed scheduled Nightly runs."' in nightly_text
-            and "ConvertFrom-Json -ErrorAction Stop" in nightly_text
+            and "--jq '.[] | [.databaseId, .headSha] | @tsv'" in nightly_text
+            and "while IFS=$'\\t' read -r candidate_run_id candidate_head" in nightly_text
+            and 'gh run download "${candidate_run_id}" \\' in nightly_text
+            and 'if ! prior_runs_tsv=$(gh run list \\' in nightly_text
             and "No prior scheduled Nightly run with a durable session receipt is available" in nightly_text
+            and "if-no-files-found: error" in nightly_text
+            and "nightly-l3-retry-source-${{ github.run_id }}" in nightly_text
+            and "RETRY_SOURCE_RUN_ID: ${{ needs.runner-preflight.outputs.retry_run_id }}" in nightly_text
+            and "RETRY_SOURCE_HEAD: ${{ needs.runner-preflight.outputs.retry_source_head }}" in nightly_text
+            and 'if (-not $retryRunId -or -not $watermark)' in nightly_text
+            and "Runner preflight Nightly receipt artifact is incomplete" in nightly_text
             and "Receipt-bound scheduled Nightly watermark is unavailable locally" in nightly_text
             and '"--retry-source-head", $watermark' in nightly_text
             and "source_head != expected_head" in nightly_scheduler_text
             and 'if ($env:FULL_NIGHTLY_RUN -eq "true")' in nightly_text
-            and "-or -not $watermark" not in nightly_text
+            and "ConvertFrom-Json -ErrorAction Stop" not in nightly_text
+            and "$priorRuns" not in nightly_text
             and "using explicit full-run fallback" not in nightly_text
             and nightly_text.count('$extraArgs += "--full-run"') == 1
         ),
