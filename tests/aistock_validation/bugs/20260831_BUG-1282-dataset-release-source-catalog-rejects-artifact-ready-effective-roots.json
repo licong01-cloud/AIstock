@@ -88,8 +88,8 @@
   },
   "first_seen_at": "2026-08-31T10:32:57.804003Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "358df206a59eaee4ce831a40d2aeaeb75a73ef46",
+  "fixed_at": "2026-08-31T11:49:46Z",
   "github_issue_number": 4064,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4064",
   "last_seen_at": "2026-08-31T10:32:57.804003Z",
@@ -97,6 +97,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4070",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -123,6 +124,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -134,7 +136,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -143,6 +145,12 @@
     "fingerprint": "99619f4af754672b21eb517e",
     "source_event_id": "FE-20260831-99619f4af754"
   },
+  "validation_evidence": [
+    "validation-receipt: id=2d8a6d0326fa5176 commit=14afd1a5044548fc7db40ba55099a5f0dc07d9d2 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (8 passed; ownership 14/14)`",
+    "validation-receipt: id=0639b29dc6191f47 commit=14afd1a5044548fc7db40ba55099a5f0dc07d9d2 kind=nox plan=qlib_data_backend status=passed command=`python -m nox -s qlib_data_backend` result=`passed (20 passed)`",
+    "validation-receipt: id=f4e790a74a3ec138 commit=14afd1a5044548fc7db40ba55099a5f0dc07d9d2 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_resolution.py -q` result=`passed (15 passed)`",
+    "validation-receipt: id=36679e092ec434e3 commit=14afd1a5044548fc7db40ba55099a5f0dc07d9d2 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed (3 files, 0 findings)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
