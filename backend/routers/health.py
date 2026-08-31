@@ -1,5 +1,6 @@
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,30 +15,33 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
+def _run_git_text(repo_root: Path, *arguments: str) -> str:
+    """Run git without PIPE reader threads while the router import lock is held."""
+
+    command = ["git", *arguments]
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="") as output:
+        subprocess.run(
+            command,
+            cwd=repo_root,
+            check=True,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=5,
+        )
+        output.seek(0)
+        return output.read()
+
+
 def _capture_runtime_identity(repo_root: Path) -> dict[str, Any]:
     """Freeze the clean checkout identity observed when this process imports the router."""
 
     try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        merge_commit = completed.stdout.strip().lower()
+        merge_commit = _run_git_text(repo_root, "rev-parse", "HEAD").strip().lower()
         if not _GIT_SHA_RE.fullmatch(merge_commit):
             raise ValueError("git HEAD is not a canonical commit SHA")
-        status = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if status.stdout.strip():
+        status = _run_git_text(repo_root, "status", "--porcelain", "--untracked-files=no")
+        if status.strip():
             raise ValueError("tracked runtime checkout is dirty")
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         return {

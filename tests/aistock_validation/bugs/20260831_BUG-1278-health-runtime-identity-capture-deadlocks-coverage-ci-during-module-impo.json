@@ -1,6 +1,9 @@
 {
   "actual": "PR CI deterministically deadlocks during pytest collection: backend/routers/health.py calls subprocess.run(..., capture_output=True) at module import while coverage tracing is active. The subprocess pipe reader threads wait on the Python import lock and the importing main thread waits in communicate(), so validation_center_backend never starts tests and only exits at the CI timeout. Fix must preserve exact runtime identity semantics, avoid import-time threaded pipe capture deadlock, add direct regression coverage, and must not weaken fail-closed identity evidence.",
   "allowed_write_scope": [
+    "backend/routers/__init__.py",
+    "backend/routers/health.py",
+    "backend/tests/platform_api/test_health_contract.py",
     "tests/aistock_validation/bugs/20260831_BUG-1278-health-runtime-identity-capture-deadlocks-coverage-ci-during-module-impo.json"
   ],
   "assigned_agent": null,
@@ -46,7 +49,7 @@
   "github_issue_number": 4057,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4057",
   "last_seen_at": "2026-08-31T08:28:14.560054Z",
-  "module": "validation",
+  "module": "platform.api",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
@@ -76,6 +79,7 @@
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
+    "platform.api",
     "validation"
   ],
   "title": "Health runtime identity capture deadlocks coverage CI during module import",
