@@ -709,6 +709,19 @@ def test_pg_pool_source_and_regression_select_shared_platform_backend_session(tm
     assert payload["unmapped_code_files"] == []
 
 
+def test_aistock_mcp_server_test_selects_validation_center_backend_session(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/tests/test_aistock_mcp_server.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["validation_center_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
     payload = classifier.classify_changed_files(
         [

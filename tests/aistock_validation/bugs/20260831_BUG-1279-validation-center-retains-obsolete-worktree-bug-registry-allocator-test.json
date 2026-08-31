@@ -1,7 +1,9 @@
 {
   "actual": "validation_center_backend completes after the import-deadlock fix but fails backend/tests/test_aistock_mcp_server.py::test_report_bug_uses_worktree_registry_max_when_allocator_is_stale. Production allocator intentionally stopped enumerating every worktree in BUG-1009 and now uses the shared reservation ledger, but the May-era test still requires scanning an arbitrary worktree BUG JSON. Replace the stale test with an exact shared-reservation-ledger contract test; do not reintroduce broad worktree scans or weaken collision prevention.",
   "allowed_write_scope": [
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/test_aistock_mcp_server.py",
+    "scripts/ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260831_BUG-1279-validation-center-retains-obsolete-worktree-bug-registry-allocator-test.json"
   ],
   "assigned_agent": null,

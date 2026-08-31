@@ -219,6 +219,7 @@ PROMPT_EVALUATION_FILES = {
 }
 DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "backend/db/pg_pool.py": ("platform_api_backend",),
+    "backend/tests/test_aistock_mcp_server.py": ("validation_center_backend",),
     "backend/tests/test_pg_pool_audit.py": ("platform_api_backend",),
     "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
     "scripts/advisory_p0k_build_training_request.py": ("advisory_modeling_backend",),
