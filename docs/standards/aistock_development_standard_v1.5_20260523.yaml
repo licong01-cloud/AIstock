@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 3d1d6d6337a34184a0142f147748f93baa2ff4e4b81b19552f50592022a613ea
+source_sha256: 43d35ea27cea4552a9b3a963fef069a9d8ba3787cbfa90ca5ae289f06291c712
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-29"
@@ -747,7 +747,7 @@ rules:
         - insufficient_shallow_ancestry_fetches_only_pinned_base_and_pr_checkout_or_head_with_limited_deepen
         - no_unbounded_full_history_checkout_for_merge_base_recovery
         - non_security_quality_lanes_run_once_on_pull_request
-        - stable_merge_quality_contexts_are_always_published
+        - merge_quality_contexts_are_change_scoped
         - codeql_default_branch_security_scan_preserved
         - codeql_uses_hash_verified_prebuilt_bundle
         - codeql_remote_action_download_is_eliminated
@@ -770,7 +770,7 @@ rules:
         - nightly_retries_failed_or_missing_sessions_plus_new_impact
         - nightly_change_scoped_l0_uses_explicit_receipt_paths
     baseline_policy: block_new_and_changed_workflow
-    remediation: Require PR-based main updates and stable merge-quality contexts for CI, CodeQL, Semgrep, and PR quality; provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one preparation checkout for changed-file classification and static or close-sync gates, reuse one final runner allocation for focused workflow validation, workflow policy, and CI verdict, reuse one security-runner allocation for CodeQL classification, sequential changed-language analysis, SARIF upload, and the stable CodeQL verdict, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
+    remediation: Require PR-based main updates and change-scoped merge-quality contexts. Source or mixed PRs retain CI, CodeQL, Semgrep, and PR quality. Official close-sync branches that change only BUG registry JSON run one GitHub-hosted stdlib metadata gate named CI verdict; non-required source/security workflow jobs publish skipped status without acquiring a runner, and must not use broad paths-ignore that also skips ordinary metadata PRs. Provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one preparation checkout for changed-file classification and static gates, reuse one final runner allocation for focused workflow validation, workflow policy, and CI verdict, reuse one security-runner allocation for CodeQL classification, sequential changed-language analysis, SARIF upload, and the CodeQL verdict, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, run source quality lanes once on the PR merge tree, and never install or download mutable toolchains in the CI job.
 
   - rule_id: CI-DATABASE-SAFETY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001

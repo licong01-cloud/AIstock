@@ -10641,6 +10641,76 @@ def test_merge_quality_contract_blocks_when_only_ci_verdict_is_reported() -> Non
     assert summary["pending"] == list(workflow.MERGE_QUALITY_CHECK_CONTEXTS[1:])
 
 
+def test_close_sync_merge_quality_contract_only_requires_ci_verdict() -> None:
+    contexts = workflow._merge_quality_contexts_for_head_ref("chore/BUG-1271-close-sync-20260831")
+    result = workflow._normalize_merge_quality_check_result(
+        {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(
+                [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
+            ),
+            "stderr": "",
+        },
+        required_contexts=contexts,
+    )
+
+    assert contexts == ("CI verdict",)
+    assert result is not None
+    assert workflow._required_pr_check_summary(result) == {
+        "failed": [],
+        "pending": [],
+        "non_blocking": [],
+        "passed": ["CI verdict"],
+    }
+
+
+def test_rest_required_check_fallback_scopes_close_sync_to_ci_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {
+            "head_sha": head_sha,
+            "head_ref": "chore/BUG-1271-close-sync-20260831",
+            "base_ref": "main",
+            "url": pr_url,
+        },
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if "/branches/main/protection/required_status_checks" in args[2]:
+            payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
+        elif "/check-runs?" in args[2]:
+            payload = {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "id": 9,
+                        "name": "CI verdict",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "app": {"id": 15368},
+                    }
+                ],
+            }
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._rest_required_pr_check_result(
+        "https://github.example/pull/199",
+        expected_head=head_sha,
+        base_ref="main",
+    )
+
+    assert workflow._required_pr_check_summary(result)["passed"] == ["CI verdict"]
+
+
 def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -243,8 +243,18 @@ def build_contract_evidence(
         "no_setup_actions": "setup-* actions install mutable toolchains; use a prebuilt runner" not in reasons,
         "no_dependency_install_commands": "dependency installation is prohibited in CI" not in reasons,
         "nox_ci_install_fail_closed_guard": bool(nox_text) and not scan_nox_text(nox_text, nox_path.as_posix()),
-        "no_linux_or_production_environment_fallback": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all("ubuntu-" not in text.casefold() and "conda run -n aistock" not in text.casefold() for text in pr_texts),
+        "no_linux_or_production_environment_fallback": (
+            len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
+            and all("conda run -n aistock" not in text.casefold() for text in pr_texts)
+            and all(
+                "ubuntu-" not in workflow_text.get(name, "").casefold()
+                for name in WINDOWS_PR_WORKFLOWS - {"test.yml"}
+            )
+            and test_text.casefold().count("ubuntu-latest") == 1
+            and "github_hosted_metadata" in test_text
+            and "scripts/bug_registry_metadata_check.py" in test_text
+            and "--close-sync-only" in test_text
+        ),
         "windows_git_bash_shell": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
         and all("shell: bash" in text.casefold() for text in pr_texts),
         "pr_quality_no_external_report_action_dependency": "actions/upload-artifact@" not in pr_quality_text
@@ -269,15 +279,25 @@ def build_contract_evidence(
             and not re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get(name, ""))
             for name in PR_ONLY_QUALITY_WORKFLOWS
         ),
-        "stable_merge_quality_contexts_are_always_published": (
-            "  pull_request:\n    branches: [main]\n  push:" in codeql_text
+        "merge_quality_contexts_are_change_scoped": (
+            "  pull_request:\n    branches: [main]" in codeql_text
             and bool(re.search(r"(?m)^  codeql-verdict:\s*$", codeql_text))
             and "name: CodeQL verdict" in codeql_text
             and "if: always()" in codeql_text
-            and "  pull_request:\n    branches: [main]\n  workflow_dispatch:" in workflow_text.get("semgrep.yml", "")
+            and "  pull_request:\n    branches: [main]" in workflow_text.get("semgrep.yml", "")
             and "name: AIstock Semgrep guardrails" in workflow_text.get("semgrep.yml", "")
             and "name: Context, scope, and open-source tooling dry-run" in pr_quality_text
-            and "name: CI verdict" in test_text
+            and all(
+                "github.event_name != 'pull_request'" in workflow_text.get(name, "")
+                and "startsWith(github.head_ref, 'chore/BUG-')" in workflow_text.get(name, "")
+                and "contains(github.head_ref, '-close-sync-')" in workflow_text.get(name, "")
+                for name in ("pr-quality.yml", "semgrep.yml", "codeql.yml")
+            )
+            and "github_hosted_metadata" in test_text
+            and "ubuntu-latest" in test_text
+            and "CI verdict (standard lane skipped)" in test_text
+            and "scripts/bug_registry_metadata_check.py" in test_text
+            and "_merge_quality_contexts_for_head_ref" in issue_workflow_text
             and all(f'"{context}"' in issue_workflow_text for context in STABLE_MERGE_QUALITY_CONTEXTS)
         ),
         "codeql_default_branch_security_scan_preserved": bool(
@@ -355,7 +375,7 @@ def build_contract_evidence(
         and ci_preparation_text.count("actions/checkout@v7") == 1
         and ci_preparation_text.count("ci_environment_verify.py") == 1
         and "Classify CI lane" in ci_preparation_text
-        and "BUG registry metadata check" in ci_preparation_text
+        and "scripts/bug_registry_metadata_check.py" in ci_preparation_text
         and "nox -s l0 -- changed files" in ci_preparation_text,
         "pr_ci_workflow_validation_reuses_ci_verdict_runner": bool(ci_verdict_text)
         and not re.search(r"(?m)^  workflow-validation-tests:\s*$", test_text)
