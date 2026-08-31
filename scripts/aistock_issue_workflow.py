@@ -1946,6 +1946,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/services/hmm_risk/market_relative_jump_spike.py",
         "backend/services/hmm_risk/market_relative_ridge_candidate.py",
         "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
         "backend/services/hmm_risk/state_model_set.py",
         "backend/services/hmm_risk/stock_fact_repository.py",
         "backend/services/announcements/title_classifier.py",
@@ -1973,6 +1974,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/hmm_risk/run_market_relative_jump_spike.py",
         "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
         "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+        "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
         "noxfile.py",
     }
     known_client_files = {
