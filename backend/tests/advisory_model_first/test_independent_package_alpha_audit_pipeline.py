@@ -21,9 +21,11 @@ from backend.services.advisory_model_first.independent_package_alpha_audit_contr
     PKG_378_ARM_ID,
     PKG_5A5_ARM_ID,
     PKG_B668_ARM_ID,
+    RESOURCE_MAX_WALL_SECONDS,
     build_independent_package_alpha_audit_request,
 )
 from backend.services.advisory_model_first.independent_package_alpha_audit_pipeline import (
+    IndependentPackageAuditProgress,
     IndependentPackageAuditMetricResult,
     _publish_bundle,
     _rank_one_arm,
@@ -44,6 +46,26 @@ from backend.tests.advisory_model_first.test_independent_package_alpha_audit_con
 def _decision_dates() -> pd.DatetimeIndex:
     candidates = pd.bdate_range("2024-07-04", "2026-02-02")
     return pd.DatetimeIndex([*candidates[:385], pd.Timestamp("2026-02-02")])
+
+
+def test_progress_records_unbounded_wall_time_without_stopping(monkeypatch) -> None:
+    from backend.services.advisory_model_first import independent_package_alpha_audit_pipeline as pipeline
+
+    request = build_independent_package_alpha_audit_request(**_values()).model_copy(
+        update={"resource_max_wall_seconds": RESOURCE_MAX_WALL_SECONDS}
+    )
+    assert request.resource_max_wall_seconds == RESOURCE_MAX_WALL_SECONDS
+    clock = iter([0.0])
+    monkeypatch.setattr(pipeline.time, "monotonic", lambda: next(clock, 10**9))
+    monkeypatch.setattr(pipeline, "_peak_rss_bytes", lambda: 1)
+
+    progress = IndependentPackageAuditProgress(request)
+    progress.stage("long_stage", 0.0)
+    report = progress.report()
+
+    assert report["total_wall_seconds"] > 8 * 60 * 60
+    assert report["wall_limit_enabled"] is False
+    assert report["wall_limit_seconds"] is None
 
 
 def _synthetic_inputs():
@@ -255,6 +277,8 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         "factor_io_mode": "IN_MEMORY_EQUIVALENT",
         "factor_input_copy_mode": "PANDAS_COPY_ON_WRITE",
         "factor_result_projection_mode": "DECISION_DATES_BEFORE_MATERIALIZATION",
+        "wall_limit_enabled": False,
+        "wall_limit_seconds": None,
         "temp_storage_mode": "ENVIRONMENT_LOCAL_EPHEMERAL",
         "static_h5_physical_file_count": 1,
         "static_h5_hardlink_alias_count": 6,
@@ -300,6 +324,10 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         request=request,
     )
     assert not _valid_batch_execution_receipt(
+        {**batch_receipt, "wall_limit_enabled": True, "wall_limit_seconds": 28800},
+        request=request,
+    )
+    assert not _valid_batch_execution_receipt(
         {
             **batch_receipt,
             "factor_result_projection_mode": "FULL_RESULT_SEMANTIC_FALLBACK",
@@ -339,7 +367,13 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         "package_inventory": {"packages": []},
         "batch": batch,
         "metrics": metrics,
-        "resource_report": {"peak_rss_bytes": 1, "temp_peak_bytes": 1, "total_wall_seconds": 1},
+        "resource_report": {
+            "peak_rss_bytes": 1,
+            "temp_peak_bytes": 1,
+            "total_wall_seconds": RESOURCE_MAX_WALL_SECONDS + 1,
+            "wall_limit_enabled": False,
+            "wall_limit_seconds": None,
+        },
     }
 
     first = _publish_bundle(**arguments)

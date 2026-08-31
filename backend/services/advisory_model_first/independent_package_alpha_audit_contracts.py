@@ -54,6 +54,8 @@ CAUSALITY_ANCHORS = (date(2024, 7, 4), date(2025, 4, 22), date(2026, 2, 2))
 
 RESOURCE_MAX_RSS_BYTES = 16 * 1024**3
 RESOURCE_MAX_TEMP_BYTES = 32 * 1024**3
+# Retained only so historical frozen request JSON remains readable. Execution
+# ignores this deprecated value; new requests default to ``None``.
 RESOURCE_MAX_WALL_SECONDS = 8 * 60 * 60
 SCORE_PARITY_ATOL = 1e-6
 RANK_PARITY_MIN_SPEARMAN = 0.999999
@@ -163,7 +165,7 @@ class AdvisoryIndependentPackageAlphaAuditRequestV1(BaseModel):
     inference_policy: Tier1InferencePolicyV1 = Field(default_factory=Tier1InferencePolicyV1)
     resource_max_rss_bytes: Literal[RESOURCE_MAX_RSS_BYTES] = RESOURCE_MAX_RSS_BYTES
     resource_max_temp_bytes: Literal[RESOURCE_MAX_TEMP_BYTES] = RESOURCE_MAX_TEMP_BYTES
-    resource_max_wall_seconds: Literal[RESOURCE_MAX_WALL_SECONDS] = RESOURCE_MAX_WALL_SECONDS
+    resource_max_wall_seconds: Literal[RESOURCE_MAX_WALL_SECONDS] | None = None
 
     @model_validator(mode="after")
     def validate_frozen_identity(self) -> "AdvisoryIndependentPackageAlphaAuditRequestV1":

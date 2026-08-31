@@ -25,6 +25,7 @@
 9. v1.2 首次真实运行显示 file-backed wrapper 约需 8 分钟/PIT 日，线性外推明显超过 8 小时。复审同时发现其后续 T 使用从首个 warm-up 日起不断扩张的输入，而单日业务语义是每个 T 独立使用该 closure 的 `required_window + 5` 滚动交易日窗口；扩张窗口既浪费计算，也可能改变 expanding/分位类结果，因此旧运行不得形成正式证据。v1.3 固定为一次完整区间读取后按 T/closure 切出滚动窗口、在该窗口内只预计算一次 static 派生，再使用受限 in-memory I/O adapter。adapter 只虚拟化已知 `daily_pv/static aliases/result.h5` 的 pandas read/write，冻结因子源码、输入值、执行顺序和返回值不变；必须用 file-backed reference 做逐值 parity，遇到 HDFStore/h5py/外部 reader 即 fail closed。
 10. v1.3 两个真实 closure 的 file-backed parity 均已通过，但稳定纯内存阶段仍约 4 分钟/PIT 日，无法在 8 小时内覆盖 386 日。剖析确认 57 因子 closure 与 50 因子 closure 有 28 个“同 factor name + 同 source SHA256”成员，且输入窗口相同；冻结 wrapper 每次 `read_hdf/read_parquet` 的深复制和 `/mnt/f` 临时目录元数据操作仍占主要非业务开销。v1.4 只做数值等价的三项优化：pandas copy-on-write 隔离输入、同日同窗口按 factor name/source hash 复用 28 个已算 target series、临时计算迁到 WSL 环境本地 `TemporaryDirectory`。首日真实 file-backed parity、输入/输出 hash、PIT/窗口、模型与 772 次 closure 语义均不变。
 11. v1.4 正式运行已经完成两个真实 closure 的首日 file-backed parity，并将无竞争阶段缩短到约 71–96 秒/PIT 日；但该区间仍贴近或超过 8 小时完成 386 日所需的约 73 秒/PIT 日，不能把临界外推冒充资源验收。剖析确认冻结 factor 脚本会先产生整个滚动窗口的 result，再由 batch consumer 规范化全量行并截取 T；业务与模型实际只消费 T 行。v1.5 因此只在 factor 计算已经结束后、虚拟 `result.h5` 物化之前投影 request 明列的 decision date，并以 pandas copy-on-write 保存该时点快照；factor 源码、输入窗口、计算过程和 T 行结果均不改变。真实 file-backed reference 仍完整物化结果再截取 T，二者必须逐值、dtype、index、column 和 hash 完全一致，否则 fail closed。
+12. 2026-09-01 用户明确取消实验的 8 小时终止门禁：实验可按真实工作量持续运行，只有用户主动终止或正确性/资源安全错误才停止。新冻结 request 固定 `resource_max_wall_seconds=null`；总墙钟仍写入 telemetry/receipt，但不参与成功判定。旧 request 的 `28800` 只为历史 JSON readback 兼容而允许解析，当前执行层同样忽略该值；任何调用方都不能重新启用墙钟终止。RSS 16 GiB、临时空间 32 GiB、PIT、文件 parity、因果性和输出完整性门禁不变。运行进度改为每 30 分钟轻量检查，不用持续高频轮询。
 
 ## 2. Goal and scope
 
@@ -109,7 +110,7 @@ request 必须冻结：
 - Prediction Store root、output root、registry path、repository clean commit；
 - bootstrap 20 个交易日 block、2,000 repetitions、seed `20260831`；
 - 因果 anchor 固定为 `2024-07-04`、`2025-04-22`、`2026-02-02`；
-- `resource_max_rss_bytes=17179869184`、`resource_max_wall_seconds=28800`、`resource_max_temp_bytes=34359738368`。
+- `resource_max_rss_bytes=17179869184`、`resource_max_wall_seconds=null`、`resource_max_temp_bytes=34359738368`；墙钟只记录、不自动终止。
 
 request 使用 canonical JSON 形成 `request_id`。unknown field、package 顺序/状态/manifest/closure 漂移、重复包、额外 arm、RETIRED 包、N1/N2-A identity 漂移、sealed 日期或非 clean commit 一律拒绝。
 
@@ -142,7 +143,7 @@ QEExperimentRuntimeAssetResolver.prepare_workspace(...)
 4. 正式 batch 默认使用受限 in-memory pandas I/O adapter 提供 canonical daily/static DataFrame；完整区间只 canonicalize 一次，每个 T 按该 closure 的 `required_window + 5` 个交易日切片，随后在已切片的 PIT 股票池内只计算一次 static 派生，同窗口的两个 closure 可共享该输入。每个 factor read 返回 pandas copy-on-write 隔离视图，禁止共享可写深层状态。factor 完成全部计算后，虚拟 `result.h5` 只保存 request 明列 decision date 的 copy-on-write 快照，禁止提前裁剪 factor 输入或中间计算；投影前必须在全量 result 上保持原有 datetime/instrument 规范化与重复键校验语义，任何需要规范化或无法证明安全的 index 都保留全量 result 并标记 `FULL_RESULT_SEMANTIC_FALLBACK`，正式审计据此 fail closed。file-backed reference 仍走完整文件物化并在 consumer 侧截取同一日期。首日真实 file-backed parity 是等价硬门禁。临时计算必须位于 WSL 环境本地 `TemporaryDirectory`，不得在 `/mnt/f` artifact root 做逐因子临时元数据往返；最终 request、Prediction Store、bundle 与 receipt 仍只写 AIstock artifact root。
 5. 对每个 decision T，先按该日 canonical PIT member set 和各 closure 冻结滚动窗口从已读 panel 切出业务等价输入，再运行 exact factor closure `977c...` 和 `f19c...`；前两包共享同日 factor matrix 只因资产闭包精确相同。两个 closure 间只允许复用 `(factor_name, frozen_source_sha256)` 完全一致且输入窗口对象相同的 target series；当前冻结 roster 每日精确为 28 个，任何 source/name/window 漂移即不命中而非近似复用。完整窗口仍固定为 `386 × 2 = 772` 次 primary closure evaluation。首个冻结 T 对两个真实 closure 各追加一次不消费复用缓存的 `FILE_BACKED_REFERENCE`，与同输入内存矩阵逐 key、column、dtype、value 精确比较；两次 reference 只是实现等价门禁，不计研究 trial。
 6. 每个 package model 只调用一次 `load_model_from_pkl`；模型对象跨 386 日复用，每日矩阵使用同一冻结 infer processor 和 `predict`，不重新加载模型、来源、CAS 或 workspace。
-7. 正式 receipt 必须满足：`market_interval_read_count=1`、`static_interval_read_count=1`、`rolling_live_window_semantics=true`、逐 closure `required_window_by_closure`、`window_buffer_trading_days=5`、`factor_io_mode=IN_MEMORY_EQUIVALENT`、`factor_input_copy_mode=PANDAS_COPY_ON_WRITE`、`factor_result_projection_mode=DECISION_DATES_BEFORE_MATERIALIZATION`、`temp_storage_mode=ENVIRONMENT_LOCAL_EPHEMERAL`、`primary_decision_batch_count=386`、`primary_factor_group_run_count_per_decision=2`、`primary_factor_group_run_count=772`、`diagnostic_factor_group_run_count=6`、`factor_group_total_run_count=778`、`file_backed_parity_factor_group_run_count=2`、`all_factor_group_run_count=780`、`factor_calculation_count=30731`、`factor_reuse_count=10892`、`result_write_count=30731`、`projected_result_write_count=30731`、`fallback_result_write_count=0`、`reference_factor_calculation_count=107`、每包 `model_load_count=1`、`daily_wsl_process_count=0`、`daily_db_query_count=0`。两条 parity receipt 的 closure roster 和 feature hash 必须成对一致。诊断重算只切已读内存 panel，保持与 primary 相同下界并只为 poison 扩展上界，不再次访问 DB、CAS 或加载模型；每个 PIT 日结束后检查 8 小时 wall 上限。
+7. 正式 receipt 必须满足：`market_interval_read_count=1`、`static_interval_read_count=1`、`rolling_live_window_semantics=true`、逐 closure `required_window_by_closure`、`window_buffer_trading_days=5`、`factor_io_mode=IN_MEMORY_EQUIVALENT`、`factor_input_copy_mode=PANDAS_COPY_ON_WRITE`、`factor_result_projection_mode=DECISION_DATES_BEFORE_MATERIALIZATION`、`wall_limit_enabled=false`、`wall_limit_seconds=null`、`temp_storage_mode=ENVIRONMENT_LOCAL_EPHEMERAL`、`primary_decision_batch_count=386`、`primary_factor_group_run_count_per_decision=2`、`primary_factor_group_run_count=772`、`diagnostic_factor_group_run_count=6`、`factor_group_total_run_count=778`、`file_backed_parity_factor_group_run_count=2`、`all_factor_group_run_count=780`、`factor_calculation_count=30731`、`factor_reuse_count=10892`、`result_write_count=30731`、`projected_result_write_count=30731`、`fallback_result_write_count=0`、`reference_factor_calculation_count=107`、每包 `model_load_count=1`、`daily_wsl_process_count=0`、`daily_db_query_count=0`。两条 parity receipt 的 closure roster 和 feature hash 必须成对一致。诊断重算只切已读内存 panel，保持与 primary 相同下界并只为 poison 扩展上界，不再次访问 DB、CAS 或加载模型；总墙钟只写 telemetry，不形成自动终止或验收阈值。
 
 ### 6.2 PIT and missing-data semantics
 
@@ -286,7 +287,7 @@ decision_use=NAVIGATION_ONLY
 | `ADVISORY_PACKAGE_BATCH_LIVE_PARITY_FAILED` | isolated end-date 与 batch Top50/score parity 不满足 |
 | `ADVISORY_PACKAGE_ALPHA_AUDIT_OUTCOME_INVALID` | N1 H20/PIT/benchmark/suspend/cost outcome 漂移 |
 | `ADVISORY_PACKAGE_ALPHA_AUDIT_BUNDLE_CONFLICT` | immutable bundle/store 冲突或 readback 失败 |
-| `ADVISORY_PACKAGE_ALPHA_AUDIT_RESOURCE_LIMIT_EXCEEDED` | RSS 超 16GB、临时空间超 32GB 或墙钟超 8 小时 |
+| `ADVISORY_PACKAGE_ALPHA_AUDIT_RESOURCE_LIMIT_EXCEEDED` | 仅用于 RSS 超 16GB 或临时空间超 32GB；墙钟不再触发该错误 |
 | `ADVISORY_MODEL_TRAINING_REQUIRES_WSL` | 正式 run 不在 WSL `rdagent-gpu` |
 
 ## 11. Implementation Plan / scope and phases
@@ -374,7 +375,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 | F-232 | N1 full-universe H20/PIT/benchmark/suspend/cost 复用且 outcome 只在 ranking 后 join |
 | F-233 | immutable bundle、Prediction Store descriptors、atomic publish、readback、exact retry |
 | F-234 | registry 为 0-trial ORACLE_DIAGNOSTIC/NAVIGATION_ONLY，route 保持 N2 |
-| F-235 | WSL `rdagent-gpu` 正式运行，RSS <16GB、temp <32GB、wall <8h，资源/调用/H5链接次数可读回 |
+| F-235 | WSL `rdagent-gpu` 正式运行，RSS <16GB、temp <32GB；wall 仅记录且不自动终止，资源/调用/H5链接次数可读回 |
 | F-236 | 无 API/UI/DB 写入/restart/runtime/Selection/StrategyPackage lifecycle 影响 |
 | F-237 | 仅在 factor 完整计算结束后把虚拟 result 投影到 request decision date；COW 快照与真实 file-backed 全量物化后截取结果完全一致 |
 
@@ -396,7 +397,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 | F-232 | `tier1_oracle_pipeline.py`; `independent_package_alpha_audit_pipeline.py` | `backend/tests/advisory_model_first/test_independent_package_alpha_audit_pipeline.py` N1/N2-A parity and outcome poison cases | DESIGN_READY | none |
 | F-233 | `independent_package_alpha_audit_pipeline.py` | `backend/tests/advisory_model_first/test_independent_package_alpha_audit_pipeline.py` bundle/exact retry/readback cases | DESIGN_READY | none |
 | F-234 | `independent_package_alpha_audit_pipeline.py`; `research_control.py` | `backend/tests/advisory_model_first/test_research_trial_registry.py` plus N2-B route duplicate cases | DESIGN_READY | none |
-| F-235 | `scripts/advisory_independent_package_alpha_audit.py`; pipeline resource receipt | `backend/tests/advisory_model_first/test_independent_package_alpha_audit_pipeline.py` WSL/resource/call-count/hard-link cases | DESIGN_READY | none |
+| F-235 | `scripts/advisory_independent_package_alpha_audit.py`; pipeline resource receipt | `backend/tests/advisory_model_first/test_independent_package_alpha_audit_pipeline.py`; `backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py` no-wall-stop/resource/call-count/hard-link cases | DESIGN_READY | none |
 | F-236 | no production surface; classifier/ownership metadata | `backend/tests/scripts/test_ci_change_classifier.py`; `tests/aistock_validation/catalog/file_ownership.yaml` | DESIGN_READY | none |
 | F-237 | `strategy_package_batch_prediction.py`; `independent_package_alpha_audit_pipeline.py` | `backend/tests/advisory_model_first/test_strategy_package_batch_prediction.py` COW snapshot/projection/file-backed parity cases | DESIGN_READY | none |
 
@@ -411,11 +412,11 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 | 相同因子数被错误复用 | 信号身份串包 | 仅 exact ordered factor asset closure 相同才共享 |
 | package source 已失效 | 偷偷回退旧 QE workspace | package-owned CAS-only；所有 fallback 禁止 |
 | 缺失特征被静默填充 | 虚高覆盖与收益 | 不填值，typed dropped coverage，Top50 不足当日 unavailable |
-| 386 日退化为 386 个独立任务 | 超时且重复 DB/进程/模型/workspace | 单个 batch 进程、一次区间读、三模型各加载一次；仅 PIT-day factor evaluation 为按日，因为横截面业务语义要求如此；8 小时 wall fail closed |
+| 386 日退化为 386 个独立任务 | 重复 DB/进程/模型/workspace，浪费资源且难以恢复 | 单个 batch 进程、一次区间读、三模型各加载一次；仅 PIT-day factor evaluation 为按日，因为横截面业务语义要求如此；墙钟仅记录 |
 | 从首日 warm-up 起扩张输入 | 后续日偏离单日业务窗口且计算量持续增长 | 每个 T/closure 使用冻结 `required_window + 5` 滚动交易日窗口；static 派生在切片后计算；receipt 固化窗口语义 |
-| file-backed 因子 result/H5 往返导致约 8 分钟/日 | 超过 8 小时且产生无业务价值的 TB 级瞬时 I/O | 受限 in-memory pandas I/O adapter + file-backed parity；源码/输入/输出不变；未知 I/O API fail closed；逐 PIT 日 wall 检查 |
-| 深复制、跨 closure 重算与 `/mnt/f` 临时元数据使纯内存阶段仍约 4 分钟/日 | 仍超过 8 小时 | COW 输入隔离 + 28 个同名同 SHA 因子 target 复用 + WSL local ephemeral temp；首日真实 file-backed parity 和精确计数 fail closed |
-| 全窗口 factor result 在只消费 T 行前仍被深复制和全量规范化 | v1.4 吞吐临界超过 8 小时，且额外内存复制无业务价值 | 只在 factor 计算完成后的虚拟 result 物化边界投影 request decision date；file-backed reference 保持全量物化，逐值/dtype/index/hash parity fail closed |
+| file-backed 因子 result/H5 往返导致约 8 分钟/日 | 产生无业务价值的 TB 级瞬时 I/O | 受限 in-memory pandas I/O adapter + file-backed parity；源码/输入/输出不变；未知 I/O API fail closed；不以墙钟终止替代正确性修复 |
+| 深复制、跨 closure 重算与 `/mnt/f` 临时元数据使纯内存阶段仍约 4 分钟/日 | 运行时间和临时资源被非业务开销放大 | COW 输入隔离 + 28 个同名同 SHA 因子 target 复用 + WSL local ephemeral temp；首日真实 file-backed parity 和精确计数 fail closed |
+| 全窗口 factor result 在只消费 T 行前仍被深复制和全量规范化 | 额外耗时和内存复制无业务价值 | 只在 factor 计算完成后的虚拟 result 物化边界投影 request decision date；file-backed reference 保持全量物化，逐值/dtype/index/hash parity fail closed |
 | 诊断变成 winner 选择 | 多重检验与方向漂移 | 0 trial、navigation only、不选权重/包、不进 sealed |
 | artifacts 变成新平台 | 延误模型演进 | task-local store + 一个 CLI + JSON/Parquet；无 DB/UI/scheduler |
 

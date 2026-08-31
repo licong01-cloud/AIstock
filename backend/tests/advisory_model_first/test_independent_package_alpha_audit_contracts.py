@@ -15,6 +15,7 @@ from backend.services.advisory_model_first.independent_package_alpha_audit_contr
     PKG_378_ARM_ID,
     PKG_5A5_ARM_ID,
     PKG_B668_ARM_ID,
+    RESOURCE_MAX_WALL_SECONDS,
     FrozenPackageAuditArmV1,
     WorkspaceFileDescriptorV1,
     build_independent_package_alpha_audit_receipt,
@@ -148,6 +149,17 @@ def test_request_is_stable_and_has_fixed_zero_trial_surface() -> None:
     )
     assert first.study_type.value == "ORACLE_DIAGNOSTIC"
     assert first.decision_use.value == "NAVIGATION_ONLY"
+    assert first.resource_max_wall_seconds is None
+
+    legacy_values = _values()
+    legacy_values["resource_max_wall_seconds"] = RESOURCE_MAX_WALL_SECONDS
+    legacy = build_independent_package_alpha_audit_request(**legacy_values)
+    assert legacy.resource_max_wall_seconds == RESOURCE_MAX_WALL_SECONDS
+
+    invalid_values = _values()
+    invalid_values["resource_max_wall_seconds"] = 60
+    with pytest.raises(ValidationError):
+        build_independent_package_alpha_audit_request(**invalid_values)
 
 
 @pytest.mark.parametrize(

@@ -420,15 +420,6 @@ class StrategyPackageBatchPredictionRunner:
                     coverage_parts.append(coverage)
                 del features
             del day_sources, day_factor_caches
-            elapsed = time.monotonic() - started
-            if elapsed > request.resource_max_wall_seconds:
-                _raise(
-                    "package batch exceeded its frozen wall-time limit between PIT days",
-                    "ADVISORY_PACKAGE_ALPHA_AUDIT_RESOURCE_LIMIT_EXCEEDED",
-                    completed_decision_count=decision_index,
-                    elapsed_seconds=round(elapsed, 3),
-                    wall_limit_seconds=request.resource_max_wall_seconds,
-                )
 
         predictions = {
             arm_id: pd.concat(parts).sort_index()
@@ -531,15 +522,12 @@ class StrategyPackageBatchPredictionRunner:
                 diagnostic=factor_group_diagnostic_count,
             )
 
-        elapsed_before_publish = time.monotonic() - started
-        if temp_peak_bytes > request.resource_max_temp_bytes or elapsed_before_publish > request.resource_max_wall_seconds:
+        if temp_peak_bytes > request.resource_max_temp_bytes:
             _raise(
-                "package batch exceeded its frozen temp or wall-time limit",
+                "package batch exceeded its frozen temporary-space limit",
                 "ADVISORY_PACKAGE_ALPHA_AUDIT_RESOURCE_LIMIT_EXCEEDED",
                 temp_peak_bytes=temp_peak_bytes,
                 temp_limit_bytes=request.resource_max_temp_bytes,
-                elapsed_seconds=round(elapsed_before_publish, 3),
-                wall_limit_seconds=request.resource_max_wall_seconds,
             )
 
         prediction_descriptors, prediction_run_ids = _publish_prediction_store(
@@ -666,6 +654,8 @@ class StrategyPackageBatchPredictionRunner:
                 else "CALLER_MANAGED"
             ),
             "wall_seconds": round(time.monotonic() - started, 3),
+            "wall_limit_enabled": False,
+            "wall_limit_seconds": None,
             "status": "COMPLETE",
         }
         batch_receipt["receipt_sha256"] = canonical_json_sha256(batch_receipt)

@@ -175,16 +175,14 @@ class IndependentPackageAuditProgress:
 
     def _assert_limits(self, item: Mapping[str, Any]) -> None:
         peak = int(item.get("peak_rss_bytes") or 0)
-        elapsed = float(item.get("elapsed_seconds") or 0.0)
-        if peak > self.request.resource_max_rss_bytes or elapsed > self.request.resource_max_wall_seconds:
+        if peak > self.request.resource_max_rss_bytes:
             _raise(
                 "N2-B audit exceeded its frozen resource limit",
                 REASON_RESOURCE_LIMIT,
                 stage=item.get("stage"),
                 peak_rss_bytes=peak,
                 rss_limit_bytes=self.request.resource_max_rss_bytes,
-                elapsed_seconds=elapsed,
-                wall_limit_seconds=self.request.resource_max_wall_seconds,
+                elapsed_seconds=float(item.get("elapsed_seconds") or 0.0),
             )
 
     def report(self, *, batch_receipt: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -195,7 +193,8 @@ class IndependentPackageAuditProgress:
             "temp_peak_bytes": int((batch_receipt or {}).get("temp_peak_bytes") or 0),
             "temp_limit_bytes": self.request.resource_max_temp_bytes,
             "total_wall_seconds": round(time.monotonic() - self.started, 3),
-            "wall_limit_seconds": self.request.resource_max_wall_seconds,
+            "wall_limit_enabled": False,
+            "wall_limit_seconds": None,
             "stages": self.stages,
         }
         self._assert_limits(
@@ -1553,7 +1552,6 @@ def _publish_bundle(
     if (
         report["peak_rss_bytes"] > request.resource_max_rss_bytes
         or int(report.get("temp_peak_bytes") or 0) > request.resource_max_temp_bytes
-        or float(report.get("total_wall_seconds") or 0) > request.resource_max_wall_seconds
     ):
         _raise("N2-B exceeded a frozen resource limit while publishing", REASON_RESOURCE_LIMIT)
     _write_json(temp / "resource_report.json", report)
@@ -1749,9 +1747,10 @@ def _read_bundle(path: Path) -> dict[str, Any]:
         or manifest.get("sealed_holdout_accessed") is not False
         or manifest.get("runtime_eligible") is not False
         or manifest.get("activated") is not False
+        or resource_report.get("wall_limit_enabled") is not False
+        or resource_report.get("wall_limit_seconds") is not None
         or int(resource_report.get("peak_rss_bytes") or 0) > request.resource_max_rss_bytes
         or int(resource_report.get("temp_peak_bytes") or 0) > request.resource_max_temp_bytes
-        or float(resource_report.get("total_wall_seconds") or 0) > request.resource_max_wall_seconds
     )
     if invalid:
         _raise("N2-B bundle relational identity is invalid", REASON_BUNDLE_CONFLICT, path=str(path))
@@ -1787,6 +1786,8 @@ def _valid_batch_execution_receipt(
         and receipt.get("factor_input_copy_mode") == FACTOR_INPUT_COPY_MODE_COW
         and receipt.get("factor_result_projection_mode")
         == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
+        and receipt.get("wall_limit_enabled") is False
+        and receipt.get("wall_limit_seconds") is None
         and receipt.get("temp_storage_mode") == "ENVIRONMENT_LOCAL_EPHEMERAL"
         and receipt.get("static_h5_physical_file_count") == 1
         and receipt.get("static_h5_hardlink_alias_count") == 6

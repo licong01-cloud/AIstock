@@ -19,6 +19,7 @@ from backend.services.advisory_model_first.independent_package_alpha_audit_contr
     PKG_378_ARM_ID,
     PKG_5A5_ARM_ID,
     PKG_B668_ARM_ID,
+    RESOURCE_MAX_WALL_SECONDS,
     FrozenPackageAuditArmV1,
     WorkspaceFileDescriptorV1,
     build_independent_package_alpha_audit_request,
@@ -323,6 +324,8 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
         "factor_calculation_count"
     ]
     assert result.batch_receipt["fallback_result_write_count"] == 0
+    assert result.batch_receipt["wall_limit_enabled"] is False
+    assert result.batch_receipt["wall_limit_seconds"] is None
     assert result.batch_receipt["temp_storage_mode"] == "ENVIRONMENT_LOCAL_EPHEMERAL"
     assert len(result.batch_receipt["factor_resource_receipts"]) == 778
     assert result.batch_receipt["file_backed_parity_factor_group_run_count"] == 2
@@ -786,7 +789,7 @@ def test_real_factor_batch_rejects_unsupported_virtual_io(
     assert raised.value.reason_code == "ADVISORY_PACKAGE_BATCH_ASSET_INVALID"
 
 
-def test_batch_runner_checks_wall_limit_after_each_pit_day(
+def test_batch_runner_ignores_deprecated_wall_value(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -794,32 +797,36 @@ def test_batch_runner_checks_wall_limit_after_each_pit_day(
 
     decisions = _decisions()
     snapshot = _pit_snapshot()
-    request = _request(tmp_path, snapshot)
-    clock = iter([0.0, float(request.resource_max_wall_seconds) + 1.0])
-    monkeypatch.setattr(batch_module.time, "monotonic", lambda: next(clock))
+    request = _request(tmp_path, snapshot).model_copy(
+        update={"resource_max_wall_seconds": RESOURCE_MAX_WALL_SECONDS}
+    )
+    assert request.resource_max_wall_seconds == RESOURCE_MAX_WALL_SECONDS
+    clock = iter([0.0])
+    monkeypatch.setattr(batch_module.time, "monotonic", lambda: next(clock, 10**9))
 
-    with pytest.raises(AdvisoryModelFirstError) as raised:
-        StrategyPackageBatchPredictionRunner(
-            source_loader=lambda _universe, _start, _end: _source(decisions),
-            factor_runner=_fake_factor_runner,
-            model_loader=lambda path: (
-                object(),
-                "fake",
-                None,
-                len(
-                    json.loads(
-                        (path.parents[1] / "factor_order.json").read_text(encoding="utf-8")
-                    )["factor_order"]
-                ),
+    result = StrategyPackageBatchPredictionRunner(
+        source_loader=lambda _universe, _start, _end: _source(decisions),
+        factor_runner=_fake_factor_runner,
+        model_loader=lambda path: (
+            object(),
+            "fake",
+            None,
+            len(
+                json.loads(
+                    (path.parents[1] / "factor_order.json").read_text(encoding="utf-8")
+                )["factor_order"]
             ),
-            model_predictor=lambda _model, _inner, _kind, frame: frame.iloc[:, 0].to_numpy(),
-            history_start_resolver=lambda _start, _window: _history_start(decisions),
-        ).run(
-            request=request,
-            pit_snapshot=snapshot,
-            decision_dates=decisions,
-            temp_root=tmp_path / "temp",
-        )
+        ),
+        model_predictor=lambda _model, _inner, _kind, frame: frame.iloc[:, 0].to_numpy(),
+        history_start_resolver=lambda _start, _window: _history_start(decisions),
+    ).run(
+        request=request,
+        pit_snapshot=snapshot,
+        decision_dates=decisions,
+        temp_root=tmp_path / "temp",
+    )
 
-    assert raised.value.reason_code == "ADVISORY_PACKAGE_ALPHA_AUDIT_RESOURCE_LIMIT_EXCEEDED"
-    assert raised.value.context["completed_decision_count"] == 1
+    assert result.batch_receipt["primary_decision_batch_count"] == 386
+    assert result.batch_receipt["wall_limit_enabled"] is False
+    assert result.batch_receipt["wall_limit_seconds"] is None
+    assert result.batch_receipt["wall_seconds"] > RESOURCE_MAX_WALL_SECONDS
