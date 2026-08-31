@@ -162,8 +162,8 @@
   },
   "first_seen_at": "2026-08-31T16:45:27.853547Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5214bd03a880525afc2944958338692953c27818",
+  "fixed_at": "2026-08-31T17:51:25Z",
   "github_issue_number": 4094,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4094",
   "last_seen_at": "2026-08-31T16:45:27.853547Z",
@@ -171,6 +171,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4099",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -198,6 +199,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -209,7 +211,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1291",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a2ec437d9d117d9a",
+    "recorded_at": "2026-08-31T17:54:12.739269Z",
+    "runtime_contract_digest": "a4ca06662f9ec8a1d9cd483ae27b569b7a1fa9549b498ef79880367a6b53d943",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c86ff543354e60c8dec1276e6c1497f353f72491",
+    "source_merge_commit": "5214bd03a880525afc2944958338692953c27818",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4099",
+    "validation_evidence": [
+      "python -m pytest backend/tests/simulation_runtime/test_localsim_cutover_inventory.py backend/tests/scripts/test_prepare_localsim_successor_cutover.py -q -> 8 passed",
+      "python -m nox -s simulation_core_l2 -> 760 passed, 3 skipped; cross-module 63 passed, 1 skipped",
+      "python -m nox -s localsim_successor_core_dev_db -> 1 passed",
+      "python -m nox -s l0 -> passed blocking=0"
+    ],
+    "validation_evidence_digest": "6b53788f31de936d433acfff52293f0c586988c518f701a56b620e503182f20e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "Simulation Runtime"
   ],
@@ -218,6 +244,12 @@
     "fingerprint": "c0699791af0a28fdfcc3f419",
     "source_event_id": "FE-20260831-c0699791af0a"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_localsim_cutover_inventory.py backend/tests/scripts/test_prepare_localsim_successor_cutover.py -q -> 8 passed",
+    "python -m nox -s simulation_core_l2 -> 760 passed, 3 skipped; cross-module 63 passed, 1 skipped",
+    "python -m nox -s localsim_successor_core_dev_db -> 1 passed",
+    "python -m nox -s l0 -> passed blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
