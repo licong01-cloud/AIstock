@@ -431,6 +431,7 @@ rules:
     priority: 90
     include:
       - backend/mcp/**
+      - backend/tests/mcp/**
       - tests/mcp/**
       - scripts/aistock_mcp_gateway.py
       - scripts/aistock_mcp_gateway_doctor.py
