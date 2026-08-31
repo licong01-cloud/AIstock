@@ -12,7 +12,7 @@ import json
 import re
 import threading
 from dataclasses import dataclass
-from datetime import date, datetime, time as datetime_time, timedelta
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 from zoneinfo import ZoneInfo
@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from .profile import ResourcePolicy, validate_resource_policy
+from .canonical_stock_transformer import MINUTE_OPENING_AUCTION_TIME, MINUTE_SESSION_TIMES
 
 from .errors import DatasetReleaseError
 
@@ -405,11 +406,7 @@ class MinuteOverlayBuilder:
 
 
 def canonical_session_times(target: date) -> tuple[datetime, ...]:
-    morning = tuple(datetime.combine(target, datetime_time(9, 31)) + timedelta(minutes=offset) for offset in range(120))
-    afternoon = tuple(
-        datetime.combine(target, datetime_time(13, 1)) + timedelta(minutes=offset) for offset in range(120)
-    )
-    return morning + afternoon
+    return tuple(datetime.combine(target, value) for value in MINUTE_SESSION_TIMES)
 
 
 def normalize_database_rows(
@@ -430,6 +427,15 @@ def normalize_database_rows(
     if any(value.date() != gap.trade_date for value in frame["trade_time"]):
         raise MinuteSourceConflict("database minute rows contain another trade date")
     _validate_raw_values(frame, source="database")
+    if frame.duplicated(["ts_code", "trade_time"]).any():
+        raise MinuteProviderInvalid("database contains duplicate minute keys")
+    expected = set(canonical_session_times(gap.trade_date))
+    auction = datetime.combine(gap.trade_date, MINUTE_OPENING_AUCTION_TIME)
+    observed = set(frame["trade_time"].tolist())
+    unexpected = observed.difference(expected).difference({auction})
+    if unexpected:
+        raise MinuteProviderInvalid(f"database contains out-of-session minute keys: {sorted(unexpected)[:3]}")
+    frame = frame.loc[frame["trade_time"].ne(auction)].copy()
     _validate_keys(frame, source="database", expected_full=False, gap=gap)
     if len(frame) > gap.expected_bars:
         raise MinuteSourceConflict("database minute rows exceed canonical session size")

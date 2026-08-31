@@ -94,6 +94,18 @@ def _minute_day(day: date, *, code: str = CODE):
     ]
 
 
+def _minute_day_with_auction(day: date, *, code: str = CODE):
+    return [
+        _raw(
+            code,
+            trade_time=datetime.combine(day, datetime.min.time()).replace(hour=9, minute=30).isoformat(sep=" ")
+            + "+08:00",
+            freq="1m",
+        ),
+        *_minute_day(day, code=code),
+    ]
+
+
 def _limits(*days: date):
     return [
         {
@@ -181,6 +193,55 @@ def test_minute_transform_is_exact_240_session_with_same_12_value_semantics() ->
     assert rows[0]["limit_up"] == 1.0
     assert metrics.peak_minute_stock_day_rows == 240
     assert metrics.full_frames_materialized == 0
+
+
+def test_minute_transform_drops_one_0930_auction_row_but_rejects_duplicates() -> None:
+    spec = _spec(start=DAY2)
+    rows = list(
+        CanonicalStockTransformer().transform_minute(
+            spec,
+            minute_rows=_minute_day_with_auction(DAY2),
+            adj_factor_rows=_adj(),
+            stk_limit_rows=_limits(DAY2),
+            suspend_rows=[],
+        )
+    )
+
+    assert len(rows) == 240
+    assert rows[0]["datetime"] == "2026-07-31 09:31:00"
+    assert rows[-1]["datetime"] == "2026-07-31 15:00:00"
+
+    duplicate = [*_minute_day_with_auction(DAY2), _minute_day_with_auction(DAY2)[0]]
+    with pytest.raises(CanonicalStockTransformError):
+        list(
+            CanonicalStockTransformer().transform_minute(
+                spec,
+                minute_rows=duplicate,
+                adj_factor_rows=_adj(),
+                stk_limit_rows=_limits(DAY2),
+                suspend_rows=[],
+            )
+        )
+
+    unexpected = [
+        *_minute_day(DAY2)[:120],
+        _raw(
+            CODE,
+            trade_time="2026-07-31 13:00:00+08:00",
+            freq="1m",
+        ),
+        *_minute_day(DAY2)[120:],
+    ]
+    with pytest.raises(CanonicalStockTransformError, match="out-of-session"):
+        list(
+            CanonicalStockTransformer().transform_minute(
+                spec,
+                minute_rows=unexpected,
+                adj_factor_rows=_adj(),
+                stk_limit_rows=_limits(DAY2),
+                suspend_rows=[],
+            )
+        )
 
 
 def test_full_day_suspend_synthesizes_daily_and_exact_240_zero_volume_minutes() -> None:

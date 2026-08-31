@@ -207,6 +207,23 @@ def _minute_rows(*, count: int = 240, open_li: int = 10_000):
     ]
 
 
+def _minute_rows_with_auction(*, open_li: int = 10_000):
+    return [
+        {
+            "ts_code": CODE,
+            "trade_time": f"{DAY.isoformat()} 09:30:00",
+            "freq": "1m",
+            "open_li": open_li,
+            "high_li": 11_000,
+            "low_li": 9_000,
+            "close_li": 10_500,
+            "volume_hand": 100,
+            "amount_li": 100_000,
+        },
+        *_minute_rows(open_li=open_li),
+    ]
+
+
 def _tdx_rows(*, count: int = 240):
     return [
         {
@@ -1385,6 +1402,129 @@ def test_missing_minute_is_filled_by_tdx_without_tushare(
     assert day["provider"] == "tdx" and day["final_rows"] == 240
 
 
+def test_artifact_ready_minute_241_and_240_have_same_effective_day_identity(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    cas_240, view_240, snapshot_240 = _fixture(
+        dataset_profile,
+        tmp_path / "core",
+        minute_rows=_minute_rows(),
+    )
+    cas_241, view_241, snapshot_241 = _fixture(
+        dataset_profile,
+        tmp_path / "auction",
+        minute_rows=_minute_rows_with_auction(),
+    )
+    builder_240 = ArtifactReadySourceBuilder(dataset_profile, cas_240)
+    builder_241 = ArtifactReadySourceBuilder(dataset_profile, cas_241)
+
+    day_240 = _minute_coverage(
+        cas_240,
+        builder_240.build(snapshot_240, source_view=view_240),
+    )["days"][0]
+    day_241 = _minute_coverage(
+        cas_241,
+        builder_241.build(snapshot_241, source_view=view_241),
+    )["days"][0]
+
+    assert day_240["database_rows"] == day_241["database_rows"] == 240
+    assert day_240["effective_content_sha256"] == day_241["effective_content_sha256"]
+
+
+def test_artifact_ready_minute_excludes_only_frozen_pit_outside_stock_days(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    prior = DAY - timedelta(days=1)
+    prior_rows = [
+        {**row, "trade_time": str(row["trade_time"]).replace(DAY.isoformat(), prior.isoformat())}
+        for row in _minute_rows()
+    ]
+    cas, view, snapshot = _fixture(
+        dataset_profile,
+        tmp_path,
+        minute_rows=[*prior_rows, *_minute_rows()],
+    )
+    descriptor = view.values["kline_minute_raw"][0]
+    old_identity = f"kline_minute_raw:{descriptor['partition_key']}"
+    bucket = int(str(descriptor["partition_key"]).rsplit("-", 1)[1])
+    descriptor["partition_key"] = f"{prior.isoformat()}_{DAY.isoformat()}_bucket-{bucket:04d}"
+    descriptor["row_count"] = 480
+    view.rows[f"kline_minute_raw:{descriptor['partition_key']}"] = view.rows.pop(old_identity)
+    builder = ArtifactReadySourceBuilder(
+        dataset_profile,
+        cas,
+        fetch_tdx_rows=lambda *_args: (_ for _ in ()).throw(AssertionError("provider must not run")),
+        fetch_tushare_minute_rows=lambda *_args: (_ for _ in ()).throw(AssertionError("provider must not run")),
+    )
+
+    entries, _provider, _derived, summary = builder._minute_entries(
+        view,
+        snapshot=snapshot,
+        trading_dates=(prior, DAY),
+        suspended=frozenset(),
+        checkpoint=lambda: None,
+    )
+
+    receipt = cas.get_json(entries[0]["rows_ref"])
+    assert receipt["summary"]["pit_excluded_stock_days"] == 1
+    assert receipt["summary"]["pit_excluded_rows"] == 240
+    assert summary["expected_days"] == 1
+    assert summary["pit_excluded_stock_days"] == 1
+    assert summary["pit_excluded_rows"] == 240
+
+
+@pytest.mark.parametrize(
+    ("raw_code", "raw_day", "pattern"),
+    [
+        ("600000.SH", DAY, "bucket"),
+        (CODE, DAY - timedelta(days=1), "trading calendar"),
+    ],
+)
+def test_minute_scope_exclusion_rejects_wrong_bucket_and_nontrading_rows(
+    dataset_profile,
+    tmp_path,
+    raw_code,
+    raw_day,
+    pattern,
+) -> None:
+    cas, view, _snapshot = _fixture(dataset_profile, tmp_path, minute_rows=_minute_rows())
+    descriptor = view.values["kline_minute_raw"][0]
+    identity = f"kline_minute_raw:{descriptor['partition_key']}"
+    view.rows[identity] = [
+        {
+            **row,
+            "ts_code": raw_code,
+            "trade_time": str(row["trade_time"]).replace(DAY.isoformat(), raw_day.isoformat()),
+        }
+        for row in _minute_rows()
+    ]
+    builder = ArtifactReadySourceBuilder(dataset_profile, cas)
+    total = {
+        "expected_days": 0,
+        "database_complete": 0,
+        "provider_filled": 0,
+        "suspended_full_day": 0,
+        "pit_excluded_stock_days": 0,
+        "pit_excluded_rows": 0,
+    }
+
+    with pytest.raises(ArtifactReadyCoverageIncomplete, match=pattern):
+        builder._scan_minute_database_partition(
+            view,
+            descriptor,
+            expected=(),
+            suspended=frozenset(),
+            total=total,
+            derived_refs=[],
+            allowed_codes=frozenset({CODE}),
+            trading_dates=frozenset({DAY}),
+            partition_start=DAY - timedelta(days=1),
+            partition_end=DAY,
+        )
+
+
 def test_failed_tdx_falls_back_to_tushare_without_leaking_error_text(
     dataset_profile,
     tmp_path,
@@ -1550,10 +1690,16 @@ def test_recheck_allows_db_to_absorb_identical_overlay_but_blocks_conflict(
     assert calls == ["tdx"]
 
 
+@pytest.mark.parametrize(
+    ("observation_offset", "expected_limit"),
+    [(30, 31 * 240), (200, artifact_ready_module.MAX_TDX_WINDOW_BARS)],
+)
 def test_fixed_loopback_tdx_kline_envelope_and_rfc3339_time(
     dataset_profile,
     tmp_path,
     monkeypatch,
+    observation_offset,
+    expected_limit,
 ) -> None:
     cas, _view, _snapshot = _fixture(
         dataset_profile,
@@ -1569,6 +1715,15 @@ def test_fixed_loopback_tdx_kline_envelope_and_rfc3339_time(
             "list": [
                 {
                     "Time": "2026-07-31T09:31:00+08:00",
+                    "Open": 10_000,
+                    "High": 11_000,
+                    "Low": 9_000,
+                    "Close": 10_500,
+                    "Volume": 100,
+                    "Amount": 100_000,
+                },
+                {
+                    "Time": "2026-08-01T09:31:00+08:00",
                     "Open": 10_000,
                     "High": 11_000,
                     "Low": 9_000,
@@ -1607,6 +1762,11 @@ def test_fixed_loopback_tdx_kline_envelope_and_rfc3339_time(
     import requests
 
     monkeypatch.setattr(requests, "Session", _Session)
+    monkeypatch.setattr(
+        artifact_ready_module,
+        "_tdx_observation_date",
+        lambda: DAY + timedelta(days=observation_offset),
+    )
     builder = ArtifactReadySourceBuilder(dataset_profile, cas)
 
     rows = builder._fetch_tdx_rows(CODE, DAY, DAY)
@@ -1616,7 +1776,7 @@ def test_fixed_loopback_tdx_kline_envelope_and_rfc3339_time(
     assert captured["kwargs"]["params"] == {
         "code": "000001",
         "type": "minute1",
-        "limit": 240,
+        "limit": expected_limit,
     }
     assert captured["trust_env"] is False and captured["closed"] is True
 
