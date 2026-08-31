@@ -709,6 +709,20 @@ def test_pg_pool_source_and_regression_select_shared_platform_backend_session(tm
     assert payload["unmapped_code_files"] == []
 
 
+def test_aistock_mcp_server_test_uses_direct_workflow_target(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/tests/test_aistock_mcp_server.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
+    assert payload["workflow_test_targets"] == ["backend/tests/test_aistock_mcp_server.py"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
     payload = classifier.classify_changed_files(
         [
