@@ -176,6 +176,7 @@ modules:
     risk_level: critical
     description: Internal LocalSIM account, immutable release binding, retained-account lineage, replay cursor, safe-boundary transition, and additive schema authority.
     description_zh: LocalSIM 内部账户、不可变 release binding、保留账户 lineage、回放游标、安全边界切换与新增 schema 权威。
+    ui_routes: [/simulation/localsim]
     test_plans:
       required_on_change: [l0, simulation_core_l2, localsim_successor_core_dev_db]
   - module_id: simulation.layer_foundation
@@ -193,7 +194,7 @@ modules:
     risk_level: critical
     description: Paper Trading v2 portfolios, sessions, day runner, ledger, and replay.
     description_zh: 覆盖 Paper Trading v2 的组合、交易会话、日内执行、账本、回放和未来准实盘模拟链路。
-    ui_routes: [/paper-v2, /paper-v2/packages, /paper-v2/selection, /paper-v2/portfolios, /paper-v2/model-hmm]
+    ui_routes: [/paper-v2/packages, /paper-v2/selection, /paper-v2/model-hmm]
     api_routes: [/api/v1/paper-v2/*]
     test_plans:
       required_on_change: [l0, paper_v2_backend]
