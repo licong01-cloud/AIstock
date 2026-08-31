@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     ".github/workflows/nightly.yml",
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "scripts/ci_workflow_policy_scan.py",
     "tests/aistock_validation/bugs/20260831_BUG-1269-nightly-receipt-history-parsing-collapses-run-ids-and-delays-l3-behind-d.json"
   ],
   "assigned_agent": null,
@@ -85,12 +87,16 @@
     },
     "planned_files": [
       ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "scripts/ci_workflow_policy_scan.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "scripts/ci_workflow_policy_scan.py"
     ]
   },
   "first_seen_at": "2026-08-31T02:56:45.832200Z",
