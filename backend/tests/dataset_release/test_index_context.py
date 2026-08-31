@@ -72,3 +72,81 @@ def test_provider_database_overlap_conflict_fails_closed() -> None:
         "close",
         "pre_close",
     }
+
+
+def test_provider_database_overlap_accepts_canonical_historical_unit_precision() -> None:
+    database = [_row("2025-11-03", 3915.6648, code="399102.SZ")]
+    database[0]["vol"] = 208_981_990.0
+    database[0]["amount"] = 535_801_515.3
+    provider = [_row("2025-11-03", 3915.6648, code="399102.SZ")]
+    provider[0]["vol"] = 208_981_990.89
+    provider[0]["amount"] = 535_801_515.31351
+
+    merged, stats = merge_index_rows_missing_only(database, provider)
+
+    assert merged == [
+        {
+            **database[0],
+            "trade_date": date(2025, 11, 3),
+        }
+    ]
+    assert stats["overlap_rows_verified"] == 1
+    assert stats["overlap_comparison_contract"] == "index_source_unit_equivalence_v1"
+    assert stats["overlap_max_abs_delta_by_field"] == {
+        "amount": "0.01351",
+        "vol": "0.89",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "database_value", "provider_value"),
+    [
+        ("vol", 208_981_990.0, 208_981_991.0),
+        ("amount", 535_801_515.3, 535_801_515.36),
+    ],
+)
+def test_provider_database_overlap_material_unit_difference_fails_closed(
+    field: str,
+    database_value: float,
+    provider_value: float,
+) -> None:
+    database = [_row("2025-11-03", 3915.6648, code="399102.SZ")]
+    provider = [_row("2025-11-03", 3915.6648, code="399102.SZ")]
+    database[0][field] = database_value
+    provider[0][field] = provider_value
+
+    with pytest.raises(IndexOverlapConflict) as captured:
+        merge_index_rows_missing_only(database, provider)
+
+    assert captured.value.context["conflict_count"] == 1
+    assert captured.value.context["comparison_contract"] == "index_source_unit_equivalence_v1"
+    assert captured.value.context["samples"][0]["field"] == field
+
+
+@pytest.mark.parametrize(
+    ("field", "database_value", "provider_value"),
+    [
+        ("vol", 208_981_990.89, 208_981_990.01),
+        ("amount", 535_801_515.31351, 535_801_515.34999),
+    ],
+)
+def test_provider_database_overlap_does_not_quantize_precise_database_values(
+    field: str,
+    database_value: float,
+    provider_value: float,
+) -> None:
+    database = [_row("2025-11-03", 3915.6648, code="399102.SZ")]
+    provider = [_row("2025-11-03", 3915.6648, code="399102.SZ")]
+    database[0][field] = database_value
+    provider[0][field] = provider_value
+
+    with pytest.raises(IndexOverlapConflict) as captured:
+        merge_index_rows_missing_only(database, provider)
+
+    assert captured.value.context["samples"][0]["field"] == field
+
+
+@pytest.mark.parametrize("abs_tolerance", [-1.0, float("inf"), float("nan")])
+def test_provider_database_overlap_rejects_invalid_point_tolerance(abs_tolerance: float) -> None:
+    with pytest.raises(IndexContractError, match="finite and non-negative"):
+        merge_index_rows_missing_only([], [], abs_tolerance=abs_tolerance)

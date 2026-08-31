@@ -2229,6 +2229,10 @@ def test_index_provider_runs_only_for_missing_code_and_overlay_is_immutable(
     receipt = cas.get_json(merged["rows_ref"])
     assert len(receipt["rows"]) == len(DOMESTIC_INDEX_DEFINITIONS)
     assert receipt["details"][missing]["provider_fill_rows"] == 1
+    assert (
+        receipt["details"][missing]["overlap_comparison_contract"]
+        == "index_source_unit_equivalence_v1"
+    )
 
 
 def test_index_provider_transport_failure_is_retryable_waiting(

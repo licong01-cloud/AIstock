@@ -1,0 +1,278 @@
+{
+  "actual": "The common absolute 1e-8 tolerance rejects 57 non-semantic cells and blocks the candidate-only monthly release before build.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/index_contract.py",
+    "backend/tests/dataset_release/test_index_context.py",
+    "backend/tests/dataset_release/test_artifact_ready_source.py",
+    "tests/aistock_validation/bugs/20260831_BUG-1272-index-provider-overlap-rejects-canonical-historical-vol-and-amount-preci.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1272",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-31T05:13:02.130921Z",
+  "description": "The common absolute 1e-8 tolerance rejects 57 non-semantic cells and blocks the candidate-only monthly release before build.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260831-df19242d2e72",
+      "timestamp": "2026-08-31T05:13:02.130902Z"
+    },
+    {
+      "action": "correct_provisional_runtime_contract_after_catalog_fix",
+      "actor": "Codex",
+      "note": "BUG-1275 / PR #4046 registered index_contract.py as an exact worker-scheduler source and dataset_release_worker_heartbeat probe input; replace the stale provisional backend-main plan before final changed-file inference.",
+      "timestamp": "2026-08-31T06:46:12.6151251Z"
+    }
+  ],
+  "evidence_uris": [
+    "submission=dss_7772ecb990cd2211cd85665c9a04bc78; attempt=dsra_6fae6239aff04d89834b5d11588af8fb-6; provider_snapshot_sha256=9dafeff327fd9f783e15f98a1ed932b21430348a1322ba74c0d059830a22b602"
+  ],
+  "expected": "Database-authoritative overlap accepts only field-unit-equivalent historical vol/amount representations, preserves strict price/return conflict detection, records the comparison contract, and still fails closed for material differences.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/index_contract.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_index_context.py",
+      "tests/aistock_validation/bugs/20260831_BUG-1272-index-provider-overlap-rejects-canonical-historical-vol-and-amount-preci.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/index_contract.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_index_context.py",
+      "tests/aistock_validation/bugs/20260831_BUG-1272-index-provider-overlap-rejects-canonical-historical-vol-and-amount-preci.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/index_contract.py",
+        "backend/tests/dataset_release/test_index_context.py",
+        "backend/tests/dataset_release/test_artifact_ready_source.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/index_contract.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_index_context.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_artifact_ready_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/index_contract.py",
+        "backend/tests/dataset_release/test_index_context.py",
+        "backend/tests/dataset_release/test_artifact_ready_source.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/index_contract.py",
+      "backend/tests/dataset_release/test_index_context.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/index_contract.py",
+      "backend/tests/dataset_release/test_index_context.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py"
+    ]
+  },
+  "first_seen_at": "2026-08-31T05:13:02.130921Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4038,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4038",
+  "last_seen_at": "2026-08-31T05:13:02.130921Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_index_context.py -q",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "BUG1272_FINAL_OK loaded task-worktree index_contract; read-only 399102 replay database=29 provider=63 merged=63 provider_fill=34 mismatch=0 database_writes=0"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Index provider overlap rejects canonical historical vol and amount precision",
+  "trigger_condition": {
+    "fingerprint": "df19242d2e72b28eb1b52888",
+    "source_event_id": "FE-20260831-df19242d2e72"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
