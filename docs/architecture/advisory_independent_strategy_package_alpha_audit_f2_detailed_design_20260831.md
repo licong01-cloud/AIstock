@@ -1,8 +1,8 @@
-# AIstock Advisory 独立 StrategyPackage 同窗 Alpha 审计 F2 详细设计 v1.1
+# AIstock Advisory 独立 StrategyPackage 同窗 Alpha 审计 F2 详细设计 v1.2
 
 - 日期：2026-08-31
 - Feature tier：F2
-- 当前状态：`DESIGN_ACCEPTED_IMPLEMENTATION_PENDING`
+- 当前状态：`DESIGN_ACCEPTED_IMPLEMENTATION_IN_PROGRESS`
 - 业务归属：Selection Center / Advisory / StrategyPackage / QE Research
 - 目标合同：`ALPHA_RANKING`
 - 研究类型：`ORACLE_DIAGNOSTIC`
@@ -18,9 +18,10 @@
    - `pkg_5a5ccb56ea5c4e3daaf6d836c8edfc27`：`PAPER_ENABLED`，57 因子，LGB；
    - `pkg_b668f8a633c44b72a5d557a2cb8970e3`：`SELECTION_ENABLED`，50 因子，LGB。
 4. 三包均已通过 `2026-02-02` frozen package-owned CAS 单日推理可产性验证，有限 score 数分别为 1,210、1,210、1,475；该事实只证明“冻结模型可推理”，不是同窗 Alpha 证据。
-5. 前两包的有序 `(factor_name, factor asset sha256)` 闭包完全相同，closure hash 为 `977c29e8e328d393bd8235821070e19a96bb23ef0434430c5437621261fb542c`；第三包闭包为 `f19cf6214cb0d38f75736550698916097b99c2ac1ddd28dc28e7a464558663a4`。因此正式运行严格只有两个 factor batch，模型仍按包分别加载一次。
+5. 前两包的有序 `(factor_name, factor asset sha256)` 闭包完全相同，closure hash 为 `977c29e8e328d393bd8235821070e19a96bb23ef0434430c5437621261fb542c`；第三包闭包为 `f19cf6214cb0d38f75736550698916097b99c2ac1ddd28dc28e7a464558663a4`。因此每个决策日只执行两个 exact closure，前两包共享同日 feature matrix，模型仍按包分别加载一次。
 6. 三包原生 label、回测窗口、执行策略、成本与候选池不同。原生 Sharpe、年化收益和 RankIC 只能作 inventory，不得替代共同 N1 window/PIT/H20/cost 结果。
 7. 本任务消费已用过的 development window，只作导航诊断；不读取 sealed holdout、不训练或调参、不改变 Selection、StrategyPackage、Advisory、Paper 或生产运行时。
+8. 实现期 package-owned 源码审核确认三包均包含按 `datetime` 横截面 rank/z-score/波动聚合的因子。把 386 日 instrument union 一次性计算后再做每日 PIT 过滤，会改变这些因子的横截面支持集，不能与“在历史 T 按 T 的 canonical PIT 股票池运行单日业务逻辑”等价。v1.2 因此冻结为一次区间读取、单进程内 386 个 PIT 日批处理、每个 T 两个 closure；禁止退回 union-wide factor matrix。
 
 ## 2. Goal and scope
 
@@ -32,7 +33,7 @@
    - `PKG_5A5CCB`：`pkg_5a5ccb56ea5c4e3daaf6d836c8edfc27`；
    - `PKG_B668F8`：`pkg_b668f8a633c44b72a5d557a2cb8970e3`。
 2. 按上述旧包顺序，从 package-owned CAS 冻结 manifest、模型、模型代码和因子代码；不回退旧 QE workspace、source id、网络节点或缓存模型。
-3. 一次读取完整历史行情/基本面/资金流/行业区间；按两个 exact factor closure 执行两个主批次因子计算；每个模型只反序列化一次并对完整 386 日矩阵批量预测。固定 prefix/isolated 诊断复用同一内存输入和已加载模型，单独计数，不冒充主批次或逐日推理。
+3. 一次读取完整历史行情/基本面/资金流/行业区间；在同一个 WSL 进程中按 386 个 T 的 frozen PIT 股票池切分已读内存 panel，每个 T 执行两个 exact factor closure，共 772 次 primary closure evaluation；前两包共享同日 closure matrix，每个模型只反序列化一次。它是一次批量任务，不创建逐日进程、DB 查询、workspace 或模型加载。固定 future-poison/isolated 诊断复用同一内存输入和已加载模型，单独计数。
 4. 为三个旧包发布 task-local、content-addressed Prediction Store artifact；每个 artifact 独立报告日期、PIT、有效 score、缺失特征和 source receipt。
 5. 复用 N1 canonical PIT、full-universe H20 outcome、benchmark、停牌/涨跌停、成本与容量折损，比较每个 arm 自身覆盖下的 signal、Top5、Top20/40/50 winner recall 与 oracle headroom。
 6. 所有 arm 同时报告自身 universe 指标；pairwise score/RankIC 只在对应两臂共同 instrument-date 上计算。禁止用四臂总 intersection 掩盖旧包约 1,200 至 1,500 只股票的覆盖瓶颈。
@@ -63,7 +64,8 @@ N0 window + N1 request/bundle + N2-A formal bundle
           +--------------+----------------+
           |                               |
   factor closure 977c...          factor closure f19c...
-  one full-window run              one full-window run
+  one run per PIT day              one run per PIT day
+  386 runs, same process           386 runs, same process
           |                               |
   model load once: pkg378          model load once: pkgb668
   model load once: pkg5a5
@@ -71,7 +73,7 @@ N0 window + N1 request/bundle + N2-A formal bundle
                           |
         three content-addressed Prediction Store artifacts
                           |
-      per-day canonical PIT filter + exact Top50 per package
+      PIT-bound input/readback + exact Top50 per package
                           |
  CURRENT_IC_PARENT from immutable N2-A + three package arms
                           |
@@ -127,22 +129,22 @@ QEExperimentRuntimeAssetResolver.prepare_workspace(...)
 
 ## 6. Batch prediction contract
 
-### 6.1 One interval read, two factor batches, three model loads
+### 6.1 One interval read, exact PIT-day factor batches, three model loads
 
 1. 从 frozen PIT spans 得到 386 日所需 instrument union；从 trading calendar 将最早决策日向前扩展 `max_required_window + 5` 个交易日。
-2. 在 WSL `rdagent-gpu` 中，对 union 和完整区间各执行一次：
+2. 在 WSL `rdagent-gpu` 中，对 union 和完整区间各执行一次只读来源加载：
    - 日线 OHLCVA/factor read；
    - 基本面、资金流与行业 read。
 3. 外部行情 fallback、Tushare fallback、Selection data cache、逐日 DB query 均关闭；receipt 记录 query contract、范围、row count 与内容 hash。
 4. 基本面/资金流/行业宽表只写一份 canonical static H5；`daily_basic.h5`、`moneyflow.h5`、`sector_data.h5`、`bak_basic.h5`、`cyq_perf.h5`、`margin_detail.h5` 必须是同卷 hard-link alias，不得复制六份相同宽表。hard link 不可建立时 typed 失败，不退化为静默复制。
-5. 对 exact factor closure `977c...` 和 `f19c...` 各运行一次完整区间 factor graph；前两包共享 factor matrix 只因资产闭包精确相同。每个 factor result 读取后立即并入有序矩阵并释放临时文件，不同时保留 57 份重复索引 DataFrame。
-6. 每个 package model 只调用一次 `load_model_from_pkl`，对其完整 feature matrix 一次/有限内存 chunk 批量 `predict`；chunk 只切矩阵，不重新加载模型或读取来源。
-7. 正式 receipt 必须满足：`market_interval_read_count=1`、`static_interval_read_count=1`、`static_h5_physical_file_count=1`、`static_h5_hardlink_alias_count=6`、`primary_factor_group_run_count=2`、`diagnostic_factor_group_run_count=6`（2 个 closure × 3 个固定 anchor）、`factor_group_total_run_count=8`、每包 `model_load_count=1`、`daily_wsl_process_count=0`、`daily_db_query_count=0`。诊断重算只切已读内存 panel，不再次访问 DB、CAS 或加载模型。
+5. 对每个 decision T，先按该日 canonical PIT member set 从已读 panel 切出截至 T 的同一批历史输入，再运行 exact factor closure `977c...` 和 `f19c...`；前两包共享同日 factor matrix 只因资产闭包精确相同。完整窗口固定为 `386 × 2 = 772` 次 primary closure evaluation。每个 factor result 读取后立即并入当日有序矩阵并释放临时文件，不同时保留 57 份重复索引 DataFrame，也不得先在 union 上算横截面因子后再过滤。
+6. 每个 package model 只调用一次 `load_model_from_pkl`；模型对象跨 386 日复用，每日矩阵使用同一冻结 infer processor 和 `predict`，不重新加载模型、来源、CAS 或 workspace。
+7. 正式 receipt 必须满足：`market_interval_read_count=1`、`static_interval_read_count=1`、单次计算峰值 `static_h5_physical_file_count=1` 与 `static_h5_hardlink_alias_count=6`、`primary_decision_batch_count=386`、`primary_factor_group_run_count_per_decision=2`、`primary_factor_group_run_count=772`、`diagnostic_factor_group_run_count=6`、`factor_group_total_run_count=778`、每包 `model_load_count=1`、`daily_wsl_process_count=0`、`daily_db_query_count=0`。诊断重算只切已读内存 panel，不再次访问 DB、CAS 或加载模型。
 
 ### 6.2 PIT and missing-data semantics
 
 - score 日期为 decision T；完整输入最大日期不得超过 `2026-02-02`，outcome 只在排名完成后读取至 `2026-03-10`。
-- batch factor/prediction 先生成冻结模型原始 score，再按 canonical PIT span 在每个 T 过滤；上市不足 252 个交易日、ST/退市状态遵循 N1 snapshot。
+- 每个 T 必须先按 canonical PIT span 冻结 factor 输入股票池，再生成冻结模型原始 score；score 输出再做同一 PIT key readback。上市不足 252 个交易日、ST/退市状态遵循 N1 snapshot。禁止 union-wide 横截面计算后置过滤。
 - 每日记录 PIT member count、feature input count、finite score count、dropped row count、invalid feature columns/count 与 Top50 status。
 - 缺失特征不得填 0、均值或跨包 score；保留 `UNSCORABLE_FEATURE_MISSING` coverage。某只股票缺失不阻断整个日期；某日少于 50 个 finite score 则该 arm 当日 `DATA_UNAVAILABLE`，不得用其他包补位。
 - 停牌、一字涨跌停、行情缺失和退出不可执行仍由 N1 full-universe outcome typed status 处理，不删除股票或中断全任务。
@@ -151,10 +153,10 @@ QEExperimentRuntimeAssetResolver.prepare_workspace(...)
 
 未来泄漏与批量语义使用同一个已加载模型检查：
 
-1. full-window run 对三个固定 anchor 留存 score/rank；
-2. 对每个 factor closure 分别以数据截断到 anchor 的 prefix 重算，禁止读取 anchor 后任何行；三个 anchor 合计形成每个 closure 三次有界诊断重算，不产生新的研究 arm/trial；
-3. full 与 prefix 的 instrument key 必须相同，Top50 顺序必须精确相同，标准化 score `max_abs_delta <= 1e-6`；
-4. `2026-02-02` 另使用该日 frozen PIT instrument set 做 isolated end-date recomputation，要求 Top50 exact parity、Spearman `>=0.999999`；
+1. primary PIT-day batch 对三个固定 anchor 留存 score/rank；
+2. 对前两个 anchor，使用相同 anchor PIT 股票池但向输入注入 anchor 后已读行做 future-poison 重算；primary 与 poisoned 结果必须保持 instrument key、Top50 和标准化 score parity。若 factor 偷看未来行即失败；
+3. 三个 anchor 合计形成每个 closure 三次有界诊断重算，不产生新的研究 arm/trial；前两个是 future-poison，`2026-02-02` 是 isolated end-date exact retry；
+4. `2026-02-02` 使用该日 frozen PIT instrument set 重算，要求 Top50 exact parity、Spearman `>=0.999999`；
 5. 任何 anchor 失败即 `ADVISORY_PACKAGE_BATCH_FUTURE_DEPENDENCY_DETECTED` 或 `ADVISORY_PACKAGE_BATCH_LIVE_PARITY_FAILED`，不得发布 Prediction Store 或 Alpha 结果。
 
 静态扫描同时拒绝本批次 factor closure 中明确的 future operator，例如负 shift、centered rolling、反向切片后前向填充等；扫描是输入校验，不替代 prefix poison test。
@@ -327,7 +329,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 
 ### 12.2 Batch / causality / PIT
 
-- fake loader 证明一次 market/static read、两个 primary factor group、六次固定诊断重算、每包一次 model load、零逐日 WSL/DB；
+- fake loader 证明一次 market/static read、386 个 PIT 日 × 两个 primary closure、六次固定诊断重算、每包一次 model load、零逐日 WSL process/DB query/workspace rebuild；
 - 相同 factor count 但不同 asset hash 不得共享；相同 closure 必须共享；
 - 三个固定 anchor 的 full/prefix poison 正负测试；
 - isolated end-date exact Top50 与 score tolerance 正负测试；
@@ -357,7 +359,7 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 | F-221 | 固定当前父包与三条未退役独立旧包；顺序、状态、manifest 与 closure 预冻结，RETIRED 禁入 |
 | F-222 | N0/N1/N2-A/window/PIT/policy/outcome identity 全量绑定，sealed-first fail closed |
 | F-223 | package-owned CAS-only workspace，不回退 QE source、node、worker workspace 或缓存模型 |
-| F-224 | 一次完整区间 market/static read、两个 exact primary factor batch、六次固定内存诊断重算、每包模型只加载一次，零逐日 WSL/DB |
+| F-224 | 一次完整区间 market/static read；单进程内 386 个 PIT 日 × 两个 exact closure；六次固定内存诊断重算；每包模型只加载一次；零逐日 WSL process/DB query/workspace rebuild |
 | F-225 | 三个固定 prefix poison anchor 与 isolated end-date parity 阻止 batch future leakage/语义漂移 |
 | F-226 | Prediction Store artifact 为 386 日、PIT-valid、finite、唯一键且 content-addressed |
 | F-227 | 缺失特征、低覆盖、停牌、涨跌停、行情缺失保留 typed coverage/outcome，不填值、不补包 |
@@ -399,11 +401,11 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 | 原生指标口径混入 | 虚假 package 排名 | 只用共同 N1 window/PIT/H20/cost；原生指标标记不可比 |
 | 四臂 intersection 过窄 | 隐藏旧包覆盖不足 | own-universe 为主，pairwise common 单列报告 |
 | 批量一次看到未来行 | 因子未来泄漏 | 固定 prefix poison + future operator scan + outcome poison |
-| union universe 改变单日语义 | batch/live 漂移 | isolated end-date PIT parity；失败不发布 |
+| union universe 改变横截面因子单日语义 | batch/live 漂移和伪 Alpha | 每个 T 先切 T 的 PIT 股票池再算两个 closure；禁止 union-wide factor matrix；三 anchor future-poison/isolated parity |
 | 相同因子数被错误复用 | 信号身份串包 | 仅 exact ordered factor asset closure 相同才共享 |
 | package source 已失效 | 偷偷回退旧 QE workspace | package-owned CAS-only；所有 fallback 禁止 |
 | 缺失特征被静默填充 | 虚高覆盖与收益 | 不填值，typed dropped coverage，Top50 不足当日 unavailable |
-| 386×3 退化为逐日推理 | 超时且重复 DB | receipt 固定一次区间读、两个 primary factor group、每包一次模型加载 |
+| 386 日退化为 386 个独立任务 | 超时且重复 DB/进程/模型/workspace | 单个 batch 进程、一次区间读、三模型各加载一次；仅 PIT-day factor evaluation 为按日，因为横截面业务语义要求如此；8 小时 wall fail closed |
 | static 宽表复制成六份 H5 | 磁盘膨胀与无谓写入 | 一份 physical H5 + 六个同卷 hard link；temp peak 32GB fail closed |
 | 诊断变成 winner 选择 | 多重检验与方向漂移 | 0 trial、navigation only、不选权重/包、不进 sealed |
 | artifacts 变成新平台 | 延误模型演进 | task-local store + 一个 CLI + JSON/Parquet；无 DB/UI/scheduler |
