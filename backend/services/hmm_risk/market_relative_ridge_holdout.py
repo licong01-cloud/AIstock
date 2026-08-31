@@ -46,16 +46,6 @@ from backend.services.hmm_risk.market_relative_ridge_candidate import (
     P2_3C_MARKET_COMPONENT_SCHEMA_VERSION,
     P2_3C_REPORT_SCHEMA_VERSION,
     P2_3C_COMPONENT_SCHEMA_VERSION,
-    RL1_ALGORITHM_VERSION,
-    RL1_CANDIDATE_PAYLOAD_KEYS as HR1_REPLAY_PAYLOAD_KEYS,
-    RL1_DEVELOPMENT_END,
-    RL1_HOLDOUT_END,
-    RL1_HOLDOUT_START,
-    RL1_MARKET_COMPONENT_SCHEMA_VERSION,
-    RL1_MEDIAN_RANK_IC_MINIMUM,
-    RL1_MEDIAN_SPREAD_MINIMUM,
-    RL1_NEWEY_WEST_LAG,
-    RL1_NEWEY_WEST_T_MINIMUM,
     RidgeFit,
     STATE_FRACTION,
     STATE_TIE_TOLERANCE,
@@ -69,9 +59,53 @@ from backend.services.hmm_risk.state_model_set import canonical_json_bytes, cano
 # intentionally uses new replay schemas in the candidate module; importing its
 # live constants must not reinterpret already-written candidate/holdout files.
 RL1_CONTRACT_VERSION = "C-012-RL1-D1-D6"
+RL1_ALGORITHM_VERSION = "hmm_risk_rotation_l1_market_conditioned_ridge_v1"
 RL1_REPORT_SCHEMA_VERSION = "hmm_risk_rotation_l1_candidate_report_v1"
 RL1_COMPONENT_SCHEMA_VERSION = "hmm_risk_rotation_l1_component_model_v1"
-RL1_CANDIDATE_PAYLOAD_KEYS = frozenset(HR1_REPLAY_PAYLOAD_KEYS - {"replay_coverage"})
+RL1_MARKET_COMPONENT_SCHEMA_VERSION = "hmm_risk_rotation_l1_market_component_v1"
+RL1_DEVELOPMENT_END = date(2026, 3, 31)
+RL1_HOLDOUT_START = date(2026, 4, 1)
+RL1_HOLDOUT_END = date(2026, 9, 30)
+RL1_MEDIAN_RANK_IC_MINIMUM = 0.02
+RL1_MEDIAN_SPREAD_MINIMUM = 0.003
+RL1_NEWEY_WEST_LAG = 9
+RL1_NEWEY_WEST_T_MINIMUM = 1.645
+RL1_CANDIDATE_PAYLOAD_KEYS = frozenset(
+    {
+        "contract_version",
+        "algorithm_version",
+        "model_origin",
+        "producer_commit",
+        "runtime_versions",
+        "request_identity",
+        "request_identity_sha256",
+        "dataset_manifest_sha256",
+        "mapping_manifest_sha256",
+        "c010_formal_evidence",
+        "database_identity",
+        "development_start",
+        "development_end",
+        "development_trading_day_count",
+        "folds",
+        "fold_receipt_sha256s",
+        "development_acceptance",
+        "market",
+        "rotation_L1",
+        "capabilities",
+        "process_fit_count",
+        "fit_attempts",
+        "fit_attempts_sha256",
+        "selection_performed",
+        "parameter_search_performed",
+        "holdout_accessed",
+        "product_acceptance_performed",
+        "model_write",
+        "bundle_write",
+        "ready_write",
+        "database_write",
+        "runtime_action",
+    }
+)
 
 CONTRACT_VERSION = "C-011-P2-4-D1-D6"
 ALGORITHM_VERSION = "hmm_risk_market_conditioned_ridge_holdout_v1"

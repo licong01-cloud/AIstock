@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass
 from datetime import date
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Any, Iterable, Mapping, Sequence
 
 from .canonical import digest_named_fields
@@ -97,6 +98,32 @@ INDEX_SOURCE_VALUE_FIELDS: tuple[str, ...] = (
     "amount",
 )
 
+INDEX_OVERLAP_COMPARISON_CONTRACT: Mapping[str, Any] = {
+    "contract_id": "index_source_unit_equivalence_v1",
+    "point_and_return_fields": {
+        "fields": ("open", "high", "low", "close", "pre_close", "pct_chg"),
+        "comparison": "absolute_tolerance",
+        "default_abs_tolerance": 1e-8,
+    },
+    "vol": {
+        "source_unit": "hand",
+        "comparison": "database_precision_guarded_provider_quantize",
+        "quantum": "1",
+        "rounding": "ROUND_DOWN",
+    },
+    "amount": {
+        "source_unit": "thousand_cny",
+        "comparison": "database_precision_guarded_provider_quantize",
+        "quantum": "0.1",
+        "rounding": "ROUND_HALF_UP",
+    },
+}
+
+_INDEX_OVERLAP_DECIMAL_RULES = {
+    "vol": (Decimal("1"), ROUND_DOWN),
+    "amount": (Decimal("0.1"), ROUND_HALF_UP),
+}
+
 
 def parse_index_definitions(rows: Sequence[Mapping[str, Any]]) -> tuple[IndexDefinition, ...]:
     output: list[IndexDefinition] = []
@@ -155,6 +182,28 @@ def index_contract_digest() -> str:
     return digest_named_fields("dataset_release_index_contract_v1", index_contract_payload())
 
 
+def _decimal_source_value(value: float) -> Decimal:
+    return Decimal(str(value))
+
+
+def _overlap_values_equivalent(
+    field: str,
+    left: float,
+    right: float,
+    *,
+    point_abs_tolerance: float,
+) -> bool:
+    decimal_rule = _INDEX_OVERLAP_DECIMAL_RULES.get(field)
+    if decimal_rule is None:
+        return math.isclose(left, right, rel_tol=0.0, abs_tol=point_abs_tolerance)
+    quantum, rounding = decimal_rule
+    database_value = _decimal_source_value(left)
+    canonical_database_value = database_value.quantize(quantum, rounding=rounding)
+    if database_value != canonical_database_value:
+        return math.isclose(left, right, rel_tol=0.0, abs_tol=point_abs_tolerance)
+    return canonical_database_value == _decimal_source_value(right).quantize(quantum, rounding=rounding)
+
+
 def _normalize_index_rows(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -194,13 +243,24 @@ def merge_index_rows_missing_only(
 
     database = _normalize_index_rows(database_rows, source="database")
     provider = _normalize_index_rows(provider_rows, source="provider")
+    point_abs_tolerance = float(abs_tolerance)
+    if not math.isfinite(point_abs_tolerance) or point_abs_tolerance < 0.0:
+        raise IndexContractError("index overlap point tolerance must be finite and non-negative")
     overlap = sorted(set(database).intersection(provider))
     conflicts: list[dict[str, Any]] = []
+    max_abs_delta_by_field = {field: Decimal("0") for field in INDEX_SOURCE_VALUE_FIELDS}
     for key in overlap:
         for field in INDEX_SOURCE_VALUE_FIELDS:
             left = float(database[key][field])
             right = float(provider[key][field])
-            if not math.isclose(left, right, rel_tol=0.0, abs_tol=float(abs_tolerance)):
+            decimal_delta = abs(_decimal_source_value(left) - _decimal_source_value(right))
+            max_abs_delta_by_field[field] = max(max_abs_delta_by_field[field], decimal_delta)
+            if not _overlap_values_equivalent(
+                field,
+                left,
+                right,
+                point_abs_tolerance=point_abs_tolerance,
+            ):
                 conflicts.append(
                     {
                         "ts_code": key[0],
@@ -213,7 +273,12 @@ def merge_index_rows_missing_only(
     if conflicts:
         raise IndexOverlapConflict(
             "provider/database index overlap differs",
-            context={"conflict_count": len(conflicts), "samples": conflicts[:20]},
+            context={
+                "comparison_contract": INDEX_OVERLAP_COMPARISON_CONTRACT["contract_id"],
+                "point_abs_tolerance": point_abs_tolerance,
+                "conflict_count": len(conflicts),
+                "samples": conflicts[:20],
+            },
         )
     provider_only = sorted(set(provider).difference(database))
     merged = dict(database)
@@ -225,5 +290,12 @@ def merge_index_rows_missing_only(
         "overlap_rows_verified": len(overlap),
         "provider_fill_rows": len(provider_only),
         "overlap_mismatch_cells": 0,
+        "overlap_comparison_contract": INDEX_OVERLAP_COMPARISON_CONTRACT["contract_id"],
+        "overlap_point_abs_tolerance": point_abs_tolerance,
+        "overlap_max_abs_delta_by_field": {
+            field: str(max_abs_delta_by_field[field])
+            for field in INDEX_SOURCE_VALUE_FIELDS
+            if max_abs_delta_by_field[field] > 0
+        },
         "source_precedence": "database_then_provider_missing_keys_conflict_fail_v1",
     }

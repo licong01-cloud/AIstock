@@ -1632,6 +1632,26 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert stale_nightly_contract["runtime_identity_match"] == "not_required"
 
 
+def test_repository_runtime_catalog_routes_index_contract_to_dataset_release_worker() -> None:
+    root = Path(__file__).resolve().parents[3]
+    changed_file = "backend/services/dataset_release/index_contract.py"
+
+    classification = workflow._classify_runtime_impact([changed_file], root=root)
+    catalog = workflow._load_runtime_target_catalog(root)
+    worker = catalog["targets"]["worker-scheduler"]
+    heartbeat_route = next(
+        route
+        for route in worker["probe_routes"]
+        if route["route_id"] == "dataset_release_worker_heartbeat"
+    )
+
+    assert classification["runtime_impact"] == "worker_scheduler"
+    assert classification["target_ids"] == ["worker-scheduler"]
+    assert classification["runtime_files"] == [changed_file]
+    assert changed_file in worker["source_globs"]
+    assert changed_file in heartbeat_route["source_globs"]
+
+
 def test_dataset_release_migration_profile_and_plan_are_exact_worker_sources() -> None:
     changed_files = [
         "backend/services/dataset_release/profile.py",
@@ -10639,6 +10659,76 @@ def test_merge_quality_contract_blocks_when_only_ci_verdict_is_reported() -> Non
     summary = workflow._required_pr_check_summary(result)
     assert summary["passed"] == ["CI verdict"]
     assert summary["pending"] == list(workflow.MERGE_QUALITY_CHECK_CONTEXTS[1:])
+
+
+def test_close_sync_merge_quality_contract_only_requires_ci_verdict() -> None:
+    contexts = workflow._merge_quality_contexts_for_head_ref("chore/BUG-1271-close-sync-20260831")
+    result = workflow._normalize_merge_quality_check_result(
+        {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(
+                [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
+            ),
+            "stderr": "",
+        },
+        required_contexts=contexts,
+    )
+
+    assert contexts == ("CI verdict",)
+    assert result is not None
+    assert workflow._required_pr_check_summary(result) == {
+        "failed": [],
+        "pending": [],
+        "non_blocking": [],
+        "passed": ["CI verdict"],
+    }
+
+
+def test_rest_required_check_fallback_scopes_close_sync_to_ci_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {
+            "head_sha": head_sha,
+            "head_ref": "chore/BUG-1271-close-sync-20260831",
+            "base_ref": "main",
+            "url": pr_url,
+        },
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if "/branches/main/protection/required_status_checks" in args[2]:
+            payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
+        elif "/check-runs?" in args[2]:
+            payload = {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "id": 9,
+                        "name": "CI verdict",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "app": {"id": 15368},
+                    }
+                ],
+            }
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._rest_required_pr_check_result(
+        "https://github.example/pull/199",
+        expected_head=head_sha,
+        base_ref="main",
+    )
+
+    assert workflow._required_pr_check_summary(result)["passed"] == ["CI verdict"]
 
 
 def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(

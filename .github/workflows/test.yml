@@ -14,6 +14,7 @@ env:
   PYTHONIOENCODING: utf-8
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
+  AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
 
 permissions:
   contents: read
@@ -23,30 +24,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  classify-changes:
-    name: Classify changes + static gate
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 20
-    outputs:
-      backend_required: ${{ steps.classify.outputs.backend_required }}
-      backend_sessions: ${{ steps.classify.outputs.backend_sessions }}
-      dev_db_required: ${{ steps.classify.outputs.dev_db_required }}
-      dev_db_plan_keys: ${{ steps.classify.outputs.dev_db_plan_keys }}
-      runner_kind: ${{ steps.classify.outputs.runner_kind }}
-      plan_routing: ${{ steps.classify.outputs.plan_routing }}
-      environment_fingerprint_ref: ${{ steps.classify.outputs.environment_fingerprint_ref }}
-      install_forbidden: ${{ steps.classify.outputs.install_forbidden }}
-      frontend_required: ${{ steps.classify.outputs.frontend_required }}
-      frontend_test_targets: ${{ steps.classify.outputs.frontend_test_targets }}
-      go_required: ${{ steps.classify.outputs.go_required }}
-      close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
-      workflow_validation_required: ${{ steps.classify.outputs.workflow_validation_required }}
-      workflow_test_targets: ${{ steps.classify.outputs.workflow_test_targets }}
-      docs_lite_required: ${{ steps.classify.outputs.docs_lite_required }}
-      static_gate_required: ${{ steps.classify.outputs.static_gate_required }}
-      catalog_validation_required: ${{ steps.classify.outputs.catalog_validation_required }}
-      prompt_evaluation_required: ${{ steps.classify.outputs.prompt_evaluation_required }}
-      classification: ${{ steps.classify.outputs.classification }}
+  ci-verdict:
+    name: CI verdict
+    runs-on: ${{ startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-') && 'ubuntu-latest' || fromJSON('["self-hosted","Windows","aistock-ci"]') }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
         with:
@@ -63,6 +44,7 @@ jobs:
             --base-ref "${BASE_REF}" --base-sha "${BASE_SHA}" --checkout-ref "${CHECKOUT_REF}"
 
       - name: Verify prebuilt AIstock-CI environment
+        if: ${{ !(startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')) }}
         shell: powershell
         env:
           AISTOCK_CI_ENV_NAME: AIstock-CI
@@ -84,10 +66,40 @@ jobs:
 
       - name: Classify CI lane
         id: classify
+        env:
+          CLOSE_SYNC_BRANCH: ${{ startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-') }}
         run: |
-          python scripts/ci_change_classifier.py \
-            --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
-            --output-json tmp/validation/ci_change_classifier/summary.json
+          if [[ "${CLOSE_SYNC_BRANCH}" == "true" ]]; then
+            python scripts/bug_registry_metadata_check.py \
+              --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
+              --close-sync-only \
+              --output-json tmp/validation/ci_change_classifier/summary.json
+            {
+              echo 'backend_required=false'
+              echo 'backend_sessions=[]'
+              echo 'dev_db_required=false'
+              echo 'dev_db_plan_keys=[]'
+              echo 'runner_kind=github_hosted_metadata'
+              echo 'plan_routing={}'
+              echo 'environment_fingerprint_ref=not_required'
+              echo 'install_forbidden=true'
+              echo 'frontend_required=false'
+              echo 'frontend_test_targets=[]'
+              echo 'go_required=false'
+              echo 'close_sync_metadata_only=true'
+              echo 'workflow_validation_required=false'
+              echo 'workflow_test_targets=[]'
+              echo 'docs_lite_required=false'
+              echo 'static_gate_required=true'
+              echo 'catalog_validation_required=false'
+              echo 'prompt_evaluation_required=false'
+              echo 'classification=close_sync_metadata_only'
+            } >> "${GITHUB_OUTPUT}"
+          else
+            python scripts/ci_change_classifier.py \
+              --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
+              --output-json tmp/validation/ci_change_classifier/summary.json
+          fi
 
       - name: Docs-lite version record
         if: steps.classify.outputs.static_gate_required == 'false'
@@ -104,15 +116,6 @@ jobs:
             echo "This documentation-only update keeps the static gate green without running code checks."
           } > tmp/validation/guardrails/docs-lite-version-record.md
           cat tmp/validation/guardrails/docs-lite-version-record.md
-
-      - name: BUG registry metadata check
-        if: steps.classify.outputs.close_sync_metadata_only == 'true'
-        run: |
-          mkdir -p tmp/validation/guardrails
-          python scripts/bug_registry_metadata_check.py \
-            --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
-            --close-sync-only \
-            --output-json tmp/validation/guardrails/bug-registry-metadata.json
 
       - name: nox -s l0 -- changed files
         if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true'
@@ -138,167 +141,92 @@ jobs:
         if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true' && steps.classify.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_catalog_integrity
 
-  backend-tests:
-    name: Backend tests (${{ matrix.session }})
-    needs: classify-changes
-    if: needs.classify-changes.outputs.backend_required != 'false'
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        session: ${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Verify AIstock-CI environment
-        shell: powershell
+      - name: Run selected backend sessions
+        id: backend_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.backend_required != 'false'
+        continue-on-error: true
         env:
-          AISTOCK_CI_ENV_NAME: AIstock-CI
-        run: python scripts/ci_environment_verify.py
+          BACKEND_SESSIONS: ${{ steps.classify.outputs.backend_sessions }}
+        run: |
+          python -c 'import json, os; print("\n".join(json.loads(os.environ["BACKEND_SESSIONS"])))' | tr -d '\r' > backend_sessions.txt
+          mapfile -t backend_sessions < backend_sessions.txt
+          backend_failures=()
+          for session in "${backend_sessions[@]}"; do
+            if ! python -m nox -s "${session}"; then
+              backend_failures+=("${session}")
+            fi
+          done
+          if (( ${#backend_failures[@]} > 0 )); then
+            printf 'Selected backend session failed: %s\n' "${backend_failures[@]}" >&2
+            exit 1
+          fi
 
-      - name: nox -s ${{ matrix.session }}
-        run: python -m nox -s ${{ matrix.session }}
+      - name: Attach lockfile-matched prebuilt frontend dependencies
+        id: frontend_dependencies
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.frontend_required == 'true'
+        continue-on-error: true
+        shell: powershell
+        run: |
+          python scripts/ci/prepare_self_hosted_workspace.py `
+            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --dest "${env:GITHUB_WORKSPACE}" `
+            --expected-commit "${env:GITHUB_SHA}" `
+            --repo "${env:GITHUB_REPOSITORY}" `
+            --frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules" `
+            --attach-frontend-only `
+            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
-  frontend-quality:
-    name: Frontend quality (type + lint)
-    needs: classify-changes
-    if: needs.classify-changes.outputs.frontend_required == 'true'
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 15
-    defaults:
-      run:
+      - name: Run selected frontend quality
+        id: frontend_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.frontend_required == 'true' && steps.frontend_dependencies.outcome == 'success'
+        continue-on-error: true
         working-directory: frontend
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Verify prebuilt frontend toolchain
-        shell: powershell
-        run: |
-          python ../scripts/ci_environment_verify.py
-          if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is not preinstalled on aistock runner' }
-          if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm is not preinstalled on aistock runner' }
-          if (-not (Test-Path -LiteralPath 'node_modules')) { throw 'frontend/node_modules is not prebuilt; dependency installation is prohibited in CI' }
-
-      - name: Type-check changed frontend surface
-        run: ./node_modules/.bin/tsc --noEmit --incremental false
-
-      - name: Lint frontend surface
-        run: npm run lint
-
-      - name: Run owning frontend module tests
-        if: needs.classify-changes.outputs.frontend_test_targets != '[]'
         env:
-          FRONTEND_TEST_TARGETS: ${{ needs.classify-changes.outputs.frontend_test_targets }}
+          FRONTEND_TEST_TARGETS: ${{ steps.classify.outputs.frontend_test_targets }}
         run: |
-          python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' > module_test_targets.txt
-          mapfile -t module_test_targets < module_test_targets.txt
-          npm run test:e2e -- "${module_test_targets[@]}"
+          command -v node >/dev/null || { echo 'node is not preinstalled on aistock runner' >&2; exit 1; }
+          command -v npm >/dev/null || { echo 'npm is not preinstalled on aistock runner' >&2; exit 1; }
+          test -d node_modules || { echo 'frontend/node_modules is not prebuilt; dependency installation is prohibited in CI' >&2; exit 1; }
+          ./node_modules/.bin/tsc --noEmit --incremental false
+          npm run lint
+          if [[ "${FRONTEND_TEST_TARGETS}" != "[]" ]]; then
+            python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' | tr -d '\r' > module_test_targets.txt
+            mapfile -t module_test_targets < module_test_targets.txt
+            npm run test:e2e -- "${module_test_targets[@]}"
+          fi
 
-  tdx-go-tests:
-    name: TDX Go tests
-    needs: classify-changes
-    if: needs.classify-changes.outputs.go_required == 'true'
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 10
-    defaults:
-      run:
+      - name: Run selected TDX Go tests
+        id: go_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.go_required == 'true'
+        continue-on-error: true
         working-directory: tdx-api-main
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Verify prebuilt AIstock-CI environment
-        shell: powershell
-        env:
-          AISTOCK_CI_ENV_NAME: AIstock-CI
-        run: python ../scripts/ci_environment_verify.py
-
-      - name: Run Go tests
         env:
           GOPROXY: off
         run: go test ./...
 
-  prompt-evaluation:
-    name: Validation LLM prompt evaluation
-    needs: classify-changes
-    if: needs.classify-changes.outputs.prompt_evaluation_required == 'true'
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 2
-
-      - name: Fetch current PR base ref only
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          CHECKOUT_REF: ${{ github.ref }}
-        run: |
-          python scripts/ci_changed_files.py --prepare-pr-merge-base-only \
-            --base-ref "${BASE_REF}" --base-sha "${BASE_SHA}" --checkout-ref "${CHECKOUT_REF}"
-
-      - name: Verify prebuilt AIstock-CI environment
-        shell: powershell
-        env:
-          AISTOCK_CI_ENV_NAME: AIstock-CI
-        run: python scripts/ci_environment_verify.py
-
-      - name: Build changed-file list
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
-          BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.sha }}
+      - name: Run selected prompt evaluation
+        id: prompt_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.prompt_evaluation_required == 'true'
+        continue-on-error: true
         run: |
           mkdir -p tmp/validation/llm_prompt_evaluation
-          python scripts/ci_changed_files.py \
-            --output tmp/validation/llm_prompt_evaluation/changed_files.txt \
-            --base-ref "${BASE_REF}" \
-            --base-sha "${BASE_SHA}" \
-            --head-sha "${HEAD_SHA}"
-
-      - name: Run prompt evaluation policy gate
-        run: |
           changed_args=()
           while IFS= read -r path; do
             if [ -n "${path}" ]; then
               changed_args+=(--changed-file "${path}")
             fi
-          done < tmp/validation/llm_prompt_evaluation/changed_files.txt
+          done < tmp/validation/ci_change_classifier/changed_files.txt
           python scripts/llm_provider_adapter.py --json prompt-evaluation \
             --provider github_models \
             "${changed_args[@]}" \
             --output tmp/validation/llm_prompt_evaluation/prompt-evaluation.json
 
-  ci-verdict:
-    name: CI verdict
-    needs:
-      - classify-changes
-      - backend-tests
-      - frontend-quality
-      - tdx-go-tests
-      - prompt-evaluation
-    if: always()
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 15
-    steps:
-      - name: Checkout for focused workflow validation
-        if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
-        uses: actions/checkout@v7
-
-      - name: Verify prebuilt AIstock-CI environment for workflow validation
-        if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
-        shell: powershell
-        env:
-          AISTOCK_CI_ENV_NAME: AIstock-CI
-        run: python scripts/ci_environment_verify.py
-
       - name: Run focused workflow validation tests
         id: workflow_validation
-        if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
+        continue-on-error: true
         env:
-          WORKFLOW_TEST_TARGETS: ${{ needs.classify-changes.outputs.workflow_test_targets }}
+          WORKFLOW_TEST_TARGETS: ${{ steps.classify.outputs.workflow_test_targets }}
           AISTOCK_RUNNER_PROCESS_OWNERSHIP: runner_owned_isolated_only
           AISTOCK_USER_BACKEND_PROCESS_CONTROL: forbidden
         run: |
@@ -309,7 +237,8 @@ jobs:
 
       - name: Enforce CI workflow policy
         id: workflow_policy
-        if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
+        continue-on-error: true
         run: |
           mkdir -p tmp/validation/ci_workflow_policy
           python scripts/ci_workflow_policy_scan.py \
@@ -318,17 +247,18 @@ jobs:
       - name: Require every selected CI lane to pass
         if: always()
         env:
-          CLASSIFY_RESULT: ${{ needs.classify-changes.result }}
-          BACKEND_RESULT: ${{ needs.backend-tests.result }}
-          FRONTEND_RESULT: ${{ needs.frontend-quality.result }}
-          GO_RESULT: ${{ needs.tdx-go-tests.result }}
-          PROMPT_RESULT: ${{ needs.prompt-evaluation.result }}
-          WORKFLOW_REQUIRED: ${{ needs.classify-changes.outputs.workflow_validation_required }}
-          WORKFLOW_TEST_TARGETS: ${{ needs.classify-changes.outputs.workflow_test_targets }}
+          CLASSIFY_RESULT: ${{ steps.classify.outcome }}
+          BACKEND_RESULT: ${{ steps.backend_validation.outcome }}
+          FRONTEND_DEPENDENCIES_RESULT: ${{ steps.frontend_dependencies.outcome }}
+          FRONTEND_RESULT: ${{ steps.frontend_validation.outcome }}
+          GO_RESULT: ${{ steps.go_validation.outcome }}
+          PROMPT_RESULT: ${{ steps.prompt_validation.outcome }}
+          WORKFLOW_REQUIRED: ${{ steps.classify.outputs.workflow_validation_required }}
+          WORKFLOW_TEST_TARGETS: ${{ steps.classify.outputs.workflow_test_targets }}
           WORKFLOW_TEST_RESULT: ${{ steps.workflow_validation.outcome }}
           WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}
-          DEV_DB_REQUIRED: ${{ needs.classify-changes.outputs.dev_db_required }}
-          DEV_DB_PLANS: ${{ needs.classify-changes.outputs.dev_db_plan_keys }}
+          DEV_DB_REQUIRED: ${{ steps.classify.outputs.dev_db_required }}
+          DEV_DB_PLANS: ${{ steps.classify.outputs.dev_db_plan_keys }}
         run: |
           failures=()
           if [[ "${CLASSIFY_RESULT}" != "success" ]]; then
@@ -336,6 +266,7 @@ jobs:
           fi
           for entry in \
             "backend:${BACKEND_RESULT}" \
+            "frontend_dependencies:${FRONTEND_DEPENDENCIES_RESULT}" \
             "frontend:${FRONTEND_RESULT}" \
             "go:${GO_RESULT}" \
             "prompt:${PROMPT_RESULT}"; do

@@ -13539,7 +13539,18 @@ def _required_pr_check_summary(result: dict[str, Any]) -> dict[str, list[str]]:
     }
 
 
-def _normalize_merge_quality_check_result(result: dict[str, Any]) -> dict[str, Any] | None:
+def _merge_quality_contexts_for_head_ref(head_ref: str | None) -> tuple[str, ...]:
+    branch = str(head_ref or "").strip()
+    if re.match(r"^chore/BUG-\d+-close-sync(?:-|$)", branch):
+        return ("CI verdict",)
+    return MERGE_QUALITY_CHECK_CONTEXTS
+
+
+def _normalize_merge_quality_check_result(
+    result: dict[str, Any],
+    *,
+    required_contexts: tuple[str, ...] = MERGE_QUALITY_CHECK_CONTEXTS,
+) -> dict[str, Any] | None:
     """Select the stable merge contract and synthesize missing checks as pending.
 
     ``gh pr checks`` returns every check and exits non-zero when any check fails.
@@ -13562,7 +13573,7 @@ def _normalize_merge_quality_check_result(result: dict[str, Any]) -> dict[str, A
         return None
     checks = [item for item in parsed if isinstance(item, dict)]
     rows: list[dict[str, Any]] = []
-    for context in MERGE_QUALITY_CHECK_CONTEXTS:
+    for context in required_contexts:
         matches = [item for item in checks if _check_name(item) == context]
         if matches:
             rows.append(matches[-1])
@@ -15144,8 +15155,9 @@ def _rest_required_pr_check_result(
             if name and name not in known_contexts:
                 requirements.append((name, None))
 
+    required_contexts = _merge_quality_contexts_for_head_ref(readback.get("head_ref"))
     known_contexts = {context for context, _ in requirements}
-    for context in MERGE_QUALITY_CHECK_CONTEXTS:
+    for context in required_contexts:
         if context not in known_contexts:
             requirements.append((context, None))
 
@@ -15232,7 +15244,8 @@ def _merge_required_check_result_with_transport_fallback(
         bug_id=bug_id,
         event="command:gh_pr_required_checks_before_merge",
     )
-    normalized = _normalize_merge_quality_check_result(result)
+    required_contexts = _merge_quality_contexts_for_head_ref(payload.get("headRefName"))
+    normalized = _normalize_merge_quality_check_result(result, required_contexts=required_contexts)
     if normalized is not None:
         return normalized, None
     message = str(result.get("stderr") or result.get("stdout") or "required PR check query failed")

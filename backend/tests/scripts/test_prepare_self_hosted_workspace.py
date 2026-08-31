@@ -5,6 +5,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import prepare_self_hosted_workspace as prepare
 
 
@@ -238,3 +240,102 @@ def test_frontend_dependency_link_fails_closed_on_package_lock_mismatch(tmp_path
         assert exc.code == 1
     else:
         raise AssertionError("package-lock mismatch must fail loud")
+
+
+def test_attach_frontend_only_preserves_checkout_and_links_verified_dependencies(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "source"
+    dest = tmp_path / "runner" / "_work" / "AIstock" / "AIstock"
+    summary_path = tmp_path / "runner" / "_temp" / "self_hosted_workspace" / "frontend.json"
+    frontend = source / "frontend"
+    node_modules = frontend / "node_modules"
+    for relative in prepare.REQUIRED_FRONTEND_ENTRYPOINTS:
+        entrypoint = node_modules / relative
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text(f"prebuilt-{relative.as_posix()}\n", encoding="utf-8")
+    (frontend / "package-lock.json").write_text('{"lockfileVersion":3}\n', encoding="utf-8")
+    tracked_marker = source / "tracked-marker.txt"
+    tracked_marker.write_text("keep checkout\n", encoding="utf-8")
+    (source / ".gitignore").write_text("frontend/node_modules/\n", encoding="utf-8")
+    _git(source, "init")
+    _git(source, "config", "user.email", "ci@example.invalid")
+    _git(source, "config", "user.name", "CI")
+    _git(source, "remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
+    _git(source, "add", ".gitignore", "frontend/package-lock.json", "tracked-marker.txt")
+    _git(source, "commit", "-m", "seed")
+    commit = _git(source, "rev-parse", "HEAD")
+    _git(tmp_path, "clone", "--local", "--no-hardlinks", str(source), str(dest))
+
+    monkeypatch.setenv("RUNNER_WORKSPACE", str(dest.parent))
+    result = prepare.main(
+        [
+            "--source",
+            str(source),
+            "--dest",
+            str(dest),
+            "--expected-commit",
+            commit,
+            "--repo",
+            "licong01-cloud/AIstock",
+            "--summary-json",
+            str(summary_path),
+            "--frontend-node-modules-source",
+            str(node_modules),
+            "--attach-frontend-only",
+        ]
+    )
+
+    assert result == 0
+    assert (dest / "tracked-marker.txt").read_text(encoding="utf-8") == "keep checkout\n"
+    assert (dest / "frontend" / "node_modules" / "typescript" / "bin" / "tsc").is_file()
+    assert _git(dest, "status", "--short") == ""
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["mode"] == "attach_frontend_only"
+    assert summary["checked_out_commit"] == commit
+    assert summary["root_worktree_written"] is False
+
+
+def test_attach_frontend_only_fails_closed_on_checkout_commit_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "source"
+    dest = tmp_path / "runner" / "_work" / "AIstock" / "AIstock"
+    (source / ".git").mkdir(parents=True)
+    dest.mkdir(parents=True)
+    actual_commit = "a" * 40
+    expected_commit = "b" * 40
+
+    def fake_git_stdout(args: list[str], *, cwd: Path, timeout: int = 120) -> str:
+        del timeout
+        if args == ["config", "--get", "remote.origin.url"]:
+            return "https://github.com/licong01-cloud/AIstock.git"
+        if args == ["rev-parse", "--show-toplevel"] and cwd == dest.resolve():
+            return str(dest.resolve())
+        if args == ["rev-parse", "HEAD"] and cwd == dest.resolve():
+            return actual_commit
+        raise AssertionError(f"unexpected git query: {args} cwd={cwd}")
+
+    monkeypatch.setattr(prepare, "_git_stdout", fake_git_stdout)
+    monkeypatch.setenv("RUNNER_WORKSPACE", str(dest.parent))
+
+    with pytest.raises(SystemExit) as exc_info:
+        prepare.main(
+            [
+                "--source",
+                str(source),
+                "--dest",
+                str(dest),
+                "--expected-commit",
+                expected_commit,
+                "--repo",
+                "licong01-cloud/AIstock",
+                "--frontend-node-modules-source",
+                str(source / "frontend" / "node_modules"),
+                "--attach-frontend-only",
+            ]
+        )
+
+    assert exc_info.value.code == 1

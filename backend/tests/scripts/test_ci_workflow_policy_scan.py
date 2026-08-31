@@ -79,11 +79,12 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "pr_quality_no_external_report_action_dependency" in evidence
     assert "superseded_pr_runs_cancel_in_progress" in evidence
     assert "bounded_pr_base_fetch_retry" in evidence
-    assert evidence["stable_merge_quality_contexts_are_always_published"] is True
+    assert evidence["merge_quality_contexts_are_change_scoped"] is True
     assert "pr_ci_no_separate_failure_publisher_job" in evidence
     assert "pr_ci_no_external_artifact_action_dependency" in evidence
     assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
-    assert evidence["pr_ci_workflow_validation_reuses_ci_verdict_runner"] is True
+    assert evidence["pr_ci_selected_lanes_reuse_ci_verdict_runner"] is True
+    assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is True
     assert evidence["codeql_reuses_single_security_runner_allocation"] is True
     assert "pr_workflows_no_external_report_action_dependency" in evidence
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
@@ -95,6 +96,34 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["bounded_dual_runner_roles"] is True
     assert evidence["policy_evidence_remains_one_scanner_step"] is True
     assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
+
+
+def test_pr_ci_frontend_dependency_attach_cannot_be_removed(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace("            --attach-frontend-only `\n", "", 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is False
+
+
+def test_linux_runner_exception_is_bounded_to_close_sync_metadata(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace(
+                "runner_kind=github_hosted_metadata",
+                "runner_kind=unexpected_metadata",
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["no_linux_or_production_environment_fallback"] is False
 
 
 def test_dual_runner_policy_does_not_lock_nightly_job_count(tmp_path: Path) -> None:
@@ -148,7 +177,7 @@ def test_workflow_validation_runner_reacquisition_is_detected(tmp_path: Path) ->
 
     evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
 
-    assert evidence["pr_ci_workflow_validation_reuses_ci_verdict_runner"] is False
+    assert evidence["pr_ci_selected_lanes_reuse_ci_verdict_runner"] is False
 
 
 def test_codeql_security_runner_reacquisition_is_detected(tmp_path: Path) -> None:
@@ -177,10 +206,10 @@ def test_ci_verdict_owns_workflow_validation_and_fails_closed() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
 
-    assert "workflow-validation-tests" not in jobs
+    assert set(jobs) == {"ci-verdict"}
     verdict = jobs["ci-verdict"]
-    assert "workflow-validation-tests" not in verdict["needs"]
-    assert verdict["timeout-minutes"] == 15
+    assert "needs" not in verdict
+    assert verdict["timeout-minutes"] == 120
 
     steps = verdict["steps"]
     workflow_test = next(step for step in steps if step.get("id") == "workflow_validation")
@@ -206,7 +235,26 @@ def test_merge_quality_contract_detects_issue_workflow_name_drift(tmp_path: Path
         issue_workflow_path=issue_workflow,
     )
 
-    assert evidence["stable_merge_quality_contexts_are_always_published"] is False
+    assert evidence["merge_quality_contexts_are_change_scoped"] is False
+
+
+def test_close_sync_quality_skip_is_branch_scoped_before_runner_allocation() -> None:
+    import yaml
+
+    expected = "startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')"
+    workflow_jobs = {
+        "pr-quality.yml": "pr-quality",
+        "semgrep.yml": "semgrep",
+        "codeql.yml": "codeql-verdict",
+    }
+    for workflow_name, job_name in workflow_jobs.items():
+        text = Path(".github/workflows", workflow_name).read_text(encoding="utf-8")
+        workflow = yaml.safe_load(text)
+        pull_request = workflow[True]["pull_request"]
+        assert "paths-ignore" not in pull_request
+        job_if = str(workflow["jobs"][job_name]["if"])
+        assert "github.event_name != 'pull_request'" in job_if
+        assert expected in job_if
 
 
 def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -> None:
@@ -225,11 +273,11 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
         "code_intelligence_refresh_is_scheduled_or_manual_only",
         "code_intelligence_refresh_has_no_external_artifact_action_dependency",
         "javascript_actions_use_approved_native_node24_majors",
-        "stable_merge_quality_contexts_are_always_published",
+        "merge_quality_contexts_are_change_scoped",
         "bounded_dual_runner_roles",
         "policy_evidence_remains_one_scanner_step",
         "pr_ci_static_gate_reuses_classifier_checkout",
-        "pr_ci_workflow_validation_reuses_ci_verdict_runner",
+        "pr_ci_selected_lanes_reuse_ci_verdict_runner",
         "codeql_reuses_single_security_runner_allocation",
     }
 

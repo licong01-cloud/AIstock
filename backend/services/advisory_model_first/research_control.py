@@ -64,6 +64,9 @@ INITIAL_SEED_EXPERIMENT_IDS = (
     "ADVISORY-H0-V6-GOLDEN",
 )
 N0_EXPERIMENT_ID = "ADVISORY-N0-RESEARCH-CONTROL-20260830"
+N1_ORACLE_EXPERIMENT_ID = "ADVISORY-N1-TIER1-ORACLE"
+N1_LEARNABILITY_EXPERIMENT_ID = "ADVISORY-N1-TIER1-LEARNABILITY"
+N1_EXPERIMENT_IDS = (N1_ORACLE_EXPERIMENT_ID, N1_LEARNABILITY_EXPERIMENT_ID)
 
 if P0C_POLICY_IDENTITY != canonical_json_sha256(
     {
@@ -101,9 +104,7 @@ class AdvisoryResearchTrialRegistryV1:
     def read(self) -> tuple[AdvisoryResearchTrialRecordV1, ...]:
         return self._read_unlocked()
 
-    def append_batch(
-        self, records: Sequence[AdvisoryResearchTrialRecordV1]
-    ) -> dict[str, Any]:
+    def append_batch(self, records: Sequence[AdvisoryResearchTrialRecordV1]) -> dict[str, Any]:
         candidates = tuple(
             item
             if isinstance(item, AdvisoryResearchTrialRecordV1)
@@ -204,9 +205,7 @@ class AdvisoryResearchTrialRegistryV1:
                 )
             by_entry[item.registry_entry_id] = item.record_sha256
             attempt_stage = (item.experiment_id, item.attempt_id, item.research_stage)
-            previous_attempt_record = by_attempt_stage.setdefault(
-                attempt_stage, item.registry_entry_id
-            )
+            previous_attempt_record = by_attempt_stage.setdefault(attempt_stage, item.registry_entry_id)
             if previous_attempt_record != item.registry_entry_id:
                 _raise(
                     "one experiment attempt/stage cannot have multiple registry records",
@@ -233,9 +232,7 @@ class AdvisoryResearchTrialRegistryV1:
                 )
             for evidence in item.evidence_refs:
                 evidence_identity = (evidence.sha256, evidence.size_bytes)
-                previous_evidence = evidence_by_uri.setdefault(
-                    evidence.artifact_uri, evidence_identity
-                )
+                previous_evidence = evidence_by_uri.setdefault(evidence.artifact_uri, evidence_identity)
                 if previous_evidence != evidence_identity:
                     _raise(
                         "one evidence URI cannot drift to different content",
@@ -253,9 +250,7 @@ class AdvisoryResearchTrialRegistryV1:
                     )
 
 
-def resolve_evidence_reference(
-    *, artifact_root: str | Path, relative_path: str, role: str
-) -> EvidenceReferenceV1:
+def resolve_evidence_reference(*, artifact_root: str | Path, relative_path: str, role: str) -> EvidenceReferenceV1:
     root = Path(artifact_root).resolve()
     candidate = Path(relative_path)
     if candidate.is_absolute():
@@ -356,9 +351,7 @@ def bootstrap_registry_from_seed(
         or item.decision_use != DecisionUse.NAVIGATION_ONLY
         for item in p0_records
     ) or any(item.decision_use != DecisionUse.NAVIGATION_ONLY for item in records):
-        _raise_registry_invalid(
-            "research seed identity or navigation-only boundary has drifted"
-        )
+        _raise_registry_invalid("research seed identity or navigation-only boundary has drifted")
     summary = AdvisoryResearchTrialRegistryV1(registry_path).append_batch(records)
     summary["seed_path"] = Path(seed_path).resolve().as_posix()
     summary["artifact_root"] = Path(artifact_root).resolve().as_posix()
@@ -379,9 +372,7 @@ def inspect_parent_prediction_extension(
     started = time.perf_counter()
     source = ExactPredictionSource(prediction_store_root)
     try:
-        descriptors = {
-            leg_id: source.describe(REPRESENTATIVE_SEED_RUN_IDS[leg_id]) for leg_id in LEG_IDS
-        }
+        descriptors = {leg_id: source.describe(REPRESENTATIVE_SEED_RUN_IDS[leg_id]) for leg_id in LEG_IDS}
     except AdvisoryModelFirstError as exc:
         _raise(
             "representative Prediction Store evidence is unavailable",
@@ -402,9 +393,7 @@ def inspect_parent_prediction_extension(
             gap
             for leg in legs
             for gap in (
-                (f"{leg.leg_id}:{item}" for item in leg.missing_runtime_assets)
-                if not leg.runtime_ready
-                else ()
+                (f"{leg.leg_id}:{item}" for item in leg.missing_runtime_assets) if not leg.runtime_ready else ()
             )
         )
     )
@@ -470,9 +459,7 @@ def _inspect_parent_leg(*, leg_id: str, descriptor: Any, runtime_asset_root: Pat
         sha256=str(descriptor.artifact_sha256),
         size_bytes=int(descriptor.size_bytes),
     )
-    matches = sorted(
-        runtime_asset_root.glob(f"{MANIFEST_SHA256[:16]}__leg_{leg_id}"), key=lambda item: item.name
-    )
+    matches = sorted(runtime_asset_root.glob(f"{MANIFEST_SHA256[:16]}__leg_{leg_id}"), key=lambda item: item.name)
     if len(matches) > 1:
         _raise(
             "multiple runtime asset roots match one representative leg",
@@ -523,9 +510,7 @@ def _inspect_parent_leg(*, leg_id: str, descriptor: Any, runtime_asset_root: Pat
         "factor_entry": assets.get("factor_entry"),
         "factor_order": assets.get("factor_order"),
     }
-    missing = tuple(
-        name for name, relative in required.items() if not relative or not (leg_root / relative).is_file()
-    )
+    missing = tuple(name for name, relative in required.items() if not relative or not (leg_root / relative).is_file())
     if missing:
         return _unready_leg(
             leg_id=leg_id,
@@ -545,9 +530,7 @@ def _inspect_parent_leg(*, leg_id: str, descriptor: Any, runtime_asset_root: Pat
             actual_sha256=model_sha,
         )
     factor_order_path = leg_root / str(required["factor_order"])
-    factor_order = _read_json(
-        factor_order_path, reason_code="ADVISORY_PARENT_RUNTIME_ASSET_INVALID"
-    )
+    factor_order = _read_json(factor_order_path, reason_code="ADVISORY_PARENT_RUNTIME_ASSET_INVALID")
     factor_names = factor_order.get("factor_order")
     if (
         factor_order.get("package_id") != PACKAGE_ID
@@ -566,9 +549,7 @@ def _inspect_parent_leg(*, leg_id: str, descriptor: Any, runtime_asset_root: Pat
     refs = (
         evidence_reference_for_file(manifest_path, role=f"{leg_id}:runtime_manifest"),
         evidence_reference_for_file(model_path, role=f"{leg_id}:model_weight"),
-        evidence_reference_for_file(
-            leg_root / str(required["factor_entry"]), role=f"{leg_id}:factor_entry"
-        ),
+        evidence_reference_for_file(leg_root / str(required["factor_entry"]), role=f"{leg_id}:factor_entry"),
         evidence_reference_for_file(factor_order_path, role=f"{leg_id}:factor_order"),
     )
     return ParentLegEvidenceV1(
@@ -609,20 +590,14 @@ def _inspect_post_cutoff_evidence(
         return None, "post_cutoff_evidence_missing"
     if not comparison_state_path.is_file():
         return None, "comparison_state_missing"
-    artifact = _read_json(
-        evidence_path, reason_code="ADVISORY_PARENT_EXTENSION_EVIDENCE_INVALID"
-    )
-    state = _read_json(
-        comparison_state_path, reason_code="ADVISORY_PARENT_EXTENSION_EVIDENCE_INVALID"
-    )
+    artifact = _read_json(evidence_path, reason_code="ADVISORY_PARENT_EXTENSION_EVIDENCE_INVALID")
+    state = _read_json(comparison_state_path, reason_code="ADVISORY_PARENT_EXTENSION_EVIDENCE_INVALID")
     if (
         artifact.get("schema_version") != "advisory_historical_model_challenger_artifact_v1"
-        or artifact.get("producer_contract_version")
-        != "advisory_historical_model_challenger_v1"
+        or artifact.get("producer_contract_version") != "advisory_historical_model_challenger_v1"
         or artifact.get("package_id") != PACKAGE_ID
         or artifact.get("manifest_sha256") != MANIFEST_SHA256
-        or artifact.get("selection_runtime_semantics_hash")
-        != EXPECTED_RUNTIME_SEMANTICS_HASH
+        or artifact.get("selection_runtime_semantics_hash") != EXPECTED_RUNTIME_SEMANTICS_HASH
     ):
         _raise(
             "post-cutoff artifact identity does not match target binding",
@@ -675,9 +650,7 @@ def _inspect_post_cutoff_evidence(
         )
     return (
         PostCutoffInferenceEvidenceV1(
-            artifact_ref=evidence_reference_for_file(
-                evidence_path, role="post_cutoff_parent_inference"
-            ),
+            artifact_ref=evidence_reference_for_file(evidence_path, role="post_cutoff_parent_inference"),
             comparison_state_ref=evidence_reference_for_file(
                 comparison_state_path, role="post_cutoff_comparison_state"
             ),
@@ -692,9 +665,7 @@ def _inspect_post_cutoff_evidence(
     )
 
 
-def _validate_retrain_receipt(
-    path: Path, *, target_start: date, target_end: date
-) -> EvidenceReferenceV1:
+def _validate_retrain_receipt(path: Path, *, target_start: date, target_end: date) -> EvidenceReferenceV1:
     payload = _read_json(path, reason_code="ADVISORY_PARENT_EXTENSION_EVIDENCE_INVALID")
     if (
         payload.get("schema_version") != "advisory_parent_retrain_requirement_v1"
@@ -727,13 +698,10 @@ def freeze_default_research_windows(
             )
     else:
         artifact_root = Path(
-            artifact_root_uri
-            or "F:/Dev/AIstock_model_artifacts/advisory_n0_research_control_20260830"
+            artifact_root_uri or "F:/Dev/AIstock_model_artifacts/advisory_n0_research_control_20260830"
         ).resolve()
     artifact_root_text = artifact_root.as_posix()
-    consumption_receipt_uri = (
-        artifact_root / "sealed_holdout_consumption_receipt.json"
-    ).as_posix()
+    consumption_receipt_uri = (artifact_root / "sealed_holdout_consumption_receipt.json").as_posix()
     sealed_dataset_identity = canonical_json_sha256(
         {
             "dataset": "ADVISORY_SEALED_HOLDOUT_2026Q4_V1",
@@ -817,12 +785,8 @@ def authorize_research_window_access(
             "activation may read only an already confirmed evidence receipt, not raw research windows",
             "ADVISORY_SEALED_HOLDOUT_ACCESS_DENIED",
         )
-    sealed = next(
-        item for item in contract.windows if item.state == ResearchWindowState.SEALED_UNCONSUMED
-    )
-    overlaps_sealed = _ranges_overlap(
-        request.start_date, request.end_date, sealed.start_date, sealed.end_date
-    )
+    sealed = next(item for item in contract.windows if item.state == ResearchWindowState.SEALED_UNCONSUMED)
+    overlaps_sealed = _ranges_overlap(request.start_date, request.end_date, sealed.start_date, sealed.end_date)
     if not overlaps_sealed:
         if request.study_type == ResearchStudyType.CONFIRMATION:
             _raise(
@@ -880,17 +844,13 @@ def authorize_research_window_access(
             "ADVISORY_SEALED_HOLDOUT_ACCESS_DENIED",
         )
     receipt_path = Path(consume_receipt_path)
-    if receipt_path.resolve().as_posix() != Path(
-        contract.sealed_consumption_receipt_uri
-    ).resolve().as_posix():
+    if receipt_path.resolve().as_posix() != Path(contract.sealed_consumption_receipt_uri).resolve().as_posix():
         _raise(
             "confirmation consume receipt path differs from the contract canonical path",
             "ADVISORY_SEALED_HOLDOUT_ACCESS_DENIED",
             expected_receipt_uri=contract.sealed_consumption_receipt_uri,
         )
-    receipt = build_holdout_consumption_receipt(
-        contract=contract, request=request, window_id=sealed.window_id
-    )
+    receipt = build_holdout_consumption_receipt(contract=contract, request=request, window_id=sealed.window_id)
     written = _write_consumption_once(receipt_path, receipt)
     return {
         "status": "AUTHORIZED_SEALED_HOLDOUT_ONCE",
@@ -937,8 +897,7 @@ def generate_current_route(
         or item.result_class in {ResearchResultClass.CONFIRMED, ResearchResultClass.ACTIVATED}
         for item in p0_records
     ) or not any(
-        item.experiment_id == "ADVISORY-P0-L"
-        and item.result_class == ResearchResultClass.FAMILY_FROZEN
+        item.experiment_id == "ADVISORY-P0-L" and item.result_class == ResearchResultClass.FAMILY_FROZEN
         for item in p0_records
     ):
         _raise(
@@ -973,11 +932,14 @@ def generate_current_route(
     n0_record = n0_records[0]
     parent_ref = evidence_reference_for_file(parent_spike_path, role="n0_parent_spike")
     window_ref = evidence_reference_for_file(window_contract_path, role="n0_window_contract")
+    # Windows and WSL use different absolute URI spellings for the same file.
+    # The immutable content identity is role + hash + size; the URI remains a
+    # locator and must not make a valid cross-OS recovery look like drift.
     expected_n0_refs = {
-        (parent_ref.artifact_uri, parent_ref.sha256),
-        (window_ref.artifact_uri, window_ref.sha256),
+        (parent_ref.role, parent_ref.sha256, parent_ref.size_bytes),
+        (window_ref.role, window_ref.sha256, window_ref.size_bytes),
     }
-    actual_n0_refs = {(item.artifact_uri, item.sha256) for item in n0_record.evidence_refs}
+    actual_n0_refs = {(item.role, item.sha256, item.size_bytes) for item in n0_record.evidence_refs}
     if (
         actual_n0_refs != expected_n0_refs
         or n0_record.policy_identity != window.contract_sha256
@@ -987,13 +949,28 @@ def generate_current_route(
             "N0 control record does not bind the supplied parent/window receipts",
             "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
         )
-    next_task = (
-        "N1_TIER1_ORACLE_LEARNABILITY"
-        if spike.status == ParentPredictionExtensionStatus.FROZEN_MODEL_CAN_INFER
-        else "PARENT_PREDICTION_EXTENSION_DECISION"
-    )
+    n1_records = [item for item in records if item.experiment_id in N1_EXPERIMENT_IDS]
+    n1_present = {item.experiment_id for item in n1_records}
+    if n1_present and n1_present != set(N1_EXPERIMENT_IDS):
+        _raise(
+            "registry contains only part of the atomic N1 diagnostic pair",
+            "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
+            present_n1=sorted(n1_present),
+            missing_n1=sorted(set(N1_EXPERIMENT_IDS) - n1_present),
+        )
+    if n1_present:
+        _validate_n1_route_records(n1_records, window=window)
+        next_task = "N2_ENTRY_EXIT_QE_PREPARATION"
+        n1_state = "COMPLETE"
+    else:
+        next_task = (
+            "N1_TIER1_ORACLE_LEARNABILITY"
+            if spike.status == ParentPredictionExtensionStatus.FROZEN_MODEL_CAN_INFER
+            else "PARENT_PREDICTION_EXTENSION_DECISION"
+        )
+        n1_state = "PENDING"
     registry_sha = sha256_file(registry_path)
-    # ALGO-COMPLEXITY-001: the route is a fixed 17-line projection; no row join,
+    # ALGO-COMPLEXITY-001: the route is a fixed-size projection; no row join,
     # market-data loop, or result-sized materialization occurs here.
     text = "\n".join(
         (
@@ -1007,6 +984,7 @@ def generate_current_route(
             "|---|---|",
             "| P0-D..P0-L | `FAMILY_FROZEN`；不得派生 P0-M |",
             "| N0 | `COMPLETE`；registry、父包 spike、窗口合同已具备 |",
+            f"| N1 Tier-1 oracle + learnability | `{n1_state}` |",
             f"| 父包延伸能力 | `{spike.status.value}` |",
             "| active main research line | `NONE` |",
             "| active auxiliary research line | `NONE` |",
@@ -1024,8 +1002,67 @@ def generate_current_route(
         "output_path": Path(output_path).resolve().as_posix(),
         "output_sha256": sha256_file(output_path),
         "parent_prediction_status": spike.status.value,
+        "n1_state": n1_state,
         "next_task": next_task,
     }
+
+
+def _validate_n1_route_records(
+    records: Sequence[AdvisoryResearchTrialRecordV1],
+    *,
+    window: AdvisoryResearchWindowContractV1,
+) -> None:
+    if len(records) != 2 or {item.experiment_id for item in records} != set(N1_EXPERIMENT_IDS):
+        _raise(
+            "registry does not contain exactly one record for each N1 diagnostic",
+            "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
+        )
+    by_id = {item.experiment_id: item for item in records}
+    oracle = by_id[N1_ORACLE_EXPERIMENT_ID]
+    learnability = by_id[N1_LEARNABILITY_EXPERIMENT_ID]
+    shared_identity = (
+        "attempt_id",
+        "dataset_identity",
+        "policy_identity",
+        "objective_contract",
+        "consumed_windows",
+        "parent_lineage",
+    )
+    mismatches = [field for field in shared_identity if getattr(oracle, field) != getattr(learnability, field)]
+    if (
+        mismatches
+        or oracle.study_type != ResearchStudyType.ORACLE_DIAGNOSTIC
+        or learnability.study_type != ResearchStudyType.LEARNABILITY_AUDIT
+        or oracle.objective_contract != ObjectiveContract.ALPHA_RANKING
+        or oracle.planned_trial_count != 1
+        or learnability.planned_trial_count != 1
+        or oracle.evaluated_trial_count != 1
+        or learnability.evaluated_trial_count != 1
+        or len(oracle.consumed_windows) != 1
+        or oracle.consumed_windows[0].window_id != "P0C_DEVELOPMENT_V1"
+        or oracle.consumed_windows[0].dataset_identity != P0C_DATASET_IDENTITY
+        or any(
+            item.decision_use == DecisionUse.ACTIVATION_EVIDENCE
+            or item.result_class in {ResearchResultClass.CONFIRMED, ResearchResultClass.ACTIVATED}
+            or len(item.evidence_refs) != 1
+            for item in records
+        )
+    ):
+        _raise(
+            "N1 diagnostic records violate the atomic route contract",
+            "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
+            mismatched_identity_fields=mismatches,
+        )
+    expected_policy_identity = research_policy_identity(
+        baseline_policy_sha256=window.baseline_policy_sha256,
+        shadow_policy_sha256=window.shadow_policy_sha256,
+        cost_policy_sha256=window.cost_policy_sha256,
+    )
+    if oracle.policy_identity != expected_policy_identity:
+        _raise(
+            "N1 diagnostic policy identity differs from the research window",
+            "ADVISORY_RESEARCH_ROUTE_INCONSISTENT",
+        )
 
 
 def complete_n0(
@@ -1161,9 +1198,7 @@ def _write_consumption_once(
             prior_id = "invalid_existing_receipt"
             try:
                 prior = SealedHoldoutConsumptionReceiptV1.model_validate(
-                    _read_json(
-                        path, reason_code="ADVISORY_SEALED_HOLDOUT_ALREADY_CONSUMED"
-                    )
+                    _read_json(path, reason_code="ADVISORY_SEALED_HOLDOUT_ALREADY_CONSUMED")
                 )
                 prior_id = prior.consumption_id
             except (ValidationError, ValueError, AdvisoryModelFirstError):
