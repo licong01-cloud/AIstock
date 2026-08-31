@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1270",
-  "closed_at": null,
+  "closed_at": "2026-08-31T04:15:55Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-08-31T03:48:45.551958Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e5efd02f3e6268b5a8e017ad1650beeaebfa1851",
+  "fixed_at": "2026-08-31T04:15:55Z",
   "github_issue_number": 4030,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4030",
   "last_seen_at": "2026-08-31T03:48:45.551958Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4032",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -128,6 +129,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -137,7 +139,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1270",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a456516609739b62",
+    "recorded_at": "2026-08-31T04:17:16.875909Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "db72b13fe2f26533ee4f32eda8655a257324a4ca",
+    "source_merge_commit": "e5efd02f3e6268b5a8e017ad1650beeaebfa1851",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4032",
+    "validation_evidence": [
+      "validation-receipt: id=11608052f064c66f commit=db72b13fe2f26533ee4f32eda8655a257324a4ca kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -k close_sync_or_source_merge_receipt_or_stale_pr` result=`63 passed`",
+      "validation-receipt: id=a907f3e6b7b2cc31 commit=db72b13fe2f26533ee4f32eda8655a257324a4ca kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed; files=2; findings=1; blocking=0; ownership=2/2`",
+      "validation-receipt: id=45a2156e0141127c commit=db72b13fe2f26533ee4f32eda8655a257324a4ca kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed; tests=8 passed; ownership=14/14`"
+    ],
+    "validation_evidence_digest": "e100f5a0069b9dd2a1a8fea50c7523b97e32d098c81459093457011e033a31c6"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -146,6 +171,11 @@
     "fingerprint": "4a70277343720fa108646a19",
     "source_event_id": "FE-20260831-4a7027734372"
   },
+  "validation_evidence": [
+    "validation-receipt: id=11608052f064c66f commit=db72b13fe2f26533ee4f32eda8655a257324a4ca kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -k close_sync_or_source_merge_receipt_or_stale_pr` result=`63 passed`",
+    "validation-receipt: id=a907f3e6b7b2cc31 commit=db72b13fe2f26533ee4f32eda8655a257324a4ca kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed; files=2; findings=1; blocking=0; ownership=2/2`",
+    "validation-receipt: id=45a2156e0141127c commit=db72b13fe2f26533ee4f32eda8655a257324a4ca kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed; tests=8 passed; ownership=14/14`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
