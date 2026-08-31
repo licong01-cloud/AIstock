@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-763",
-  "closed_at": null,
+  "closed_at": "2026-08-31T15:07:05Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -29,8 +29,8 @@
   "expected": "从C:\\Users\\lc999启动的新Claude Code会话在处理F:\\Dev\\AIstock任务时使用aistock-task-router和唯一权威开发规范，非AIstock任务不受影响。",
   "first_seen_at": "2026-07-18T12:55:38.333362Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3d92eee8f7aa61905d3e2f9a049ef7d8e6d3e7e9",
+  "fixed_at": "2026-08-31T15:07:05Z",
   "github_issue_number": 2445,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2445",
   "last_seen_at": "2026-07-18T12:55:38.333362Z",
@@ -40,6 +40,7 @@
     "Do not modify Claude settings, credentials, MCP configuration, or permissions.",
     "Do not overwrite user-owned Claude startup memory outside the exact AIstock managed-router block."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4089",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,9 +50,39 @@
     "guardrail_changed_files"
   ],
   "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required"
+  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-763",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b51fdb5a5dde6086",
+    "recorded_at": "2026-08-31T15:09:20.853239Z",
+    "runtime_contract_digest": "35343b440d535d28f7adbce288e2e1d37ea1e1f424e81752b78268fe3eac22d5",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0531641ab6915df638b085916c99af1fb8aa5287",
+    "source_merge_commit": "3d92eee8f7aa61905d3e2f9a049ef7d8e6d3e7e9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4089",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed: 471 passed, 2 skipped",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k client -q -> passed: 23 passed",
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed: blocking=0, ownership=5/5",
+      "python -m nox -s validation_module_registry_l0 -> passed: 8 passed, ownership=14/14"
+    ],
+    "validation_evidence_digest": "d2d5a3a29eaa6ee9e93992aa48a8dea54eb4e6dc204059d929f5050cfca28a8b"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,6 +91,12 @@
     "fingerprint": "6828bbd9ab0c9b3fee0d0853",
     "source_event_id": "FE-20260718-6828bbd9ab0c"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed: 471 passed, 2 skipped",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -k client -q -> passed: 23 passed",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed: blocking=0, ownership=5/5",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 passed, ownership=14/14"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
