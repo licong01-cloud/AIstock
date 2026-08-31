@@ -14780,7 +14780,17 @@ def test_remote_branch_delete_is_sha_lease_bound(
     sha = "a" * 40
     remote_ref = f"{sha}\trefs/heads/{branch}"
     executed: list[list[str]] = []
-    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: remote_ref)
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": remote_ref,
+            "stderr": "",
+            "attempts": 1,
+        },
+    )
     monkeypatch.setattr(
         workflow,
         "_execute_checked",
@@ -14813,7 +14823,17 @@ def test_remote_branch_delete_stops_on_sha_drift(
     branch = "bug/BUG-199-workflow"
     expected = f"{'a' * 40}\trefs/heads/{branch}"
     observed = f"{'b' * 40}\trefs/heads/{branch}"
-    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: observed)
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": observed,
+            "stderr": "",
+            "attempts": 1,
+        },
+    )
     monkeypatch.setattr(
         workflow,
         "_execute_checked",
@@ -14821,6 +14841,72 @@ def test_remote_branch_delete_stops_on_sha_drift(
     )
 
     with pytest.raises(workflow.WorkflowError, match="changed after cleanup preflight"):
+        workflow._delete_remote_branch_with_lease(
+            root=isolated_workflow_root,
+            branch=branch,
+            expected_remote_ref=expected,
+        )
+
+
+def test_remote_branch_delete_converges_when_branch_is_already_absent(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    expected = f"{'a' * 40}\trefs/heads/{branch}"
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "attempts": 2,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda *args, **kwargs: pytest.fail("an already-absent remote branch must not be deleted again"),
+    )
+
+    result = workflow._delete_remote_branch_with_lease(
+        root=isolated_workflow_root,
+        branch=branch,
+        expected_remote_ref=expected,
+    )
+
+    assert result["ok"] is True
+    assert result["already_absent"] is True
+    assert result["expected_sha"] == "a" * 40
+    assert result["readback_attempts"] == 2
+
+
+def test_remote_branch_delete_does_not_treat_transport_failure_as_absent(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    expected = f"{'a' * 40}\trefs/heads/{branch}"
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "schannel: SSL/TLS connection failed",
+            "attempts": 2,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda *args, **kwargs: pytest.fail("remote delete must not run after a transport failure"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="SSL/TLS connection failed"):
         workflow._delete_remote_branch_with_lease(
             root=isolated_workflow_root,
             branch=branch,
