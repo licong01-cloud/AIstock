@@ -187,7 +187,7 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness",
     "catalog_ref": "docs/standards/aistock_runtime_targets_v1.yaml",
-    "database_readback_ref": "scripts/prepare_localsim_successor_cutover.py --mode readback",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/cutover-readiness",
     "fresh_process_evidence": [
       "python -m pytest backend/tests/simulation_runtime/test_localsim_cutover_inventory.py backend/tests/scripts/test_prepare_localsim_successor_cutover.py -q -> 8 passed",
       "python -m nox -s simulation_core_l2 -> 760 passed, 3 skipped; cross-module 63 passed, 1 skipped"
