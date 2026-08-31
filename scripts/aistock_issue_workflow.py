@@ -215,10 +215,8 @@ UI_ROUTE_HINTS = {
             "backend/tests/watchlist/test_advisory_program.py",
         ],
         "verification": [
-            "frontend_tsc",
-            "paper_v2_ui",
-            "backend/tests/watchlist/test_advisory_api.py",
-            "backend/tests/watchlist/test_advisory_program.py",
+            "frontend_type_lint",
+            "watchlist_backend",
         ],
     },
     "paper_v2": {
@@ -230,7 +228,7 @@ UI_ROUTE_HINTS = {
             "backend/routers/paper_trading_v2.py",
             "backend/services/paper_trading_v2",
         ],
-        "verification": ["frontend_tsc", "paper_v2_ui", "paper_v2_backend"],
+        "verification": ["frontend_type_lint", "paper_v2_ui", "paper_v2_backend"],
     },
 }
 UI_KEYWORDS = ("ui", "页面", "前端", "显示", "按钮", "弹窗", "表格", "分页", "排序", "json", "route", "page")
