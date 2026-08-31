@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1285",
-  "closed_at": null,
+  "closed_at": "2026-08-31T13:26:11.777939Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -88,8 +88,8 @@
   },
   "first_seen_at": "2026-08-31T12:04:44.324077Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3a5bb7813e46c180dcf0d0faaf73b74690c32261",
+  "fixed_at": "2026-08-31T13:14:36Z",
   "github_issue_number": 4074,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4074",
   "last_seen_at": "2026-08-31T12:04:44.324077Z",
@@ -97,6 +97,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4078",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -118,8 +119,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1285\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1285",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "7415827948e88073ac34042eae7a357e0ae0ffcaac90706e1bd5720386262666",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "3a5bb7813e46c180dcf0d0faaf73b74690c32261",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-31T13:22:30.356706Z",
+      "mode": "read_only",
+      "observed_identity": "3a5bb7813e46c180dcf0d0faaf73b74690c32261",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b348c791e8dce7313d762b2b4061ce129381ec18152d1e6969909b02bb5497b2",
+      "receipt_sha256": "5dec0028c342f8b09499d822f8eadeb7d6453120fe1d7c944f8c7c677397ef51",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6ea9a1b45ce96f31a46e579a48a739f52234316e26dd030f687b8ea09048c55b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -129,7 +154,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -138,6 +163,12 @@
     "fingerprint": "326e45f2f79eff689aae747e",
     "source_event_id": "FE-20260831-326e45f2f79e"
   },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership 14/14)",
+    "python -m nox -s qlib_data_backend -> passed (20 passed)",
+    "python -m pytest backend/tests/dataset_release/test_resolution.py backend/tests/dataset_release/test_resolution_processor.py -q -> passed (26 passed)",
+    "python -m nox -s l0 -> passed (3 files, 0 findings)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
