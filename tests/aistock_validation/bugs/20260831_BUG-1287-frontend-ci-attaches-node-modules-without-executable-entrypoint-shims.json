@@ -32,17 +32,20 @@
   "file_scope_contract": {
     "actual_changed_files": [
       ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_issue_flow.py"
     ],
     "added_files": [],
     "changed_files": [
       ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_issue_flow.py"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/test.yml",
+        "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/scripts/test_issue_flow.py"
       ],
       "impacted_modules": [
@@ -67,6 +70,19 @@
           "rule_id": "dev_quality_tooling"
         },
         {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
           "file": "backend/tests/scripts/test_issue_flow.py",
           "impact_modules": [
             "validation.center",
@@ -86,17 +102,20 @@
       ],
       "suggested_scope": [
         ".github/workflows/test.yml",
+        "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/scripts/test_issue_flow.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_issue_flow.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_issue_flow.py"
     ]
   },
