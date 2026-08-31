@@ -30,6 +30,8 @@ from backend.services.advisory_model_first.strategy_package_batch_prediction imp
     FACTOR_INPUT_COPY_MODE_FILE,
     FACTOR_IO_MODE_FILE_BACKED,
     FACTOR_IO_MODE_IN_MEMORY,
+    FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES,
+    FACTOR_RESULT_PROJECTION_MODE_FILE,
     StrategyPackageBatchPredictionRunner,
     _assert_file_backed_feature_parity,
     _publish_prediction_store,
@@ -268,9 +270,17 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
                 if virtualize_io
                 else FACTOR_INPUT_COPY_MODE_FILE
             ),
+            "factor_result_projection_mode": (
+                FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
+                if virtualize_io
+                else FACTOR_RESULT_PROJECTION_MODE_FILE
+            ),
             "temp_peak_bytes": 0,
             "factor_calculation_count": len(frame.columns),
             "factor_reuse_count": 0,
+            "result_write_count": len(frame.columns) if virtualize_io else 0,
+            "projected_result_write_count": len(frame.columns) if virtualize_io else 0,
+            "fallback_result_write_count": 0,
         }
         return frame
 
@@ -302,6 +312,17 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
     assert result.batch_receipt["daily_db_query_count"] == 0
     assert result.batch_receipt["factor_io_mode"] == FACTOR_IO_MODE_IN_MEMORY
     assert result.batch_receipt["factor_input_copy_mode"] == FACTOR_INPUT_COPY_MODE_COW
+    assert (
+        result.batch_receipt["factor_result_projection_mode"]
+        == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
+    )
+    assert result.batch_receipt["result_write_count"] == result.batch_receipt[
+        "factor_calculation_count"
+    ]
+    assert result.batch_receipt["projected_result_write_count"] == result.batch_receipt[
+        "factor_calculation_count"
+    ]
+    assert result.batch_receipt["fallback_result_write_count"] == 0
     assert result.batch_receipt["temp_storage_mode"] == "ENVIRONMENT_LOCAL_EPHEMERAL"
     assert len(result.batch_receipt["factor_resource_receipts"]) == 778
     assert result.batch_receipt["file_backed_parity_factor_group_run_count"] == 2
@@ -549,8 +570,15 @@ def test_real_factor_batch_uses_one_physical_static_h5_with_hardlink_aliases(
     assert receipt["temp_peak_bytes"] > 0
     assert receipt["factor_io_mode"] == FACTOR_IO_MODE_IN_MEMORY
     assert receipt["factor_input_copy_mode"] == FACTOR_INPUT_COPY_MODE_COW
+    assert (
+        receipt["factor_result_projection_mode"]
+        == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
+    )
     assert receipt["factor_calculation_count"] == 1
     assert receipt["factor_reuse_count"] == 0
+    assert receipt["result_write_count"] == 1
+    assert receipt["projected_result_write_count"] == 1
+    assert receipt["fallback_result_write_count"] == 0
     assert reused.attrs["factor_resource_receipt"]["factor_calculation_count"] == 0
     assert reused.attrs["factor_resource_receipt"]["factor_reuse_count"] == 1
     assert drifted.attrs["factor_resource_receipt"]["factor_calculation_count"] == 1
@@ -560,6 +588,85 @@ def test_real_factor_batch_uses_one_physical_static_h5_with_hardlink_aliases(
         file_backed.attrs["factor_resource_receipt"]["factor_input_copy_mode"]
         == FACTOR_INPUT_COPY_MODE_FILE
     )
+    assert (
+        file_backed.attrs["factor_resource_receipt"]["factor_result_projection_mode"]
+        == FACTOR_RESULT_PROJECTION_MODE_FILE
+    )
+
+
+def test_virtual_factor_io_projects_result_before_materialization_with_cow_snapshot(
+    tmp_path: Path,
+) -> None:
+    days = pd.DatetimeIndex(["2025-04-21", "2025-04-22"])
+    index = pd.MultiIndex.from_product(
+        [days, ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [1.0, 2.0]}, index=index)
+    static = pd.DataFrame({"db_turnover_rate": [1.0, 1.0]}, index=index)
+    result = pd.DataFrame({"factor": [10.0, 20.0]}, index=index)
+
+    with _virtualized_factor_io(
+        daily=daily,
+        static=static,
+        result_dates=[date(2025, 4, 22)],
+    ):
+        clean_path = tmp_path / "daily_pv_clean.h5"
+        clean = pd.read_hdf("daily_pv.h5")
+        clean.to_hdf(clean_path, key="data", mode="w")
+        clean.iloc[:, 0] = 88.0
+        captured_clean = pd.read_hdf(clean_path)
+
+        result_path = tmp_path / "result.h5"
+        result.to_hdf(result_path, key="data", mode="w")
+        result.iloc[:, 0] = 99.0
+        captured = pd.read_hdf(result_path)
+
+        series_path = tmp_path / "series" / "result.h5"
+        result_series = pd.Series([30.0, 40.0], index=index, name="factor")
+        result_series.to_hdf(series_path, key="data", mode="w")
+        result_series.iloc[:] = 77.0
+        captured_series = pd.read_hdf(series_path)
+
+    pd.testing.assert_frame_equal(captured_clean, daily)
+    assert list(captured.index.get_level_values("datetime")) == [pd.Timestamp("2025-04-22")]
+    assert captured.iloc[0, 0] == 20.0
+    assert list(captured_series.index.get_level_values("datetime")) == [
+        pd.Timestamp("2025-04-22")
+    ]
+    assert captured_series.iloc[0] == 40.0
+
+
+def test_virtual_factor_io_falls_back_to_full_result_when_index_needs_normalization(
+    tmp_path: Path,
+) -> None:
+    days = pd.DatetimeIndex(["2025-04-21", "2025-04-22"])
+    index = pd.MultiIndex.from_product(
+        [days, ["SZ000001"]],
+        names=["datetime", "instrument"],
+    )
+    result = pd.DataFrame({"factor": [10.0, 20.0]}, index=index)
+    canonical_index = pd.MultiIndex.from_tuples(
+        [(days[-1], "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [1.0]}, index=canonical_index)
+
+    with _virtualized_factor_io(
+        daily=daily,
+        static=daily,
+        result_dates=[date(2025, 4, 22)],
+    ) as projection_stats:
+        result_path = tmp_path / "result.h5"
+        result.to_hdf(result_path, key="data", mode="w")
+        captured = pd.read_hdf(result_path)
+
+    pd.testing.assert_frame_equal(captured, result)
+    assert projection_stats == {
+        "result_write_count": 1,
+        "projected_result_write_count": 0,
+        "fallback_result_write_count": 1,
+    }
 
 
 def test_virtual_factor_io_restores_pandas_after_exception() -> None:

@@ -57,6 +57,9 @@ FACTOR_IO_MODE_IN_MEMORY = "IN_MEMORY_EQUIVALENT"
 FACTOR_IO_MODE_FILE_BACKED = "FILE_BACKED_REFERENCE"
 FACTOR_INPUT_COPY_MODE_COW = "PANDAS_COPY_ON_WRITE"
 FACTOR_INPUT_COPY_MODE_FILE = "FILE_MATERIALIZED"
+FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES = "DECISION_DATES_BEFORE_MATERIALIZATION"
+FACTOR_RESULT_PROJECTION_MODE_FILE = "FILE_MATERIALIZED_THEN_DECISION_FILTER"
+FACTOR_RESULT_PROJECTION_MODE_FALLBACK = "FULL_RESULT_SEMANTIC_FALLBACK"
 
 _STATIC_ALIASES = (
     "daily_basic.h5",
@@ -286,6 +289,9 @@ class StrategyPackageBatchPredictionRunner:
         factor_group_diagnostic_count = 0
         factor_calculation_count = 0
         factor_reuse_count = 0
+        result_write_count = 0
+        projected_result_write_count = 0
+        fallback_result_write_count = 0
         packages_by_closure = _packages_by_factor_closure(request.packages)
         temp_peak_bytes = 0
         factor_resource_receipts: list[dict[str, Any]] = []
@@ -349,6 +355,13 @@ class StrategyPackageBatchPredictionRunner:
                         resource_receipt.get("factor_calculation_count") or 0
                     )
                     factor_reuse_count += int(resource_receipt.get("factor_reuse_count") or 0)
+                    result_write_count += int(resource_receipt.get("result_write_count") or 0)
+                    projected_result_write_count += int(
+                        resource_receipt.get("projected_result_write_count") or 0
+                    )
+                    fallback_result_write_count += int(
+                        resource_receipt.get("fallback_result_write_count") or 0
+                    )
                     temp_peak_bytes = max(
                         temp_peak_bytes,
                         int(resource_receipt.get("temp_peak_bytes") or 0),
@@ -476,6 +489,13 @@ class StrategyPackageBatchPredictionRunner:
                         resource_receipt.get("factor_calculation_count") or 0
                     )
                     factor_reuse_count += int(resource_receipt.get("factor_reuse_count") or 0)
+                    result_write_count += int(resource_receipt.get("result_write_count") or 0)
+                    projected_result_write_count += int(
+                        resource_receipt.get("projected_result_write_count") or 0
+                    )
+                    fallback_result_write_count += int(
+                        resource_receipt.get("fallback_result_write_count") or 0
+                    )
                     temp_peak_bytes = max(temp_peak_bytes, int(resource_receipt.get("temp_peak_bytes") or 0))
                 for arm in group:
                     replay, _ = self._score_package_features(
@@ -541,6 +561,7 @@ class StrategyPackageBatchPredictionRunner:
         causality_payload["receipt_sha256"] = canonical_json_sha256(causality_payload)
         factor_io_mode: str | None = None
         factor_input_copy_mode: str | None = None
+        factor_result_projection_mode: str | None = None
         if self._requires_factor_resource_receipt:
             expected_resource_receipts = factor_group_primary_count + factor_group_diagnostic_count
             if len(factor_resource_receipts) != expected_resource_receipts:
@@ -571,6 +592,19 @@ class StrategyPackageBatchPredictionRunner:
                     modes=sorted(factor_input_copy_modes),
                 )
             factor_input_copy_mode = FACTOR_INPUT_COPY_MODE_COW
+            factor_result_projection_modes = {
+                str(item.get("factor_result_projection_mode") or "")
+                for item in factor_resource_receipts
+            }
+            if factor_result_projection_modes != {
+                FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
+            }:
+                _raise(
+                    "formal factor batch did not project only requested decision-date results",
+                    REASON_SOURCE_READ_FAILED,
+                    modes=sorted(factor_result_projection_modes),
+                )
+            factor_result_projection_mode = FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
             if len(file_backed_parity_receipts) != len(request.factor_group_closures):
                 _raise(
                     "real closure file-backed parity coverage is incomplete",
@@ -604,6 +638,7 @@ class StrategyPackageBatchPredictionRunner:
             "daily_db_query_count": 0,
             "factor_io_mode": factor_io_mode,
             "factor_input_copy_mode": factor_input_copy_mode,
+            "factor_result_projection_mode": factor_result_projection_mode,
             "file_backed_parity_factor_group_run_count": len(file_backed_parity_receipts),
             "all_factor_group_run_count": (
                 factor_group_primary_count
@@ -615,6 +650,9 @@ class StrategyPackageBatchPredictionRunner:
             "factor_resource_receipts": factor_resource_receipts,
             "factor_calculation_count": factor_calculation_count,
             "factor_reuse_count": factor_reuse_count,
+            "result_write_count": result_write_count,
+            "projected_result_write_count": projected_result_write_count,
+            "fallback_result_write_count": fallback_result_write_count,
             "reference_factor_calculation_count": sum(
                 int(item["reference_resource_receipt"].get("factor_calculation_count") or 0)
                 for item in file_backed_parity_receipts
@@ -892,12 +930,16 @@ def run_factor_group_batch(
         factor_work_root = root / "factor_work"
         factor_work_root.mkdir()
         io_context = (
-            _virtualized_factor_io(daily=daily, static=static)
+            _virtualized_factor_io(
+                daily=daily,
+                static=static,
+                result_dates=decisions,
+            )
             if virtualize_io
             else nullcontext()
         )
         try:
-            with io_context:
+            with io_context as result_projection_stats:
                 tempfile.tempdir = str(factor_work_root)
                 os.chdir(root)
                 for column_index, (factor_name, calculation, factor_key) in enumerate(
@@ -910,7 +952,11 @@ def run_factor_group_batch(
                     )
                     if cached is None:
                         part = calculation()
-                        series = _factor_series(part, factor_name=factor_name)
+                        series = _factor_series(
+                            part,
+                            factor_name=factor_name,
+                            decision_dates=decisions,
+                        )
                         dates = pd.to_datetime(
                             series.index.get_level_values("datetime")
                         ).normalize()
@@ -931,6 +977,17 @@ def run_factor_group_batch(
             os.chdir(old_cwd)
             tempfile.tempdir = old_tempdir
     features = pd.DataFrame(feature_values, index=feature_index, columns=order)
+    factor_result_projection_mode = FACTOR_RESULT_PROJECTION_MODE_FILE
+    if virtualize_io:
+        stats = result_projection_stats or {}
+        expected_writes = factor_calculation_count
+        factor_result_projection_mode = (
+            FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
+            if int(stats.get("result_write_count") or 0) == expected_writes
+            and int(stats.get("projected_result_write_count") or 0) == expected_writes
+            and int(stats.get("fallback_result_write_count") or 0) == 0
+            else FACTOR_RESULT_PROJECTION_MODE_FALLBACK
+        )
     features.attrs["factor_resource_receipt"] = {
         "static_h5_physical_file_count": 1,
         "static_h5_hardlink_alias_count": len(_STATIC_ALIASES),
@@ -945,12 +1002,25 @@ def run_factor_group_batch(
         "factor_input_copy_mode": (
             FACTOR_INPUT_COPY_MODE_COW if virtualize_io else FACTOR_INPUT_COPY_MODE_FILE
         ),
+        "factor_result_projection_mode": factor_result_projection_mode,
+        "result_write_count": int((result_projection_stats or {}).get("result_write_count") or 0),
+        "projected_result_write_count": int(
+            (result_projection_stats or {}).get("projected_result_write_count") or 0
+        ),
+        "fallback_result_write_count": int(
+            (result_projection_stats or {}).get("fallback_result_write_count") or 0
+        ),
     }
     return features
 
 
 @contextmanager
-def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noqa: ANN202
+def _virtualized_factor_io(
+    *,
+    daily: pd.DataFrame,
+    static: pd.DataFrame,
+    result_dates: Sequence[date] | pd.DatetimeIndex | None = None,
+):  # noqa: ANN202
     """Replace only known factor input/result H5 operations with in-memory equivalents."""
 
     original_read_hdf = pd.read_hdf
@@ -968,6 +1038,29 @@ def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noq
     captured_results: dict[Path, pd.DataFrame | pd.Series] = {}
     consumed_results: set[Path] = set()
     clean_daily: pd.DataFrame | None = None
+    projected_result_dates = (
+        pd.DatetimeIndex(pd.to_datetime(list(result_dates))).normalize()
+        if result_dates is not None
+        else None
+    )
+    projection_stats = {
+        "result_write_count": 0,
+        "projected_result_write_count": 0,
+        "fallback_result_write_count": 0,
+    }
+
+    def _project_result(value: pd.DataFrame | pd.Series) -> pd.DataFrame | pd.Series:
+        if projected_result_dates is None:
+            return value
+        projection_stats["result_write_count"] += 1
+        projected, exact = _project_factor_result_for_decisions(
+            value,
+            projected_result_dates,
+        )
+        projection_stats[
+            "projected_result_write_count" if exact else "fallback_result_write_count"
+        ] += 1
+        return projected
 
     def _path(value: Any) -> Path:
         path = Path(os.fspath(value))
@@ -1088,7 +1181,7 @@ def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noq
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
             consumed_results.discard(path)
-            captured_results[path] = frame.copy(deep=True)
+            captured_results[path] = _project_result(frame).copy(deep=False)
             return None
         return original_frame_to_hdf(frame, path_or_buf, *args, **kwargs)
 
@@ -1099,7 +1192,7 @@ def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noq
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
             consumed_results.discard(path)
-            captured_results[path] = series.copy(deep=True)
+            captured_results[path] = _project_result(series).copy(deep=False)
             return None
         return original_series_to_hdf(series, path_or_buf, *args, **kwargs)
 
@@ -1109,7 +1202,7 @@ def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noq
     pd.DataFrame.to_hdf = capture_frame
     pd.Series.to_hdf = capture_series
     try:
-        yield
+        yield projection_stats
     finally:
         pd.read_hdf = original_read_hdf
         pd.read_parquet = original_read_parquet
@@ -1202,11 +1295,16 @@ def _prepare_static_panel(
     return static.sort_index()
 
 
-def _factor_series(value: Any, *, factor_name: str) -> pd.Series:
+def _factor_series(
+    value: Any,
+    *,
+    factor_name: str,
+    decision_dates: Sequence[date] | pd.DatetimeIndex | None = None,
+) -> pd.Series:
     if isinstance(value, pd.Series):
         frame = value.to_frame(factor_name)
     elif isinstance(value, pd.DataFrame):
-        frame = value.copy()
+        frame = value
     else:
         _raise(
             "factor calculation returned a non-tabular value",
@@ -1214,6 +1312,10 @@ def _factor_series(value: Any, *, factor_name: str) -> pd.Series:
             factor_name=factor_name,
             actual_type=type(value).__name__,
         )
+    if decision_dates is not None:
+        decisions = pd.DatetimeIndex(pd.to_datetime(list(decision_dates))).normalize()
+        frame, _ = _project_factor_result_for_decisions(frame, decisions)
+    frame = frame.copy(deep=False if bool(pd.options.mode.copy_on_write) else True)
     if len(frame.columns) != 1:
         _raise(
             "factor calculation must return exactly one column",
@@ -1224,6 +1326,39 @@ def _factor_series(value: Any, *, factor_name: str) -> pd.Series:
     frame.columns = [factor_name]
     frame = _canonical_panel_index(frame, label=f"factor {factor_name}")
     return pd.to_numeric(frame[factor_name], errors="coerce")
+
+
+def _project_factor_result_for_decisions(
+    value: pd.DataFrame | pd.Series,
+    decisions: pd.DatetimeIndex,
+) -> tuple[pd.DataFrame | pd.Series, bool]:
+    """Project only when doing so preserves full-result structural validation."""
+
+    index = value.index
+    if not isinstance(index, pd.MultiIndex) or set(index.names) != {
+        "datetime",
+        "instrument",
+    }:
+        return value, False
+    try:
+        dates = pd.DatetimeIndex(pd.to_datetime(index.get_level_values("datetime")))
+        instruments = index.get_level_values("instrument")
+        unique_instruments = pd.Index(instruments).unique()
+        normalized_by_value = {
+            item: normalize_ts_code(item) for item in unique_instruments
+        }
+    except (TypeError, ValueError, OverflowError):
+        return value, False
+    if not dates.equals(dates.normalize()):
+        return value, False
+    if any(not isinstance(item, str) for item in unique_instruments):
+        return value, False
+    if any(normalized_by_value[item] != item for item in normalized_by_value):
+        return value, False
+    if index.has_duplicates:
+        return value, False
+    keep = dates.isin(decisions)
+    return value.iloc[np.flatnonzero(keep)], True
 
 
 def _scan_factor_sources(

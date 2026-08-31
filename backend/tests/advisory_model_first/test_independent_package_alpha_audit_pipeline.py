@@ -254,6 +254,7 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         },
         "factor_io_mode": "IN_MEMORY_EQUIVALENT",
         "factor_input_copy_mode": "PANDAS_COPY_ON_WRITE",
+        "factor_result_projection_mode": "DECISION_DATES_BEFORE_MATERIALIZATION",
         "temp_storage_mode": "ENVIRONMENT_LOCAL_EPHEMERAL",
         "static_h5_physical_file_count": 1,
         "static_h5_hardlink_alias_count": 6,
@@ -266,6 +267,9 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         "all_factor_group_run_count": 780,
         "factor_calculation_count": 30731,
         "factor_reuse_count": 10892,
+        "result_write_count": 30731,
+        "projected_result_write_count": 30731,
+        "fallback_result_write_count": 0,
         "reference_factor_calculation_count": 107,
         "file_backed_parity_receipts": [
             {
@@ -293,6 +297,15 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
     )
     assert not _valid_batch_execution_receipt(
         {**batch_receipt, "factor_reuse_count": 10891},
+        request=request,
+    )
+    assert not _valid_batch_execution_receipt(
+        {
+            **batch_receipt,
+            "factor_result_projection_mode": "FULL_RESULT_SEMANTIC_FALLBACK",
+            "projected_result_write_count": 30730,
+            "fallback_result_write_count": 1,
+        },
         request=request,
     )
     batch = PackagePredictionBatchResult(

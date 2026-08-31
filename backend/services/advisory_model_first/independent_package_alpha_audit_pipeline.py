@@ -82,6 +82,7 @@ from backend.services.advisory_model_first.research_control_contracts import (
 from backend.services.advisory_model_first.strategy_package_batch_prediction import (
     FACTOR_INPUT_COPY_MODE_COW,
     FACTOR_IO_MODE_IN_MEMORY,
+    FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES,
     PackagePredictionBatchResult,
     StrategyPackageBatchPredictionRunner,
 )
@@ -1784,6 +1785,8 @@ def _valid_batch_execution_receipt(
         and all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in windows.values())
         and receipt.get("factor_io_mode") == FACTOR_IO_MODE_IN_MEMORY
         and receipt.get("factor_input_copy_mode") == FACTOR_INPUT_COPY_MODE_COW
+        and receipt.get("factor_result_projection_mode")
+        == FACTOR_RESULT_PROJECTION_MODE_DECISION_DATES
         and receipt.get("temp_storage_mode") == "ENVIRONMENT_LOCAL_EPHEMERAL"
         and receipt.get("static_h5_physical_file_count") == 1
         and receipt.get("static_h5_hardlink_alias_count") == 6
@@ -1796,6 +1799,9 @@ def _valid_batch_execution_receipt(
         and receipt.get("all_factor_group_run_count") == 780
         and receipt.get("factor_calculation_count") == 30731
         and receipt.get("factor_reuse_count") == 10892
+        and receipt.get("result_write_count") == 30731
+        and receipt.get("projected_result_write_count") == 30731
+        and receipt.get("fallback_result_write_count") == 0
         and receipt.get("reference_factor_calculation_count") == 107
         and isinstance(receipt.get("file_backed_parity_receipts"), list)
         and len(receipt["file_backed_parity_receipts"]) == 2
