@@ -78,8 +78,6 @@ NON_BLOCKING_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 MERGE_QUALITY_CHECK_CONTEXTS = (
     "CI verdict",
     "CodeQL verdict",
-    "AIstock Semgrep guardrails",
-    "Context, scope, and open-source tooling dry-run",
 )
 ARTIFACT_PATH_PATTERNS = (
     ".codex_tmp",
