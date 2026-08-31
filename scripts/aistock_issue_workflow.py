@@ -463,6 +463,10 @@ def _sha256_file(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _sha256_tree(path: Path) -> str | None:
     if not path.exists():
         return None
@@ -10568,6 +10572,12 @@ CLIENT_CLAUDE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("validation_delegation", "aistock-validation-delegation.md"),
 )
 
+CLIENT_CLAUDE_STARTUP_ROUTER_KEY = "startup_router"
+CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE = Path(".claude/commands/aistock-global-router.md")
+CLIENT_CLAUDE_STARTUP_ROUTER_TARGET = "CLAUDE.md"
+CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN = "<!-- BEGIN AISTOCK MANAGED ROUTER -->"
+CLIENT_CLAUDE_STARTUP_ROUTER_END = "<!-- END AISTOCK MANAGED ROUTER -->"
+
 CLIENT_LANE_CHOICES: tuple[str, ...] = tuple(key for key, _name in CLIENT_CODEX_SKILLS)
 
 
@@ -10597,6 +10607,8 @@ def _client_lanes_for_changed_files(changed_files: Iterable[str]) -> list[str]:
         path = f".claude/commands/{command_name}"
         if path in normalized:
             lanes.add(key)
+    if CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE.as_posix() in normalized:
+        lanes.add("router")
     return sorted(lanes)
 
 
@@ -10606,8 +10618,9 @@ def _stale_client_lanes(manifest: dict[str, Any]) -> list[str]:
     for entries_key in ("codex_entries", "claude_entries"):
         entries = manifest.get(entries_key) if isinstance(manifest.get(entries_key), dict) else {}
         for lane, entry in entries.items():
-            if str((entry or {}).get("status") or "") in stale_statuses:
-                lanes.add(str(lane))
+            status = str((entry or {}).get("status") or "")
+            if status in stale_statuses or status.startswith("stale"):
+                lanes.add("router" if lane == CLIENT_CLAUDE_STARTUP_ROUTER_KEY else str(lane))
     return sorted(lanes)
 
 
@@ -10757,6 +10770,7 @@ def _client_source_authority() -> dict[str, Any]:
             "--",
             ".codex/skills",
             ".claude/commands",
+            str(CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE),
             "scripts/aistock_issue_workflow.py",
         ],
         cwd=canonical_root,
@@ -10892,6 +10906,63 @@ def _staged_replace_file(source: Path, target: Path) -> None:
             stage.unlink()
 
 
+def _claude_startup_router_block(
+    path: Path,
+    *,
+    require_only_block: bool = False,
+) -> tuple[str | None, str | None]:
+    if not path.exists():
+        return None, "missing"
+    if not path.is_file():
+        return None, "not_a_file"
+    text = path.read_text(encoding="utf-8")
+    begin_count = text.count(CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN)
+    end_count = text.count(CLIENT_CLAUDE_STARTUP_ROUTER_END)
+    if begin_count == 0 and end_count == 0:
+        return None, "missing"
+    if begin_count != 1 or end_count != 1:
+        return None, "malformed_markers"
+    begin = text.index(CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN)
+    end = text.find(CLIENT_CLAUDE_STARTUP_ROUTER_END, begin)
+    if end < 0:
+        return None, "malformed_marker_order"
+    end += len(CLIENT_CLAUDE_STARTUP_ROUTER_END)
+    if require_only_block and (text[:begin].strip() or text[end:].strip()):
+        return None, "authority_contains_unmanaged_text"
+    return text[begin:end].strip(), None
+
+
+def _merge_claude_startup_router_block(current: str, managed_block: str) -> str:
+    begin_count = current.count(CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN)
+    end_count = current.count(CLIENT_CLAUDE_STARTUP_ROUTER_END)
+    if begin_count == 0 and end_count == 0:
+        prefix = current.rstrip()
+        return f"{prefix}\n\n{managed_block}\n" if prefix else f"{managed_block}\n"
+    if begin_count != 1 or end_count != 1:
+        raise WorkflowError("Claude startup memory has malformed AIstock managed-router markers")
+    begin = current.index(CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN)
+    end = current.find(CLIENT_CLAUDE_STARTUP_ROUTER_END, begin)
+    if end < 0:
+        raise WorkflowError("Claude startup memory has reversed AIstock managed-router markers")
+    end += len(CLIENT_CLAUDE_STARTUP_ROUTER_END)
+    return f"{current[:begin]}{managed_block}{current[end:]}"
+
+
+def _staged_replace_text(target: Path, text: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, stage_name = tempfile.mkstemp(prefix=f".{target.name}.stage-", dir=target.parent)
+    stage = Path(stage_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+        os.replace(stage, target)
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            stage.unlink()
+
+
 def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = None) -> dict[str, Any]:
     codex_home = codex_home or _codex_home()
     claude_home = claude_home or _claude_home()
@@ -10974,6 +11045,55 @@ def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = 
             "checkout_status": "matches_authority" if repo_sha == authority_sha else "differs_from_authority",
             "status": _file_status(authority_sha, global_sha),
         }
+
+    startup_repo_path = checkout_root / CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE
+    startup_authority_path = authority_root / CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE
+    startup_global_path = claude_home / CLIENT_CLAUDE_STARTUP_ROUTER_TARGET
+    startup_repo_block, startup_repo_error = _claude_startup_router_block(
+        startup_repo_path,
+        require_only_block=True,
+    )
+    if authority.get("ready"):
+        startup_authority_block, startup_authority_error = _claude_startup_router_block(
+            startup_authority_path,
+            require_only_block=True,
+        )
+    else:
+        startup_authority_block, startup_authority_error = None, "authority_unavailable"
+    startup_global_block, startup_global_error = _claude_startup_router_block(startup_global_path)
+    startup_repo_sha = _sha256_text(startup_repo_block) if startup_repo_block is not None else None
+    startup_authority_sha = (
+        _sha256_text(startup_authority_block) if startup_authority_block is not None else None
+    )
+    startup_global_sha = _sha256_text(startup_global_block) if startup_global_block is not None else None
+    if not authority.get("ready"):
+        startup_status = "authority_unavailable"
+    elif startup_authority_error:
+        startup_status = "missing_authority"
+    elif startup_global_error == "missing":
+        startup_status = "missing_global"
+    elif startup_global_error:
+        startup_status = "stale_global_malformed"
+    else:
+        startup_status = _file_status(startup_authority_sha, startup_global_sha)
+    claude_entries[CLIENT_CLAUDE_STARTUP_ROUTER_KEY] = {
+        "name": f"{CLIENT_CLAUDE_STARTUP_ROUTER_TARGET}#aistock-managed-router",
+        "repo_path": str(startup_repo_path),
+        "authority_path": str(startup_authority_path),
+        "global_path": str(startup_global_path),
+        "repo_sha256": startup_repo_sha,
+        "authority_sha256": startup_authority_sha,
+        "global_sha256": startup_global_sha,
+        "repo_error": startup_repo_error,
+        "authority_error": startup_authority_error,
+        "global_error": startup_global_error,
+        "checkout_status": (
+            "matches_authority"
+            if startup_repo_sha is not None and startup_repo_sha == startup_authority_sha
+            else "differs_from_authority"
+        ),
+        "status": startup_status,
+    }
 
     codex_status = _combined_status(
         (entry["status"] for entry in codex_entries.values()),
@@ -11075,7 +11195,11 @@ def _client_lane_verification(
         for key, entry in entries.items():
             status = str((entry or {}).get("status") or "missing")
             checkout_status = str((entry or {}).get("checkout_status") or "unknown")
-            relevant = key in selected_keys
+            relevant = key in selected_keys or (
+                client == "claude"
+                and key == CLIENT_CLAUDE_STARTUP_ROUTER_KEY
+                and "router" in selected_keys
+            )
             checked.append(
                 {
                     "client": client,
@@ -11312,6 +11436,21 @@ def build_client_install_plan(
         for key, name in CLIENT_CLAUDE_COMMANDS
         if key in selected_keys
     ] if install_claude else []
+    startup_router_selected = install_claude and "router" in selected_keys
+    startup_router_source = authority_root / CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE
+    startup_router_target = target_claude_home / CLIENT_CLAUDE_STARTUP_ROUTER_TARGET
+    startup_router_block: str | None = None
+    startup_router_error: str | None = None
+    startup_router_target_block: str | None = None
+    startup_router_target_error: str | None = None
+    if startup_router_selected:
+        startup_router_block, startup_router_error = _claude_startup_router_block(
+            startup_router_source,
+            require_only_block=True,
+        )
+        startup_router_target_block, startup_router_target_error = _claude_startup_router_block(
+            startup_router_target
+        )
     blocking: list[str] = []
     if not source_authority.get("ready"):
         blocking.append(
@@ -11324,6 +11463,16 @@ def build_client_install_plan(
     for _key, name, source, _target in source_claude_commands:
         if not source.exists():
             blocking.append(f"missing repo Claude Code command {name}: {source}")
+    if startup_router_selected and startup_router_error:
+        blocking.append(
+            "invalid repo Claude startup router authority "
+            f"{startup_router_source}: {startup_router_error}"
+        )
+    if startup_router_selected and startup_router_target_error not in {None, "missing"}:
+        blocking.append(
+            "Claude startup memory has invalid AIstock managed-router block "
+            f"{startup_router_target}: {startup_router_target_error}"
+        )
 
     actions: list[dict[str, Any]] = []
     for key, name, source, target in source_codex_skills:
@@ -11351,6 +11500,25 @@ def build_client_install_plan(
                 "source": str(source),
                 "target": str(target),
                 "safe": source.exists() and not blocking,
+                "source_sha256": source_sha,
+                "target_sha256": target_sha,
+                "sync_required": source_sha != target_sha,
+            }
+        )
+    if startup_router_selected:
+        source_sha = _sha256_text(startup_router_block) if startup_router_block is not None else None
+        target_sha = (
+            _sha256_text(startup_router_target_block)
+            if startup_router_target_block is not None
+            else None
+        )
+        actions.append(
+            {
+                "action": "sync_claude_code_startup_router",
+                "name": f"{CLIENT_CLAUDE_STARTUP_ROUTER_TARGET}#aistock-managed-router",
+                "source": str(startup_router_source),
+                "target": str(startup_router_target),
+                "safe": startup_router_block is not None and not blocking,
                 "source_sha256": source_sha,
                 "target_sha256": target_sha,
                 "sync_required": source_sha != target_sha,
@@ -11390,6 +11558,51 @@ def build_client_install_plan(
                 raise WorkflowError(
                     "merged client authority changed before install; rerun from synchronized canonical main"
                 )
+            if startup_router_selected:
+                locked_startup_block, locked_startup_error = _claude_startup_router_block(
+                    startup_router_source,
+                    require_only_block=True,
+                )
+                locked_target_block, locked_target_error = _claude_startup_router_block(
+                    startup_router_target
+                )
+                if locked_startup_error or locked_startup_block is None:
+                    raise WorkflowError(
+                        "Claude startup router authority changed before install: "
+                        f"{locked_startup_error or 'missing'}"
+                    )
+                if locked_target_error not in {None, "missing"}:
+                    raise WorkflowError(
+                        "Claude startup memory changed to malformed managed-router markers before install"
+                    )
+                if _sha256_text(locked_startup_block) == (
+                    _sha256_text(locked_target_block) if locked_target_block is not None else None
+                ):
+                    skipped_current.append(
+                        {
+                            "client": "claude",
+                            "lane": CLIENT_CLAUDE_STARTUP_ROUTER_KEY,
+                            "target": str(startup_router_target),
+                        }
+                    )
+                else:
+                    current_text = (
+                        startup_router_target.read_text(encoding="utf-8")
+                        if startup_router_target.exists()
+                        else ""
+                    )
+                    merged_text = _merge_claude_startup_router_block(
+                        current_text,
+                        locked_startup_block,
+                    )
+                    _staged_replace_text(startup_router_target, merged_text)
+                    installed.append(
+                        {
+                            "client": "claude",
+                            "lane": CLIENT_CLAUDE_STARTUP_ROUTER_KEY,
+                            "target": str(startup_router_target),
+                        }
+                    )
             for key, _name, source, target in source_codex_skills:
                 if _sha256_tree(source) == _sha256_tree(target):
                     skipped_current.append({"client": "codex", "lane": key, "target": str(target)})

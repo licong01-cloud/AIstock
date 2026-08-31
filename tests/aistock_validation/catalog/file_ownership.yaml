@@ -1430,6 +1430,7 @@ rules:
       - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
       - .claude/commands/aistock-task-router.md
+      - .claude/commands/aistock-global-router.md
       - .claude/commands/aistock-docs-handoff.md
       - .claude/commands/aistock-merge-aftercare.md
       - .claude/commands/aistock-readonly-triage.md
