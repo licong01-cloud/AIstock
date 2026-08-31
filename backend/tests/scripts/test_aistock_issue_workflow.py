@@ -11656,6 +11656,238 @@ def test_close_sync_pr_commit_reuses_existing_branch_pr_when_worktree_is_clean(
     assert payload["pr_url"] == "https://github.example/pull/299"
 
 
+def test_close_sync_pr_commit_recovers_unpushed_clean_commit(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    head = "a" * 40
+    remote_heads = iter([None, head])
+    calls: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {
+            "commit": head,
+            "changed_files": [bug_file],
+            "merge_base": "b" * 40,
+            "ahead_of_merge_base": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_remote_close_sync_branch_head",
+        lambda _branch, root: next(remote_heads),
+    )
+    monkeypatch.setattr(workflow, "_open_pr_for_branch", lambda _branch, **_kwargs: None)
+    monkeypatch.setattr(
+        workflow,
+        "_create_pr_with_transport_fallback",
+        lambda **_kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "https://github.com/licong01-cloud/AIstock/pull/299",
+            "stderr": "",
+        },
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": bug_file,
+            "merged_pr": "https://github.example/pull/199",
+            "merge_commit": "merge123",
+        },
+        validation_evidence=["targeted test -> passed"],
+    )
+
+    assert payload["workflow_gate"] == "pr_opened"
+    assert payload["reason"] == "recovered_unpushed_close_sync_commit"
+    assert payload["commit"] == head
+    assert ["git", "push", "-u", "origin", "chore/BUG-199-close-sync"] in calls
+
+
+def test_close_sync_pr_commit_recovers_pushed_commit_without_duplicate_pr(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    head = "a" * 40
+    calls: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {"commit": head, "changed_files": [bug_file], "merge_base": "b" * 40},
+    )
+    monkeypatch.setattr(workflow, "_remote_close_sync_branch_head", lambda _branch, root: head)
+    monkeypatch.setattr(
+        workflow,
+        "_open_pr_for_branch",
+        lambda _branch, **_kwargs: {
+            "number": 299,
+            "url": "https://github.example/pull/299",
+            "headRefName": "chore/BUG-199-close-sync",
+            "headRefOid": head,
+        },
+    )
+    monkeypatch.setattr(workflow, "_run_command", lambda args, **_kwargs: calls.append(args) or {})
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": bug_file,
+        },
+        validation_evidence=["targeted test -> passed"],
+    )
+
+    assert payload["reason"] == "recovered_existing_close_sync_commit_and_pr"
+    assert payload["pr_url"] == "https://github.example/pull/299"
+    assert not any(args[:2] == ["git", "push"] for args in calls)
+
+
+def test_close_sync_pr_commit_recovery_fails_closed_on_remote_sha_mismatch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {"commit": "a" * 40, "changed_files": [bug_file], "merge_base": "c" * 40},
+    )
+    monkeypatch.setattr(workflow, "_remote_close_sync_branch_head", lambda _branch, root: "b" * 40)
+    monkeypatch.setattr(workflow, "_is_single_commit_fast_forward", lambda **_kwargs: False)
+
+    with pytest.raises(workflow.WorkflowError, match="remote branch diverges"):
+        workflow._maybe_commit_and_pr_close_sync(
+            bug_id="BUG-199",
+            close_sync={
+                "registry_root": str(registry),
+                "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+                "updated_bug_json": bug_file,
+            },
+            validation_evidence=["targeted test -> passed"],
+        )
+
+
+def test_close_sync_pr_commit_recovers_one_commit_ahead_of_existing_remote(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    old_head = "b" * 40
+    head = "a" * 40
+    remote_heads = iter([old_head, head])
+    calls: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {
+            "commit": head,
+            "changed_files": [bug_file],
+            "merge_base": "c" * 40,
+            "ahead_of_merge_base": 2,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_remote_close_sync_branch_head",
+        lambda _branch, root: next(remote_heads),
+    )
+    monkeypatch.setattr(workflow, "_is_single_commit_fast_forward", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        workflow,
+        "_open_pr_for_branch",
+        lambda _branch, **_kwargs: {
+            "number": 299,
+            "url": "https://github.example/pull/299",
+            "headRefOid": head,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, **_kwargs: calls.append(args)
+        or {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": bug_file,
+        },
+        validation_evidence=["targeted test -> passed"],
+    )
+
+    assert payload["reason"] == "recovered_existing_close_sync_commit_and_pr"
+    assert ["git", "push", "-u", "origin", "chore/BUG-199-close-sync"] in calls
+
+
+def test_close_sync_commit_inspection_rejects_unrelated_file(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = "a" * 40
+    base = "b" * 40
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        stdout_by_args = {
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): "chore/BUG-199-close-sync",
+            ("git", "rev-parse", "HEAD"): head,
+            ("git", "merge-base", "HEAD", "origin/main"): base,
+            ("git", "rev-list", "--count", f"{base}..HEAD"): "1",
+            ("git", "rev-list", "--parents", "-n", "1", "HEAD"): f"{head} {base}",
+            ("git", "show", "-s", "--format=%s", "HEAD"): "chore(issue): close-sync BUG-199 after merge",
+            ("git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"): (
+                "tests/aistock_validation/bugs/bug199.json\nscripts/unrelated.py"
+            ),
+        }
+        return {
+            "ok": tuple(args) in stdout_by_args,
+            "returncode": 0,
+            "stdout": stdout_by_args.get(tuple(args), ""),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="files differ"):
+        workflow._inspect_pending_close_sync_commit(
+            root=isolated_workflow_root,
+            branch="chore/BUG-199-close-sync",
+            expected_subject="chore(issue): close-sync BUG-199 after merge",
+            expected_files=["tests/aistock_validation/bugs/bug199.json"],
+        )
+
+
 def test_close_sync_pr_commit_blocks_unexpected_dirty_files(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
