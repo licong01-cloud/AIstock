@@ -1,0 +1,198 @@
+{
+  "actual": "Current unmerged P0-1A implementation violates those contracts although it is not wired into runtime and has no GPU calls.",
+  "allowed_write_scope": [
+    "backend/migrations/multi_alpha_durable_orchestration_20260718.preflight.sql",
+    "backend/migrations/multi_alpha_durable_orchestration_20260718.rollback.sql",
+    "backend/migrations/multi_alpha_durable_orchestration_20260718.sql",
+    "backend/services/multi_alpha/durable_models.py",
+    "backend/services/multi_alpha/durable_repository.py",
+    "backend/services/multi_alpha/durable_backfill.py",
+    "backend/tests/multi_alpha/__init__.py",
+    "backend/tests/multi_alpha/test_durable_repository.py",
+    "backend/tests/multi_alpha/test_durable_backfill.py",
+    "backend/tests/multi_alpha/test_durable_repository_postgres.py",
+    "backend/tests/multi_alpha/test_durable_schema.py",
+    "docs/codex_project_memory.md",
+    "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+    "scripts/backfill_multi_alpha_durable_tasks.py",
+    "tests/aistock_validation/bugs/20260718_BUG-767-durable-multi-alpha-orchestration-violates-lease-claim-backfill-and-iden.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-767",
+  "closed_at": "2026-07-19T04:18:37Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-18T19:58:14.414432Z",
+  "description": "Current unmerged P0-1A implementation violates those contracts although it is not wired into runtime and has no GPU calls.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260718-cdc1aa8d8dfb",
+      "timestamp": "2026-07-18T19:58:14.414428Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "codex",
+      "note": "BUG-767 repairs the same unmerged P0-1A foundation branch, so PR scope includes its already-approved migration, backfill entrypoint, tests, design, and project-memory files; no unrelated runtime scope was added.",
+      "timestamp": "2026-07-18T20:38:48.5136308Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "codex",
+      "note": "PR CI found the new multi-alpha migration, tests, and backfill entrypoint absent from the existing qe_multi_alpha_services ownership rule; the catalog-only correction maps them to the existing qe.auto_evolution validation plan and adds no runtime behavior.",
+      "timestamp": "2026-07-18T20:48:27.3752587Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md:841"
+  ],
+  "expected": "QE-only durable orchestration must reject every expired owner write, claim only durable-managed work with state-pair semantics, backfill only legacy rows while distinguishing technical failure from mathematical not-computable, verify canonical payload hashes, fail closed on the full runtime schema contract, and preserve cancel/reason/error semantics without affecting model training or GPU resources.",
+  "first_seen_at": "2026-07-18T19:58:14.414432Z",
+  "fix_branch": null,
+  "fix_commit": "5f698b3be504aff9a8a05354240dba84ef68a8e4",
+  "fixed_at": "2026-07-19T04:19:14.275797Z",
+  "github_issue_number": 2459,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2459",
+  "last_seen_at": "2026-07-18T19:58:14.414432Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2464",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "pending",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/multi_alpha/test_durable_repository.py backend/tests/multi_alpha/test_durable_backfill.py backend/tests/multi_alpha/test_durable_repository_postgres.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "Durable multi-alpha orchestration violates lease claim backfill and identity contracts",
+  "trigger_condition": {
+    "fingerprint": "cdc1aa8d8dfb8951309241a6",
+    "source_event_id": "FE-20260718-cdc1aa8d8dfb"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_multi_alpha_combine_backtest.py backend/tests/test_multi_alpha_combine_ui_adapter.py backend/tests/multi_alpha -q -p no:cacheprovider -> 89 passed, 4 skipped",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md --tier F2 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "multi_alpha",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "multi_alpha",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

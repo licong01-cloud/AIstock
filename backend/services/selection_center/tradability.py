@@ -129,6 +129,7 @@ class TradabilityFilter:
         enabled: bool = True,
         industry_blacklist: list[str] | None = None,
         allow_empty: bool = False,
+        exhaustive_evidence: bool = False,
     ) -> TradabilityResult:
         """Run the current filter once and preserve its exact in-memory trace."""
         if top_k <= 0:
@@ -146,11 +147,21 @@ class TradabilityFilter:
                 exclude_suspended=False,
                 industry_blacklist=[],
             )
+            tail_exclusions = [
+                self._top_k_exclusion(
+                    candidate,
+                    trade_date=trade_date,
+                    package_id=package_id,
+                    manifest_sha256=manifest_sha256,
+                    top_k=top_k,
+                )
+                for candidate in ordered[top_k:]
+            ] if exhaustive_evidence else []
             return self._result_with_receipt(
                 candidates=selected,
-                exclusions=[],
+                exclusions=tail_exclusions,
                 candidate_pool_count=len(ordered),
-                inspected_count=len(selected),
+                inspected_count=len(ordered) if exhaustive_evidence else len(selected),
                 enabled=False,
                 industry_blacklist=[],
                 trade_date=trade_date,
@@ -175,6 +186,19 @@ class TradabilityFilter:
         selected: list[SelectionCandidate] = []
         excluded: list[SelectionExclusion] = []
         for candidate in ordered:
+            if len(selected) >= top_k:
+                if exhaustive_evidence:
+                    excluded.append(
+                        self._top_k_exclusion(
+                            candidate,
+                            trade_date=trade_date,
+                            package_id=package_id,
+                            manifest_sha256=manifest_sha256,
+                            top_k=top_k,
+                        )
+                    )
+                    continue
+                break
             suspension = suspended.get(candidate.symbol)
             if suspension is not None:
                 excluded.append(
@@ -244,8 +268,6 @@ class TradabilityFilter:
                     )
                     continue
             selected.append(candidate)
-            if len(selected) >= top_k:
-                break
 
         if not selected:
             reasons = sorted({item.reason for item in excluded})
@@ -254,7 +276,7 @@ class TradabilityFilter:
                     candidates=[],
                     exclusions=excluded,
                     candidate_pool_count=len(ordered),
-                    inspected_count=len(excluded),
+                    inspected_count=len(ordered),
                     enabled=enabled,
                     industry_blacklist=normalized_industry_blacklist,
                     trade_date=trade_date,
@@ -294,12 +316,36 @@ class TradabilityFilter:
             candidates=reranked,
             exclusions=excluded,
             candidate_pool_count=len(ordered),
-            inspected_count=len(reranked) + len(excluded),
+            inspected_count=(len(ordered) if exhaustive_evidence else len(reranked) + len(excluded)),
             enabled=enabled,
             industry_blacklist=normalized_industry_blacklist,
             trade_date=trade_date,
             package_id=package_id,
             manifest_sha256=manifest_sha256,
+        )
+
+    @staticmethod
+    def _top_k_exclusion(
+        candidate: SelectionCandidate,
+        *,
+        trade_date: date,
+        package_id: str,
+        manifest_sha256: str,
+        top_k: int,
+    ) -> SelectionExclusion:
+        return SelectionExclusion(
+            symbol=candidate.symbol,
+            score=candidate.score,
+            rank=candidate.rank,
+            reason="outside_selection_top_k",
+            source="runtime_profile.selection.top_k",
+            context={
+                "package_id": package_id,
+                "manifest_sha256": manifest_sha256,
+                "trade_date": trade_date.isoformat(),
+                "raw_rank": candidate.rank,
+                "top_k": top_k,
+            },
         )
 
     def select_top_k_with_receipt(
@@ -310,6 +356,7 @@ class TradabilityFilter:
         trade_date: date,
         package_id: str,
         manifest_sha256: str,
+        exhaustive_evidence: bool = False,
     ) -> TradabilityResult:
         """Record the existing no-filter top-k branch without mutating rows."""
         if top_k <= 0:
@@ -318,11 +365,21 @@ class TradabilityFilter:
                 context={"package_id": package_id, "top_k": top_k},
             )
         selected = list(candidates[:top_k])
+        exclusions = [
+            self._top_k_exclusion(
+                candidate,
+                trade_date=trade_date,
+                package_id=package_id,
+                manifest_sha256=manifest_sha256,
+                top_k=top_k,
+            )
+            for candidate in candidates[top_k:]
+        ] if exhaustive_evidence else []
         return self._result_with_receipt(
             candidates=selected,
-            exclusions=[],
+            exclusions=exclusions,
             candidate_pool_count=len(candidates),
-            inspected_count=len(selected),
+            inspected_count=len(candidates) if exhaustive_evidence else len(selected),
             enabled=False,
             industry_blacklist=[],
             trade_date=trade_date,

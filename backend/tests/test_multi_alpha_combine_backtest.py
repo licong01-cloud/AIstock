@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -209,6 +211,7 @@ def _service(
         capacity_checker=checker,
         workspace_root=tmp_path / "macb",
         clock=lambda: datetime(2026, 1, 5, tzinfo=timezone.utc),
+        legacy_execution_mode_for_tests=True,
     )
     service._archive_event_capture = FakeArchiveEventCapture()  # type: ignore[attr-defined]
     return service, repo, executor, checker
@@ -223,6 +226,17 @@ def _runtime_template(tmp_path: Path) -> Path:
                 "class": "ScoreWeightedTopkStrategyV2",
                 "kwargs": {"topk": 25, "n_drop": 2},
             },
+            "backtest": {
+                "start_time": "2026-03-30",
+                "end_time": "2026-04-28",
+            },
+        },
+        "task": {
+            "dataset": {
+                "kwargs": {
+                    "segments": {"test": ["2026-03-30", "2026-04-28"]},
+                }
+            }
         },
     }
     (template / "conf.yaml").write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
@@ -238,6 +252,7 @@ def test_submit_preflights_missing_runtime_template_before_persisting_run(tmp_pa
         prediction_loader=lambda _run_id: _pred(1.0),
         repository=repo,
         workspace_root=tmp_path / "macb",
+        legacy_execution_mode_for_tests=True,
     )
     payload = _payload()
     payload["backtest_config"] = {
@@ -288,11 +303,76 @@ def test_prepare_runtime_template_routes_unreadable_wsl_link_through_wsl_copy(
     assert (workspace / "bak_basic.h5").read_text(encoding="utf-8") == "test stand-in"
 
 
+def test_prepare_runtime_template_refreshes_current_sector_overlay_helpers(tmp_path: Path) -> None:
+    template = _runtime_template(tmp_path)
+    stale_wrapper = "from qe_suspend_filter_score_weighted_strategy import ScoreWeightedTopkStrategyV2\n"
+    (template / "qe_sector_risk_overlay_strategy.py").write_text(stale_wrapper, encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    combine_backtest_module.prepare_pred_backtest_workspace(
+        workspace=workspace,
+        backtest_config={
+            "runtime_template_dir": str(template),
+            "strategy_kwargs": {
+                "sector_risk_overlay_enabled": True,
+                "sector_risk_overlay_mode": "bounded_de_risk",
+            },
+        },
+    )
+
+    scripts_dir = combine_backtest_module._AISTOCK_PROJECT_ROOT / "scripts"
+    for helper_name in combine_backtest_module.QE_STRATEGY_RUNTIME_HELPER_FILES:
+        assert (workspace / helper_name).read_bytes() == (scripts_dir / helper_name).read_bytes()
+    wrapper = (workspace / "qe_sector_risk_overlay_strategy.py").read_text(encoding="utf-8")
+    assert "from score_weighted_strategy_v2 import ScoreWeightedTopkStrategyV2" in wrapper
+    assert "from score_weighted_strategy_v2_capacity_v1 import" in wrapper
+    assert wrapper != stale_wrapper
+
+
+def test_prepare_runtime_template_fails_closed_when_current_overlay_helper_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    template = _runtime_template(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(
+        combine_backtest_module,
+        "QE_STRATEGY_RUNTIME_HELPER_FILES",
+        (*combine_backtest_module.QE_STRATEGY_RUNTIME_HELPER_FILES, "missing_overlay_parent.py"),
+    )
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        combine_backtest_module.prepare_pred_backtest_workspace(
+            workspace=workspace,
+            backtest_config={
+                "runtime_template_dir": str(template),
+                "strategy_kwargs": {
+                    "sector_risk_overlay_enabled": True,
+                    "sector_risk_overlay_mode": "exit_reentry",
+                },
+            },
+        )
+
+    assert excinfo.value.reason_code == "pred_backtest_sector_risk_runtime_asset_missing"
+    assert excinfo.value.context["missing"] == ["missing_overlay_parent.py"]
+
+
 def test_default_local_pred_backtest_commands_use_configured_wsl_on_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(combine_backtest_module, "_is_windows_host", lambda: True)
+    monkeypatch.setenv("TDX_DB_HOST", "fake-host")
+    monkeypatch.setenv("TDX_DB_PORT", "5432")
+    monkeypatch.setenv("TDX_DB_USER", "fake-user")
+    monkeypatch.setenv("TDX_DB_PASSWORD", "fake-password")
+    monkeypatch.setenv("TDX_DB_NAME", "fake-db")
+    monkeypatch.setenv("PGHOST", "fake-pghost")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("AISTOCK_PREDICTION_STORE_BASE_URL", "http://prediction-store")
+    monkeypatch.setenv("QLIB_DATA_PATH", "C:/qlib_data")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -317,7 +397,21 @@ def test_default_local_pred_backtest_commands_use_configured_wsl_on_windows(
     assert "conda activate rdagent-gpu; set -u;" in read_command[-1]
     assert "set -euo pipefail; source" not in read_command[-1]
     assert "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py" in read_command[-1]
-    assert read_env is None
+    # The child env is the scrubbed QE data-plane env: DB credentials removed,
+    # file-path / control-plane variables preserved.
+    assert read_env is not None
+    for leaked in (
+        "TDX_DB_HOST",
+        "TDX_DB_PORT",
+        "TDX_DB_USER",
+        "TDX_DB_PASSWORD",
+        "TDX_DB_NAME",
+        "PGHOST",
+        "DATABASE_URL",
+    ):
+        assert leaked not in read_env
+    assert read_env.get("AISTOCK_PREDICTION_STORE_BASE_URL") == "http://prediction-store"
+    assert read_env.get("QLIB_DATA_PATH") == "C:/qlib_data"
 
 
 def test_prepare_runtime_template_preserves_real_drvfs_linux_symlink(tmp_path: Path) -> None:
@@ -395,6 +489,7 @@ def _rank_fusion_service(
         capacity_checker=checker,
         workspace_root=tmp_path / "macb",
         clock=lambda: datetime(2026, 1, 5, tzinfo=timezone.utc),
+        legacy_execution_mode_for_tests=True,
     )
     service._archive_event_capture = FakeArchiveEventCapture()  # type: ignore[attr-defined]
     return service, repo, executor, checker
@@ -602,6 +697,44 @@ def test_initial_cash_override_inserts_missing_backtest_account(tmp_path: Path) 
 
     updated = yaml.safe_load((workspace / "conf.yaml").read_text(encoding="utf-8"))
     assert updated["port_analysis_config"]["backtest"]["account"] == 100_000_000
+
+
+def test_oos_window_override_updates_backtest_and_dataset_test_segment(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    conf = {
+        "port_analysis_config": {
+            "strategy": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {"topk": 25, "n_drop": 2},
+            },
+            "backtest": {
+                "start_time": "2026-03-30",
+                "end_time": "2026-04-28",
+            },
+        },
+        "task": {
+            "dataset": {
+                "kwargs": {
+                    "segments": {"test": ["2026-03-30", "2026-04-28"]},
+                }
+            }
+        },
+    }
+    (workspace / "conf.yaml").write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
+
+    apply_pred_backtest_overrides(
+        workspace=workspace,
+        backtest_config={"oos_start": "2024-07-01", "oos_end": "2026-06-29"},
+    )
+
+    updated = yaml.safe_load((workspace / "conf.yaml").read_text(encoding="utf-8"))
+    assert updated["port_analysis_config"]["backtest"]["start_time"] == "2024-07-01"
+    assert updated["port_analysis_config"]["backtest"]["end_time"] == "2026-06-29"
+    assert updated["task"]["dataset"]["kwargs"]["segments"]["test"] == [
+        "2024-07-01",
+        "2026-06-29",
+    ]
 
 
 def test_shell_executor_command_path_applies_topk_and_strategy_overrides(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -868,6 +1001,61 @@ def test_combine_backtest_persists_loo_for_three_or_more_legs(tmp_path: Path) ->
 
     assert len(run["loo"]) == 3
     assert {row["dropped_leg_id"] for row in run["loo"]} == {"leg_a", "leg_b", "leg_c"}
+
+
+def test_combine_backtest_explicit_task_selection_disables_loo_without_extra_children(
+    tmp_path: Path,
+) -> None:
+    service, _repo, executor, _checker = _service(tmp_path)
+    payload = _payload_three_legs()
+    payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+    result = service.submit_run(payload, run_async=False)
+    run = service.get_run(result["run_id"])
+
+    assert run["run"]["status"] == "succeeded"
+    assert run["loo"] == []
+    assert {call["workspace"].name for call in executor.calls} == {
+        "baseline_leg_a",
+        "combined_equal",
+    }
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        [],
+        {"include_loo": "false"},
+        {"include_loo": False, "unexpected": True},
+    ],
+)
+def test_parse_request_rejects_invalid_prediction_task_selection(selection: object) -> None:
+    payload = _payload_three_legs()
+    payload["prediction_task_selection"] = selection
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as caught:
+        parse_request(payload)
+
+    assert caught.value.reason_code == "prediction_task_selection_invalid"
+
+
+def test_request_snapshot_preserves_legacy_shape_and_explicit_selection() -> None:
+    legacy = parse_request(_payload_three_legs())
+    explicit_payload = _payload_three_legs()
+    explicit_payload["prediction_task_selection"] = {"include_loo": False}
+    explicit = parse_request(explicit_payload)
+
+    legacy_snapshot = combine_backtest_module.request_snapshot_for(legacy)
+    explicit_snapshot = combine_backtest_module.request_snapshot_for(explicit)
+
+    assert "prediction_task_selection" not in legacy_snapshot
+    assert explicit_snapshot["prediction_task_selection"] == {
+        "include_baseline": True,
+        "include_loo": False,
+    }
 
 
 def test_combine_backtest_limits_intra_run_parallelism_to_node_cap(tmp_path: Path) -> None:
@@ -1395,6 +1583,67 @@ def test_shell_executor_failure_keeps_utf8_stderr_tail(tmp_path: Path) -> None:
     assert excinfo.value.reason_code == "pred_backtest_failed"
     assert f"failure stderr {marker} diagnostic" in excinfo.value.context["stderr_tail"]
     assert f"failure stderr {marker} diagnostic" in (workspace / "pred_backtest_stderr.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("string_command", [False, True])
+def test_shell_executor_custom_command_receives_credential_safe_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    string_command: bool,
+) -> None:
+    forbidden = (
+        "TDX_DB_PASSWORD",
+        "database_url",
+        "OpenAI_Api_Key",
+        "BASH_ENV",
+        "LD_PRELOAD",
+        "QE_RESOURCE_SESSION_TOKEN",
+    )
+    for key in forbidden:
+        monkeypatch.setenv(key, "forbidden-marker")
+    monkeypatch.setenv("AISTOCK_PREDICTION_STORE_BASE_URL", "http://prediction-store:9000")
+    script = tmp_path / "custom_command_env_probe.py"
+    script.write_text(
+        "import json, os\n"
+        "from pathlib import Path\n"
+        f"forbidden = {forbidden!r}\n"
+        "present = sorted(key for key in forbidden if key in os.environ)\n"
+        "Path('custom_command_env_probe.json').write_text(json.dumps({\n"
+        "    'present': present,\n"
+        "    'prediction_store': os.environ.get('AISTOCK_PREDICTION_STORE_BASE_URL'),\n"
+        "}), encoding='utf-8')\n"
+        "Path('qlib_results_enhanced.json').write_text(json.dumps({\n"
+        "    'absolute_returns': {'cagr': 1.0, 'max_drawdown': -0.1, 'sharpe': 2.0}\n"
+        "}), encoding='utf-8')\n"
+        "raise SystemExit(91 if present else 0)\n",
+        encoding="utf-8",
+    )
+    pred_pkl = tmp_path / "combined_prediction.pkl"
+    pd.DataFrame({"score": [1.0]}).to_pickle(pred_pkl)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for runtime_file in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"):
+        (workspace / runtime_file).write_text("# test runtime placeholder\n", encoding="utf-8")
+
+    command_argv = [sys.executable, str(script)]
+    command: str | list[str]
+    if string_command:
+        command = subprocess.list2cmdline(command_argv) if os.name == "nt" else shlex.join(command_argv)
+    else:
+        command = command_argv
+    metrics = ShellPredBacktestExecutor().execute_pred_backtest(
+        workspace=workspace,
+        pred_pkl=pred_pkl,
+        node_id="wsl2-5080",
+        backtest_config={"command": command, "timeout_seconds": 30},
+    )
+
+    probe = json.loads((workspace / "custom_command_env_probe.json").read_text(encoding="utf-8"))
+    assert probe == {
+        "present": [],
+        "prediction_store": "http://prediction-store:9000",
+    }
+    assert metrics["cagr"] == pytest.approx(1.0)
 
 
 def test_prediction_store_upload_is_explicit_and_fail_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

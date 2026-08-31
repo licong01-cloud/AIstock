@@ -11,6 +11,7 @@
 > 后继设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`
 > 当前状态：`design_ready`；F-033 dated binding lifecycle、F-034 policy registry、F-035 immutable evidence producer、F-036 natural no-candidate contract 与 F-039/F-040 manual historical research runner 已完成。Phase 1 source-availability/revision-set 基础设施已实现并通过 DEV-DB rollback-only gate，但 observer/capture/build 未启用；F-031/F-032/F-038 及 F-037 后续消费路径仍未完成。未创建生产策略包或 Program/binding 业务记录、生产 DML、scheduler 或实时荐股路径
 > 生产影响：F-033 的 comment-only migration、F-035 的 additive v2 artifact migration 与 F-039/F-040 的 Advisory historical-research migration 已应用到 `127.0.0.1:5433/aistock_dev` 并通过 rollback-only readback；生产 migration 尚未应用。未执行依赖安装、服务重启、调度启用、生产 API/UI 发布或运行时操作
+> 2026-07-19 边界修订：Phase 0A.2 继续权威定义单 Program/单交易日的 `MANUAL_HISTORICAL_RESEARCH` 证据闭合；正式历史日期范围执行、逐日列表演进与新策略上线前历史验证由 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md` 定义。该修订不宣称 Phase 1R 已实现
 
 ## 0. 文档定位与权威边界
 
@@ -158,7 +159,7 @@ scripts/advisory_phase0a_audit.py
 | F-037 | Phase 0A.2 复用 Phase 1 source ledger；历史修复只接受 exact source，缺证据保持 retrospective/unavailable |
 | F-038 | 正确历史数据存在自动可达的双轨正向路径：先 `PARTIAL -> HANDOFF_EMITTED`，exact source/label closure 满足后达到 `RESEARCH_READY`，且不影响 Selection/模拟盘/Paper |
 | F-039 | 手工历史研究 runner 对显式选定 Program 独立执行，只读 `DB_HISTORICAL`、使用唯一 Program/date 业务键、原子或可恢复持久化、失败隔离和确定性批次回执；不调度、不接入实时数据、不执行交易 |
-| F-040 | 历史研究锚点只能是显式指定的已完成交易日；历史读取与 current-semantics replay 永久保持 retrospective，不产生实时荐股、投资建议或交易指令 |
+| F-040 | 单日手工历史研究锚点只能是显式指定的已完成交易日；legacy current-semantics replay 永久保持 diagnostic retrospective。正式日期范围研究由 Phase 1R 独立承接，三者均不产生实时荐股、投资建议或交易指令 |
 
 ## 5. Architecture / 总体架构
 
@@ -499,9 +500,10 @@ evidence_payload.decision/runtime/universe/policy closure complete
 
 - 只读历史分析可直接消费已存在、identity/hash 匹配的 DSE；两条当前轨道若要求同日横向比较，现阶段仅 `2026-06-29` 是已观察的精确共同 cutoff。
 - 每个 Program 可按自己的真实 DSE 日期独立观察列表变化，不要求伪造连续共同窗口。
-- 使用当前 manifest/runtime/code 重算过去区间必须标记 `run_type=REPLAY`、`evidence_scope=RETROSPECTIVE_RESEARCH_ONLY` 和 current-semantics hashes；它回答“当前算法若作用于过去数据会怎样”，不回答“当时真实会荐出什么”。
-- 现有 replay 会产生数据库写入，只有在用户另行明确授权生产 DML 后才能执行；文档、只读 audit 或模型训练准备不得隐式触发。
-- 手工历史研究只接受 `DB_HISTORICAL + MANUAL_HISTORICAL_RESEARCH + HISTORICAL_RESEARCH_ONLY + execution_prohibited=true`；结果永远不升级为 `PUBLISHED`、formal OOS、实时荐股或交易指令。
+- 当前 `AdvisoryProgramService.run_replay` 使用当前 manifest/runtime/code 重算过去区间，并写入 `run_type=REPLAY`、`version_status=REPLAY` 等共享旧表。它是 legacy diagnostic lineage，只回答“当前实现若作用于过去数据会怎样”，不得作为 Phase 1R 正式历史范围任务、训练样本或 formal OOS 的替代物。
+- Phase 0A.2 手工历史研究只接受 `DB_HISTORICAL + MANUAL_HISTORICAL_RESEARCH + HISTORICAL_RESEARCH_ONLY + execution_prohibited=true`，并以单 Program/单交易日 persisted DSE 为权威输入；结果永远不升级为 `PUBLISHED`、formal OOS、实时荐股或交易指令。
+- Phase 1R 正式历史范围能力使用独立的 `HISTORICAL_RANGE_RESEARCH + RETROSPECTIVE_RESEARCH_ONLY` lineage、独立表和显式 artifact root，由 Program 在每个交易日重新生成候选并执行同一列表状态机。它不读取 Phase 0A.2 单日 receipt 来伪造连续日期，也不把 current-semantics 结果解释为历史真实在线产出。
+- legacy replay、Phase 0A.2 单日手工研究和 Phase 1R 历史范围研究的数据库写入均只可由各自显式任务入口触发；文档、只读 audit 或模型训练准备不得隐式执行任何任务。
 
 ## 12. Contracts / API、DB、UI 与 CLI 契约
 
@@ -547,13 +549,14 @@ binding 生命周期仍使用 §7.3 的 Program row lock、expected version 和�
 
 未来扩展现有 CLI，而不建立人工操作链：
 
+`replay-program-range` 不再属于 Phase 0A.2 CLI。正式日期范围入口由 Phase 1R 的 typed API/CLI 定义；现有 replay 入口仅保留 legacy diagnostic 兼容，不得继续扩张为正式范围执行器。
+
 ```text
 validate-policy-registry
 plan-dated-binding
 run-historical-research-batch
 verify-prospective-evidence
 inspect-historical-evidence
-replay-program-range
 audit-targets
 build-handoff-bundle
 verify-handoff-readiness
@@ -621,7 +624,7 @@ G-RUN-05 artifact_publish_cleanup
 | Handoff | Phase 0A/0A.1 | 每 scope 唯一 RESEARCH_READY/PARTIAL/BLOCKED；hash 稳定 | 正确历史输入至少 PARTIAL/HANDOFF | BLOCKED 新输入新 audit，不原地放行 |
 | Source maturity | Phase 1 source ledger | availability event/revision 与研究 source refs 一致 | exact source closure 后转 RESEARCH_READY | 保持 PARTIAL，不回填猜测 |
 | Research window | frozen policy/calendar | requested cutoff、label as-of 和 source closure 完整 | walk-forward/history window 自动闭合 | 未闭合保持 PARTIAL，不冒充 formal OOS |
-| Replay boundary | origin + evidence classifier | MANUAL_HISTORICAL_RESEARCH 与 REPLAY/PREVIEW/PUBLISHED 严格分离 | 历史诊断和研究均显式分类 | payload 冲突或越权发布 fail-closed |
+| Historical execution boundary | origin + evidence classifier | MANUAL_HISTORICAL_RESEARCH、HISTORICAL_RANGE_RESEARCH 与 legacy REPLAY/PREVIEW/PUBLISHED 严格分离 | 单日研究、范围研究和历史诊断均显式分类 | payload 冲突、lineage 混用或越权发布 fail-closed |
 
 ### 14.3 双轨状态可达性
 
@@ -826,16 +829,16 @@ production_runtime_gate = noop
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-031 | §1.2-1.4、§6.1、§11、§15.6 | current-manifest smoke、旧 manifest evidence 隔离、条件式新 identity 和归档包不复活已定义 | design_ready | none |
-| F-032 | §5.2、§6.2-6.3、§15.6 | 现有 native parent 复用、历史 dated binding 只读解析和多 Program 独立路径已定义 | design_ready | none |
-| F-033 | §7、§12.1-12.2、§16 | `[from,to)`、未来有效日、expected version、legacy null 与原子验证已定义 | design_ready | none |
-| F-034 | §8、§14、§15.1 | immutable policy schema、hash/effective range、自动 loader 和零审批字段已定义 | design_ready | none |
-| F-035 | §9、§12、§15.3、§16 | clock/config/runtime/HMM/universe/risk/asset/source/stage producer 与验证已定义 | design_ready | none |
-| F-036 | §10、§13、§16 | 合法空候选 artifact/DSE/header、自然样本和 fixture/L4 边界已定义 | design_ready | none |
-| F-037 | §5.3、§9.6、§11、§15.7 | Phase 1 ledger 复用、exact remediation 和 historical no-guess 边界已定义 | design_ready | none |
-| F-038 | §5、§14-17、§19 | 双轨 PARTIAL/HANDOFF 到 RESEARCH_READY、8 类门禁正向可达、隔离、发布与回滚已定义 | design_ready | none |
-| F-039 | §1.3、§6.4、§12-16 | historical-research runner、唯一键、事务/恢复、失败隔离、批次回执和只读运行证据已定义 | design_ready | none |
-| F-040 | §1.3-1.4、§7.2、§11.3、§16-17 | 显式历史锚点、共同历史窗口、current-semantics replay 和实时/交易隔离已定义 | design_ready | none |
+| F-031 | §1.2-1.4、§6.1、§11、§15.6 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；current-manifest smoke、旧 manifest evidence 隔离、条件式新 identity 和归档包不复活已定义 | design_ready | none |
+| F-032 | §5.2、§6.2-6.3、§15.6 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；现有 native parent 复用、历史 dated binding 只读解析和多 Program 独立路径已定义 | design_ready | none |
+| F-033 | §7、§12.1-12.2、§16 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；`[from,to)`、未来有效日、expected version、legacy null 与原子验证已定义 | design_ready | none |
+| F-034 | §8、§14、§15.1 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；immutable policy schema、hash/effective range、自动 loader 和零审批字段已定义 | design_ready | none |
+| F-035 | §9、§12、§15.3、§16 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；clock/config/runtime/HMM/universe/risk/asset/source/stage producer 与验证已定义 | design_ready | none |
+| F-036 | §10、§13、§16 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；合法空候选 artifact/DSE/header、自然样本和 fixture/L4 边界已定义 | design_ready | none |
+| F-037 | §5.3、§9.6、§11、§15.7 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；Phase 1 ledger 复用、exact remediation 和 historical no-guess 边界已定义 | design_ready | none |
+| F-038 | §5、§14-17、§19 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；双轨 PARTIAL/HANDOFF 到 RESEARCH_READY、8 类自动检查正向可达、隔离、发布与回滚已定义 | design_ready | none |
+| F-039 | §1.3、§6.4、§12-16 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；historical-research runner、唯一键、事务/恢复、失败隔离、批次回执和只读运行证据已定义 | design_ready | none |
+| F-040 | §1.3-1.4、§7.2、§11.3、§12.4、§16-17 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；显式历史锚点、单日手工研究、Phase 1R 正式范围研究、legacy current-semantics replay 和实时/交易隔离已定义 | design_ready | none |
 
 ### 20.1 实现验收记录
 
@@ -843,12 +846,12 @@ production_runtime_gate = noop
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-033 | `backend/services/advisory_program.py` dated interval、事务内 RUN/date 复核、payload 同步、runtime 继承、expected version、原子 create/replace、legacy repair；`backend/routers/advisory.py` binding defaults/repair 和 create/update/clone/apply 返回契约；`frontend/src/lib/api/advisory.ts`、`frontend/src/app/paper-v2/advisory/page.tsx` 后端默认日期/版本令牌调用；`advisory_binding_interval_comments_20260712.sql` comment 语义统一 | `test_advisory_binding_lifecycle.py` payload/runtime/legacy/并发锁序；`test_advisory_api.py` API contract；`paper-v2-advisory-ui.spec.ts` 9 passed；`test_advisory_binding_lifecycle_devdb.py` 在 `127.0.0.1:5433/aistock_dev` 以 `AISTOCK_DEV_DB_E2E=1` 执行，1 passed，事务回滚；focused backend suite 43 passed，完整 Advisory backend suite 59 passed；TypeScript/Ruff/compile/diff check passed | completed | none |
-| F-034 | `backend/services/advisory_phase0a/policy.py` registry loader/hash validator；`models.py` typed request/registry contract；`audit_service.py` frozen id/hash/effective-range enforcement；`scripts/advisory_phase0a_audit.py validate-policy-registry` | `test_policy_registry.py` valid/tampered/missing/effective-range/prohibited-field/scratch-root cases；`test_audit_service.py` scratch/hash mismatch cases；focused suite 33 passed；Ruff passed；direct CLI registry validation passed | completed | none |
-| F-035 | `backend/services/selection_center/prospective_evidence.py`、`prospective_evidence_assembler.py` typed contract/assembler；`backend/services/strategy_package/selection_artifact.py` immutable v2 artifact、explicit JSONB temporal receipt serializer；`backend/services/simulation_runtime/repository.py` v2 DSE insert-or-compare；`add_selection_score_artifact_v2_evidence_20260712.sql` additive schema | prospective contract/lineage/parity tests、CI backend suite 892 passed/1 skipped/1 deselected；`test_prospective_selection_evidence_dev_db.py` 在 `127.0.0.1:5433/aistock_dev` 通过 migration schema、artifact/DSE repository readback/hash、idempotency/conflict-original-row 和 rollback-no-residue 验证，1 passed；focused suite 19 passed；Ruff/compile/diff check passed。production additive DDL remains a separate activation gate and no production business evidence was created | completed | none |
-| F-036 | `backend/services/selection_center/prospective_evidence.py` natural raw-empty/filtered-empty receipt state machine；`prospective_evidence_assembler.py` complete DSE contract；`backend/services/strategy_package/selection_artifact.py` immutable raw artifact persistence | `test_prospective_selection_evidence.py` raw-empty、filtered-empty、declaration forbidden、缺失 receipt fail-closed 和无虚假 item 覆盖；同一 DEV-DB rollback-only E2E 覆盖 v2 evidence 持久化边界。真实自然空候选样本保持 `NOT_OBSERVED`，不伪造，后继 F-039/F-040 只负责其历史研究运行观察 | completed | none |
-| F-039 | `backend/services/advisory_phase0a/historical_research.py` manual multi-Program contract/state machine/idempotency/receipt；`historical_research_postgres.py` dated Program resolver、persisted v2 DSE read-only adapter 与 independent PostgreSQL transactions；`backend/routers/advisory.py` three manual historical-research endpoints；`add_advisory_historical_research_runner_20260712.sql` Advisory-only tables | `test_historical_research.py` independent Program isolation、WAITING_INPUT resume、terminal receipt immutability、same-key conflict、forbidden-import scan；`test_historical_research_api.py` manual API and research-only output projection；`test_historical_research_dev_db.py` on `127.0.0.1:5433/aistock_dev` with `AISTOCK_DEV_DB_E2E=1`, migration schema, real dated Program/binding/artifact/DSE/readback/exact retry and rollback-no-residue, 1 passed; focused matrix 80 passed/1 skipped；Ruff/compile/diff check passed. No scheduler, real-time source, simulation, Paper, QMT, broker or execution path is introduced | completed | none |
-| F-040 | `HistoricalResearchBatchRequest` enforces DB_HISTORICAL/manual origin/research scope/execution prohibition; `PostgresHistoricalResearchTradingDateResolver` queries `market.trading_calendar` and rejects current/future/non-trading dates; persisted DSE adapter rejects non-research evidence | request source/origin/flag/date negative cases; API invalid-source response; v2 DSE context mismatch becomes WAITING_INPUT; static forbidden-import scan; same DEV-DB rollback-only L4 evidence. No production DDL/DML, runtime activation or historical research batch was executed | completed | none |
+| F-033 | `backend/services/advisory_program.py` dated interval、事务内 RUN/date 复核、payload 同步、runtime 继承、expected version、原子 create/replace、legacy repair；`backend/routers/advisory.py` binding defaults/repair 和 create/update/clone/apply 返回契约；`frontend/src/lib/api/advisory.ts`、`frontend/src/app/paper-v2/advisory/page.tsx` 后端默认日期/版本令牌调用；`advisory_binding_interval_comments_20260712.sql` comment 语义统一 | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；`test_advisory_binding_lifecycle.py` payload/runtime/legacy/并发锁序；`test_advisory_api.py` API contract；`paper-v2-advisory-ui.spec.ts` 9 passed；`test_advisory_binding_lifecycle_devdb.py` 在 `127.0.0.1:5433/aistock_dev` 以 `AISTOCK_DEV_DB_E2E=1` 执行，1 passed，事务回滚；focused backend suite 43 passed，完整 Advisory backend suite 59 passed；TypeScript/Ruff/compile/diff check passed | completed | none |
+| F-034 | `backend/services/advisory_phase0a/policy.py` registry loader/hash validator；`models.py` typed request/registry contract；`audit_service.py` frozen id/hash/effective-range enforcement；`scripts/advisory_phase0a_audit.py validate-policy-registry` | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；`test_policy_registry.py` valid/tampered/missing/effective-range/prohibited-field/scratch-root cases；`test_audit_service.py` scratch/hash mismatch cases；focused suite 33 passed；Ruff passed；direct CLI registry validation passed | completed | none |
+| F-035 | `backend/services/selection_center/prospective_evidence.py`、`prospective_evidence_assembler.py` typed contract/assembler；`backend/services/strategy_package/selection_artifact.py` immutable v2 artifact、explicit JSONB temporal receipt serializer；`backend/services/simulation_runtime/repository.py` v2 DSE insert-or-compare；`add_selection_score_artifact_v2_evidence_20260712.sql` additive schema | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；prospective contract/lineage/parity tests、CI backend suite 892 passed/1 skipped/1 deselected；`test_prospective_selection_evidence_dev_db.py` 在 `127.0.0.1:5433/aistock_dev` 通过 migration schema、artifact/DSE repository readback/hash、idempotency/conflict-original-row 和 rollback-no-residue 验证，1 passed；focused suite 19 passed；Ruff/compile/diff check passed。production additive DDL remains a separate activation gate and no production business evidence was created | completed | none |
+| F-036 | `backend/services/selection_center/prospective_evidence.py` natural raw-empty/filtered-empty receipt state machine；`prospective_evidence_assembler.py` complete DSE contract；`backend/services/strategy_package/selection_artifact.py` immutable raw artifact persistence | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；`test_prospective_selection_evidence.py` raw-empty、filtered-empty、declaration forbidden、缺失 receipt fail-closed 和无虚假 item 覆盖；同一 DEV-DB rollback-only E2E 覆盖 v2 evidence 持久化边界。真实自然空候选样本保持 `NOT_OBSERVED`，不伪造，后继 F-039/F-040 只负责其历史研究运行观察 | completed | none |
+| F-039 | `backend/services/advisory_phase0a/historical_research.py` manual multi-Program contract/state machine/idempotency/receipt；`historical_research_postgres.py` dated Program resolver、persisted v2 DSE read-only adapter 与 independent PostgreSQL transactions；`backend/routers/advisory.py` three manual historical-research endpoints；`add_advisory_historical_research_runner_20260712.sql` Advisory-only tables | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；`test_historical_research.py` independent Program isolation、WAITING_INPUT resume、terminal receipt immutability、same-key conflict、forbidden-import scan；`test_historical_research_api.py` manual API and research-only output projection；`test_historical_research_dev_db.py` on `127.0.0.1:5433/aistock_dev` with `AISTOCK_DEV_DB_E2E=1`, migration schema, real dated Program/binding/artifact/DSE/readback/exact retry and rollback-no-residue, 1 passed; focused matrix 80 passed/1 skipped；Ruff/compile/diff check passed. No scheduler, real-time source, simulation, Paper, QMT, broker or execution path is introduced | completed | none |
+| F-040 | `HistoricalResearchBatchRequest` enforces DB_HISTORICAL/manual origin/research scope/execution prohibition; `PostgresHistoricalResearchTradingDateResolver` queries `market.trading_calendar` and rejects current/future/non-trading dates; persisted DSE adapter rejects non-research evidence | artifact: `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；request source/origin/flag/date negative cases; API invalid-source response; v2 DSE context mismatch becomes WAITING_INPUT; static forbidden-import scan; same DEV-DB rollback-only L4 evidence. No production DDL/DML, runtime activation or historical research batch was executed | completed | none |
 
 ## 21. Exit Criteria / 设计退出条件
 

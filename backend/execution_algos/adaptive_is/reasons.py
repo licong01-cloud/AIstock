@@ -148,23 +148,37 @@ QUOTE_FAILURE_REGISTRY: Mapping[QuoteContractReasonCode, QuoteFailureDefinition]
             QuoteContractStage.BOOTSTRAP,
             severity=QuoteFailureSeverity.WARNING,
         ),
-        QuoteContractReasonCode.CAPACITY_EXCEEDED: _definition(QuoteContractReasonCode.CAPACITY_EXCEEDED, QuoteContractStage.INGRESS),
+        QuoteContractReasonCode.CAPACITY_EXCEEDED: _definition(
+            QuoteContractReasonCode.CAPACITY_EXCEEDED, QuoteContractStage.INGRESS
+        ),
         QuoteContractReasonCode.UNEXPECTED_SYMBOL: _definition(
             QuoteContractReasonCode.UNEXPECTED_SYMBOL,
             QuoteContractStage.INGRESS,
             severity=QuoteFailureSeverity.WARNING,
         ),
-        QuoteContractReasonCode.PAYLOAD_INVALID: _definition(QuoteContractReasonCode.PAYLOAD_INVALID, QuoteContractStage.INGRESS),
-        QuoteContractReasonCode.SYMBOL_INVALID: _definition(QuoteContractReasonCode.SYMBOL_INVALID, QuoteContractStage.NORMALIZE),
-        QuoteContractReasonCode.ALIAS_CONFLICT: _definition(QuoteContractReasonCode.ALIAS_CONFLICT, QuoteContractStage.NORMALIZE),
-        QuoteContractReasonCode.TIMESTAMP_INVALID: _definition(QuoteContractReasonCode.TIMESTAMP_INVALID, QuoteContractStage.NORMALIZE),
+        QuoteContractReasonCode.PAYLOAD_INVALID: _definition(
+            QuoteContractReasonCode.PAYLOAD_INVALID, QuoteContractStage.INGRESS
+        ),
+        QuoteContractReasonCode.SYMBOL_INVALID: _definition(
+            QuoteContractReasonCode.SYMBOL_INVALID, QuoteContractStage.NORMALIZE
+        ),
+        QuoteContractReasonCode.ALIAS_CONFLICT: _definition(
+            QuoteContractReasonCode.ALIAS_CONFLICT, QuoteContractStage.NORMALIZE
+        ),
+        QuoteContractReasonCode.TIMESTAMP_INVALID: _definition(
+            QuoteContractReasonCode.TIMESTAMP_INVALID, QuoteContractStage.NORMALIZE
+        ),
         QuoteContractReasonCode.DEPTH_CAPABILITY_MISSING: _definition(
             QuoteContractReasonCode.DEPTH_CAPABILITY_MISSING,
             QuoteContractStage.NORMALIZE,
             severity=QuoteFailureSeverity.WARNING,
         ),
-        QuoteContractReasonCode.DEPTH_SCHEMA_INVALID: _definition(QuoteContractReasonCode.DEPTH_SCHEMA_INVALID, QuoteContractStage.NORMALIZE),
-        QuoteContractReasonCode.UNIT_UNPROVEN: _definition(QuoteContractReasonCode.UNIT_UNPROVEN, QuoteContractStage.UNIT),
+        QuoteContractReasonCode.DEPTH_SCHEMA_INVALID: _definition(
+            QuoteContractReasonCode.DEPTH_SCHEMA_INVALID, QuoteContractStage.NORMALIZE
+        ),
+        QuoteContractReasonCode.UNIT_UNPROVEN: _definition(
+            QuoteContractReasonCode.UNIT_UNPROVEN, QuoteContractStage.UNIT
+        ),
         QuoteContractReasonCode.ORDERING_REJECTED: _definition(
             QuoteContractReasonCode.ORDERING_REJECTED,
             QuoteContractStage.NORMALIZE,
@@ -185,7 +199,9 @@ QUOTE_FAILURE_REGISTRY: Mapping[QuoteContractReasonCode, QuoteFailureDefinition]
             QuoteContractStage.TRADABILITY,
             severity=QuoteFailureSeverity.WARNING,
         ),
-        QuoteContractReasonCode.TRADABILITY_DATA_INVALID: _definition(QuoteContractReasonCode.TRADABILITY_DATA_INVALID, QuoteContractStage.TRADABILITY),
+        QuoteContractReasonCode.TRADABILITY_DATA_INVALID: _definition(
+            QuoteContractReasonCode.TRADABILITY_DATA_INVALID, QuoteContractStage.TRADABILITY
+        ),
         QuoteContractReasonCode.ACTION_QUOTE_INELIGIBLE: _definition(
             QuoteContractReasonCode.ACTION_QUOTE_INELIGIBLE,
             QuoteContractStage.ELIGIBILITY,
@@ -298,23 +314,48 @@ def failure_definition(reason_code: QuoteContractReasonCode | str) -> QuoteFailu
     return QUOTE_FAILURE_REGISTRY[code]
 
 
-@dataclass(frozen=True)
 class QuoteContractError(ValueError):
-    """Typed, structured failure; callers must surface it as a loud event."""
+    """Typed, structured failure with read-only business fields.
 
-    reason_code: QuoteContractReasonCode
-    stage: QuoteContractStage
-    message: str
-    context: Mapping[str, Any] = field(default_factory=dict)
+    Python owns mutable exception runtime attributes such as ``__traceback__``.
+    A frozen dataclass blocks those assignments and can mask the primary typed
+    failure inside ``contextlib``/pytest, so business fields are exposed through
+    read-only properties while ``ValueError`` retains its normal runtime model.
+    """
 
-    def __post_init__(self) -> None:
-        expected = failure_definition(self.reason_code)
-        if self.stage not in expected.allowed_stages:
-            raise ValueError(
-                f"reason {self.reason_code.value} is not registered for stage {self.stage.value}"
-            )
-        object.__setattr__(self, "context", _freeze_context(self.context))
-        ValueError.__init__(self, self.message)
+    __slots__ = ("_context", "_message", "_reason_code", "_stage")
+
+    def __init__(
+        self,
+        reason_code: QuoteContractReasonCode,
+        stage: QuoteContractStage,
+        message: str,
+        context: Mapping[str, Any] | None = None,
+    ) -> None:
+        expected = failure_definition(reason_code)
+        if stage not in expected.allowed_stages:
+            raise ValueError(f"reason {reason_code.value} is not registered for stage {stage.value}")
+        self._reason_code = reason_code
+        self._stage = stage
+        self._message = message
+        self._context = _freeze_context(context or {})
+        ValueError.__init__(self, message)
+
+    @property
+    def reason_code(self) -> QuoteContractReasonCode:
+        return self._reason_code
+
+    @property
+    def stage(self) -> QuoteContractStage:
+        return self._stage
+
+    @property
+    def message(self) -> str:
+        return self._message
+
+    @property
+    def context(self) -> Mapping[str, Any]:
+        return self._context
 
     @property
     def retryable(self) -> bool:

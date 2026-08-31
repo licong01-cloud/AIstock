@@ -18,10 +18,10 @@ from backend.mcp.tool_manifest import (
 
 
 def test_manifest_counts_and_required_metadata() -> None:
-    assert legacy_tool_count() == 372
+    assert legacy_tool_count() == 388
     assert platform_tool_count() == 6
-    assert len(TOOL_MANIFEST) == 378
-    assert len(TOOL_MANIFEST_BY_NAME) == 378
+    assert len(TOOL_MANIFEST) == 394
+    assert len(TOOL_MANIFEST_BY_NAME) == 394
     assert validate_manifest() == []
     for entry in TOOL_MANIFEST:
         assert entry.tool_name
@@ -40,6 +40,16 @@ def test_module_tool_names_match_module_constants() -> None:
         imported = importlib.import_module(f"backend.mcp.modules.{module}")
         assert tuple(imported.TOOL_NAMES) == tuple(tool_names)
         assert imported.TOOL_COUNT == len(tool_names)
+
+
+def test_long_trend_quality_tool_is_discoverable_and_read_only() -> None:
+    entry = TOOL_MANIFEST_BY_NAME["qe_archive_query_long_trend_quality"]
+
+    assert entry.module == "qe_archive"
+    assert entry.backend_endpoint == "qe-archive/*"
+    assert entry.risk_level == "read_only"
+    assert entry.assistant_usable == "direct_or_catalog"
+    assert entry.requires_confirmation is False
 
 
 def test_high_risk_tools_have_preflight_metadata() -> None:
@@ -90,6 +100,7 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "qe_archive_get_run_quality",
         "qe_archive_list_backfill_runs",
         "qe_archive_get_backfill_run",
+        "qe_archive_query_long_trend_quality",
         "qe_archive_query_run_leaderboard",
         "qe_archive_query_topk_quality",
         "list_validation_runs",

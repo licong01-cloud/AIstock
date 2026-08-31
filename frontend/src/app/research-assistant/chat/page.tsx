@@ -1185,14 +1185,16 @@ export default function ResearchAssistantChatPage() {
           onInitialize={initializeCatalogs}
         />
       ) : (
-        developerDiagnostics ? (
-          <>
-            <Phase7EvidencePanel latest={latest} />
+        <>
+          <Phase7EvidencePanel latest={latest} />
+          {developerDiagnostics ? (
+            <>
             <TurnUsagePanel latest={latest} history={turnUsageHistory} />
             <RuntimeCodePanel latest={latest} />
             <PlanSummary latest={latest} />
-          </>
-        ) : null
+            </>
+          ) : null}
+        </>
       )}
     </main>
   );

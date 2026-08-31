@@ -4,6 +4,7 @@ rdagent_assets/
 __pycache__/
 *.py[cod]
 *.pyo
+.coverage
 
 # Virtualenv
 .venv/
@@ -75,6 +76,8 @@ nul
 !tsconfig.json
 !backend/services/advisory_phase1/release_schema_registry/
 !backend/services/advisory_phase1/release_schema_registry/*.json
+!backend/execution_algos/vnpy_compat/characterization_artifacts/
+!backend/execution_algos/vnpy_compat/characterization_artifacts/*.json
 !tests/aistock_validation/bugs/*.json
 !tests/aistock_validation/catalog/**/*.json
 !tests/aistock_validation/runs/**/*.json

@@ -12,10 +12,13 @@
 - 使用真实交易日历（market.trading_calendar）
 """
 
+import ast
 import asyncio
+import hashlib
 import json
+import re
 from datetime import date
-from typing import Any, Literal, Optional, Tuple
+from typing import Any, Literal, Mapping, Optional, Tuple
 
 import pandas as pd
 
@@ -28,6 +31,10 @@ from .artifact_manifest import RemoteArtifactManifest
 from .cache_manager import ArtifactCacheManager
 from .db_repository import HMMDataRepository
 from .exceptions import DataSourceError, DateRangeError, HorizonError, DataNotFoundError
+from .legacy_qe_artifact_manifests import (
+    LegacyQEArtifactManifest,
+    find_legacy_qe_artifact_manifest,
+)
 from .prediction_store_resolver import PredictionStoreArtifactResolver
 
 
@@ -39,6 +46,11 @@ ArtifactSourcePreference = Literal[
 ARTIFACT_SOURCE_PREFERENCES: frozenset[str] = frozenset(
     {"prediction_store_first", "prediction_store_only", "workspace_only"}
 )
+_RECORDER_START_LOG_RE = re.compile(
+    r"Recorder (?P<recorder_id>[0-9a-f]+) starts running under Experiment "
+    r"(?P<experiment_id>[0-9]+)"
+)
+_HISTORICAL_RECORDER_LOG_MAX_BYTES = 2 * 1024 * 1024
 
 
 class BacktestDataSource(HMMDataSourceInterface):
@@ -113,6 +125,11 @@ class BacktestDataSource(HMMDataSourceInterface):
         self.repository = repository or HMMDataRepository()
         self._prediction_store_resolver = PredictionStoreArtifactResolver(model_store)
         self._artifact_source_info: dict[str, dict[str, Any]] = {}
+        # Artifacts actually downloaded from the QE workspace during this data
+        # source's lifetime.  A data source instance is scoped to one
+        # preparation/execution run, so this set is the direct evidence that
+        # separates a cold run (downloaded now) from a warm run (cache reuse).
+        self._downloaded_artifact_names: set[str] = set()
 
         # 内存缓存（避免重复加载 pickle）
         self._pred_cache: Optional[pd.DataFrame] = None
@@ -405,6 +422,7 @@ class BacktestDataSource(HMMDataSourceInterface):
             "trust_level": "trusted_computational_input",
             "zero_copy": False,
             "fallback": self.artifact_source_preference == "prediction_store_first",
+            "downloaded_in_run": artifact_name in self._downloaded_artifact_names,
         }
 
     async def _download_artifact(self, artifact_name: str):
@@ -477,6 +495,7 @@ class BacktestDataSource(HMMDataSourceInterface):
                     "remote_quality_status": remote_manifest.quality_status,
                 },
             )
+            self._downloaded_artifact_names.add(artifact_name)
 
         except Exception as e:
             raise DataSourceError(f"Failed to download {artifact_name} from QE workspace: {e}")
@@ -559,8 +578,9 @@ class BacktestDataSource(HMMDataSourceInterface):
             raise DataSourceError(f"QE task {task_id} has no authoritative compute node")
         return node_id
 
-    @staticmethod
+    @classmethod
     async def _resolve_workspace_artifact_path(
+        cls,
         client: QEWorkspaceClient,
         *,
         task_id: str,
@@ -569,6 +589,8 @@ class BacktestDataSource(HMMDataSourceInterface):
     ) -> str:
         """Resolve an allowlisted MLflow artifact from recorder metadata."""
         attempts: dict[str, str] = {}
+        invalid_sidecars: dict[str, str] = {}
+        sidecar_identities: set[tuple[str, str]] = set()
         for ref_name in ("qe_current_recorder.json", "qe_extracted_recorder.json"):
             try:
                 payload: Any = await client.get_workspace_file(
@@ -576,6 +598,10 @@ class BacktestDataSource(HMMDataSourceInterface):
                     loop_name,
                     ref_name,
                 )
+            except Exception as exc:
+                attempts[ref_name] = f"{type(exc).__name__}: {exc}"
+                continue
+            try:
                 if isinstance(payload, str):
                     payload = json.loads(payload)
                 if not isinstance(payload, dict):
@@ -589,15 +615,162 @@ class BacktestDataSource(HMMDataSourceInterface):
                 ):
                     if not value or "/" in value or "\\" in value or value in {".", ".."}:
                         raise ValueError(f"invalid {field_name}: {value!r}")
-
-                return f"mlruns/{experiment_id}/{recorder_id}/artifacts/{artifact_name}"
+                sidecar_identities.add((experiment_id, recorder_id))
             except Exception as exc:
-                attempts[ref_name] = f"{type(exc).__name__}: {exc}"
+                invalid_sidecars[ref_name] = f"{type(exc).__name__}: {exc}"
 
-        raise DataSourceError(f"QE recorder metadata unavailable for task={task_id}, loop={loop_name}: {attempts}")
+        if invalid_sidecars:
+            raise DataSourceError(
+                f"Invalid QE recorder sidecar for task={task_id}, loop={loop_name}: "
+                f"{invalid_sidecars}"
+            )
+        if len(sidecar_identities) > 1:
+            raise DataSourceError(
+                f"Conflicting QE recorder sidecars for task={task_id}, loop={loop_name}: "
+                f"{sorted(sidecar_identities)}"
+            )
+        if sidecar_identities:
+            experiment_id, recorder_id = next(iter(sidecar_identities))
+            return f"mlruns/{experiment_id}/{recorder_id}/artifacts/{artifact_name}"
+
+        legacy_manifest = find_legacy_qe_artifact_manifest(f"{task_id}/{loop_name}")
+        if legacy_manifest is None:
+            raise DataSourceError(
+                f"QE recorder metadata unavailable for task={task_id}, loop={loop_name}: {attempts}"
+            )
+        return await cls._resolve_legacy_workspace_artifact_path(
+            client,
+            task_id=task_id,
+            loop_name=loop_name,
+            artifact_name=artifact_name,
+            manifest=legacy_manifest,
+        )
 
     @staticmethod
+    async def _resolve_legacy_workspace_artifact_path(
+        client: QEWorkspaceClient,
+        *,
+        task_id: str,
+        loop_name: str,
+        artifact_name: str,
+        manifest: LegacyQEArtifactManifest,
+    ) -> str:
+        """Resolve a pre-sidecar recorder only from corroborated immutable evidence."""
+
+        try:
+            catalog = await client.list_workspace_files(task_id, loop_name)
+        except Exception as exc:
+            raise DataSourceError(
+                f"Failed to read the complete QE catalog for legacy recorder resolution: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if catalog.get("catalog_completeness") != "complete":
+            raise DataSourceError(
+                f"Legacy QE recorder resolution requires a complete catalog for {task_id}/{loop_name}"
+            )
+        rows = catalog.get("files") or catalog.get("assets") or []
+        if not isinstance(rows, list):
+            raise DataSourceError(f"Legacy QE catalog rows are invalid for {task_id}/{loop_name}")
+        rows_by_path: dict[str, list[Mapping[str, Any]]] = {}
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            path = str(
+                row.get("relative_path") or row.get("path") or row.get("filename") or ""
+            ).replace("\\", "/")
+            rows_by_path.setdefault(path, []).append(row)
+
+        for required_name in ("pred.pkl", "label.pkl"):
+            required_path = manifest.artifact(required_name).workspace_path
+            if len(rows_by_path.get(required_path, [])) != 1:
+                raise DataSourceError(
+                    f"Legacy QE recorder lacks one unique {required_name} catalog entry for "
+                    f"{task_id}/{loop_name}"
+                )
+
+        evidence = manifest.recorder_evidence
+        log_rows = rows_by_path.get(evidence.workspace_path, [])
+        if len(log_rows) != 1:
+            raise DataSourceError(
+                f"Legacy QE recorder requires one cataloged run.log for {task_id}/{loop_name}"
+            )
+        log_row = log_rows[0]
+        if str(log_row.get("access_mode") or "") != "inspection_only":
+            raise DataSourceError(
+                f"Legacy QE recorder log is not inspection-only for {task_id}/{loop_name}"
+            )
+        try:
+            catalog_size = int(log_row.get("size_bytes"))
+        except (TypeError, ValueError) as exc:
+            raise DataSourceError(
+                f"Legacy QE recorder log has no valid catalog size for {task_id}/{loop_name}"
+            ) from exc
+        if catalog_size != evidence.size_bytes or catalog_size > _HISTORICAL_RECORDER_LOG_MAX_BYTES:
+            raise DataSourceError(
+                f"Legacy QE recorder log size differs from its immutable receipt for {task_id}/{loop_name}"
+            )
+
+        try:
+            payload = await client.get_workspace_file(
+                task_id,
+                loop_name,
+                evidence.workspace_path,
+            )
+        except Exception as exc:
+            raise DataSourceError(
+                f"Failed to inspect legacy QE recorder log for {task_id}/{loop_name}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if not isinstance(payload, str) or not payload:
+            raise DataSourceError(f"Legacy QE recorder log is empty for {task_id}/{loop_name}")
+        payload_bytes = payload.encode("utf-8")
+        if len(payload_bytes) != evidence.size_bytes or hashlib.sha256(payload_bytes).hexdigest() != evidence.sha256:
+            raise DataSourceError(
+                f"Legacy QE recorder log differs from its immutable receipt for {task_id}/{loop_name}"
+            )
+
+        terminal_identities: set[tuple[str, str]] = set()
+        started_identities: set[tuple[str, str]] = set()
+        for line_number, line in enumerate(payload.splitlines(), start=1):
+            start_match = _RECORDER_START_LOG_RE.search(line)
+            if start_match is not None:
+                started_identities.add(
+                    (start_match.group("experiment_id"), start_match.group("recorder_id"))
+                )
+            if not line.startswith("Latest recorder: "):
+                continue
+            try:
+                terminal = ast.literal_eval(line.partition(":")[2].strip())
+            except (SyntaxError, ValueError) as exc:
+                raise DataSourceError(
+                    f"Invalid terminal recorder evidence at run.log:{line_number}"
+                ) from exc
+            if not isinstance(terminal, Mapping):
+                raise DataSourceError(
+                    f"Terminal recorder evidence is not an object at run.log:{line_number}"
+                )
+            if terminal.get("class") != "Recorder" or terminal.get("status") != "FINISHED":
+                raise DataSourceError(
+                    f"Terminal recorder evidence is not finished at run.log:{line_number}"
+                )
+            terminal_identities.add(
+                (
+                    str(terminal.get("experiment_id") or "").strip(),
+                    str(terminal.get("id") or "").strip(),
+                )
+            )
+
+        expected_identity = (manifest.recorder_experiment_id, manifest.recorder_id)
+        if terminal_identities != {expected_identity} or expected_identity not in started_identities:
+            raise DataSourceError(
+                f"Legacy QE recorder log does not corroborate the immutable identity for "
+                f"{task_id}/{loop_name}: terminal={sorted(terminal_identities)}"
+            )
+        return manifest.artifact(artifact_name).workspace_path
+
+    @classmethod
     async def _resolve_remote_artifact_manifest(
+        cls,
         client: QEWorkspaceClient,
         *,
         task_id: str,
@@ -628,6 +801,57 @@ class BacktestDataSource(HMMDataSourceInterface):
                 return manifest, manifest_path
             except Exception as exc:
                 attempts[manifest_path] = f"{type(exc).__name__}: {exc}"
+        legacy_manifest = find_legacy_qe_artifact_manifest(f"{task_id}/{loop_name}")
+        if legacy_manifest is not None:
+            try:
+                catalog = await client.list_workspace_files(task_id, loop_name)
+            except Exception as exc:
+                raise DataSourceError(
+                    f"Cannot prove remote manifests are absent for legacy artifact resolution: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            if catalog.get("catalog_completeness") != "complete":
+                raise DataSourceError(
+                    f"Legacy artifact manifest fallback requires a complete catalog for "
+                    f"{task_id}/{loop_name}"
+                )
+            catalog_rows = catalog.get("files") or catalog.get("assets") or []
+            catalog_paths = {
+                str(
+                    row.get("relative_path")
+                    or row.get("path")
+                    or row.get("filename")
+                    or ""
+                ).replace("\\", "/")
+                for row in catalog_rows
+                if isinstance(row, Mapping)
+            }
+            cataloged_remote_manifests = sorted(set(manifest_paths) & catalog_paths)
+            if cataloged_remote_manifests:
+                raise DataSourceError(
+                    "A remote artifact manifest is cataloged but could not be validated; "
+                    f"refusing legacy fallback for {task_id}/{loop_name}/{artifact_name}: "
+                    f"{cataloged_remote_manifests}"
+                )
+            receipt = legacy_manifest.artifact(artifact_name)
+            if receipt.workspace_path != artifact_path:
+                raise DataSourceError(
+                    f"Legacy QE artifact path differs from its immutable receipt for "
+                    f"{task_id}/{loop_name}/{artifact_name}"
+                )
+            return (
+                RemoteArtifactManifest.model_validate(
+                    {
+                        "artifact_name": receipt.artifact_name,
+                        "schema_version": receipt.schema_version,
+                        "sha256": receipt.sha256,
+                        "size_bytes": receipt.size_bytes,
+                        "row_count": receipt.row_count,
+                        "quality_status": receipt.quality_status,
+                    }
+                ),
+                "legacy_qe_artifact_manifests.py",
+            )
         raise DataSourceError(
             f"Trusted remote artifact manifest unavailable for task={task_id}, "
             f"loop={loop_name}, artifact={artifact_name}: {attempts}"

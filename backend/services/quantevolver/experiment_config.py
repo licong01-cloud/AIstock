@@ -9,9 +9,20 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
-from .qe_dataset_contract import QE_ST_PIT_UNIVERSE_KEY
+from .long_trend_evaluation_contract import (
+    EVALUATOR_VERSION,
+    PROFILE_ID_V1,
+    get_long_trend_profile,
+)
+
+from .qe_dataset_contract import (
+    QE_FORMAL_DATASET_REQUEST_PARAM,
+    QE_ST_PIT_UNIVERSE_KEY,
+    QEFormalDatasetRequest,
+    require_qe_formal_dataset_request,
+)
 
 ALLOWED_LABEL_HORIZONS = (1, 3, 5, 10, 20, 30, 40, 60, 120, 180)
 DEFAULT_LABEL_HORIZON = 1
@@ -315,6 +326,42 @@ class HmmConfig(BaseModel):
         return self
 
 
+class LongTrendEvaluationOptIn(BaseModel):
+    """Explicit QE-only request for the normal-loop F-014 postprocess.
+
+    Node-owned environment and dataset manifests are intentionally not caller
+    supplied.  BacktestExecutor resolves and freezes them immediately before
+    composing the loop request.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = True
+    profile_id: str = PROFILE_ID_V1
+    evaluator_version: str = EVALUATOR_VERSION
+    feature_data_root_uri: str
+    outcome_data_root_uri: str
+    backtest_freq: str | None = None
+    mode: str = "normal_postprocess"
+
+    @model_validator(mode="after")
+    def _validate_authoritative_identity(self) -> "LongTrendEvaluationOptIn":
+        if self.enabled is not True:
+            raise ValueError("long_trend_evaluation exists only for enabled opt-in requests")
+        if self.profile_id != PROFILE_ID_V1:
+            raise ValueError(f"unsupported long-trend profile_id: {self.profile_id!r}")
+        if self.evaluator_version != EVALUATOR_VERSION:
+            raise ValueError(f"unsupported long-trend evaluator_version: {self.evaluator_version!r}")
+        if self.mode != "normal_postprocess":
+            raise ValueError("ExperimentConfig only accepts normal_postprocess mode")
+        for field_name in ("feature_data_root_uri", "outcome_data_root_uri"):
+            if not str(getattr(self, field_name) or "").strip():
+                raise ValueError(f"long_trend_evaluation.{field_name} is required")
+        if self.backtest_freq is not None and not str(self.backtest_freq).strip():
+            raise ValueError("long_trend_evaluation.backtest_freq cannot be empty")
+        return self
+
+
 class ExperimentConfig(BaseModel):
     """Unified experiment configuration for all QE call paths.
 
@@ -331,6 +378,11 @@ class ExperimentConfig(BaseModel):
 
     # ── Training / backtest window ─────────────────────────────────────────────
     data_split: dict[str, str] | None = None
+
+    # Explicit enablement-only v2 identity.  Existing production admission
+    # omits this field until W9; formal callers must create it from the sealed
+    # release manifest through qe_dataset_contract.QEFormalDatasetRequest.
+    canonical_pit_dataset: QEFormalDatasetRequest | None = None
 
     # ── Stock universe ─────────────────────────────────────────────────────────
     label_type: str | None = None
@@ -362,6 +414,14 @@ class ExperimentConfig(BaseModel):
     runtime_flags: dict[str, Any] | None = None
     seed_ensemble: dict[str, Any] | None = None
 
+    # Explicit normal-loop F-014 postprocess.  Omitted by default so ordinary
+    # QE loop requests, commands, reservations, and metrics remain byte-stable.
+    # Public task creation persists only the immutable profile id.  The
+    # executor resolves node-owned roots immediately before submission and
+    # constructs the internal path-bound request below.
+    long_trend_profile_id: str | None = None
+    long_trend_evaluation: LongTrendEvaluationOptIn | None = None
+
     # ── Model hyperparameters base ─────────────────────────────────────────────
     # For paths that start from model_params (Paths 2 & 3).
     # Merged into custom_params before strategy_params overlay.
@@ -392,7 +452,33 @@ class ExperimentConfig(BaseModel):
             raise ValueError("factor_names cannot be empty in single-alpha mode")
         if self.alpha_mode == "multi" and not self.multi_alpha_config:
             raise ValueError("multi_alpha_config required when alpha_mode='multi'")
+        if self.long_trend_profile_id is not None:
+            self.long_trend_profile_id = get_long_trend_profile(
+                str(self.long_trend_profile_id).strip()
+            ).profile_id
+        if (
+            self.long_trend_evaluation is not None
+            and self.long_trend_profile_id is not None
+            and self.long_trend_evaluation.profile_id != self.long_trend_profile_id
+        ):
+            raise ValueError(
+                "long_trend_profile_id conflicts with the resolved long_trend_evaluation profile"
+            )
         self.label_horizon = normalize_label_horizon(self.label_horizon)
+        if self.canonical_pit_dataset is not None:
+            self.canonical_pit_dataset = require_qe_formal_dataset_request(
+                self.canonical_pit_dataset
+            )
+        for source_name, source in (
+            ("model_params_base", self.model_params_base),
+            ("strategy_params", self.strategy_params),
+            ("extra_params", self.extra_params),
+        ):
+            if source and QE_FORMAL_DATASET_REQUEST_PARAM in source:
+                raise ValueError(
+                    f"{source_name}.{QE_FORMAL_DATASET_REQUEST_PARAM} is reserved; "
+                    "use ExperimentConfig.canonical_pit_dataset"
+                )
         return self
 
     def build_custom_params(self) -> dict[str, Any]:
@@ -475,7 +561,17 @@ class ExperimentConfig(BaseModel):
                 extra_params.pop("label_horizon", None)
             params.update(extra_params)
 
-        # 11. initial_cash must NOT flow into custom_params
+        # 11. Formal v2 dataset identity is persisted as execution metadata.
+        # It is explicitly filtered by ConfigComposer and never reaches a
+        # Qlib strategy constructor.
+        if self.canonical_pit_dataset is not None:
+            params[QE_FORMAL_DATASET_REQUEST_PARAM] = (
+                require_qe_formal_dataset_request(
+                    self.canonical_pit_dataset
+                ).as_dict()
+            )
+
+        # 12. initial_cash must NOT flow into custom_params
         params.pop("initial_cash", None)
         for runtime_key in QE_RUNTIME_METADATA_KEYS:
             params.pop(runtime_key, None)

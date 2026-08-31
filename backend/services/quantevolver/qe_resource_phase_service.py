@@ -30,15 +30,17 @@ GPU_LEASE_BUSY_REASON = "QE_GPU_PHASE_LEASE_BUSY"
 GPU_PHASE_LIFECYCLE_REASON = "QE_GPU_PHASE_LIFECYCLE_COMPLETE"
 
 TERMINAL_PHASES = {"completed", "failed", "cancelled"}
+QELT_SOURCE_RUN_KEY_PREFIX = "qelt:"
 GPU_RELEASE_PHASES = {"gpu_phase_released", "release_rejected"}
 _PHASE_TRANSITIONS: dict[str, set[str]] = {
-    "created": {"bootstrap", "train", "backtest", "failed"},
+    "created": {"bootstrap", "train", "backtest", "long_trend_eval", "failed"},
     "bootstrap": {"train", "backtest", "finalize", "completed", "failed"},
     "train": {"predict", "release_rejected", "finalize", "completed", "failed"},
     "predict": {"gpu_phase_released", "release_rejected", "finalize", "completed", "failed"},
     "gpu_phase_released": {"backtest", "finalize", "completed", "failed"},
     "release_rejected": {"backtest", "finalize", "completed", "failed"},
     "backtest": {"finalize", "completed", "failed"},
+    "long_trend_eval": {"finalize", "completed", "failed", "cancelled"},
     "finalize": {"completed", "failed"},
     "completed": set(),
     "failed": set(),
@@ -95,6 +97,36 @@ def validate_phase_transition(current_phase: str, event: Mapping[str, Any]) -> N
             raise QEResourcePhaseError(
                 PHASE_INVALID_REASON,
                 "gpu_phase_released requires lifecycle completion with resource monitoring disabled",
+            )
+    if phase == "long_trend_eval":
+        if str(event.get("phase_status") or "") not in {"running", "not_submitted"}:
+            raise QEResourcePhaseError(
+                PHASE_INVALID_REASON,
+                "long_trend_eval phase_status must be running or not_submitted",
+            )
+        forbidden_gpu_fields = (
+            "gpu_device_index",
+            "gpu_name",
+            "gpu_memory_used_peak_bytes",
+            "gpu_process_memory_peak_bytes",
+            "gpu_utilization_avg_pct",
+            "gpu_utilization_peak_pct",
+            "cuda_allocated_peak_bytes",
+            "cuda_reserved_peak_bytes",
+            "cuda_allocated_end_bytes",
+            "cuda_reserved_end_bytes",
+        )
+        supplied = [name for name in forbidden_gpu_fields if event.get(name) is not None]
+        if supplied:
+            raise QEResourcePhaseError(
+                PHASE_INVALID_REASON,
+                f"long_trend_eval forbids GPU telemetry fields: {supplied}",
+            )
+        metadata = event.get("metadata")
+        if not isinstance(metadata, Mapping) or str(metadata.get("evaluation_id") or "").strip() == "":
+            raise QEResourcePhaseError(
+                PHASE_INVALID_REASON,
+                "long_trend_eval requires metadata.evaluation_id",
             )
 
 
@@ -324,6 +356,15 @@ class QEResourcePhaseService:
                     ),
                 )
             conn.commit()
+        from .qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.RESOURCE_SESSION,
+            key=session_id,
+        )
         return ResourceSessionSecret(
             session_id=session_id,
             source_run_key=source_run_key,
@@ -343,7 +384,8 @@ class QEResourcePhaseService:
                     """,
                     (session_id,),
                 )
-                if cur.rowcount != 1:
+                changed = cur.rowcount == 1
+                if not changed:
                     cur.execute(
                         "SELECT status FROM qe_archive.run_resource_session WHERE session_id = %s",
                         (session_id,),
@@ -352,6 +394,16 @@ class QEResourcePhaseService:
                     if not row or row[0] not in {"running", "completed", "failed", "cancelled"}:
                         raise QEResourcePhaseError(PHASE_INVALID_REASON, f"session {session_id} is not reserved")
             conn.commit()
+        if changed:
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            notify_qe_reconciliation(
+                QEReconciliationScope.RESOURCE_SESSION,
+                key=session_id,
+            )
 
     def mark_session_terminal(self, session_id: str, *, status: str, reason_code: str | None = None) -> None:
         normalized = "cancelled" if status in {"cancelled", "canceled"} else status
@@ -362,19 +414,53 @@ class QEResourcePhaseService:
                 cur.execute(
                     """
                     UPDATE qe_archive.run_resource_session
-                    SET status = %s,
+                    SET status = CASE
+                            WHEN status IN ('completed', 'failed', 'cancelled') THEN status
+                            ELSE %s
+                        END,
                         current_phase = CASE
                             WHEN current_phase IN ('completed', 'failed', 'cancelled') THEN current_phase
                             ELSE %s
                         END,
-                        terminal_reason_code = COALESCE(%s, terminal_reason_code),
+                        terminal_reason_code = CASE
+                            WHEN status IN ('completed', 'failed', 'cancelled') THEN terminal_reason_code
+                            ELSE COALESCE(%s, terminal_reason_code)
+                        END,
                         completed_at = COALESCE(completed_at, NOW()),
                         updated_at = NOW()
                     WHERE session_id = %s
+                      AND (
+                          status NOT IN ('completed', 'failed', 'cancelled')
+                          OR current_phase NOT IN ('completed', 'failed', 'cancelled')
+                          OR completed_at IS NULL
+                      )
                     """,
                     (normalized, normalized, reason_code, session_id),
                 )
+                changed = cur.rowcount == 1
+                if not changed:
+                    cur.execute(
+                        "SELECT status FROM qe_archive.run_resource_session WHERE session_id = %s",
+                        (session_id,),
+                    )
+                    row = cur.fetchone()
+                    if not row or row[0] not in TERMINAL_PHASES:
+                        raise QEResourcePhaseError(
+                            PHASE_INVALID_REASON,
+                            f"session {session_id} could not be marked terminal",
+                        )
             conn.commit()
+        if changed:
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            notify_qe_reconciliation(
+                QEReconciliationScope.RESOURCE_SESSION,
+                key=session_id,
+                force=True,
+            )
 
     def has_unreleased_gpu_session(
         self,
@@ -449,6 +535,7 @@ class QEResourcePhaseService:
                     WHERE s.task_id = l.task_id
                       AND s.loop_index = l.loop_index
                       AND s.status IN ('reserved', 'running')
+                      AND s.source_run_key NOT LIKE 'qelt:%'
                       AND l.status IN (
                           'completed', 'failed', 'cancelled', 'canceled',
                           'interrupted', 'timeout', 'stopped'
@@ -475,6 +562,40 @@ class QEResourcePhaseService:
                 )
                 row = cur.fetchone()
         return dict(row) if row else None
+
+    def authenticate_session(
+        self,
+        *,
+        token: str,
+        session_id: str,
+        source_run_key: str,
+        task_id: str,
+        loop_index: int,
+    ) -> dict[str, Any]:
+        """Authenticate an existing parent Loop session without advancing it."""
+
+        self.ensure_schema_ready()
+        with self._connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT session_id, source_run_key, task_id, loop_index, node_id,
+                           token_sha256, status, current_phase
+                    FROM qe_archive.run_resource_session
+                    WHERE session_id = %s
+                    """,
+                    (session_id,),
+                )
+                row = cur.fetchone()
+        if (
+            row is None
+            or not secrets.compare_digest(str(row["token_sha256"]), _token_sha256(token))
+            or str(row["source_run_key"]) != str(source_run_key)
+            or str(row["task_id"]) != str(task_id)
+            or int(row["loop_index"]) != int(loop_index)
+        ):
+            raise QEResourcePhaseError(AUTH_FAILED_REASON, "resource session token or parent binding is invalid")
+        return {key: value for key, value in dict(row).items() if key != "token_sha256"}
 
     def ingest_event(self, *, token: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         self.ensure_schema_ready()
@@ -558,6 +679,17 @@ class QEResourcePhaseService:
                     )
 
                 current_phase = str(session["current_phase"] or "created")
+                qelt_source = str(session["source_run_key"]).startswith(QELT_SOURCE_RUN_KEY_PREFIX)
+                if phase == "long_trend_eval" and not qelt_source:
+                    raise QEResourcePhaseError(
+                        PHASE_INVALID_REASON,
+                        "long_trend_eval is reserved for an independent qelt:<evaluation_id> resource session",
+                    )
+                if qelt_source and current_phase == "created" and phase != "long_trend_eval":
+                    raise QEResourcePhaseError(
+                        PHASE_INVALID_REASON,
+                        "qelt resource sessions must enter long_trend_eval before a terminal phase",
+                    )
                 validate_phase_transition(current_phase, event)
 
                 cur.execute(

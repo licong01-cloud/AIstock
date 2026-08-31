@@ -1,0 +1,317 @@
+{
+  "actual": "Source schema/builder require persisted sector identity columns and the repair workflow reports 10,624 production blockers even though global PIT eligibility excludes the irrelevant ST/delisted universe rows.",
+  "allowed_write_scope": [
+    "backend/db/migrations/sector_data_pit_identity_v1.sql",
+    "backend/services/sector_data_builder.py",
+    "backend/services/sector_data_repair.py",
+    "backend/tests/services/test_sector_data_builder.py",
+    "backend/tests/services/test_sector_data_repair.py",
+    "scripts/create_sw_sector_tables.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "backend/db/migrations/sector_data_pit_identity_retirement_v1.sql",
+    "tests/aistock_validation/bugs/20260722_BUG-832-sector-data-persisted-pit-identity-duplicates-dynamic-industry-and-stock.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-832",
+  "closed_at": "2026-07-22T17:59:12Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-22T17:00:56.788083Z",
+  "description": "Source schema/builder require persisted sector identity columns and the repair workflow reports 10,624 production blockers even though global PIT eligibility excludes the irrelevant ST/delisted universe rows.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260722-7e4dc7fa45bd",
+      "timestamp": "2026-07-22T17:00:56.788083Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/pull/2622",
+    "https://github.com/licong01-cloud/AIstock/pull/2634",
+    "file:docs/architecture/sector_data_l2_code_id_export_f1_design_20260710.md",
+    "file:docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+  ],
+  "expected": "sector_data remains fact-only; consumers dynamically join the exact sw_index_member PIT row and freeze its canonical snapshot/hash, then apply the existing global stock-universe PIT for backtest/live eligibility. No production sector_data identity DDL or repair DML is required.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/db/migrations/sector_data_pit_identity_retirement_v1.sql"
+    ],
+    "changed_files": [
+      "backend/db/migrations/sector_data_pit_identity_v1.sql",
+      "backend/services/sector_data_builder.py",
+      "backend/services/sector_data_repair.py",
+      "backend/tests/services/test_sector_data_builder.py",
+      "backend/tests/services/test_sector_data_repair.py",
+      "scripts/create_sw_sector_tables.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/db/migrations/sector_data_pit_identity_v1.sql",
+        "backend/services/sector_data_builder.py",
+        "backend/services/sector_data_repair.py",
+        "backend/tests/services/test_sector_data_builder.py",
+        "backend/tests/services/test_sector_data_repair.py",
+        "scripts/create_sw_sector_tables.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+        "backend/db/migrations/sector_data_pit_identity_retirement_v1.sql"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "docs.architecture"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/db/migrations/sector_data_pit_identity_v1.sql",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_sector_data_materialization"
+        },
+        {
+          "file": "backend/services/sector_data_builder.py",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_sector_data_materialization"
+        },
+        {
+          "file": "backend/services/sector_data_repair.py",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_sector_data_materialization"
+        },
+        {
+          "file": "backend/tests/services/test_sector_data_builder.py",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_sector_data_materialization"
+        },
+        {
+          "file": "backend/tests/services/test_sector_data_repair.py",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_sector_data_materialization"
+        },
+        {
+          "file": "scripts/create_sw_sector_tables.py",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_sector_data_materialization"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "backend/db/migrations/sector_data_pit_identity_retirement_v1.sql",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_sector_data_materialization"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/db/migrations/sector_data_pit_identity_v1.sql",
+        "backend/services/sector_data_builder.py",
+        "backend/services/sector_data_repair.py",
+        "backend/tests/services/test_sector_data_builder.py",
+        "backend/tests/services/test_sector_data_repair.py",
+        "scripts/create_sw_sector_tables.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+        "backend/db/migrations/sector_data_pit_identity_retirement_v1.sql"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/db/migrations/sector_data_pit_identity_v1.sql",
+      "backend/services/sector_data_builder.py",
+      "backend/services/sector_data_repair.py",
+      "backend/tests/services/test_sector_data_builder.py",
+      "backend/tests/services/test_sector_data_repair.py",
+      "scripts/create_sw_sector_tables.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "backend/db/migrations/sector_data_pit_identity_retirement_v1.sql"
+    ]
+  },
+  "first_seen_at": "2026-07-22T17:00:56.788083Z",
+  "fix_branch": null,
+  "fix_commit": "bb2db0fea3b2c94a53b09eb837910018c1e9dcc9",
+  "fixed_at": "2026-07-22T18:01:06.697733Z",
+  "github_issue_number": 2638,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2638",
+  "last_seen_at": "2026-07-22T17:00:56.788083Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2639",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only compare market.sector_data production columns with backend/db/migrations/sector_data_pit_identity_v1.sql and run SectorDataRepairService.audit against 127.0.0.1:5432/aistock; do not execute DML/DDL.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "sector_data persisted PIT identity duplicates dynamic industry and stock-universe PIT",
+  "trigger_condition": {
+    "fingerprint": "7e4dc7fa45bd66c5e1533f31",
+    "source_event_id": "FE-20260722-7e4dc7fa45bd"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -- <changed-files> -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "deep",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "45-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "deep",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "45-60%"
+    }
+  }
+}

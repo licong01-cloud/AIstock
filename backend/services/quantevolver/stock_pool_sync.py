@@ -13,6 +13,8 @@ import logging
 import os
 import re
 import shlex
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -31,6 +33,21 @@ DEFAULT_STOCK_POOL_ROOT = PROJECT_ROOT / "stock_pools"
 _FILTERED_POOL_RE = re.compile(r"^filtered_pool_[A-Za-z0-9_.-]+(?:\.txt)?$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _LINUX_ABS_PATH_RE = re.compile(r"^/[A-Za-z0-9_./:@%+=,-]+$")
+
+
+@dataclass(frozen=True)
+class StockPoolInterval:
+    ts_code: str
+    eligible_start: date
+    eligible_end: date
+
+
+@dataclass(frozen=True)
+class StockPoolSnapshot:
+    filename: str
+    instrument_name: str
+    sha256: str
+    intervals: tuple[StockPoolInterval, ...]
 
 
 def is_filtered_stock_pool(stock_pool_path: str | None) -> bool:
@@ -122,6 +139,52 @@ def _read_stock_pool_payload(stock_pool_path: str) -> tuple[Path, str, str, str]
     except UnicodeDecodeError as exc:
         raise RuntimeError(f"stock_pool file must be UTF-8 text: {local_path}") from exc
     return local_path, local_path.name, content, digest
+
+
+def read_stock_pool_snapshot(stock_pool_path: str) -> StockPoolSnapshot:
+    """Read the exact AIstock-owned pool delivered to QE and validate its PIT intervals."""
+
+    _, filename, content, digest = _read_stock_pool_payload(stock_pool_path)
+    intervals: list[StockPoolInterval] = []
+    prior_by_symbol: dict[str, date] = {}
+    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            raise RuntimeError(
+                f"stock_pool row {line_number} must contain symbol, start date, and end date"
+            )
+        symbol = parts[0].strip().upper()
+        if not re.fullmatch(r"[0-9]{6}\.(?:SH|SZ|BJ)", symbol):
+            raise RuntimeError(f"stock_pool row {line_number} has invalid symbol: {symbol!r}")
+        try:
+            eligible_start = date.fromisoformat(parts[1].strip())
+            eligible_end = date.fromisoformat(parts[2].strip())
+        except ValueError as exc:
+            raise RuntimeError(f"stock_pool row {line_number} has invalid ISO dates") from exc
+        if eligible_end < eligible_start:
+            raise RuntimeError(f"stock_pool row {line_number} ends before it starts")
+        prior_end = prior_by_symbol.get(symbol)
+        if prior_end is not None and eligible_start <= prior_end:
+            raise RuntimeError(f"stock_pool intervals overlap or are unsorted for {symbol}")
+        prior_by_symbol[symbol] = eligible_end
+        intervals.append(
+            StockPoolInterval(
+                ts_code=symbol,
+                eligible_start=eligible_start,
+                eligible_end=eligible_end,
+            )
+        )
+    if not intervals:
+        raise RuntimeError(f"stock_pool contains no eligible intervals: {filename}")
+    return StockPoolSnapshot(
+        filename=filename,
+        instrument_name=filename.removesuffix(".txt"),
+        sha256=digest,
+        intervals=tuple(intervals),
+    )
 
 
 def _remote_instruments_dir(node: dict[str, Any]) -> str:

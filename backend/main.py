@@ -12,6 +12,7 @@ import os
 import sys
 import signal
 import faulthandler
+import traceback
 
 from dotenv import load_dotenv
 
@@ -27,6 +28,7 @@ from .routers import (
     analysis,
     cloud_screening,
     config_env,
+    dataset_releases,
     execution_policy,
     external_research,
     strategy_governance,
@@ -95,6 +97,42 @@ from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 from .schedulers.strategy_scheduler import scheduler as strategy_scheduler
 from .infra.qmt_client import get_qmt_client_singleton
+from .services.quantevolver.qe_log_store import get_qe_live_log_store
+
+
+def _report_bootstrap_failure(event: str, exc: BaseException) -> None:
+    stream = sys.__stderr__
+    if stream is None or getattr(stream, "closed", False):
+        raise RuntimeError(f"{event}: no writable stderr is available") from exc
+    stream.write(f"{event}: {type(exc).__name__}: {exc}\n")
+    traceback.print_exception(type(exc), exc, exc.__traceback__, file=stream)
+    stream.flush()
+
+
+def _report_nonfatal_lifecycle_failure(event: str, exc: BaseException) -> None:
+    logging.getLogger("aistock.lifecycle").error(
+        "%s: %s",
+        event,
+        exc,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+
+
+async def _cancel_background_task(task: asyncio.Task, *, task_name: str) -> None:
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        logging.getLogger("aistock.lifecycle").debug(
+            "BACKGROUND_TASK_CANCELLED task=%s",
+            task_name,
+        )
+        return
+    except Exception as exc:
+        _report_nonfatal_lifecycle_failure(
+            f"BACKGROUND_TASK_SHUTDOWN_FAILED task={task_name}",
+            exc,
+        )
 
 
 def _install_safe_print_and_logging() -> None:
@@ -103,13 +141,13 @@ def _install_safe_print_and_logging() -> None:
             sys.stdout = sys.__stdout__
         if getattr(sys.stderr, "closed", False):
             sys.stderr = sys.__stderr__
-    except Exception:
-        pass
+    except Exception as exc:
+        _report_bootstrap_failure("SAFE_STREAM_RESTORE_FAILED", exc)
 
     try:
         logging.raiseExceptions = False
-    except Exception:
-        pass
+    except Exception as exc:
+        _report_bootstrap_failure("LOGGING_EXCEPTION_POLICY_SETUP_FAILED", exc)
 
     class SafeStreamHandler(logging.StreamHandler):
         def emit(self, record):  # type: ignore[no-untyped-def]
@@ -142,13 +180,12 @@ def _install_safe_print_and_logging() -> None:
                 try:
                     msg = " ".join(str(a) for a in args)
                     logging.getLogger("aistock.safe_print").info(msg)
-                except Exception:
-                    pass
-                return None
+                except Exception as exc:
+                    _report_bootstrap_failure("SAFE_PRINT_FALLBACK_LOG_FAILED", exc)
 
         builtins.print = safe_print
-    except Exception:
-        pass
+    except Exception as exc:
+        _report_bootstrap_failure("SAFE_PRINT_INSTALL_FAILED", exc)
 
     try:
         for logger in (logging.getLogger(), logging.getLogger("uvicorn"), logging.getLogger("uvicorn.access"), logging.getLogger("uvicorn.error")):
@@ -157,10 +194,10 @@ def _install_safe_print_and_logging() -> None:
                 if stream is not None and getattr(stream, "closed", False):
                     try:
                         h.stream = sys.__stderr__
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+                    except Exception as exc:
+                        _report_bootstrap_failure("CLOSED_LOG_STREAM_REPAIR_FAILED", exc)
+    except Exception as exc:
+        _report_bootstrap_failure("LOG_STREAM_INSPECTION_FAILED", exc)
 
     # Replace StreamHandlers with a safe variant that self-heals when streams are closed.
     try:
@@ -181,8 +218,8 @@ def _install_safe_print_and_logging() -> None:
                     new_h.addFilter(f)
                 logger.removeHandler(h)
                 logger.addHandler(new_h)
-    except Exception:
-        pass
+    except Exception as exc:
+        _report_bootstrap_failure("SAFE_STREAM_HANDLER_INSTALL_FAILED", exc)
 
     # Patch tqdm to avoid noisy __del__ crashes when half-initialized (often due to stream/tty issues).
     try:
@@ -197,13 +234,14 @@ def _install_safe_print_and_logging() -> None:
                         _orig_del(self)
                 except AttributeError:
                     return
-                except Exception:
+                except Exception as exc:
+                    _report_nonfatal_lifecycle_failure("TQDM_DESTRUCTOR_FAILED", exc)
                     return
 
             _tqdm_std.tqdm.__del__ = _safe_tqdm_del
             _tqdm_std.tqdm._AISTOCK_DEL_PATCHED = True
-    except Exception:
-        pass
+    except Exception as exc:
+        _report_nonfatal_lifecycle_failure("TQDM_DESTRUCTOR_PATCH_FAILED", exc)
 
 
 @asynccontextmanager
@@ -233,8 +271,8 @@ async def _lifespan(app: FastAPI):
         _eh.setFormatter(_fmt)
         logging.getLogger().addHandler(_fh)
         logging.getLogger().addHandler(_eh)
-    except Exception:
-        pass
+    except Exception as exc:
+        _report_nonfatal_lifecycle_failure("FILE_LOGGING_SETUP_FAILED", exc)
 
     try:
         uv_err = logging.getLogger("uvicorn.error")
@@ -252,8 +290,14 @@ async def _lifespan(app: FastAPI):
             if lg.level > logging.INFO:
                 lg.setLevel(logging.INFO)
             lg.propagate = True
-    except Exception:
-        pass
+    except Exception as exc:
+        _report_nonfatal_lifecycle_failure("APPLICATION_LOGGER_SETUP_FAILED", exc)
+
+    # QE live logs are runtime state, never source-tree artifacts. Construct
+    # the process store before any backend service starts so a missing or
+    # unsafe state root fails startup instead of being swallowed by a lazy SSE
+    # fallback later.
+    get_qe_live_log_store()
 
     init_db_pool(minconn=5, maxconn=40)
     _configure_external_research_provider()
@@ -263,12 +307,12 @@ async def _lifespan(app: FastAPI):
             def _dump_threads(_signum, _frame):
                 try:
                     faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _report_nonfatal_lifecycle_failure("THREAD_DUMP_FAILED", exc)
             signal.signal(signal.SIGINT, _dump_threads)
             signal.signal(signal.SIGTERM, _dump_threads)
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("THREAD_DUMP_SIGNAL_SETUP_FAILED", exc)
 
     try:
         client = get_qmt_client_singleton()
@@ -291,18 +335,24 @@ async def _lifespan(app: FastAPI):
         strategy_scheduler.start()
 
 
-    # Paper Trading v2 session scheduler is opt-in so development ports do not
-    # accidentally advance durable v2 sessions while production 8001 is running.
-    enable_pt_v2 = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
+    # The Paper v2 session scheduler is a retired execution path.  The old env
+    # may remain on a host during migration, but it must never create a second
+    # scheduler beside the unified simulation-runtime owner.
+    legacy_pt_v2_requested = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
     logging.getLogger("uvicorn.error").info(
-        "Paper Trading v2 scheduler autostart=%s interval=%s auto_run=%s",
-        enable_pt_v2 in {"1", "true", "yes", "y", "on"},
-        os.getenv("PAPER_TRADING_V2_SCHEDULER_INTERVAL_SEC") or "30",
-        os.getenv("PAPER_V2_AUTO_RUN_ENABLED") or "true",
+        "Paper Trading v2 legacy scheduler retired env_requested=%s env_ignored=true replacement=/api/v1/simulation-runtime",
+        legacy_pt_v2_requested in {"1", "true", "yes", "y", "on"},
     )
-    if enable_pt_v2 in {"1", "true", "yes", "y", "on"}:
-        from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
-        paper_trading_v2_scheduler.start()
+
+    enable_advisory_forward = (os.getenv("AISTOCK_ADVISORY_FORWARD_SCHEDULER_ENABLED") or "").strip().lower()
+    logging.getLogger("uvicorn.error").info(
+        "Advisory forward scheduler autostart=%s interval=%s",
+        enable_advisory_forward in {"1", "true", "yes", "y", "on"},
+        os.getenv("AISTOCK_ADVISORY_FORWARD_POLL_SECONDS") or "300",
+    )
+    if enable_advisory_forward in {"1", "true", "yes", "y", "on"}:
+        from .services.advisory_forward.scheduler import advisory_forward_scheduler
+        advisory_forward_scheduler.start()
 
     # Unified LocalSim/MiniQMT simulation lifecycle scheduler is opt-in. It
     # follows the committed simulation-runtime path and never starts by default.
@@ -339,56 +389,18 @@ async def _lifespan(app: FastAPI):
         from .routers.hmm_training import init_hmm_scheduler
         init_hmm_scheduler()
 
-    # Evolution loop timer scanner (fallback for webhook-based flow)
+    # QE lifecycle recovery is owned by one event-driven coordinator.  It
+    # coalesces local submit/callback wakes and performs one aggregate read-only
+    # safety sweep per minute for restart/cross-process recovery.
     shutdown_event = asyncio.Event()
-    scan_task = None
-    disable_evo_scanner = (os.getenv("DISABLE_EVOLUTION_SCANNER") or "").strip().lower()
-    if disable_evo_scanner not in {"1", "true", "yes", "y", "on"}:
-        async def _timer_scan_loop(stop_event: asyncio.Event):
-            from .services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
-            scanner = AutoEvolutionScheduler()
-            scan_interval = int((os.getenv("QE_EVOLUTION_SCAN_INTERVAL_SEC") or "60").strip() or "60")
-            while not stop_event.is_set():
-                try:
-                    await scanner.scan_running_loops()
-                except Exception as e:
-                    logging.getLogger("aistock.evolution_scanner").warning(f"Evolution scan error: {e}")
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
-                    break  # stop_event was set
-                except asyncio.TimeoutError:
-                    pass  # Normal timeout, run the next scan.
+    from .services.quantevolver.qe_reconciliation_coordinator import (
+        run_qe_reconciliation_coordinator,
+    )
 
-        scan_task = asyncio.create_task(_timer_scan_loop(shutdown_event))
-
-    # One-off QE experiment scanner. This covers single-alpha and Multi-Alpha
-    # experiments whose browser/SSE session or RD-Agent callback did not update DB.
-    qe_exp_scan_task = None
-    disable_qe_exp_scanner = (os.getenv("DISABLE_QE_EXPERIMENT_SCANNER") or "").strip().lower()
-    if disable_qe_exp_scanner not in {"1", "true", "yes", "y", "on"}:
-        async def _qe_experiment_scan_loop(stop_event: asyncio.Event):
-            from .services.quantevolver.qe_experiment_status_scanner import QEExperimentStatusScanner
-            scan_interval = int((os.getenv("QE_EXPERIMENT_SCAN_INTERVAL_SEC") or "30").strip() or "30")
-            batch_size = int((os.getenv("QE_EXPERIMENT_SCAN_BATCH_SIZE") or "50").strip() or "50")
-            scanner = QEExperimentStatusScanner(batch_size=batch_size)
-            while not stop_event.is_set():
-                try:
-                    stats = await scanner.scan_once()
-                    if stats.get("checked") or stats.get("synced_terminal") or stats.get("errors"):
-                        logging.getLogger("aistock.qe_experiment_scanner").info(
-                            "QE experiment scan stats: %s", stats
-                        )
-                except Exception as e:
-                    logging.getLogger("aistock.qe_experiment_scanner").warning(
-                        "QE experiment scan error: %s", e, exc_info=True
-                    )
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
-                    break
-                except asyncio.TimeoutError:
-                    pass
-
-        qe_exp_scan_task = asyncio.create_task(_qe_experiment_scan_loop(shutdown_event))
+    qe_reconciliation_task = asyncio.create_task(
+        run_qe_reconciliation_coordinator(shutdown_event),
+        name="qe-reconciliation-coordinator",
+    )
 
     qe_archive_worker_task = None
     try:
@@ -402,80 +414,100 @@ async def _lifespan(app: FastAPI):
             "QE archive worker autostart setup failed: %s", e, exc_info=True
         )
 
+    multi_alpha_durable_task = None
+    try:
+        from .services.multi_alpha.durable_orchestrator import (
+            run_durable_multi_alpha_orchestrator,
+        )
+
+        multi_alpha_durable_task = asyncio.create_task(
+            run_durable_multi_alpha_orchestrator(shutdown_event),
+            name="multi-alpha-durable-orchestrator",
+        )
+        logging.getLogger("backend.services.multi_alpha.durable_orchestrator").info(
+            "QE-only multi-alpha durable orchestrator task created"
+        )
+    except Exception as e:
+        logging.getLogger("backend.services.multi_alpha.durable_orchestrator").error(
+            "multi_alpha_durable_startup_failed: %s",
+            e,
+            exc_info=True,
+        )
+
     try:
         yield  # ── 应用运行中 ──
     except asyncio.CancelledError:
-        pass  # uvicorn reload 发送的取消信号，正常处理
+        logging.getLogger("aistock.lifecycle").info(
+            "APPLICATION_LIFESPAN_CANCELLED reason=uvicorn_reload_or_shutdown"
+        )
     finally:
         # ── SHUTDOWN ──
         shutdown_event.set()
-        if scan_task is not None:
-            scan_task.cancel()
-            try:
-                await scan_task
-            except (asyncio.CancelledError, Exception):
-                pass
-        if qe_exp_scan_task is not None:
-            qe_exp_scan_task.cancel()
-            try:
-                await qe_exp_scan_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await _cancel_background_task(
+            qe_reconciliation_task,
+            task_name="qe-reconciliation-coordinator",
+        )
         if qe_archive_worker_task is not None:
-            qe_archive_worker_task.cancel()
-            try:
-                await qe_archive_worker_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            await _cancel_background_task(qe_archive_worker_task, task_name="qe-archive-worker")
+        if multi_alpha_durable_task is not None:
+            await _cancel_background_task(
+                multi_alpha_durable_task,
+                task_name="multi-alpha-durable-orchestrator",
+            )
         # ── 先停所有后台线程（它们可能持有 DB 连接）──
         try:
             ingestion_scheduler.shutdown(wait=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("INGESTION_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             strategy_scheduler.shutdown(wait=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("STRATEGY_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             from .services.quantevolver.correlation_scheduler import correlation_scheduler
             correlation_scheduler.shutdown(wait=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("CORRELATION_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             from .services.quantevolver.factor_metrics_scheduler import factor_metrics_scheduler
             factor_metrics_scheduler.shutdown(wait=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("FACTOR_METRICS_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             from .schedulers.node_health_scheduler import node_health_scheduler
             node_health_scheduler.shutdown()
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("NODE_HEALTH_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             from .routers.hmm_training import shutdown_hmm_scheduler
             shutdown_hmm_scheduler()
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("HMM_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
             paper_trading_v2_scheduler.shutdown(wait=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("PAPER_V2_SCHEDULER_SHUTDOWN_FAILED", exc)
+        try:
+            from .services.advisory_forward.scheduler import advisory_forward_scheduler
+            advisory_forward_scheduler.shutdown(wait=False)
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("ADVISORY_FORWARD_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             from .services.simulation_runtime import simulation_lifecycle_background_scheduler
             simulation_lifecycle_background_scheduler.shutdown(wait=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("SIMULATION_SCHEDULER_SHUTDOWN_FAILED", exc)
         # ── 后台线程已停，再关闭 DB 连接池和外部连接 ──
         try:
             client = get_qmt_client_singleton()
             client.disconnect()
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("QMT_DISCONNECT_FAILED", exc)
         try:
             close_db_pool()
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("DB_POOL_CLOSE_FAILED", exc)
 
 
 def create_app() -> FastAPI:
@@ -518,6 +550,7 @@ def create_app() -> FastAPI:
     app.include_router(news.router, prefix="/api/v1")
     app.include_router(settings.router, prefix="/api/v1")
     app.include_router(config_env.router, prefix="/api/v1")
+    app.include_router(dataset_releases.router, prefix="/api/v1")
     app.include_router(smart_monitor.router, prefix="/api/v1")
     app.include_router(rdagent.router, prefix="/api/v1")
     app.include_router(rdagent_templates.router, prefix="/api/v1")

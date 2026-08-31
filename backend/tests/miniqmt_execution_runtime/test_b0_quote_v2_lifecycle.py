@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from threading import Event, Thread
 
 import pytest
 
@@ -15,6 +16,7 @@ from backend.services.miniqmt_execution_runtime import (
 from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
     B0QuoteV2Controller,
     B0QuoteV2ControllerFactory,
+    B0QuoteV2RegistryRollbackError,
     ParentQuoteControlAssignmentV1,
 )
 from backend.services.miniqmt_execution_runtime.quote_evidence import QuoteEvidenceCoordinator
@@ -26,36 +28,88 @@ from backend.services.miniqmt_execution_runtime.quote_eligibility import (
 from backend.services.miniqmt_execution_runtime.quote_ingress import (
     PhaseOneQuoteProjectionSink,
     PhaseOneRawQuoteSnapshotStore,
+    QuoteIngressSupervisor,
 )
+from backend.infra.realtime_quote_subscriber import RealtimeQuoteSubscriber
+import backend.infra.realtime_quote_subscriber as subscriber_module
 from backend.services.miniqmt_execution_runtime.quote_normalizer import capture_raw_quote_frame
 
 from backend.tests.miniqmt_execution_runtime.test_b0_quote_v2_adapter import CLOCK_AT, _runtime_controller
-from backend.tests.miniqmt_execution_runtime.test_quote_ingress import _projection_context
+from backend.tests.miniqmt_execution_runtime.test_quote_ingress import _FakeXtData, _payload, _projection_context
 
 
 class _LifecycleSupervisor:
     def __init__(self, source_controller) -> None:  # type: ignore[no-untyped-def]
         self.normalized_store = source_controller.normalized_store
         self.context_store = source_controller.context_store
-        self.sinks: dict[str, object] = {}
+        self.sinks: dict[str, tuple[tuple[str, ...], object]] = {}
         self.leases: dict[str, tuple[str, ...]] = {}
         self.physical_feed_start_count = 0
+        self.lifecycle_calls: list[tuple[str, str]] = []
 
-    def register_observation_sink(self, *, consumer_id: str, sink) -> None:  # type: ignore[no-untyped-def]
+    def register_observation_sink(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+        sink,
+    ) -> None:  # type: ignore[no-untyped-def]
         if consumer_id in self.sinks:
             raise AssertionError("duplicate sink")
-        self.sinks[consumer_id] = sink
+        self.sinks[consumer_id] = (tuple(symbols), sink)
+        self.lifecycle_calls.append(("register", consumer_id))
 
-    def unregister_observation_sink(self, *, consumer_id: str) -> None:
-        self.sinks.pop(consumer_id, None)
+    def unregister_observation_sink(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+        sink,
+    ) -> bool:  # type: ignore[no-untyped-def]
+        current = self.sinks.get(consumer_id)
+        if current is None:
+            return False
+        if current[0] != tuple(symbols) or current[1] is not sink:
+            raise AssertionError("sink owner mismatch")
+        self.sinks.pop(consumer_id)
+        self.lifecycle_calls.append(("unregister", consumer_id))
+        return True
+
+    def get_observation_sink(self, *, consumer_id: str, symbols: tuple[str, ...]):  # type: ignore[no-untyped-def]
+        current = self.sinks.get(consumer_id)
+        if current is None:
+            return None
+        if current[0] != tuple(symbols):
+            raise AssertionError("sink symbol owner mismatch")
+        return current[1]
 
     def acquire_consumer(self, *, consumer_id: str, symbols: list[str]) -> None:
         if not self.leases:
             self.physical_feed_start_count += 1
         self.leases[consumer_id] = tuple(symbols)
+        self.lifecycle_calls.append(("acquire", consumer_id))
 
-    def release_consumer(self, *, consumer_id: str) -> None:
+    def release_consumer(self, *, consumer_id: str) -> bool:
+        if consumer_id in self.sinks:
+            raise AssertionError("lease released before exact sink unregistration")
         self.leases.pop(consumer_id, None)
+        self.lifecycle_calls.append(("release", consumer_id))
+        return True
+
+    def consumer_lease_owner_snapshot(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+    ) -> dict[str, object]:
+        lease_symbols = self.leases.get(consumer_id)
+        if lease_symbols is None:
+            return {"readback_current": True, "exact_owner": False, "state": "ABSENT"}
+        return {
+            "readback_current": True,
+            "exact_owner": lease_symbols == tuple(symbols),
+            "state": "ACTIVE",
+        }
 
 
 def test_projection_sink_delivers_the_exact_context_used_to_normalize_observation() -> None:
@@ -73,6 +127,7 @@ def test_projection_sink_delivers_the_exact_context_used_to_normalize_observatio
     captured: list[tuple[object, QuoteEvaluationContext]] = []
     sink.register_observation_sink(
         consumer_id="b0-context-handoff",
+        symbols=("000001.SZ",),
         sink=lambda observation, observation_context: captured.append((observation, observation_context)),
     )
 
@@ -163,11 +218,7 @@ def test_lifecycle_without_observation_persists_runtime_wait_not_quote_less_acti
     second = controller.lifecycle_tick(now_utc=CLOCK_AT)
 
     events = repository.list_events("runtime-p1e", include_archived=True)
-    waiting = [
-        event
-        for event in events
-        if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"
-    ]
+    waiting = [event for event in events if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"]
     assert len(waiting) == 1
     assert waiting[0].event_type.value == "TIMER"
     assert waiting[0].source == "quote_ingress"
@@ -214,9 +265,7 @@ def test_quote_wait_recovery_rejects_tampered_durable_fingerprint() -> None:
         if event.payload.get("schema_version") == "b0_quote_v2_quote_waiting_v1"
     )
     wait_event = events[wait_index]
-    events[wait_index] = wait_event.model_copy(
-        update={"payload": {**wait_event.payload, "wait_fingerprint": "0" * 64}}
-    )
+    events[wait_index] = wait_event.model_copy(update={"payload": {**wait_event.payload, "wait_fingerprint": "0" * 64}})
 
     with pytest.raises(QuoteContractError) as exc_info:
         B0QuoteV2Controller(
@@ -261,6 +310,322 @@ def test_only_scheduler_constructs_controller_and_read_only_paths_never_start_in
     assert supervisor.leases == {}
     assert supervisor.sinks == {}
     assert released_contexts == [runtime.config.runtime_id]
+    assert supervisor.lifecycle_calls == [
+        ("register", "b0qv2:runtime-p1e"),
+        ("acquire", "b0qv2:runtime-p1e"),
+        ("unregister", "b0qv2:runtime-p1e"),
+        ("release", "b0qv2:runtime-p1e"),
+    ]
+
+
+def test_factory_create_rollback_uses_exact_symbols_and_stable_sink_identity() -> None:
+    source, runtime, _gateway, _repository = _runtime_controller()
+
+    class AcquireFailureSupervisor(_LifecycleSupervisor):
+        def acquire_consumer(self, *, consumer_id: str, symbols: list[str]) -> None:
+            self.lifecycle_calls.append(("acquire", consumer_id))
+            raise RuntimeError("primary acquire failure")
+
+    supervisor = AcquireFailureSupervisor(source)
+    factory = B0QuoteV2ControllerFactory(
+        supervisor=supervisor,
+        config=source.config,
+        data_session_key="sim-session-p1e",
+    )
+
+    with pytest.raises(RuntimeError, match="primary acquire failure"):
+        factory.create(runtime=runtime, assignments=source.assignments, symbols=tuple(source.symbols))
+
+    assert factory.get(runtime.config.runtime_id) is None
+    assert supervisor.sinks == {}
+    assert supervisor.lifecycle_calls == [
+        ("register", "b0qv2:runtime-p1e"),
+        ("acquire", "b0qv2:runtime-p1e"),
+        ("unregister", "b0qv2:runtime-p1e"),
+    ]
+
+
+def test_factory_create_preserves_primary_and_exact_rollback_failures() -> None:
+    source, runtime, _gateway, _repository = _runtime_controller()
+
+    class RollbackFailureSupervisor(_LifecycleSupervisor):
+        fail_unregister = True
+
+        def acquire_consumer(self, *, consumer_id: str, symbols: list[str]) -> None:
+            raise RuntimeError("primary acquire failure")
+
+        def unregister_observation_sink(self, **values: object) -> bool:
+            if self.fail_unregister:
+                raise RuntimeError("rollback unregister failure")
+            return super().unregister_observation_sink(**values)
+
+    supervisor = RollbackFailureSupervisor(source)
+    factory = B0QuoteV2ControllerFactory(
+        supervisor=supervisor,
+        config=source.config,
+        data_session_key="sim-session-p1e",
+    )
+
+    with pytest.raises(B0QuoteV2RegistryRollbackError) as caught:
+        factory.create(runtime=runtime, assignments=source.assignments, symbols=tuple(source.symbols))
+
+    assert caught.value.context["operation"] == "CREATE_ACQUIRE_CONSUMER"
+    assert caught.value.context["primary_failure"]["exception_message"] == "primary acquire failure"
+    assert caught.value.context["rollback_failure"]["exception_message"] == "rollback unregister failure"
+    retained_controller = factory.get(runtime.config.runtime_id)
+    assert retained_controller is not None
+    assert retained_controller.health()["status"] == "CLOSED"
+    assert factory.health()["ingress_owners"][runtime.config.runtime_id]["release_state"] == "RELEASE_UNKNOWN"
+    assert tuple(supervisor.sinks) == ("b0qv2:runtime-p1e",)
+
+    supervisor.fail_unregister = False
+    factory.release(runtime.config.runtime_id)
+    assert factory.get(runtime.config.runtime_id) is None
+    assert supervisor.sinks == {}
+
+
+@pytest.mark.parametrize("rollback_mode", ("false", "error"))
+def test_real_factory_create_releases_retained_non_exact_acquire_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    rollback_mode: str,
+) -> None:
+    fake_xtdata = _FakeXtData()
+    monkeypatch.setattr(subscriber_module, "_load_xtdata", lambda: fake_xtdata)
+    source, runtime, _gateway, _repository = _runtime_controller()
+    subscriber = RealtimeQuoteSubscriber()
+    supervisor = QuoteIngressSupervisor(
+        subscriber=subscriber,
+        config=source.config,
+        data_session_key="SIM:B0_QUOTE_V2:create-retained-owner",
+        owner="simulation-scheduler",
+        bootstrap_fetcher=lambda symbols: {symbol: _payload(10.0) for symbol in symbols},
+        normalized_store=source.normalized_store,
+        context_store=source.context_store,
+    )
+    monkeypatch.setattr(supervisor._worker, "on_generation_published", lambda *_values: False)
+    original_release = subscriber.release_phase_one_lease
+    release_count = 0
+
+    def first_cleanup_unknown_then_release(**values: object) -> bool:
+        nonlocal release_count
+        release_count += 1
+        if release_count == 1:
+            if rollback_mode == "false":
+                return False
+            raise RuntimeError("initial acquire rollback transport failed")
+        return original_release(**values)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(subscriber, "release_phase_one_lease", first_cleanup_unknown_then_release)
+    factory = B0QuoteV2ControllerFactory(
+        supervisor=supervisor,
+        config=source.config,
+        data_session_key="SIM:B0_QUOTE_V2:create-retained-owner",
+    )
+
+    with pytest.raises(QuoteContractError) as failure:
+        factory.create(runtime=runtime, assignments=source.assignments, symbols=tuple(source.symbols))
+
+    assert failure.value.context["consumer_lease_retained"] is True
+    assert release_count == 2
+    assert factory.get(runtime.config.runtime_id) is None
+    assert factory.health()["ingress_owners"] == {}
+    assert supervisor.consumer_lease_owner_snapshot(
+        consumer_id="b0qv2:runtime-p1e",
+        symbols=tuple(source.symbols),
+    )["state"] == "ABSENT"
+    assert supervisor.health()["consumers"] == {}
+    supervisor.shutdown()
+
+
+@pytest.mark.parametrize("release_outcome", ["ACTIVE", "UNKNOWN"])
+def test_factory_release_retains_exact_owner_and_only_restores_sink_for_active_outcome(
+    release_outcome: str,
+) -> None:
+    source, runtime, _gateway, _repository = _runtime_controller()
+
+    class ReleaseFailure(RuntimeError):
+        def __init__(self) -> None:
+            self.context = {"release_outcome": release_outcome}
+            super().__init__(f"physical release {release_outcome.lower()}")
+
+    class ReleaseFailureSupervisor(_LifecycleSupervisor):
+        fail_release = True
+
+        def release_consumer(self, *, consumer_id: str) -> bool:
+            if consumer_id in self.sinks:
+                raise AssertionError("lease released before exact sink unregistration")
+            self.lifecycle_calls.append(("release", consumer_id))
+            if self.fail_release:
+                raise ReleaseFailure()
+            self.leases.pop(consumer_id, None)
+            return True
+
+    supervisor = ReleaseFailureSupervisor(source)
+    factory = B0QuoteV2ControllerFactory(
+        supervisor=supervisor,
+        config=source.config,
+        data_session_key="sim-session-p1e",
+    )
+    controller = factory.create(runtime=runtime, assignments=source.assignments, symbols=tuple(source.symbols))
+    consumer_id = "b0qv2:runtime-p1e"
+    stable_sink = supervisor.sinks[consumer_id][1]
+
+    with pytest.raises(ReleaseFailure):
+        controller.close()
+
+    assert factory.get(runtime.config.runtime_id) is controller
+    owner_health = factory.health()["ingress_owners"][runtime.config.runtime_id]
+    if release_outcome == "ACTIVE":
+        assert supervisor.sinks[consumer_id][1] is stable_sink
+        assert owner_health["release_state"] == "ACTIVE"
+        assert controller.health()["status"] != "CLOSED"
+    else:
+        assert consumer_id not in supervisor.sinks
+        assert owner_health["release_state"] == "RELEASE_UNKNOWN"
+        assert controller.health()["status"] == "CLOSED"
+    assert owner_health["last_release_failure"]["exception_message"] == (
+        f"physical release {release_outcome.lower()}"
+    )
+
+    supervisor.fail_release = False
+    controller.close()
+    assert factory.get(runtime.config.runtime_id) is None
+    assert controller.health()["status"] == "CLOSED"
+    assert supervisor.sinks == {}
+    assert supervisor.leases == {}
+
+
+def test_direct_factory_release_fences_controller_while_physical_release_is_in_flight() -> None:
+    source, runtime, _gateway, _repository = _runtime_controller()
+    entered = Event()
+    resume = Event()
+
+    class BlockingReleaseSupervisor(_LifecycleSupervisor):
+        def release_consumer(self, *, consumer_id: str) -> bool:
+            if consumer_id in self.sinks:
+                raise AssertionError("lease released before exact sink unregistration")
+            entered.set()
+            if not resume.wait(timeout=5):
+                raise AssertionError("test did not resume physical release")
+            self.leases.pop(consumer_id, None)
+            return True
+
+    supervisor = BlockingReleaseSupervisor(source)
+    factory = B0QuoteV2ControllerFactory(
+        supervisor=supervisor,
+        config=source.config,
+        data_session_key="sim-session-p1e",
+    )
+    controller = factory.create(runtime=runtime, assignments=source.assignments, symbols=tuple(source.symbols))
+    release_failures: list[BaseException] = []
+
+    def release() -> None:
+        try:
+            factory.release(runtime.config.runtime_id)
+        except BaseException as failure:  # noqa: BLE001 - surface worker failure in the test thread.
+            release_failures.append(failure)
+
+    release_thread = Thread(target=release)
+
+    release_thread.start()
+    assert entered.wait(timeout=5)
+    assert controller.health()["status"] == "CLOSED"
+    assert factory.get(runtime.config.runtime_id) is controller
+    assert factory.health()["ingress_owners"][runtime.config.runtime_id]["release_state"] == "RELEASING"
+
+    resume.set()
+    release_thread.join(timeout=5)
+    assert not release_thread.is_alive()
+    assert release_failures == []
+    assert factory.get(runtime.config.runtime_id) is None
+    assert controller.health()["status"] == "CLOSED"
+
+
+def test_factory_release_preserves_primary_and_sink_rollback_failures_for_retry() -> None:
+    source, runtime, _gateway, _repository = _runtime_controller()
+
+    class ReleaseFailure(RuntimeError):
+        context = {"release_outcome": "ACTIVE"}
+
+    class RollbackFailureSupervisor(_LifecycleSupervisor):
+        fail_release = True
+        register_attempts = 0
+
+        def register_observation_sink(self, **values: object) -> None:
+            self.register_attempts += 1
+            if self.register_attempts > 1:
+                raise RuntimeError("rollback register failure")
+            super().register_observation_sink(**values)
+
+        def release_consumer(self, *, consumer_id: str) -> bool:
+            self.lifecycle_calls.append(("release", consumer_id))
+            if self.fail_release:
+                raise ReleaseFailure("primary release failure")
+            self.leases.pop(consumer_id, None)
+            return True
+
+    supervisor = RollbackFailureSupervisor(source)
+    factory = B0QuoteV2ControllerFactory(
+        supervisor=supervisor,
+        config=source.config,
+        data_session_key="sim-session-p1e",
+    )
+    controller = factory.create(runtime=runtime, assignments=source.assignments, symbols=tuple(source.symbols))
+
+    with pytest.raises(B0QuoteV2RegistryRollbackError) as caught:
+        factory.release(runtime.config.runtime_id)
+
+    assert caught.value.context["operation"] == "RELEASE_CONSUMER"
+    assert caught.value.context["primary_failure"]["exception_message"] == "primary release failure"
+    assert caught.value.context["rollback_failure"]["exception_message"] == "rollback register failure"
+    assert factory.get(runtime.config.runtime_id) is controller
+    assert factory.health()["ingress_owners"][runtime.config.runtime_id]["release_state"] == "RELEASE_UNKNOWN"
+
+    supervisor.fail_release = False
+    factory.release(runtime.config.runtime_id)
+    assert factory.get(runtime.config.runtime_id) is None
+
+
+def test_factory_close_then_later_runtime_reacquires_quote_without_registry_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_xtdata = _FakeXtData()
+    monkeypatch.setattr(subscriber_module, "_load_xtdata", lambda: fake_xtdata)
+    source, runtime, _gateway, _repository = _runtime_controller()
+    supervisor = QuoteIngressSupervisor(
+        subscriber=RealtimeQuoteSubscriber(),
+        config=source.config,
+        data_session_key="SIM:B0_QUOTE_V2:lifecycle-reacquire",
+        owner="simulation-scheduler",
+        bootstrap_fetcher=lambda symbols: {symbol: _payload(10.0) for symbol in symbols},
+        normalized_store=source.normalized_store,
+        context_store=source.context_store,
+    )
+    factory = B0QuoteV2ControllerFactory(
+        supervisor=supervisor,
+        config=source.config,
+        data_session_key="SIM:B0_QUOTE_V2:lifecycle-reacquire",
+    )
+    morning = factory.create(runtime=runtime, assignments=source.assignments, symbols=tuple(source.symbols))
+    morning_generation = supervisor.health()["subscription"]["generation"]
+
+    morning.close()
+
+    _second_source, afternoon_runtime, _second_gateway, _second_repository = _runtime_controller()
+    afternoon_runtime.config = afternoon_runtime.config.model_copy(update={"runtime_id": "runtime-p1e-afternoon"})
+    afternoon = factory.create(
+        runtime=afternoon_runtime,
+        assignments=source.assignments,
+        symbols=tuple(source.symbols),
+    )
+
+    health = supervisor.health()
+    assert factory.get("runtime-p1e") is None
+    assert factory.get("runtime-p1e-afternoon") is afternoon
+    assert factory.health()["controller_count"] == 1
+    assert health["subscription"]["generation"] > morning_generation
+    assert health["writer"]["ordering_rejected_count"] == 0
+    supervisor.shutdown()
 
 
 def test_runtime_leases_share_physical_feed_but_isolate_coordinator_and_symbol_failure() -> None:

@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Database, FileText, PlayCircle, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import type { Loop } from "../../../evolution/components/TopologyPanel";
+import MultiAlphaChildGrid from "../../../evolution/components/MultiAlphaChildGrid";
 
 export type CombineRunLoop = Loop & {
   run_id?: string;
@@ -51,6 +52,58 @@ type ArchiveStatus = {
   run_id: string;
   archive_status: "archived" | "not_archived" | string;
   archive_run?: Record<string, unknown> | null;
+};
+
+type DurableAttempt = {
+  attempt_id: string;
+  attempt_no?: number;
+  status?: string | null;
+  execution_kind?: string | null;
+  retry_mode?: string | null;
+  selected?: boolean;
+};
+
+type DurableChild = {
+  child_id: string;
+  child_key: string;
+  child_kind?: string | null;
+  status?: string | null;
+  selected_attempt_id?: string | null;
+  execution_disposition?: string | null;
+  source_child_id?: string | null;
+};
+
+type DurableCommand = {
+  command_id: string;
+  action: string;
+  status: string;
+  child_id?: string | null;
+  attempt_id?: string | null;
+  response_json?: Record<string, unknown> | null;
+  error_code?: string | null;
+  error_json?: Record<string, unknown> | null;
+  updated_at?: string | null;
+};
+
+type DurableCapabilities = {
+  run_id: string;
+  run_status?: string | null;
+  run_terminal?: boolean;
+  actions?: Record<string, { state?: string; [key: string]: unknown }>;
+  evidence?: Record<string, unknown>;
+};
+
+type DurableRecoveryPreview = {
+  topology: string;
+  source_run_id: string;
+  target_child_id: string;
+  retry_mode: string;
+  command_id: string;
+  scope_hash: string;
+  successor_run_id?: string | null;
+  state_allowed: boolean;
+  evidence: Record<string, unknown>;
+  dependency_plan: Array<Record<string, unknown>>;
 };
 
 type ScenarioForm = {
@@ -217,6 +270,13 @@ function runIdOf(loop?: CombineRunLoop): string {
   return String(value || "").trim();
 }
 
+function newIdempotencyKey(prefix: string): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function progressText(progress?: Record<string, unknown>): string {
   if (!progress || Object.keys(progress).length === 0) return "-";
   const completed = progress.completed;
@@ -234,6 +294,15 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
   const [logsError, setLogsError] = useState<string | null>(null);
   const [archiveStatus, setArchiveStatus] = useState<ArchiveStatus | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [durableCapabilities, setDurableCapabilities] = useState<DurableCapabilities | null>(null);
+  const [durableChildren, setDurableChildren] = useState<DurableChild[]>([]);
+  const [durableCommands, setDurableCommands] = useState<DurableCommand[]>([]);
+  const [durableError, setDurableError] = useState<string | null>(null);
+  const [recoveryTargetChildId, setRecoveryTargetChildId] = useState("");
+  const [recoveryRetryMode, setRecoveryRetryMode] = useState("backtest_only");
+  const [recoveryPreview, setRecoveryPreview] = useState<DurableRecoveryPreview | null>(null);
+  const [recoveryIdempotencyKey, setRecoveryIdempotencyKey] = useState<string | null>(null);
+  const [childGridRefreshToken, setChildGridRefreshToken] = useState(0);
   const [retryDraft, setRetryDraft] = useState<RetryDraft | null>(null);
   const [retryPayloadText, setRetryPayloadText] = useState("");
   const [scenarioDraft, setScenarioDraft] = useState<RetryDraft | null>(null);
@@ -245,9 +314,12 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
   const loadEvidence = useCallback(async () => {
     if (!runId) return;
     setLoading(true);
-    const [logsResult, archiveResult] = await Promise.allSettled([
+    const [logsResult, archiveResult, capabilitiesResult, childrenResult, commandsResult] = await Promise.allSettled([
       apiRequest<RunLogs>(`${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/logs?tail_lines=300`),
       apiRequest<ArchiveStatus>(`${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/archive-status`),
+      apiRequest<DurableCapabilities>(`${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/control-capabilities`),
+      apiRequest<{ children: DurableChild[] }>(`${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/children`),
+      apiRequest<{ commands: DurableCommand[] }>(`${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/commands?limit=50`),
     ]);
     if (logsResult.status === "fulfilled") {
       setLogs(logsResult.value);
@@ -262,6 +334,21 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
       setArchiveStatus(null);
       setArchiveError(archiveResult.reason instanceof Error ? archiveResult.reason.message : String(archiveResult.reason));
     }
+    const durableFailures = [capabilitiesResult, childrenResult, commandsResult].filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (capabilitiesResult.status === "fulfilled") setDurableCapabilities(capabilitiesResult.value);
+    if (childrenResult.status === "fulfilled") {
+      setDurableChildren(childrenResult.value.children || []);
+      setRecoveryTargetChildId((current) => current || childrenResult.value.children?.[0]?.child_id || "");
+    }
+    if (commandsResult.status === "fulfilled") setDurableCommands(commandsResult.value.commands || []);
+    if (durableFailures.length > 0) {
+      setDurableError(durableFailures.map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason)).join("; "));
+    } else {
+      setDurableError(null);
+    }
+    setChildGridRefreshToken((current) => current + 1);
     setLoading(false);
   }, [apiBase, runId]);
 
@@ -270,6 +357,12 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
     setLogsError(null);
     setArchiveStatus(null);
     setArchiveError(null);
+    setDurableCapabilities(null);
+    setDurableChildren([]);
+    setDurableCommands([]);
+    setDurableError(null);
+    setRecoveryTargetChildId("");
+    setRecoveryPreview(null);
     setRetryDraft(null);
     setRetryPayloadText("");
     setScenarioDraft(null);
@@ -401,8 +494,124 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
     }
   }, [apiBase, loadEvidence, runId]);
 
+  const submitDurableRunCommand = useCallback(async (action: "pause" | "resume" | "cancel" | "stop" | "reconcile") => {
+    if (!runId) return;
+    setBusy(`durable-${action}`);
+    setMessage(null);
+    try {
+      const command = await apiRequest<{ command: DurableCommand }>(
+        `${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/${action}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": newIdempotencyKey(`mac-${action}`),
+          },
+          body: JSON.stringify({ request: {} }),
+        },
+      );
+      setMessage({ ok: true, text: `已记录 ${action} 命令：${command.command.command_id}` });
+      await onChanged();
+      await loadEvidence();
+    } catch (error) {
+      setMessage({ ok: false, text: `${action} 命令提交失败：${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setBusy(null);
+    }
+  }, [apiBase, loadEvidence, onChanged, runId]);
+
+  const cancelDurableAttempt = useCallback(async (attemptId: string) => {
+    if (!runId) return;
+    setBusy(`attempt-cancel-${attemptId}`);
+    setMessage(null);
+    try {
+      const command = await apiRequest<{ command: DurableCommand }>(
+        `${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(attemptId)}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": newIdempotencyKey("mac-attempt-cancel"),
+          },
+          body: JSON.stringify({ request: {} }),
+        },
+      );
+      setMessage({ ok: true, text: `已记录 attempt cancel：${command.command.command_id}` });
+      await onChanged();
+      await loadEvidence();
+    } catch (error) {
+      setMessage({ ok: false, text: `attempt cancel 提交失败：${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setBusy(null);
+    }
+  }, [apiBase, loadEvidence, onChanged, runId]);
+
+  const previewRecovery = useCallback(async () => {
+    if (!runId || !recoveryTargetChildId) return;
+    const idempotencyKey = newIdempotencyKey("mac-recovery");
+    setBusy("recovery-preview");
+    setMessage(null);
+    setRecoveryIdempotencyKey(idempotencyKey);
+    try {
+      const preview = await apiRequest<DurableRecoveryPreview>(
+        `${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/children/${encodeURIComponent(recoveryTargetChildId)}/recovery/preview`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotencyKey,
+          },
+          body: JSON.stringify({ retry_mode: recoveryRetryMode }),
+        },
+      );
+      setRecoveryPreview(preview);
+      setMessage({ ok: true, text: `已生成恢复范围：${preview.scope_hash}` });
+    } catch (error) {
+      setRecoveryPreview(null);
+      setRecoveryIdempotencyKey(null);
+      setMessage({ ok: false, text: `恢复范围生成失败：${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setBusy(null);
+    }
+  }, [apiBase, recoveryRetryMode, recoveryTargetChildId, runId]);
+
+  const executeRecovery = useCallback(async () => {
+    if (!runId || !recoveryPreview || !recoveryIdempotencyKey || recoveryPreview.target_child_id !== recoveryTargetChildId || recoveryPreview.retry_mode !== recoveryRetryMode) {
+      setMessage({ ok: false, text: "请先为当前 child 和 retry mode 生成恢复范围。" });
+      return;
+    }
+    setBusy("recovery-execute");
+    setMessage(null);
+    try {
+      const command = await apiRequest<{ command: DurableCommand }>(
+        `${apiBase}/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}/children/${encodeURIComponent(recoveryTargetChildId)}/recovery`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": recoveryIdempotencyKey,
+          },
+          body: JSON.stringify({
+            retry_mode: recoveryRetryMode,
+            scope_hash: recoveryPreview.scope_hash,
+            preview_command_id: recoveryPreview.command_id,
+          }),
+        },
+      );
+      setMessage({ ok: true, text: `已记录 child recovery：${command.command.command_id}` });
+      await onChanged();
+      await loadEvidence();
+    } catch (error) {
+      setMessage({ ok: false, text: `child recovery 提交失败：${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setBusy(null);
+    }
+  }, [apiBase, loadEvidence, onChanged, recoveryIdempotencyKey, recoveryPreview, recoveryRetryMode, recoveryTargetChildId, runId]);
+
   const displayedEvents = useMemo(() => (logs?.events || []).slice(-30).reverse(), [logs?.events]);
-  const isTerminal = ["succeeded", "failed", "partial_failed"].includes(String(loop?.raw_status || ""));
+  const isTerminal = ["succeeded", "failed", "partial_failed", "partial_recovered", "cancelled"].includes(String(loop?.raw_status || ""));
+  const executionIdentityEvidence = asRecord(durableCapabilities?.evidence?.execution_identity_evidence);
+  const executionIdentityHash = durableCapabilities?.evidence?.execution_identity_hash;
 
   if (!loop || !runId) {
     return <div style={{ ...cardStyle, color: "#64748b", fontSize: 13 }}>请选择一个组合配置查看运行证据。</div>;
@@ -443,6 +652,128 @@ export default function CombineRunOperationsPanel({ apiBase, loop, onChanged }: 
         </div>
         {archiveError && <div style={{ marginTop: 8, fontSize: 11, color: "#b91c1c" }}>数仓状态读取失败: {archiveError}</div>}
         {logsError && <div style={{ marginTop: 8, fontSize: 11, color: "#b91c1c" }}>日志读取失败: {logsError}</div>}
+      </div>
+
+      <div style={cardStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a" }}>Durable QE 控制与 Child Recovery</div>
+            <div style={{ marginTop: 3, fontSize: 11, color: "#64748b" }}>
+              命令先持久化，再由 QE-only orchestrator 异步协调；证据缺口会原样显示，不会隐藏恢复方向或改写 retry mode。
+            </div>
+          </div>
+          <span style={{ padding: "3px 7px", borderRadius: 999, background: "#eff6ff", color: "#1d4ed8", fontSize: 11, fontFamily: "monospace" }}>
+            {durableCapabilities?.run_status || "control state loading"}
+          </span>
+        </div>
+        {durableError && <div style={{ marginTop: 10, color: "#b91c1c", fontSize: 11 }}>控制证据读取失败：{durableError}</div>}
+        {Object.keys(executionIdentityEvidence).length > 0 && (
+          <div style={{ marginTop: 10, padding: 8, border: "1px solid #e2e8f0", borderRadius: 6, background: "#f8fafc", fontSize: 11, color: "#475569" }}>
+            <div style={{ fontWeight: 800, color: "#334155" }}>执行身份与证据</div>
+            <div style={{ marginTop: 3, fontFamily: "monospace", wordBreak: "break-word" }}>
+              identity_hash={typeof executionIdentityHash === "string" ? executionIdentityHash : "未完整捕获"}
+            </div>
+            <pre style={{ margin: "6px 0 0", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {JSON.stringify(executionIdentityEvidence, null, 2)}
+            </pre>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          {(["pause", "resume", "cancel", "stop", "reconcile"] as const).map((action) => (
+            <button
+              key={action}
+              onClick={() => void submitDurableRunCommand(action)}
+              disabled={busy != null}
+              style={{
+                ...buttonStyle,
+                cursor: busy ? "wait" : "pointer",
+                color: action === "cancel" || action === "stop" ? "#b91c1c" : "#1d4ed8",
+                borderColor: action === "cancel" || action === "stop" ? "#fca5a5" : "#bfdbfe",
+                backgroundColor: action === "cancel" || action === "stop" ? "#fef2f2" : "#eff6ff",
+              }}
+            >
+              {busy === `durable-${action}` ? `${action}…` : action}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 14 }}>
+          <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+            目标 child
+            <select
+              value={recoveryTargetChildId}
+              onChange={(event) => { setRecoveryTargetChildId(event.target.value); setRecoveryPreview(null); setRecoveryIdempotencyKey(null); }}
+              style={inputStyle}
+            >
+              {durableChildren.map((child) => (
+                <option key={child.child_id} value={child.child_id}>
+                  {child.child_key} · {child.status || "unknown"}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+            Retry mode
+            <select
+              value={recoveryRetryMode}
+              onChange={(event) => { setRecoveryRetryMode(event.target.value); setRecoveryPreview(null); setRecoveryIdempotencyKey(null); }}
+              style={inputStyle}
+            >
+              <option value="results_only">results_only</option>
+              <option value="backtest_only">backtest_only</option>
+              <option value="rematerialize_and_backtest">rematerialize_and_backtest</option>
+            </select>
+          </label>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+          <button onClick={() => void previewRecovery()} disabled={busy != null || !recoveryTargetChildId} style={{ ...buttonStyle, color: "#1d4ed8", borderColor: "#bfdbfe", backgroundColor: "#eff6ff", cursor: busy ? "wait" : "pointer" }}>
+            {busy === "recovery-preview" ? "计算中…" : "预览恢复闭包"}
+          </button>
+          <button onClick={() => void executeRecovery()} disabled={busy != null || !recoveryTargetChildId} style={{ ...buttonStyle, color: "#fff", borderColor: "#2563eb", backgroundColor: "#2563eb", cursor: busy ? "wait" : "pointer" }}>
+            {busy === "recovery-execute" ? "提交中…" : "执行已预览恢复"}
+          </button>
+        </div>
+        {recoveryPreview && (
+          <div style={{ marginTop: 12, padding: 10, border: "1px solid #cbd5e1", borderRadius: 6, background: "#f8fafc", fontSize: 11 }}>
+            <div style={{ fontWeight: 800, color: "#0f172a" }}>恢复范围</div>
+            <div style={{ marginTop: 4, fontFamily: "monospace", wordBreak: "break-word", color: "#334155" }}>
+              topology={recoveryPreview.topology} · scope_hash={recoveryPreview.scope_hash} · successor={recoveryPreview.successor_run_id || "in-place"}
+            </div>
+            <div style={{ marginTop: 7, color: recoveryPreview.state_allowed ? "#047857" : "#92400e" }}>
+              当前拓扑状态：{recoveryPreview.state_allowed ? "可按预览执行" : "当前事实已变化；提交会返回明确 scope evidence，不会替换为其他模式"}
+            </div>
+            <pre style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", wordBreak: "break-word", color: "#475569" }}>
+              {JSON.stringify({ evidence: recoveryPreview.evidence, dependency_plan: recoveryPreview.dependency_plan }, null, 2)}
+            </pre>
+          </div>
+        )}
+
+        <div style={{ marginTop: 14 }}>
+          <MultiAlphaChildGrid
+            apiBase={apiBase}
+            runId={runId}
+            refreshToken={childGridRefreshToken}
+            busy={busy != null}
+            onCancelAttempt={cancelDurableAttempt}
+            onSelectRecoveryChild={(childId) => {
+              setRecoveryTargetChildId(childId);
+              setRecoveryPreview(null);
+              setRecoveryIdempotencyKey(null);
+            }}
+          />
+        </div>
+
+        <div style={{ marginTop: 14, display: "grid", gap: 6 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Recent durable commands</div>
+          {durableCommands.length === 0 ? (
+            <div style={{ color: "#64748b", fontSize: 11 }}>暂无命令。</div>
+          ) : durableCommands.slice(-12).reverse().map((command) => (
+            <div key={command.command_id} style={{ padding: 8, border: "1px solid #e2e8f0", borderRadius: 6, fontSize: 11, fontFamily: "monospace", color: "#334155", wordBreak: "break-word" }}>
+              {command.action} · {command.status} · {command.command_id}
+              {command.error_code ? ` · error=${command.error_code}` : ""}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div style={cardStyle}>

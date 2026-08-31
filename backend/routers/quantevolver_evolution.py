@@ -10,8 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
-from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body
+from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body, Path as PathParam
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
 
@@ -23,10 +23,12 @@ from ..services.quantevolver.qe_evolution_service import (
     QE_LOOP_RETRY_MODE_FULL_TRAIN,
     QE_LOOP_RETRY_MODE_RESULTS_ONLY,
     normalize_qe_loop_retry_mode,
+    normalize_long_trend_profile_id,
 )
 from ..services.quantevolver.factor_value_loader import FactorValueLoader
 from ..services.quantevolver.correlation_engine import CorrelationEngine, CorrelationResult
 from ..services.quantevolver import correlation_compute_service as _correlation_compute_service
+from ..services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from ..db.pg_pool import get_conn
 from psycopg2.extras import RealDictCursor, execute_values
 
@@ -38,7 +40,32 @@ from ..services.quantevolver.qe_resource_phase_service import (
     QEResourcePhaseError,
     QEResourcePhaseService,
 )
+from ..services.quantevolver.long_trend_evaluation_contract import QELongTrendError, typed_null
+from ..services.quantevolver.long_trend_evaluation_phase2 import (
+    QELongTrendPhase2Error,
+    QELongTrendPhase2Service,
+)
+from ..services.quantevolver.long_trend_artifact_store import QELongTrendArtifactStoreError
+from ..services.quantevolver.long_trend_evaluation_control_repository import QELongTrendControlRepositoryError
+from ..services.quantevolver.long_trend_api_service import (
+    LongTrendCreateRequest,
+    QELongTrendAPIService,
+    QELongTrendAPIServiceError,
+)
+from ..services.quantevolver.long_trend_snapshot_resolver import QELongTrendSnapshotResolutionError
+from ..services.qe_archive.long_trend_repository import (
+    QELongTrendEvaluationResultRepository,
+    QELongTrendResultRepositoryError,
+)
+from ..services.quantevolver.qe_workspace_client import QELongTrendWorkspaceError, QEWorkspaceClient
+from ..services.quantevolver.qe_log_broker import (
+    BROKER_CURSOR_CONFLICT,
+    QELogBrokerCursorError,
+    get_qe_log_broker,
+    resolve_broker_cursor,
+)
 from ..services.quantevolver.experiment_config import (
+    LongTrendEvaluationOptIn,
     ensure_qe_risk_policy,
     normalize_label_horizon,
     normalize_qe_random_seed,
@@ -199,6 +226,8 @@ def _normalize_qe_execution_algo_for_request(execution_algo: Optional[str], cont
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         return ConfigComposer._normalize_execution_algo(execution_algo)
+    except ExecutionAlgoRetiredError as e:
+        raise HTTPException(status_code=422, detail=e.to_dict()) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"{context}: {e}") from e
 
@@ -271,6 +300,10 @@ class EvolutionTaskCreateRequest(BaseModel):
     label_type: Optional[str] = Field(None, description="训练标签类型: close(默认) / open(可执行价) / vwap(均价)")
     label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10/20/30/40/60/120/180d，默认继承源实验或 1d")
     random_seed: Optional[int] = Field(None, description="QE trainable loops fixed random seed; required for reproducibility")
+    long_trend_profile_id: Optional[str] = Field(
+        None,
+        description="Immutable registered QE long-trend profile; omitted keeps evaluation disabled",
+    )
     # ── Multi-Alpha (Phase 3) ──────────────────────────────────────
     alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
     multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
@@ -284,6 +317,15 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
     - rdagent_task_sota: 从 RDAgent task 的 SOTA 资产创建实验后演进
     """
     try:
+        try:
+            req_long_trend_profile_id = normalize_long_trend_profile_id(
+                req.long_trend_profile_id
+            )
+        except QELongTrendError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason_code": e.reason_code, "message": e.message, "context": e.context},
+            ) from e
         try:
             ensure_qe_label_horizon_schema()
         except RuntimeError as e:
@@ -455,6 +497,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             node_id=req.node_id,
             label_horizon=req_label_horizon,
             random_seed=req_random_seed,
+            long_trend_profile_id=req_long_trend_profile_id,
         )
 
         # 保存额外字段（含 evolution_mode）
@@ -544,6 +587,12 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             )
 
         background_tasks.add_task(scheduler.submit_next_loop, task_id)
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(QEReconciliationScope.EVOLUTION, key=task_id)
         return {"status": "success", "task_id": task_id, "message": "演进任务已创建并在后台启动"}
     except HTTPException:
         raise
@@ -621,6 +670,12 @@ def resolve_factor_issues(task_id: str, req: FactorResolveRequest, background_ta
 
         # 恢复任务执行
         background_tasks.add_task(scheduler.submit_next_loop, task_id)
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(QEReconciliationScope.EVOLUTION, key=task_id)
 
         return {
             "status": "success",
@@ -712,6 +767,151 @@ async def get_evolution_task_detail(
     except Exception as e:
         logger.error(f"Failed to get task detail: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class LongTrendEvaluationCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str = Field("qe_long_trend_v1", min_length=1, max_length=64)
+    outcome_dataset_snapshot_id: str = Field(..., min_length=1, max_length=200)
+
+
+def _raise_long_trend_http(exc: Exception) -> None:
+    reason_code = str(getattr(exc, "reason_code", "QELT_PLATFORM_ERROR"))
+    raw_context = dict(getattr(exc, "context", {}) or {})
+    public_context_keys = {
+        "task_id", "loop_index", "node_id", "requested_snapshot_id",
+        "snapshot_role", "node_bindings", "matches",
+    }
+    context = {key: value for key, value in raw_context.items() if key in public_context_keys}
+    safe_message_types = (
+        QELongTrendAPIServiceError,
+        QELongTrendSnapshotResolutionError,
+        QELongTrendResultRepositoryError,
+    )
+    message = str(exc) if isinstance(exc, safe_message_types) else "F-014 operation failed"
+    if reason_code in {"QELT_NON_QE_SOURCE_REJECTED", "QELT_ARCHIVE_RUN_UNAVAILABLE"}:
+        status_code = 404
+    elif reason_code in {
+        "QELT_PROFILE_INVALID",
+        "QELT_SNAPSHOT_RESOLUTION_INVALID",
+        "QELT_QUERY_INVALID",
+    }:
+        status_code = 400
+    elif reason_code in {
+        "QELT_RESULT_PERSISTENCE_CONFLICT",
+        "QELT_SNAPSHOT_IDENTITY_AMBIGUOUS",
+        "QELT_CONTROL_STATE_CONFLICT",
+        "QELT_CAS_MANIFEST_CONFLICT",
+        "QELT_ARTIFACT_HASH_MISMATCH",
+        "QELT_ARTIFACT_SCHEMA_MISMATCH",
+    }:
+        status_code = 409
+    else:
+        status_code = 503
+    raise HTTPException(
+        status_code=status_code,
+        detail={"reason_code": reason_code, "message": message, "context": context},
+    ) from exc
+
+
+@router.get(
+    "/tasks/{task_id}/loops/{loop_index}/long-trend-input-preview",
+    summary="只读预览已归档 QE Loop 的长期趋势输入可用性",
+)
+async def preview_long_trend_inputs(
+    task_id: str = PathParam(..., min_length=1, max_length=200),
+    loop_index: int = PathParam(..., ge=1),
+    profile_id: str = Query("qe_long_trend_v1", min_length=1, max_length=64),
+    outcome_dataset_snapshot_id: str = Query(..., min_length=1, max_length=200),
+):
+    try:
+        return await QELongTrendAPIService().preview_inputs(
+            task_id=task_id,
+            loop_index=loop_index,
+            request=LongTrendCreateRequest(
+                profile_id=profile_id,
+                outcome_dataset_snapshot_id=outcome_dataset_snapshot_id,
+            ),
+        )
+    except (
+        QELongTrendAPIServiceError,
+        QELongTrendSnapshotResolutionError,
+        QELongTrendWorkspaceError,
+        QELongTrendError,
+    ) as exc:
+        _raise_long_trend_http(exc)
+
+
+@router.post(
+    "/tasks/{task_id}/loops/{loop_index}/long-trend-evaluations",
+    summary="生成或更新已完成 QE Loop 的长期趋势评价",
+)
+async def create_or_update_long_trend_evaluation(
+    body: LongTrendEvaluationCreateBody,
+    task_id: str = PathParam(..., min_length=1, max_length=200),
+    loop_index: int = PathParam(..., ge=1),
+):
+    try:
+        return await QELongTrendAPIService().create_or_update(
+            task_id=task_id,
+            loop_index=loop_index,
+            request=LongTrendCreateRequest(
+                profile_id=body.profile_id,
+                outcome_dataset_snapshot_id=body.outcome_dataset_snapshot_id,
+            ),
+        )
+    except (
+        QELongTrendAPIServiceError,
+        QELongTrendSnapshotResolutionError,
+        QELongTrendPhase2Error,
+        QELongTrendWorkspaceError,
+        QELongTrendArtifactStoreError,
+        QELongTrendControlRepositoryError,
+        QELongTrendResultRepositoryError,
+        QELongTrendError,
+    ) as exc:
+        _raise_long_trend_http(exc)
+
+
+@router.get("/tasks/{task_id}/loops/{loop_index}/long-trend-evaluations")
+def list_long_trend_evaluations(
+    task_id: str = PathParam(..., min_length=1, max_length=200),
+    loop_index: int = PathParam(..., ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=4096),
+):
+    try:
+        return QELongTrendEvaluationResultRepository().list_evaluations(
+            task_id=task_id,
+            loop_index=loop_index,
+            limit=limit,
+            cursor=cursor,
+        )
+    except QELongTrendResultRepositoryError as exc:
+        _raise_long_trend_http(exc)
+
+
+@router.get("/long-trend-evaluations/{evaluation_id}")
+def get_long_trend_evaluation(
+    evaluation_id: str = PathParam(..., pattern=r"^qelt_[0-9a-f]{64}$"),
+    metric_limit: int = Query(100, ge=1, le=100),
+    metric_cursor: str | None = Query(None, max_length=4096),
+):
+    try:
+        result = QELongTrendEvaluationResultRepository().get_evaluation(
+            evaluation_id,
+            metric_limit=metric_limit,
+            metric_cursor=metric_cursor,
+        )
+    except QELongTrendResultRepositoryError as exc:
+        _raise_long_trend_http(exc)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason_code": "QELT_EVALUATION_NOT_FOUND", "evaluation_id": evaluation_id},
+        )
+    return result
 
 
 @router.get("/tasks/{task_id}/loops/comparison", summary="获取任务所有 Loop 的标量对比表")
@@ -850,6 +1050,15 @@ async def resume_evolution_task(task_id: str, req: EvolutionTaskResumeRequest, b
             return {"status": "success", "task_id": resumed_id, "message": msg}
         else:
             background_tasks.add_task(scheduler.submit_next_loop, resumed_id)
+            from ..services.quantevolver.qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            notify_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=resumed_id,
+            )
             return {"status": "success", "task_id": resumed_id, "message": "演进任务已恢复并在后台继续执行"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -940,6 +1149,10 @@ class EvolutionTaskForkRequest(BaseModel):
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
     label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10/20/30/40/60/120/180d；全量重训 fork 可覆盖源 Loop")
     random_seed: Optional[int] = Field(None, description="QE fork fixed random seed; required for reproducible full-train loops")
+    long_trend_profile_id: Optional[str] = Field(
+        None,
+        description="Immutable registered QE long-trend profile for the new task",
+    )
 
 
 @router.post("/tasks/{task_id}/fork", summary="从指定 Loop 分叉出全新演进任务")
@@ -949,6 +1162,15 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
     新 task 的 Loop 1 会用该配置做初始回测建立基线，后续 Loop 由 Agent 正常演进。
     """
     try:
+        try:
+            req_long_trend_profile_id = normalize_long_trend_profile_id(
+                req.long_trend_profile_id
+            )
+        except QELongTrendError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason_code": e.reason_code, "message": e.message, "context": e.context},
+            ) from e
         try:
             ensure_qe_label_horizon_schema()
         except RuntimeError as e:
@@ -993,6 +1215,7 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
             node_id=req.node_id,
             label_horizon=req_label_horizon,
             random_seed=req_random_seed,
+            long_trend_profile_id=req_long_trend_profile_id,
         )
 
         # 合并从因子库额外添加的因子
@@ -1025,6 +1248,15 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
                 raise HTTPException(status_code=500, detail=f"合并额外因子到 fork 任务失败: {e}")
 
         background_tasks.add_task(scheduler.submit_next_loop, new_task_id)
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.EVOLUTION,
+            key=new_task_id,
+        )
         return {
             "status": "success",
             "task_id": new_task_id,
@@ -1033,6 +1265,8 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
             "inherit_history": req.inherit_history,
             "message": f"已从 Loop {req.from_loop_index} 分叉创建新演进任务 {new_task_id}，后台启动中",
         }
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -1062,6 +1296,10 @@ class StrategyEvolutionForkRequest(BaseModel):
     loops: List[StrategyLoopConfig] = Field(..., description="每个 Loop 的策略参数配置", min_length=1)
     inherit_history: bool = Field(False, description="是否继承截止到该 loop 的演进历史")
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=继承源任务节点")
+    long_trend_profile_id: Optional[str] = Field(
+        None,
+        description="Immutable registered QE long-trend profile for the new task",
+    )
 
 @router.post("/tasks/{task_id}/strategy-fork", summary="从指定 Loop 分叉出策略演进任务（跳过训练）")
 async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
@@ -1071,6 +1309,15 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
     所有 Loop 使用 --backtest-only 模式，跳过模型训练。
     """
     try:
+        try:
+            req_long_trend_profile_id = normalize_long_trend_profile_id(
+                req.long_trend_profile_id
+            )
+        except QELongTrendError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason_code": e.reason_code, "message": e.message, "context": e.context},
+            ) from e
         try:
             ensure_qe_label_horizon_schema()
         except RuntimeError as e:
@@ -1099,6 +1346,7 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
             loops_config=loops_config,
             inherit_history=req.inherit_history,
             node_id=req.node_id,
+            long_trend_profile_id=req_long_trend_profile_id,
         )
 
         return {
@@ -1110,6 +1358,8 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
             "execution_mode": req.execution_mode or "serial",
             "message": f"策略演进任务已创建，{len(loops_config)} 个策略回测 Loop 后台启动中",
         }
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -1232,6 +1482,10 @@ class CustomEvolutionCreateRequest(BaseModel):
 
     auto_start: bool = Field(True, description="Create and immediately submit loops; template materialization sets false")
     clone_from_task_id: Optional[str] = Field(None, description="Optional source custom_evo task id for clone provenance")
+    long_trend_profile_id: Optional[str] = Field(
+        None,
+        description="Immutable registered QE long-trend profile for the new task",
+    )
 
 
 class CustomEvoConfigUpdateRequest(BaseModel):
@@ -1464,6 +1718,15 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
     """Create a custom_evo task with explicit per-loop execution nodes."""
     try:
         try:
+            req_long_trend_profile_id = normalize_long_trend_profile_id(
+                req.long_trend_profile_id
+            )
+        except QELongTrendError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason_code": e.reason_code, "message": e.message, "context": e.context},
+            ) from e
+        try:
             ensure_qe_label_horizon_schema()
         except RuntimeError as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
@@ -1491,6 +1754,7 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             engine_mode="unified",
             clone_from_task_id=req.clone_from_task_id,
             auto_start=req.auto_start,
+            long_trend_profile_id=req_long_trend_profile_id,
         )
 
         response = {
@@ -1736,7 +2000,11 @@ async def append_custom_evo_loops(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/tasks/{task_id}/logs", summary="获取实时的任务运行及 Agent 思考日志流 (SSE)")
-def stream_task_logs(task_id: str):
+async def stream_task_logs(
+    task_id: str,
+    request: Request,
+    after_cursor: str | None = Query(default=None, max_length=4096),
+):
     """
     通过 SSE (Server-Sent Events) 返回该任务当前 LOOP 的实时日志
     底层会调用 RDAgent 的日志 API 进行转发
@@ -1745,11 +2013,19 @@ def stream_task_logs(task_id: str):
         if not scheduler.task_exists(task_id):
             logger.info("Log stream requested for deleted/nonexistent task %s; returning 204", task_id)
             return Response(status_code=204)
+        cursor = resolve_broker_cursor(after_cursor, request.headers.get("last-event-id"))
+        get_qe_log_broker().validate_cursor(task_id, cursor)
         return StreamingResponse(
-            scheduler.stream_task_logs(task_id),
+            scheduler.stream_task_logs(task_id, after_cursor=cursor),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
         )
+    except QELogBrokerCursorError as exc:
+        status_code = 400 if exc.reason_code == BROKER_CURSOR_CONFLICT else 410
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason_code": exc.reason_code, "message": str(exc)},
+        ) from exc
     except Exception as e:
         logger.error(f"Failed to establish log stream for task {task_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1838,6 +2114,24 @@ class LoopResourcePhasePayload(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class LongTrendNormalRegistrationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str
+    task_id: str
+    loop_index: int = Field(..., ge=1)
+    node_id: str
+    run_id: Optional[str] = None
+    long_trend_evaluation: Dict[str, Any]
+    frozen_identity: Dict[str, Any]
+    label_horizon: Optional[int] = None
+    strategy_topk: Optional[int] = Field(None, ge=1)
+    recorder_ref: Dict[str, Any]
+    registration_catalog: Dict[str, Any]
+    parent_resource_session_id: str
+    parent_resource_source_run_key: str
+
+
 class PromotionReviewCreateRequest(BaseModel):
     requested_by: str = Field("manual_user", description="Operator or UI identity requesting manual SOTA review")
     review_reason: Optional[str] = Field(None, description="Manual review note; does not approve SOTA")
@@ -1859,6 +2153,21 @@ async def on_loop_completed_webhook(request: Request, payload: LoopCompletedPayl
             await scheduler.process_completed_loop(payload.task_id, payload.loop_id)
         except Exception as e:
             logger.error(f"Webhook process_completed_loop failed for {payload.loop_id}: {e}", exc_info=True)
+        finally:
+            from ..services.quantevolver.qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            notify_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=payload.loop_id,
+                force=True,
+            )
+            notify_qe_reconciliation(
+                QEReconciliationScope.RESOURCE_SESSION,
+                key=f"{payload.task_id}:{payload.loop_id}",
+            )
 
     _task = asyncio.create_task(_process_with_logging())
     _task.add_done_callback(lambda t: logger.error(f"Webhook task error: {t.exception()}") if t.exception() else None)
@@ -1873,7 +2182,16 @@ def on_loop_resource_phase_webhook(request: Request, payload: LoopResourcePhaseP
     try:
         result = QEResourcePhaseService().ingest_event(
             token=token,
-            payload=payload.model_dump(mode="json"),
+            payload=payload.model_dump(mode="json", exclude_unset=True),
+        )
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.RESOURCE_SESSION,
+            key=payload.session_id,
         )
         return {"status": "success", "data": result}
     except QEResourcePhaseError as exc:
@@ -1883,6 +2201,103 @@ def on_loop_resource_phase_webhook(request: Request, payload: LoopResourcePhaseP
         raise HTTPException(
             status_code=status_code,
             detail={"reason_code": exc.reason_code, "message": exc.message},
+        ) from exc
+
+
+@router.post(
+    "/internal/long-trend-postprocess-registrations",
+    summary="Register one authenticated normal-Loop F-014 postprocess",
+)
+async def register_long_trend_postprocess(
+    request: Request,
+    payload: LongTrendNormalRegistrationPayload,
+):
+    if payload.schema_version != "qe_long_trend_normal_registration_request_v1":
+        raise HTTPException(status_code=400, detail={"reason_code": "QELT_CONTROL_STATE_CONFLICT"})
+    token = request.headers.get("X-QE-Resource-Token", "").strip()
+    if not token:
+        raise HTTPException(status_code=403, detail={"reason_code": AUTH_FAILED_REASON})
+    resource_service = QEResourcePhaseService()
+    try:
+        parent = resource_service.authenticate_session(
+            token=token,
+            session_id=payload.parent_resource_session_id,
+            source_run_key=payload.parent_resource_source_run_key,
+            task_id=payload.task_id,
+            loop_index=payload.loop_index,
+        )
+        if str(parent.get("node_id") or "") != payload.node_id:
+            raise QEResourcePhaseError(AUTH_FAILED_REASON, "parent resource node binding is invalid")
+        opt_in = LongTrendEvaluationOptIn.model_validate(payload.long_trend_evaluation)
+        from backend.services.qe_archive.long_trend_repository import QELongTrendEvaluationResultRepository
+
+        service = QELongTrendPhase2Service(
+            resource_service=resource_service,
+            result_repository=QELongTrendEvaluationResultRepository(),
+        )
+        async with QEWorkspaceClient.for_node(payload.node_id) as client:
+            prepared = await service.prepare_normal_postprocess(
+                task_id=payload.task_id,
+                loop_index=payload.loop_index,
+                node_id=payload.node_id,
+                opt_in=opt_in,
+                registration_catalog=payload.registration_catalog,
+                label_horizon=payload.label_horizon,
+                strategy_topk=payload.strategy_topk,
+                client=client,
+                run_id=payload.run_id,
+                frozen_identity=payload.frozen_identity,
+                expected_recorder_ref=payload.recorder_ref,
+            )
+            job_receipt = await service.submit(
+                prepared=prepared,
+                task_id=payload.task_id,
+                loop_index=payload.loop_index,
+                client=client,
+            )
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.LONG_TREND,
+            key=prepared.evaluation_id,
+        )
+        row = service.control_repository.get(prepared.evaluation_id) or prepared.control_row
+        outcome_snapshot = payload.frozen_identity.get("outcome_dataset", {}).get("long_trend_snapshot")
+        evaluation_asof = (
+            outcome_snapshot.get("end_date")
+            if isinstance(outcome_snapshot, dict) and outcome_snapshot.get("end_date")
+            else typed_null("evaluation_asof")
+        )
+        receipt = {
+            "schema_version": "qe_long_trend_registration_v1",
+            "receipt_stage": "registered",
+            "evaluation_id": prepared.evaluation_id,
+            "profile_id": opt_in.profile_id,
+            "job_id": job_receipt.job_id if job_receipt is not None else typed_null("job_id"),
+            "request_sha": row["request_sha"],
+            "evaluation_asof": evaluation_asof,
+            "task_status": job_receipt.status if job_receipt is not None else str(row["status"]),
+            "platform_delivery_status": row.get("platform_delivery_status_json") or {},
+            "artifact_manifest_uri": typed_null("artifact_manifest_uri"),
+            "artifact_manifest_sha256": typed_null("artifact_manifest_sha256"),
+            "worker_terminal_sha256": typed_null("worker_terminal_sha256"),
+        }
+        return {"status": "success", "data": receipt}
+    except QEResourcePhaseError as exc:
+        raise HTTPException(status_code=403, detail={"reason_code": exc.reason_code, "message": exc.message}) from exc
+    except (ValueError, QELongTrendError, QELongTrendPhase2Error) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason_code": getattr(exc, "reason_code", "QELT_CONTROL_STATE_CONFLICT"), "message": str(exc)},
+        ) from exc
+    except QELongTrendWorkspaceError as exc:
+        status_code = 503 if exc.reason_code == "QELT_NODE_STATE_UNKNOWN" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason_code": exc.reason_code, "message": str(exc), "context": exc.context},
         ) from exc
 
 
@@ -2503,13 +2918,22 @@ def _run_correlation_compute_via_dispatch(
             _active_dispatch_task_id = task_id
             deadline = _time.time() + _MATRIX_TIMEOUT_SEC
             last_task = created
+            dispatch_service = _get_dispatch_service()
+            observation_generation, initial_observation = dispatch_service.get_task_observation(task_id)
+            if initial_observation is not None:
+                last_task = initial_observation
             while _time.time() < deadline:
-                asyncio.run(_get_dispatch_service().sync_running_tasks())
-                last_task = _get_dispatch_service().get_task(task_id) or last_task
+                remaining = max(0.0, deadline - _time.time())
+                observation_generation, observed_task = dispatch_service.wait_for_task_observation(
+                    task_id,
+                    after_generation=observation_generation,
+                    timeout=min(65.0, remaining),
+                )
+                if observed_task is not None:
+                    last_task = observed_task
                 status = last_task.get("status")
                 if status in {"success", "failed", "canceled"}:
                     break
-                _time.sleep(2)
             else:
                 raise TimeoutError(f"correlation dispatch task timeout: {task_id}")
 

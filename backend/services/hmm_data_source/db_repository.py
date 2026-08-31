@@ -166,7 +166,11 @@ class HMMDataRepository:
                             c.trade_date,
                             RTRIM(k1.ts_code) AS symbol,
                             %s AS horizon_days,
-                            (k2.close_li / NULLIF(k1.close_li, 0) - 1.0) AS future_return,
+                            (
+                                k2.close_li::DOUBLE PRECISION
+                                / NULLIF(k1.close_li::DOUBLE PRECISION, 0.0)
+                                - 1.0
+                            ) AS future_return,
                             c.label_date
                         FROM calendar c
                         JOIN market.kline_daily_raw k1

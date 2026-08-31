@@ -395,6 +395,7 @@ def test_reader_loads_only_qe_daily_and_sector_files(tmp_path: Path) -> None:
     assert calls == ["daily_pv.h5", "sector_data.h5"]
     assert snapshot_identity.lineage_parent_ids == ("qe-parent-snapshot",)
     assert list(loaded.prices.columns) == [
+        "open_qfq",
         "close_qfq",
         "high_qfq",
         "low_qfq",
@@ -402,6 +403,34 @@ def test_reader_loads_only_qe_daily_and_sector_files(tmp_path: Path) -> None:
     ]
     assert loaded.prices.index.get_level_values("instrument").unique().tolist() == ["000001.SZ"]
     assert str(loaded.sectors["l2_code_id"].dtype) == "Int16"
+    parity = verify_outcome_snapshot_extension(
+        feature_identity=snapshot_identity,
+        outcome_identity=snapshot_identity,
+        feature_prices=loaded.prices,
+        outcome_prices=loaded.prices,
+    )
+    assert parity.relation == "same_snapshot"
+    assert parity.row_count == len(loaded.prices)
+
+
+def test_reader_rejects_open_outside_daily_high_low_range(tmp_path: Path) -> None:
+    workspace, data_root, snapshot_identity = _prepare_reader_paths(tmp_path)
+
+    def invalid_open_reader(_path: Path) -> pd.DataFrame:
+        frame = _daily_frame()
+        frame.loc[:, "open"] = 12.0
+        return frame
+
+    reader = QELongTrendDatasetReader(
+        factor_data_dir=data_root,
+        qe_workspace_root=workspace,
+        qe_dataset_contract_id=QE_DATASET_CONTRACT_ID,
+        snapshot_identity=snapshot_identity,
+        hdf_reader=invalid_open_reader,
+    )
+    with pytest.raises(QELongTrendError) as exc_info:
+        reader.load_prices(start_date="2026-01-05", end_date="2026-01-07")
+    assert exc_info.value.reason_code == QELongTrendReason.DAILY_PV_SCHEMA_INVALID.value
 
 
 def test_reader_rejects_non_qe_identity_and_invalid_sector_schema(tmp_path: Path) -> None:

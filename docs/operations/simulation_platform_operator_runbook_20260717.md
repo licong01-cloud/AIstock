@@ -91,11 +91,42 @@ MiniQMT：
 
 ```powershell
 curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?runtime_id=<runtime_id>"
+curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?runtime_id=<runtime_id>&trade_date=<YYYY-MM-DD>&limit=100"
 curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/miniqmt/quote-diagnostics?runtime_id=<runtime_id>&limit=100"
 ```
 
 MiniQMT canonical health 必须来自 quote diagnostics 的 durable health、subscription、writer、controller、gateway 与 OMS 联合投影；legacy `/monitor/miniqmt/status` 不参与模拟盘健康判定。
 `FAILED/DEGRADED` 形成 `MINIQMT_QUOTE_PROGRESS` 告警；durable health 恢复并通过 readback 后自动解除。
+
+K2 durable kernel 只在提供 exact `runtime_id + trade_date` 时加入 `layers.miniqmt_kernel`。`schema_status=NOT_APPLIED` 明确返回
+`NOT_DEPLOYED/MINIQMT_KERNEL_SCHEMA_NOT_APPLIED`，不伪报 healthy，也不形成每日执行门禁；`READY` 时核对 event type、delivery、
+outbox command/status、timer、diagnostic reason family、predecessor gap 及 bounded recent command→mapping chain。该查询不启动
+dispatcher/reconciler，不 claim lease，不调用 Gateway/broker，不写数据库。
+
+K2-D final-review operator facts:
+
+- Continue a truncated command-chain read with the returned `next_cursor` as
+  `kernel_cursor`; never synthesize or edit the cursor.
+- `OUTCOME_UNKNOWN`, any predecessor gap, or any expired `DISPATCHING` lease is an
+  immediate critical fact. Delivery lag is warning above 5 seconds and critical above
+  30 seconds; timer due lag is warning above 2 seconds and critical above 10 seconds.
+- `READBACK_FAILED` is critical and carries the failure type. It is not permission to
+  edit a row, replay a command, restart a service, or acknowledge an alert.
+- Restart recovery converts expired pre-call `CLAIMED` to the exact bounded retry and
+  expired post-commit `DISPATCHING` to `OUTCOME_UNKNOWN` without calling broker. Safe
+  retry requires zero matching durable callbacks inside the watermark interval.
+- `MINIQMT_COMMAND_OUTBOX_PLACE_ORDER_UNAVAILABLE` and
+  `MINIQMT_COMMAND_OUTBOX_CANCEL_ORDER_UNAVAILABLE` are explicit pre-call technical
+  failures with `broker_called=false`; they follow the durable 1/2/4/8-second bounded
+  retry and must not be relabelled as broker rejection or unknown outcome. A failed
+  optional diagnostic read is retained inside ACK evidence and does not invalidate a
+  real broker ACK.
+- An EOD terminal decision must reference the persisted exchange-clock EOD event and a
+  fresh final reconcile receipt. A pre-EOD receipt recovered after a crash is attached
+  first and cannot substitute for that final readback.
+
+All alerts clear from the next clean readback; no manual acknowledge, approval or extra
+runtime gate exists.
 
 ### 3.5 Durable facts
 
@@ -115,6 +146,11 @@ MiniQMT 核对：batch/runtime identity 唯一；`results` cardinality 等于 `t
 - `SIMULATION_PLATFORM_DURABLE_BATCH_COUNT_MISMATCH`；
 - `SIMULATION_PLATFORM_BUSINESS_COUNT_CONFLICT`。
 
+K2 outbox 另外核对：`PENDING/CLAIMED/DISPATCHING/FAILED_RETRYABLE/OUTCOME_UNKNOWN/RECONCILING/ACKED/ACKED_REJECTED/FAILED_TERMINAL`
+计数、`SUBMIT_LIMIT/CANCEL_ORDER`计数、predecessor gap、最新 command→mapping→broker receipt。`OUTCOME_UNKNOWN/RECONCILING`只说明
+自动 exact reconcile 尚未闭合，不授权重复 SUBMIT；`FAILED_TERMINAL`或 predecessor gap 形成 BLOCKED。不得通过编辑 carrier JSON、
+移动 outbox status、补 broker order id 或重放 command 来“修复”。
+
 ### 3.6 Broker / Reconcile
 
 ```powershell
@@ -122,7 +158,10 @@ curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/<run_id>"
 curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/execution-parents?binding_id=<binding_id>&trade_date=2026-07-17&limit=100"
 ```
 
-仅检查 parent/algo/child/order/trade/reconcile 链和 mismatch count。不要从 runbook 调用 broker reconcile 写路径。
+仅检查 parent/algo/child/order/trade/reconcile 链和 mismatch count。不要从 runbook 调用 broker reconcile 写路径。K2 reconcile 顺序固定为
+exact command/client-ref/order-remark/callback-watermark/order+trade snapshot；唯一匹配、明确 non-acceptance、冲突和 unresolved 必须保留各自
+durable receipt。`idempotent_submit_by_client_ref=false` 时 NOT_FOUND 不得重复下单，达到有界次数后以
+`MINIQMT_COMMAND_OUTCOME_UNRESOLVED`终结并保留 parent residual。
 MiniQMT pending algo、submitted child 和 reconcile mismatch 均从 durable fact 精确计数；terminal run 仍有 active/pending work 返回
 `SIMULATION_TERMINAL_RUN_HAS_ACTIVE_WORK`。
 
@@ -136,10 +175,10 @@ curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/execution-parents/
 
 ## 4. Metrics 与 cardinality
 
-metric labels 只允许：`backend/control_revision/status/reason_code/market_phase/source`。
+metric labels 只允许：`backend/control_revision/status/reason_code/market_phase/source/plugin_id/event_type/command_type/reason_family/route`。
 禁止 `run/order/symbol/package/strategy/binding/runtime/plan` 等高基数 label。单次响应最多 256 个 series；超限 typed fail loud，不裁剪后报成功。
 
-平台至少投影：scheduler success/failure/tick lag、binding/run status、LocalSIM active/partial/residual/bar lag/transaction failure/outbox backlog、MiniQMT callback age/recent normalized/rejected/pending/submitted/reconcile mismatch、invalid payload、false-green prevention、durable readback mismatch。
+平台至少投影：scheduler success/failure/tick lag、binding/run status、LocalSIM active/partial/residual/bar lag/transaction failure/outbox backlog、MiniQMT callback age/recent normalized/rejected/pending/submitted/reconcile mismatch、K2 schema/event/outbox/command/predecessor/diagnostic reason family、invalid payload、false-green prevention、durable readback mismatch。
 
 ## 5. Alerts 与自动恢复
 
@@ -152,6 +191,7 @@ metric labels 只允许：`backend/control_revision/status/reason_code/market_ph
 - LocalSIM causal bar lag超过 120 秒；
 - LocalSIM outbox/readback/terminal failure；
 - MiniQMT quote health failed/degraded；
+- MiniQMT K2 delivery/outbox terminal、predecessor gap、OUTCOME_UNKNOWN/reconcile pending；
 - active algo 在收盘后仍无 terminal classification；
 - retired route 被调用。
 
@@ -162,3 +202,51 @@ metric labels 只允许：`backend/control_revision/status/reason_code/market_ph
 以下状态必须分别报告，不能互相替代：source merge、CI、production DDL、production dependency/config、restart、binding DML、runtime readback、正常交易日 LocalSIM、正常交易日 MiniQMT、broker/reconcile/TCA。
 
 BUG-687 source PR 不新增 DB object、dependency 或生产配置，不执行 DDL/DML，不调用 broker，不重启服务。合入不等于 runtime 已激活；用户重启后再做本 runbook 的生产只读 readback。
+
+## 7. K6-D final KERNEL_V2 route read-only checks
+
+K6-D does not add an operator write API, approval, acknowledge, force-route,
+force-release, replay, repair or restart action. Backend process control remains
+user-owned. Source merge and a user restart must be reported separately before
+using the following normal-trading-day observations.
+
+```powershell
+curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
+curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?runtime_id=<runtime_id>&trade_date=<YYYY-MM-DD>&limit=100"
+```
+
+Pre-open and first activation:
+
+- `scheduler.miniqmt_quote_ingress_activation.kernel_product_runtimes` must
+  contain exactly the expected runtime/binding/date and one lowercase
+  `source_capability_sha256` from the running source.
+- `layers.miniqmt_k6d` must use
+  `miniqmt_k6d_platform_diagnostics_v1`, be read-only, and close the same
+  runtime/binding/date to `route_owner=KERNEL_V2`, route epoch, cutoff, owner and
+  receipt hashes. `legacy_active_instance_count` must be zero.
+- Current active instance counts and cutover-snapshot counts are different
+  facts; do not substitute the receipt snapshot for the current inventory.
+- K6-D adds no DDL. The existing K6-B production schema/readback remains the
+  authority and must not be repaired from this endpoint.
+
+Intraday, lunch and EOD:
+
+- The scheduler lifecycle tick first reads real QMT order/trade snapshots and
+  persists owned TRADE/ORDER callback facts, then advances the exchange clock.
+  SESSION/TIMER/EOD therefore must continue even when no new quote arrives.
+- One runtime callback/clock failure is recorded against its exact binding as
+  `MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED`; other MiniQMT and LocalSIM
+  bindings must continue. It is not a global stop or manual approval state.
+- Repeated broker snapshots must not create duplicate events, children or
+  broker calls. A distinct late TRADE after terminal ORDER may extend trade
+  lineage while the mapping remains `TERMINAL`; it must never reopen the child.
+- A successful first scheduler tick on the following trade date finalizes the
+  prior-day exchange clock and releases the old B0 logical consumer/sink. A
+  retained prior-day runtime or release failure remains explicit.
+
+Healthy readback has no active K6-D alert and exposes only low-cardinality
+`route/status/reason_family/source` metric labels. Any missing live source,
+non-KERNEL owner, legacy active instance, route/hash drift, malformed callback
+carrier or readback failure is visible and automatically clears only after the
+next clean readback. Never edit durable rows, synthesize a callback, replay a
+broker command or restart a service from this runbook.

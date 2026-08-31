@@ -1,0 +1,176 @@
+{
+  "actual": "Default httpx trust_env behavior sends LAN node requests through the process proxy. The same status.txt and pred.pkl Range requests return 502 with inherited proxy settings but 200 and 206 with trust_env disabled.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_workspace_client.py",
+    "backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py",
+    "tests/aistock_validation/bugs/20260720_BUG-786-qeworkspaceclient-inherits-proxy-env-and-returns-502-for-lan-compute-nod.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-786",
+  "closed_at": "2026-07-20T06:05:02Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-20T05:40:35.949038Z",
+  "description": "Default httpx trust_env behavior sends LAN node requests through the process proxy. The same status.txt and pred.pkl Range requests return 502 with inherited proxy settings but 200 and 206 with trust_env disabled.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260720-17664fc559b2",
+      "timestamp": "2026-07-20T05:40:35.949032Z"
+    }
+  ],
+  "evidence_uris": [
+    "HMM batch hmmb_37a20e3bcc64414b912a7aa4b417a66b failed during source freeze",
+    "Direct probe: catalog=200 status=200 pred Range=206 with trust_env disabled"
+  ],
+  "expected": "QEWorkspaceClient must connect directly to the authoritative internal QE node for catalog, file, Range, asset and log-stream operations while preserving explicit node resolution and fail-closed errors.",
+  "first_seen_at": "2026-07-20T05:40:35.949038Z",
+  "fix_branch": null,
+  "fix_commit": "a7212a4705baa8a91e799777cf42ce5e0ca4ebd1",
+  "fixed_at": "2026-07-20T06:09:25.025467Z",
+  "github_issue_number": 2499,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2499",
+  "last_seen_at": "2026-07-20T05:40:35.949038Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2500",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Compare default HTTPX and trust_env disabled GET requests to the authoritative Loop1 status.txt endpoint; observed status codes are 502 and 200.",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "hmm_evolution_backend"
+  ],
+  "risk_area": "infra_failure",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QEWorkspaceClient inherits proxy env and returns 502 for LAN compute nodes",
+  "trigger_condition": {
+    "fingerprint": "17664fc559b2b497c76efb89",
+    "source_event_id": "FE-20260720-17664fc559b2"
+  },
+  "validation_evidence": [
+    "PR #2500 CI: l0, qe_read_backend, hmm_evolution_backend, CodeQL, Semgrep and PR Quality passed; real Loop1 smoke status.txt=200 and pred.pkl Range=206"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read",
+        "hmm_evolution"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "hmm_evolution_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read",
+          "hmm_evolution"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "hmm_evolution_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

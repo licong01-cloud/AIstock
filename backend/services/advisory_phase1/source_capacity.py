@@ -306,11 +306,12 @@ class Phase1EProgramCapacityWorkload(HashClosedContract):
     package_id: str = Field(min_length=1, max_length=160)
     manifest_sha256: str = Field(min_length=64, max_length=64)
     alpha_mode: AlphaMode
-    candidate_depth: int = Field(ge=1)
+    candidate_depth: int = Field(ge=0)
     input_universe_count: int = Field(ge=0)
-    horizons: tuple[int, ...] = Field(min_length=1)
-    projection_count: int = Field(ge=1)
-    stage_projection_factor: int = Field(ge=1)
+    workload_scope: Literal["SOURCE_CAPTURE_ONLY", "OUTCOME_LABELS"] = "OUTCOME_LABELS"
+    horizons: tuple[int, ...] = ()
+    projection_count: int = Field(default=0, ge=0)
+    stage_projection_factor: int = Field(default=0, ge=0)
     source_requirement_set_hash: str = Field(min_length=64, max_length=64)
     program_workload_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
@@ -324,6 +325,20 @@ class Phase1EProgramCapacityWorkload(HashClosedContract):
         horizons = tuple(sorted(set(self.horizons)))
         if horizons != self.horizons or any(value <= 0 for value in horizons):
             raise ValueError("horizons must be positive, sorted, and duplicate-free")
+        if self.workload_scope == "SOURCE_CAPTURE_ONLY":
+            if horizons or self.projection_count != 0 or self.stage_projection_factor != 0:
+                raise ValueError(
+                    "SOURCE_CAPTURE_ONLY workload requires empty horizons and zero projection factors"
+                )
+        elif (
+            self.candidate_depth <= 0
+            or not horizons
+            or self.projection_count <= 0
+            or self.stage_projection_factor <= 0
+        ):
+            raise ValueError(
+                "OUTCOME_LABELS workload requires positive horizons, projection_count, and stage_projection_factor"
+            )
         self.close_hash()
         return self
 
@@ -699,7 +714,9 @@ def build_capacity_program_coverage_v1(
         raise ValueError("capacity receipt does not bind the exact request workload set")
 
     per_program_missing = receipt.missing_measurements_by_program_workload_hash.get(workload_hash, ())
-    missing = tuple(sorted(set(receipt.missing_measurements + per_program_missing)))
+    missing = tuple(sorted(set(per_program_missing)))
+    if not receipt.missing_measurements_by_program_workload_hash:
+        missing = tuple(sorted(set(receipt.missing_measurements)))
     if receipt.status is CapacityStatus.INSUFFICIENT:
         status = ProgramCapacityStatus.INSUFFICIENT
     elif workload_hash in receipt.measured_program_workload_hashes and not missing:
@@ -1259,53 +1276,58 @@ class AdvisoryPhase1CapacityProbe:
         source_fetch_peak_bytes: int | None,
         store_available_bytes: int,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], bool]:
-        tiers: dict[str, Any] = {}
-        observed_partitions = max(0, trading_days) * len(request.program_workloads)
-        for tier in ("p50", "p95", "max"):
-            role_rows = {
-                "canonical_signals": sum(item.candidate_depth for item in request.program_workloads),
-                "stage_candidates": sum(
-                    item.candidate_depth * item.stage_projection_factor for item in request.program_workloads
-                ),
-                "outcome_labels": sum(
-                    item.candidate_depth * len(item.horizons) * item.projection_count
-                    for item in request.program_workloads
-                ),
-                "universe_outcomes": sum(
-                    item.input_universe_count * len(item.horizons) * item.projection_count
-                    for item in request.program_workloads
-                ),
-                "source_revisions": int(math.ceil(observed_partitions * revision_summary[tier])),
-            }
-            logical_bytes = {
-                role: int(math.ceil(count * logical_widths[role]))
-                for role, count in role_rows.items()
-                if role in logical_widths
-            }
-            parquet_bytes = {
-                role: int(math.ceil(count * parquet_widths[role]))
-                for role, count in role_rows.items()
-                if role in parquet_widths
-            }
-            total_parquet = sum(parquet_bytes.values())
-            staging_peak = total_parquet * request.staging_copy_count
-            retained_store = (
-                total_parquet * request.retained_snapshot_count
-                + request.manifest_overhead_bytes_per_snapshot * request.retained_snapshot_count
-            )
-            required_free = staging_peak * request.concurrent_build_count + request.orphan_reserve_bytes
-            tiers[tier] = {
-                "role_rows": role_rows,
-                "logical_uncompressed_bytes": logical_bytes,
-                "projected_parquet_bytes_by_role": parquet_bytes,
-                "projected_parquet_bytes": total_parquet,
-                "projected_file_count": (
-                    math.ceil(total_parquet / request.parquet_target_file_bytes) if total_parquet else 0
-                ),
-                "staging_peak_bytes": staging_peak,
-                "retained_store_bytes": retained_store,
-                "required_free_bytes": required_free,
-            }
+        def project(workloads: tuple[Phase1EProgramCapacityWorkload, ...]) -> dict[str, Any]:
+            tiers: dict[str, Any] = {}
+            observed_partitions = max(0, trading_days) * len(workloads)
+            for tier in ("p50", "p95", "max"):
+                role_rows = {
+                    "canonical_signals": sum(item.candidate_depth for item in workloads),
+                    "stage_candidates": sum(item.candidate_depth * item.stage_projection_factor for item in workloads),
+                    "outcome_labels": sum(
+                        item.candidate_depth * len(item.horizons) * item.projection_count for item in workloads
+                    ),
+                    "universe_outcomes": sum(
+                        item.input_universe_count * len(item.horizons) * item.projection_count for item in workloads
+                    ),
+                    "source_revisions": int(math.ceil(observed_partitions * revision_summary[tier])),
+                }
+                logical_bytes = {
+                    role: int(math.ceil(count * logical_widths[role]))
+                    for role, count in role_rows.items()
+                    if role in logical_widths
+                }
+                parquet_bytes = {
+                    role: int(math.ceil(count * parquet_widths[role]))
+                    for role, count in role_rows.items()
+                    if role in parquet_widths
+                }
+                total_parquet = sum(parquet_bytes.values())
+                staging_peak = total_parquet * request.staging_copy_count
+                retained_store = (
+                    total_parquet * request.retained_snapshot_count
+                    + request.manifest_overhead_bytes_per_snapshot * request.retained_snapshot_count
+                )
+                required_free = staging_peak * request.concurrent_build_count + request.orphan_reserve_bytes
+                tiers[tier] = {
+                    "role_rows": role_rows,
+                    "logical_uncompressed_bytes": logical_bytes,
+                    "projected_parquet_bytes_by_role": parquet_bytes,
+                    "projected_parquet_bytes": total_parquet,
+                    "projected_file_count": (
+                        math.ceil(total_parquet / request.parquet_target_file_bytes) if total_parquet else 0
+                    ),
+                    "staging_peak_bytes": staging_peak,
+                    "retained_store_bytes": retained_store,
+                    "required_free_bytes": required_free,
+                }
+            return {"tiers": tiers}
+
+        aggregate_projection = project(request.program_workloads)
+        tiers = aggregate_projection["tiers"]
+        program_projections = {
+            str(workload.program_workload_hash): project((workload,))
+            for workload in request.program_workloads
+        }
         per_worker_memory = (
             source_fetch_peak_bytes
             + sum(request.worker_memory_overheads.values())
@@ -1319,7 +1341,11 @@ class AdvisoryPhase1CapacityProbe:
             concurrent_memory is not None and concurrent_memory > request.memory_budget_bytes
         )
         return (
-            {"program_workload_set_hash": request.program_workload_set_hash, "tiers": tiers},
+            {
+                "program_workload_set_hash": request.program_workload_set_hash,
+                "tiers": tiers,
+                "programs": program_projections,
+            },
             {
                 "budget_bytes": request.memory_budget_bytes,
                 "estimated_peak_bytes_per_worker": per_worker_memory,

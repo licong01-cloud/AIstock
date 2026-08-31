@@ -1,0 +1,188 @@
+{
+  "actual": "主板 300 股、TWAP split_count=6 的首个 child 为 50 股，LocalSIM risk/ledger 以 LOCAL_SIM_BOARD_LOT_VIOLATION 拒绝；相同 side-aware rounding 分布于多种 legacy/V24/V25 算法。",
+  "allowed_write_scope": [
+    "backend/execution_algos/base_algo.py",
+    "backend/execution_algos/board_lot.py",
+    "backend/execution_algos/twap_algo.py",
+    "backend/execution_algos/vwap_algo.py",
+    "backend/execution_algos/ac_optimal_algo.py",
+    "backend/execution_algos/pov_algo.py",
+    "backend/execution_algos/sbb_ema_algo.py",
+    "backend/execution_algos/v24_rl_algo.py",
+    "backend/execution_algos/v25_two_stage_algo.py",
+    "backend/services/trading_core/minute_execution.py",
+    "backend/tests/trading_core/test_minute_execution.py",
+    "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "tests/aistock_validation/bugs/20260721_BUG-795-p0-localsim-sell-residual-child.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-795",
+  "closed_at": "2026-07-21T09:36:17Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-21T05:28:15.228973Z",
+  "description": "主板 300 股、TWAP split_count=6 的首个 child 为 50 股，LocalSIM risk/ledger 以 LOCAL_SIM_BOARD_LOT_VIOLATION 拒绝；相同 side-aware rounding 分布于多种 legacy/V24/V25 算法。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260721-daa341ca7a4a",
+      "timestamp": "2026-07-21T05:28:15.228968Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md#P0-G"
+  ],
+  "expected": "所有注册分钟算法的非最终 SELL child 均满足对应板块最小数量与增量；只有 final child 且数量等于全部 remaining quantity 时允许 residual 清仓。主板 300 股多切片不得产生 50 股中间单，最终总成交仍精确为 300；科创板最小 200、1 股增量和最终 residual 语义保持。",
+  "first_seen_at": "2026-07-21T05:28:15.228973Z",
+  "fix_branch": null,
+  "fix_commit": "fbc981892b88435088c4676322443edad47d3a56",
+  "fixed_at": "2026-07-21T09:53:34.600096Z",
+  "github_issue_number": 2530,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2530",
+  "last_seen_at": "2026-07-21T05:28:15.228973Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2534",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/trading_core/test_minute_execution.py -k sell_small_multi_slice -q",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][LocalSIM] 分钟执行算法把 SELL residual 例外错误用于非最终 child",
+  "trigger_condition": {
+    "fingerprint": "daa341ca7a4a05ae08dcb12d",
+    "source_event_id": "FE-20260721-daa341ca7a4a"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/trading_core/test_minute_execution.py backend/tests/paper_trading_v2/test_localsim_backend.py -k sell_small_multi_slice_or_pov_sell_residual_or_twap_final_child_or_v24_v25_sell_residual_or_localsim_twap_sell -q -p no:cacheprovider -> 8 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "simulation_core"
+      ],
+      "plans": [
+        "paper_v2_backend",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "paper_v2",
+          "simulation_core"
+        ],
+        "plans": [
+          "paper_v2_backend",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

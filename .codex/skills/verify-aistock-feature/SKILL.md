@@ -5,10 +5,13 @@ description: "Use for real AIstock feature delivery that needs Feature Card/desi
 
 # Verify AIstock Feature
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this skill provides the feature procedure.
+
 Use this skill only after the task is confirmed as new feature delivery or architecture/capability implementation.
 
 ## Context Budget
 
+- Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine it.
 - Read project rules once, then this skill plus the approved Feature Card/design.
 - Use `Design Acceptance Index` ids after the first design read; do not repeatedly load the full design.
 - Do not read BUG workflow, docs workflow, quickstarts, archived standards, or unrelated module designs.
@@ -24,6 +27,7 @@ Use this skill only after the task is confirmed as new feature delivery or archi
 
 ## Local Gate And Delegation
 
+- Feature validation, merge, delegation and aftercare never authorize start/stop/restart of a user backend. Runtime-affecting delivery must persist across restart, prove fresh-process loading, and remain pending until the user's restart is followed by read-only identity and business smoke verification.
 - Codex keeps the minimal local gate: changed-file lint/compile, direct contract or fix-point tests, `git diff --check`, scope check, and production gates.
 - Delegate broad UI/API/business-flow, cross-module, LLM design-drift, and long-running validation through `aistock-validation-delegation` or nightly; consume compact receipts first.
 - Immediate deep validation remains only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.

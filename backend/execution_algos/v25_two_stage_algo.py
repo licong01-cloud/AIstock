@@ -15,7 +15,6 @@ import numpy as np
 
 from .base_algo import BaseExecutionAlgo, OrderState, StepResult
 from .board_lot import round_to_board_lot
-from .registry import register
 from .v25_core import (
     EARLY_LEN,
     LATE_LEN,
@@ -99,7 +98,6 @@ def _make_model_classes(torch: Any):
     return EarlyPlanNetEnhanced, LatePlanNet
 
 
-@register
 class V25TwoStageAlgo(BaseExecutionAlgo):
     ALGO_CODE = "V25_TWO_STAGE"
     HANDLES_MARKET_STATE = True
@@ -260,6 +258,7 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             state.step += 1
             return None
 
+        final_child = market_state.action == V25MarketAction.P0_FORCE or cur_step >= horizon - 1
         if market_state.action == V25MarketAction.P0_FORCE:
             step_qty = remaining
             reason = market_state.reason
@@ -279,7 +278,12 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             step_qty = min(step_qty, remaining)
             reason = f"V25_TWO_STAGE step {state.step + 1}/{horizon}"
 
-        step_qty = round_to_board_lot(step_qty, stock_id, side=side)
+        step_qty = round_to_board_lot(
+            step_qty,
+            stock_id,
+            side=side,
+            allow_sell_residual=final_child,
+        )
         state.step += 1
         if step_qty <= 0:
             self._last_no_fill_reason = "board_lot_zero"

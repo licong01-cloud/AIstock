@@ -1,0 +1,196 @@
+{
+  "actual": "Six nonconforming SELL children were broker-rejected; two increment-aligned children filled. Partial odd-lot sells such as 1 of a 100-share position and 83 of a 500-share position are currently treated as legal by the child helper.",
+  "allowed_write_scope": [
+    "backend/execution_algos/board_lot.py",
+    "backend/execution_algos/vnpy_style/base.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/tests/trading_core/test_vnpy_style_execution_assets.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_parity_twap.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py",
+    "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_issue_flow.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260720_BUG-781-p0-miniqmt-adaptive-is-child-sell-quantities-violate-board-lot-and-resid.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-781",
+  "closed_at": "2026-07-20T08:48:46Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-20T03:00:36.146311Z",
+  "description": "Six nonconforming SELL children were broker-rejected; two increment-aligned children filled. Partial odd-lot sells such as 1 of a 100-share position and 83 of a 500-share position are currently treated as legal by the child helper.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260720-cc06bcc53ef5",
+      "timestamp": "2026-07-20T03:00:36.146307Z"
+    }
+  ],
+  "evidence_uris": [
+    "related:BUG-531",
+    "related:BUG-717",
+    "broker_orders:1090520226-1090520234"
+  ],
+  "expected": "Every MiniQMT child quantity is legal for its symbol and side. Main-board and ChiNext child quantities use 100-share increments except an exact whole-position residual sell; STAR follows min 200 then increment 1. Parent totals, child totals and broker can_sell remain reconstructible, and an illegal slice fails before broker call with typed context.",
+  "first_seen_at": "2026-07-20T03:00:36.146311Z",
+  "fix_branch": null,
+  "fix_commit": "1b7367d6b33aa4a9d74ef5b02593b4a3db08ea3c",
+  "fixed_at": "2026-07-20T08:50:11.352616Z",
+  "github_issue_number": 2490,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2490",
+  "last_seen_at": "2026-07-20T03:00:36.146311Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2497",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run vn.py-style execution direct tests for main-board SELL parent positions with requested child 1/83/94 and 628/14096; assert only exact whole residual sells pass and all normal children are increment aligned before gateway submit.",
+  "required_verification": [
+    "l0",
+    "miniqmt_execution_runtime_l2",
+    "paper_v2_backend",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][MiniQMT] Adaptive IS child SELL quantities violate board-lot and residual rules",
+  "trigger_condition": {
+    "fingerprint": "cc06bcc53ef518758ce09306",
+    "source_event_id": "FE-20260720-cc06bcc53ef5"
+  },
+  "validation_evidence": [
+    "PR #2497 all required local plans and hosted CI verdict -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core",
+        "paper_v2",
+        "miniqmt_execution_runtime"
+      ],
+      "plans": [
+        "simulation_core_l2",
+        "paper_v2_backend",
+        "miniqmt_execution_runtime_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core",
+          "paper_v2",
+          "miniqmt_execution_runtime"
+        ],
+        "plans": [
+          "simulation_core_l2",
+          "paper_v2_backend",
+          "miniqmt_execution_runtime_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

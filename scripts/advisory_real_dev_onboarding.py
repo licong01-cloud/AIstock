@@ -19,8 +19,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from backend.services.advisory_phase0a.policy import canonical_json_text
+from backend.services.advisory_phase0a.policy import POLICY_REGISTRY_ROOT, canonical_json_text
+from backend.services.advisory_phase1.source_capacity import Phase1ECapacityPolicyV1
 from backend.services.advisory_dev_input_onboarding.contracts import (
+    AdvisoryImmutableArtifactRef,
     EvidenceKind,
     InventoryClassification,
     ImportCommitOutcome,
@@ -38,14 +40,22 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     REASON_HISTORICAL_INPUT_PENDING,
     database_identity_hash,
 )
+from backend.services.advisory_dev_input_onboarding.phase1e_orchestration import (
+    AdvisoryPhase1EOrchestrationService,
+)
 from backend.services.advisory_dev_input_onboarding.production_projection import (
     RealDevOnboardingInventoryService,
     RealDevProductionPackageExporter,
     load_exact_release_receipt,
 )
 from backend.services.advisory_dev_input_onboarding.dev_importer import RealDevPackageImporter
-from backend.services.advisory_dev_input_onboarding.historical_onboarding import RealDevHistoricalOnboardingService
+from backend.services.advisory_dev_input_onboarding.historical_onboarding import (
+    HistoricalOnboardingEvidenceStore,
+    RealDevHistoricalOnboardingService,
+)
 from backend.services.advisory_dev_input_onboarding.store import RealDevOnboardingEvidenceStore
+from backend.services.strategy_package.advisory_input_projection import project_advisory_inputs
+from backend.services.strategy_package.repository import StrategyPackageRepository
 
 
 LOGGER = logging.getLogger("advisory_real_dev_onboarding")
@@ -132,7 +142,44 @@ def _parser() -> argparse.ArgumentParser:
     run_historical.add_argument("--env-file", required=True, type=Path)
     run_historical.add_argument("--evidence-root", required=True, type=Path)
     run_historical.add_argument("--target-package-asset-root", required=True, type=Path)
+
+    observe_source = subparsers.add_parser("observe-source", help="append exact DEV source facts for O4 Program scopes")
+    observe_source.add_argument("--historical-request-ref", required=True, type=Path)
+    observe_source.add_argument("--capacity-policy", required=True, type=Path)
+    observe_source.add_argument("--env-file", required=True, type=Path)
+    observe_source.add_argument("--evidence-root", required=True, type=Path)
+    observe_source.add_argument("--artifact-root", required=True, type=Path)
+    _add_o4_config_args(observe_source)
+
+    build_phase1e = subparsers.add_parser("build-phase1e-inputs", help="build exact pre-capacity O4 Program inputs")
+    build_phase1e.add_argument("--historical-request-ref", required=True, type=Path)
+    build_phase1e.add_argument("--historical-receipt-ref", required=True, type=Path)
+    build_phase1e.add_argument("--observation-scope-ref", required=True, action="append", type=Path)
+    build_phase1e.add_argument("--source-mapping-registry-ref", required=True, type=Path)
+    build_phase1e.add_argument("--capacity-policy-ref", required=True, type=Path)
+    build_phase1e.add_argument("--env-file", required=True, type=Path)
+    build_phase1e.add_argument("--evidence-root", required=True, type=Path)
+    build_phase1e.add_argument("--artifact-root", required=True, type=Path)
+    build_phase1e.add_argument("--policy-registry-root", type=Path, default=POLICY_REGISTRY_ROOT)
+    _add_o4_config_args(build_phase1e)
+
+    plan_capacity = subparsers.add_parser("plan-capacity", help="probe exact DEV O4 workloads and build post-capacity inputs")
+    plan_capacity.add_argument("--input-bundle-ref", required=True, type=Path)
+    plan_capacity.add_argument("--env-file", required=True, type=Path)
+    plan_capacity.add_argument("--artifact-root", required=True, type=Path)
+    plan_capacity.add_argument("--advisory-store-root", type=Path)
+    _add_o4_config_args(plan_capacity)
+
+    compile_phase1e = subparsers.add_parser("compile-phase1e", help="compile independent single-Program Phase1E batches")
+    compile_phase1e.add_argument("--input-bundle-ref", required=True, type=Path)
+    compile_phase1e.add_argument("--env-file", required=True, type=Path)
+    compile_phase1e.add_argument("--artifact-root", required=True, type=Path)
     return parser
+
+
+def _add_o4_config_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--config-id", default="phase1e_advisory_inputs_dev_v2")
+    parser.add_argument("--config-version", default="v2")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -155,10 +202,21 @@ def _read_ref(path: Path, *, expected: EvidenceKind | None = None) -> Onboarding
     return ref
 
 
+def _read_o4_ref(path: Path) -> AdvisoryImmutableArtifactRef:
+    return AdvisoryImmutableArtifactRef.model_validate(_read_json(path))
+
+
 def _emit(value: Any) -> None:
-    if hasattr(value, "model_dump"):
-        value = value.model_dump(mode="json")
-    print(canonical_json_text(value))
+    def jsonable(item: Any) -> Any:
+        if hasattr(item, "model_dump"):
+            return jsonable(item.model_dump(mode="json"))
+        if isinstance(item, dict):
+            return {str(key): jsonable(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [jsonable(child) for child in item]
+        return item
+
+    print(canonical_json_text(jsonable(value)))
 
 
 def _inventory(args: argparse.Namespace) -> int:
@@ -337,10 +395,15 @@ def _run_historical(args: argparse.Namespace) -> int:
         target_package_asset_root=args.target_package_asset_root,
         repository_root=REPOSITORY_ROOT,
     )
+    historical_store = HistoricalOnboardingEvidenceStore(root=args.evidence_root)
+    request_ref = historical_store.artifact_ref(historical_store.publish(request))
+    receipt_ref = historical_store.artifact_ref(stored)
     _emit(
         {
             "ok": receipt.batch_status == "COMPLETE",
             "command": "run-historical",
+            "historical_request_ref": request_ref,
+            "historical_receipt_ref": receipt_ref,
             "historical_request_hash": receipt.historical_request_hash,
             "historical_receipt_hash": receipt.receipt_hash,
             "formal_batch_receipt_hash": receipt.formal_batch_receipt_hash,
@@ -368,6 +431,94 @@ def _run_historical(args: argparse.Namespace) -> int:
     if receipt.batch_status == "WAITING_INPUT":
         return EXIT_INPUT_PENDING
     return EXIT_VERIFICATION_FAILED
+
+
+def _pending_historical_request_ref(args: argparse.Namespace) -> AdvisoryImmutableArtifactRef:
+    request = RealDevHistoricalRunRequest.model_validate(_read_json(args.historical_request))
+    store = HistoricalOnboardingEvidenceStore(root=args.evidence_root)
+    ref = store.artifact_ref(store.publish(request))
+    if store.load(ref) != request:
+        raise ValueError("pending historical request full readback differs")
+    return ref
+
+
+def _project_admitted_package_inputs(*, conn_factory: Any, package_id: str) -> dict[str, Any]:
+    package = StrategyPackageRepository(conn_factory=conn_factory).get(package_id)
+    projected = project_advisory_inputs(package.manifest)
+    return projected.model_dump(mode="json")
+
+
+def _o4_service() -> AdvisoryPhase1EOrchestrationService:
+    return AdvisoryPhase1EOrchestrationService(
+        repository_root=REPOSITORY_ROOT,
+        package_projection_provider=_project_admitted_package_inputs,
+    )
+
+
+def _observe_source(args: argparse.Namespace) -> int:
+    result = _o4_service().observe_source(
+        historical_request_ref=_read_o4_ref(args.historical_request_ref),
+        capacity_policy=Phase1ECapacityPolicyV1.model_validate(_read_json(args.capacity_policy)),
+        env_file=args.env_file,
+        evidence_root=args.evidence_root,
+        artifact_root=args.artifact_root,
+        config_id=args.config_id,
+        config_version=args.config_version,
+    )
+    _emit(result)
+    if result["aggregate_status"] == "COMPLETE":
+        return EXIT_SUCCESS
+    return EXIT_INPUT_PENDING if result["aggregate_status"] == "PENDING" else EXIT_VERIFICATION_FAILED
+
+
+def _build_phase1e_inputs(args: argparse.Namespace) -> int:
+    result = _o4_service().build_phase1e_inputs(
+        historical_request_ref=_read_o4_ref(args.historical_request_ref),
+        historical_receipt_ref=_read_o4_ref(args.historical_receipt_ref),
+        observation_scope_refs=tuple(_read_o4_ref(path) for path in args.observation_scope_ref),
+        source_mapping_registry_ref=_read_o4_ref(args.source_mapping_registry_ref),
+        capacity_policy_ref=_read_o4_ref(args.capacity_policy_ref),
+        env_file=args.env_file,
+        evidence_root=args.evidence_root,
+        artifact_root=args.artifact_root,
+        policy_registry_root=args.policy_registry_root,
+        config_id=args.config_id,
+        config_version=args.config_version,
+    )
+    _emit(result)
+    aggregate = result["bundle"].aggregate_readiness.value
+    if aggregate == "ALL_FULL_READY":
+        return EXIT_SUCCESS
+    return EXIT_VERIFICATION_FAILED if aggregate == "BLOCKED" else EXIT_INPUT_PENDING
+
+
+def _plan_capacity(args: argparse.Namespace) -> int:
+    result = _o4_service().plan_capacity(
+        input_bundle_ref=_read_o4_ref(args.input_bundle_ref),
+        env_file=args.env_file,
+        artifact_root=args.artifact_root,
+        advisory_store_root=args.advisory_store_root,
+        config_id=args.config_id,
+        config_version=args.config_version,
+    )
+    _emit(result)
+    aggregate = result["bundle"].aggregate_readiness.value
+    if aggregate == "ALL_FULL_READY":
+        return EXIT_SUCCESS
+    return EXIT_VERIFICATION_FAILED if aggregate == "BLOCKED" else EXIT_INPUT_PENDING
+
+
+def _compile_phase1e(args: argparse.Namespace) -> int:
+    result = _o4_service().compile_phase1e(
+        input_bundle_ref=_read_o4_ref(args.input_bundle_ref),
+        env_file=args.env_file,
+        artifact_root=args.artifact_root,
+    )
+    _emit(result)
+    aggregate = result["compile_receipt"].aggregate_status.value
+    if aggregate == "COMPLETE":
+        return EXIT_SUCCESS
+    return EXIT_VERIFICATION_FAILED if aggregate == "FAILED" else EXIT_INPUT_PENDING
 
 
 def _verify(args: argparse.Namespace, *, expected: EvidenceKind | None = None) -> int:
@@ -428,6 +579,14 @@ def main(argv: list[str] | None = None) -> int:
             return _verify_import(args)
         if args.command == "run-historical":
             return _run_historical(args)
+        if args.command == "observe-source":
+            return _observe_source(args)
+        if args.command == "build-phase1e-inputs":
+            return _build_phase1e_inputs(args)
+        if args.command == "plan-capacity":
+            return _plan_capacity(args)
+        if args.command == "compile-phase1e":
+            return _compile_phase1e(args)
         if args.command == "verify-evidence":
             return _verify(args)
         if args.command == "verify-bundle":
@@ -474,15 +633,29 @@ def main(argv: list[str] | None = None) -> int:
     except RealDevOnboardingError as exc:
         reason_code = getattr(exc, "reason_code", "ADVISORY_REAL_DEV_CONTRACT_INVALID")
         LOGGER.error("advisory_onboarding_command_failed command=%s reason_code=%s", args.command, reason_code)
-        _emit(
-            {
-                "ok": False,
-                "command": args.command,
-                "reason_code": reason_code,
-                "message": str(exc),
-                "context": exc.context,
-            }
-        )
+        payload = {
+            "ok": False,
+            "command": args.command,
+            "reason_code": reason_code,
+            "message": str(exc),
+            "context": exc.context,
+        }
+        if args.command == "run-historical" and reason_code == REASON_HISTORICAL_INPUT_PENDING:
+            try:
+                payload["historical_request_ref"] = _pending_historical_request_ref(args)
+            except Exception as ref_exc:
+                _log_sanitized_exception("pending historical request ref publication failed", ref_exc)
+                _emit(
+                    {
+                        "ok": False,
+                        "command": args.command,
+                        "reason_code": REASON_UNEXPECTED_ERROR,
+                        "message": "pending historical request reference publication failed",
+                        "context": {"original_reason_code": reason_code},
+                    }
+                )
+                return EXIT_INTERNAL
+        _emit(payload)
         if reason_code == "ADVISORY_REAL_DEV_IMPORT_COMMIT_STATE_UNKNOWN":
             return EXIT_STATE_UNKNOWN
         if reason_code == REASON_HISTORICAL_INPUT_PENDING:

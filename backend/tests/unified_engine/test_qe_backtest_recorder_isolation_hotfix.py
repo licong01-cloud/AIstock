@@ -8,6 +8,7 @@ import pickle
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -102,6 +103,7 @@ def _executor_context(loop_index: int) -> ExecutionContext:
         task_id="qe_target",
         loop_index=loop_index,
         experiment_name=f"qe_target/Loop{loop_index}",
+        node_id="wsl2-5080",
         model_source={
             "source_task_id": "qe_source",
             "source_loop": "Loop1",
@@ -110,7 +112,35 @@ def _executor_context(loop_index: int) -> ExecutionContext:
         extra_experiment_files={
             "mlruns_params.tar.gz.b64": base64.b64encode(b"params-tar").decode("ascii"),
         },
+        submission_source_kind="qe_evolution_loop",
+        submission_source_execution_id=f"qe_target_Loop{loop_index}",
     )
+
+
+class _UnitSubmissionCoordinator:
+    async def submit(self, *, client, source, payload):
+        loop_id = await client.create_and_run_loop(
+            payload.task_id,
+            payload.loop_index,
+            dict(payload.config),
+            dict(payload.experiment_files),
+            payload.wsl_command,
+            model_source=payload.model_source,
+            callback_url=payload.callback_url,
+            submission_intent_hash=source.submission_intent_hash,
+        )
+        return SimpleNamespace(
+            loop_id=loop_id,
+            state="submitted",
+            reservation_id="qer_unit",
+            reservation_status="submitting",
+            remote_status="reserved",
+            active_count=1,
+            node_capacity=2,
+            duplicate_replay=False,
+            remote_acceptance_unknown=False,
+            detail={},
+        )
 
 
 @pytest.mark.xfail(
@@ -243,7 +273,11 @@ def test_two_backtest_only_target_loops_reuse_one_source_payload_independently()
     }
     client = AsyncMock()
     client.create_and_run_loop.side_effect = ["Loop1", "Loop2"]
-    executor = BacktestExecutor(composer, client)
+    executor = BacktestExecutor(
+        composer,
+        client,
+        submission_coordinator=_UnitSubmissionCoordinator(),
+    )
     cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
 
     results = [

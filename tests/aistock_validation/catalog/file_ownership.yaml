@@ -1,10 +1,249 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: advisory_model_first_training
+    priority: 130
+    include:
+      - backend/services/advisory_model_first/**
+      - backend/tests/advisory_model_first/**
+      - scripts/advisory_model_prepare_request.py
+      - scripts/advisory_model_train_wsl.py
+      - scripts/advisory_model_quality_prepare_request.py
+      - scripts/advisory_model_quality_train_wsl.py
+      - scripts/advisory_policy_dataset_prepare_request.py
+      - scripts/advisory_policy_utility_prepare_request.py
+      - scripts/advisory_dual_head_output_constraint_prepare_request.py
+      - scripts/advisory_grouped_rank_output_constraint_prepare_request.py
+      - scripts/advisory_selection_prior_residual_prepare_request.py
+      - scripts/advisory_turnover_constrained_utility_prepare_request.py
+      - scripts/advisory_meta_label_prepare_request.py
+      - scripts/advisory_n0_research_control.py
+      - scripts/advisory_n1_tier1_oracle_learnability.py
+      - scripts/advisory_strategy_package_alpha_audit.py
+      - scripts/advisory_publish_program_model_descriptor.py
+      - scripts/advisory_outcome_calibration_prepare_request.py
+      - scripts/advisory_outcome_calibration_train_wsl.py
+      - scripts/advisory_outcome_prepare_request.py
+      - scripts/advisory_outcome_train_wsl.py
+      - scripts/advisory_price_range_calibration_prepare_request.py
+      - scripts/advisory_price_range_calibration_train_wsl.py
+      - scripts/advisory_price_range_prepare_request.py
+      - scripts/advisory_price_range_train_wsl.py
+      - scripts/wsl/advisory_model_train.py
+      - scripts/wsl/advisory_model_quality_train.py
+      - scripts/wsl/advisory_policy_dataset_build.py
+      - scripts/wsl/advisory_policy_utility_train.py
+      - scripts/wsl/advisory_dual_head_output_constraint_train.py
+      - scripts/wsl/advisory_grouped_rank_output_constraint_train.py
+      - scripts/wsl/advisory_selection_prior_residual_train.py
+      - scripts/wsl/advisory_turnover_constrained_utility_train.py
+      - scripts/wsl/advisory_meta_label_train.py
+      - scripts/wsl/advisory_outcome_calibration_train.py
+      - scripts/wsl/advisory_outcome_train.py
+      - scripts/wsl/advisory_price_range_calibration_train.py
+      - scripts/wsl/advisory_price_range_train.py
+      - docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_*.md
+      - docs/architecture/advisory_p0c_policy_episode_cpcv_f2_design_*.md
+      - docs/architecture/advisory_p0d_short_rebound_meta_label_f2_design_*.md
+      - docs/architecture/advisory_p0i_grouped_rank_return_head_f2_design_*.md
+      - docs/architecture/advisory_n0_research_control_f2_detailed_design_*.md
+      - docs/architecture/advisory_n1_tier1_oracle_learnability_f2_detailed_design_*.md
+      - docs/architecture/advisory_strategy_package_three_arm_alpha_audit_f2_detailed_design_*.md
+    primary_module: advisory.model_first
+    impact_modules: []
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: File-only runtime-equivalent candidate reconstruction, fresh HMM, real WSL reranker training, and immutable experimental model bundles form one isolated Advisory research delivery.
+  - rule_id: advisory_short_rebound_modeling
+    priority: 129
+    include:
+      - backend/services/advisory_modeling/**
+      - backend/tests/advisory_modeling/**
+      - scripts/advisory_short_rebound_batch_b.py
+      - tests/aistock_validation/history/advisory_modeling/**
+      - docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_*.md
+      - docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_*.md
+    primary_module: advisory.modeling
+    impact_modules: [advisory.historical_range]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Short-rebound reranker contracts, deterministic calculations, isolated artifacts, direct tests, and their design records form one bounded Advisory-only research delivery.
+  - rule_id: advisory_phase0b_candidate_quality
+    priority: 128
+    include:
+      - backend/services/advisory_phase0b/**
+      - backend/tests/advisory_phase0b/**
+      - scripts/advisory_phase0b_candidate_quality_audit.py
+      - docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_*.md
+    primary_module: advisory.candidate_quality
+    impact_modules: [advisory.historical_range]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Phase 0B contracts, read-only snapshot audit, deterministic metrics, isolated report output, CLI, tests, and design form one bounded research delivery.
+  - rule_id: qe_long_trend_evaluation_phase4
+    priority: 127
+    include:
+      - frontend/src/app/qe-archive/LongTrendComparisonPanel.tsx
+      - frontend/src/app/quantevolver/evolution/components/LongTrendEvaluationPanel.tsx
+      - frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts
+    primary_module: qe.long_trend_evaluation
+    impact_modules: [qe.core, qe.archive]
+    layer: frontend
+    risk_level: high
+    ownership_reason: F-014 Phase 4 DB-restored Loop operator action and same-vintage Archive comparison form one bounded QE-only UI delivery.
+  - rule_id: qe_long_trend_evaluation_phase3
+    priority: 126
+    include:
+      - backend/migrations/qe_long_trend_evaluation_result_phase3_*.sql
+      - backend/db/init_qe_archive_schema.py
+      - backend/services/qe_archive/long_trend_*.py
+      - backend/services/quantevolver/long_trend_api_service.py
+      - backend/services/quantevolver/long_trend_snapshot_resolver.py
+      - backend/tests/qe_archive/test_qe_long_trend_phase3_*.py
+      - backend/tests/test_qe_archive_schema.py
+      - backend/tests/unified_engine/test_qe_long_trend_phase3_*.py
+      - backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py
+      - docs/architecture/qe_long_trend_evaluation_f2_design_*.md
+    primary_module: qe.long_trend_evaluation
+    impact_modules: [qe.core, qe.archive, platform.mcp_gateway]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: F-014 Phase 3 compact persistence, allowlisted snapshot resolution, and bounded QE-only API/MCP form one cross-module feature delivery.
+  - rule_id: qe_sector_risk_overlay
+    priority: 124
+    include:
+      - backend/services/quantevolver/sector_risk_overlay*.py
+      - backend/services/quantevolver/config_composer.py
+      - backend/tests/quantevolver/test_*sector_risk_overlay*.py
+      - backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py
+      - backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py
+      - backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py
+      - backend/tests/unified_engine/test_score_weighted_capacity_registration.py
+      - backend/tests/unified_engine/test_score_weighted_strategy_determinism.py
+      - backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py
+      - scripts/build_qe_sector_risk_overlay.py
+      - scripts/qe_sector_risk_overlay*.py
+      - scripts/qrun_limit.py
+      - scripts/qrun_limit_minute.py
+      - scripts/score_weighted_strategy_v2.py
+      - tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py
+      - docs/architecture/qe_sector_risk_overlay_f2_design_*.md
+    primary_module: qe.sector_risk_overlay
+    impact_modules: [qe.core, qe.auto_evolution, qe.enhanced_metrics, qe.data_completeness, qe.long_trend_evaluation]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The risk artifact, strategy wrapper, runtime packaging, Recorder evidence, multi-alpha policy arms, and F-014 aligned metrics form one QE-only research module.
+  - rule_id: qe_score_weighted_base_strategy
+    priority: 124
+    include:
+      - scripts/score_weighted_strategy.py
+      - backend/tests/quantevolver/test_score_weighted_hold_thresh.py
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment, qe.custom_evolution, qe.auto_evolution, qe.sector_risk_overlay]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The base score-weighted portfolio strategy and its direct contract tests define shared QE backtest execution semantics.
+  - rule_id: qe_frozen_data_plane
+    priority: 123
+    include:
+      - aistock_models/**
+      - scripts/qe_build_frozen_*.py
+      - scripts/export_suspend_d_candidate.py
+    primary_module: qe.core
+    impact_modules: [qe.single_experiment, qe.custom_evolution, qe.auto_evolution, qe.sector_risk_overlay]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The QE model package and frozen-dataset artifact builders form the offline computation data plane whose inputs must come from versioned frozen files and never from PostgreSQL market tables.
+  - rule_id: qe_alpha_candidate_research
+    priority: 123
+    include:
+      - scripts/qe_alpha_candidates/**
+      - backend/tests/quantevolver/test_sector_participation_gap_v2.py
+      - backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py
+      - backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py
+      - backend/tests/quantevolver/test_p0_d2_sector_oracle.py
+      - backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py
+    primary_module: qe.core
+    impact_modules: [qe.auto_evolution, factor_library]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: File-only QE Alpha and relation-prior candidates plus their exact direct tests form an offline research boundary; they do not enter runtime, catalog, or formal experiments merely by being source-reviewable.
+  - rule_id: qe_long_trend_evaluation_phase2
+    priority: 125
+    include:
+      - backend/migrations/qe_long_trend_evaluation_control_phase2_*.sql
+      - backend/migrations/qe_long_trend_task_profile_phase4_*.sql
+      - backend/services/quantevolver/long_trend_*.py
+      - backend/services/quantevolver/templates/long_trend_postprocess_adapter.py
+      - backend/tests/unified_engine/test_experiment_config.py
+      - backend/tests/unified_engine/test_qe_long_trend_*.py
+      - docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_*.md
+    primary_module: qe.long_trend_evaluation
+    impact_modules: [qe.core, qe.data_completeness, qe.enhanced_metrics]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: F-014 long-trend evaluator contracts, node compute orchestration, dedicated CAS, durable control, and direct regressions form one QE-only module.
+  - rule_id: advisory_historical_range_foundation
+    priority: 121
+    include:
+      - backend/routers/advisory.py
+      - backend/services/advisory_historical_range/**
+      - backend/tests/advisory_historical_range/**
+      - backend/db/migrations/add_advisory_historical_range_phase1r_20260719.sql
+      - backend/db/migrations/add_advisory_historical_range_r4_outcome_bridge_20260723.sql
+      - backend/db/migrations/fix_advisory_historical_range_batch_queued_aggregate_20260721.sql
+      - backend/db/migrations/fix_advisory_historical_range_r3_executor_contract_20260722.sql
+      - backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_*.sql
+      - backend/db/migrations/add_advisory_historical_range_internal_operation_types_*.sql
+      - backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_*.sql
+      - backend/services/advisory_phase1/capture_foundation.py
+      - backend/services/advisory_phase1/dataset_build.py
+      - backend/services/advisory_phase1/dataset_build_postgres.py
+      - backend/services/advisory_phase1/dataset_store.py
+      - backend/services/advisory_phase1/label_builder.py
+      - backend/services/advisory_phase1/label_builder_postgres.py
+      - backend/services/advisory_phase1/label_capture.py
+      - backend/services/advisory_phase1/observation_capture.py
+      - backend/services/advisory_phase1/observation_capture_postgres.py
+      - backend/services/advisory_phase1/observation_selector.py
+      - backend/services/advisory_phase1/outcome_engine.py
+      - backend/services/advisory_phase1/release_schema_contract.py
+      - backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v4.json
+      - backend/services/advisory_phase1/retrospective_contracts.py
+      - backend/services/advisory_phase1/retrospective_selector.py
+      - backend/services/advisory_phase1/retrospective_selector_postgres.py
+      - backend/services/advisory_phase1/snapshot_writer.py
+      - backend/services/advisory_phase1/stage_trace.py
+      - backend/tests/advisory_phase1/test_phase1c3_batch_d_integrity.py
+      - backend/tests/advisory_phase1/test_phase1c3_batch_d_writer.py
+      - backend/tests/advisory_phase1/test_r4_dataset_build_postgres.py
+      - backend/tests/advisory_phase1/test_r4_snapshot_manifest.py
+      - backend/tests/advisory_phase1/test_release_schema.py
+      - backend/tests/advisory_phase1/test_release_schema_import_boundary.py
+      - backend/tests/advisory_phase1/test_retrospective_selector.py
+      - backend/services/advisory_list_transition.py
+      - backend/services/advisory_program.py
+      - backend/tests/test_advisory_program_transition_parity.py
+      - backend/inference_engine.py
+      - scripts/strategy_package_live_inference.py
+      - scripts/advisory_historical_fullstack_comparison.py
+      - scripts/advisory_p0d_historical_forward_replay.py
+      - scripts/wsl/advisory_historical_model_predict.py
+      - backend/tests/test_inference_engine_historical_readonly.py
+      - backend/tests/test_inference_strict_scoring_alignment.py
+      - backend/tests/scripts/test_advisory_historical_fullstack_comparison.py
+      - backend/tests/scripts/test_advisory_p0d_historical_forward_replay.py
+      - backend/tests/scripts/test_strategy_package_live_inference.py
+    primary_module: advisory.historical_range
+    impact_modules: [tests.backend]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Phase 1R historical-range research owns isolated contracts, CAS, persistence, migration, explicit historical read-only inference entry points, and direct regression tests.
   - rule_id: advisory_dev_input_onboarding
     priority: 105
     include:
       - backend/services/advisory_dev_input_onboarding/**
       - backend/services/advisory_phase0a/**
+      - backend/services/advisory_phase1/readiness_plan.py
       - backend/services/advisory_phase1/readiness_plan_store.py
       - backend/services/advisory_phase1/source_capacity.py
       - backend/services/advisory_phase1/source_observer.py
@@ -15,6 +254,7 @@ rules:
       - backend/tests/advisory_phase1/test_source_observer_cli.py
       - scripts/advisory_phase0a_audit.py
       - scripts/advisory_phase1_source_observer.py
+      - scripts/advisory_phase1e_readiness_plan.py
       - scripts/advisory_real_dev_onboarding.py
     primary_module: advisory.dev_input_onboarding
     impact_modules: [tests.backend]
@@ -62,6 +302,27 @@ rules:
     layer: validation_bug_registry
     risk_level: high
     ownership_reason: Local bug JSON records are workflow metadata; normal BUG registration and close-sync should validate schema/module quality without forcing full Validation Center backend tests.
+  - rule_id: validation_plan_catalog_services
+    priority: 120
+    include:
+      - backend/services/validation/catalog_integrity.py
+      - backend/services/validation/plan_catalog.py
+    primary_module: validation.runner
+    impact_modules: [validation.module_quality]
+    layer: validation_catalog
+    risk_level: high
+    ownership_reason: Plan allowlists and catalog integrity checks belong to the validation runner contract.
+  - rule_id: validation_ownership_catalog_services
+    priority: 120
+    include:
+      - backend/services/validation/file_ownership.py
+      - backend/services/validation/module_registry.py
+      - backend/services/validation/ui_target_catalog.py
+    primary_module: validation.module_quality
+    impact_modules: [validation.runner]
+    layer: validation_catalog
+    risk_level: high
+    ownership_reason: Ownership, module, and UI target catalogs select direct module validation plans.
   - rule_id: validation_services
     priority: 100
     include:
@@ -130,12 +391,26 @@ rules:
     layer: test_runner
     risk_level: high
     ownership_reason: noxfile.py defines allowlisted local validation sessions.
+  - rule_id: research_pipeline_tests
+    priority: 100
+    include:
+      - backend/tests/research_pipeline/**
+    primary_module: research_pipeline
+    impact_modules: [tests.backend, validation.runner]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Research Pipeline tests prove workflow, HMM ingestion, artifact, and promotion contracts.
   - rule_id: dev_quality_tooling
     priority: 100
     include:
       - .mcp.json
       - .github/ISSUE_TEMPLATE/*.yml
       - .github/workflows/*.yml
+      - scripts/ci_changed_files.py
+      - backend/tests/scripts/test_ci_changed_files.py
+      - scripts/ci_change_classifier.py
+      - backend/tests/scripts/test_ci_change_classifier.py
+      - scripts/validate_changed_requirements.py
       - .pre-commit-config.yaml
       - .semgrep.yml
       - .semgrep/**
@@ -159,6 +434,19 @@ rules:
     layer: mcp_gateway
     risk_level: high
     ownership_reason: Unified MCP gateway code, profiles, manifests, and contract tests control agent-facing access to AIstock tools.
+  - rule_id: qe_archive_mcp_contract
+    priority: 100
+    include:
+      - backend/mcp/modules/qe_archive.py
+      - backend/mcp/tool_manifest.py
+      - backend/tests/mcp/test_qe_archive_module.py
+      - backend/tests/test_aistock_qe_mcp_servers.py
+      - scripts/aistock_qe_archive_mcp_server.py
+    primary_module: qe.data_completeness
+    impact_modules: [qe.archive, platform.mcp_gateway]
+    layer: mcp_gateway
+    risk_level: high
+    ownership_reason: QE Archive MCP control and manifest changes require both QE data-contract and archive validation instead of the generic MCP l0-only route.
   - rule_id: validation_backend_tests
     priority: 95
     include:
@@ -168,8 +456,12 @@ rules:
       - backend/tests/scripts/test_repo_hygiene_orphan_audit.py
       - backend/tests/scripts/test_code_intelligence_adapter.py
       - backend/tests/scripts/test_aistock_issue_workflow.py
+      - backend/tests/scripts/test_aistock_issue_workflow_fast.py
       - backend/tests/scripts/test_aistock_feature_workflow.py
       - backend/tests/scripts/test_issue_flow.py
+      - backend/tests/scripts/test_issue_flow_pr_quality.py
+      - backend/tests/scripts/test_validate_changed_requirements.py
+      - backend/tests/test_noxfile_validation_env.py
       - backend/tests/scripts/test_ci_failure_issue_summary.py
       - backend/tests/scripts/test_nightly_discovery_*.py
       - backend/tests/scripts/test_nightly_bug_candidate_*.py
@@ -191,26 +483,59 @@ rules:
   - rule_id: qe_multi_alpha_services
     priority: 90
     include:
+      - backend/main.py
+      - backend/migrations/multi_alpha_durable_orchestration_*.sql
+      - backend/migrations/qe_execution_reservation_*.sql
       - backend/services/multi_alpha/**
       - backend/routers/multi_alpha.py
+      - backend/tests/multi_alpha/**
       - backend/tests/test_multi_alpha*.py
+      - backend/tests/unified_engine/test_multi_alpha*.py
       - backend/tests/strategy_package/test_multi_alpha*.py
+      - scripts/backfill_multi_alpha_durable_tasks.py
     primary_module: qe.auto_evolution
-    impact_modules: [qe.core, qe.data_completeness, qe.enhanced_metrics]
+    impact_modules: [qe.core, qe.data_completeness, qe.enhanced_metrics, platform.db]
     layer: backend_service
     risk_level: high
     ownership_reason: QE multi-alpha services combine experiment legs, execute portfolio backtests, persist scheme and LOO evidence, and expose the operator UI contract.
+  - rule_id: qe_multi_alpha_p0_2_migrations
+    priority: 100
+    include:
+      - backend/migrations/multi_alpha_p0_2_control_recovery_*.sql
+      - backend/migrations/qe_archive_multi_alpha_p0_2_recovery_*.sql
+    primary_module: qe.auto_evolution
+    impact_modules: [qe.archive, platform.db]
+    layer: database
+    risk_level: high
+    ownership_reason: Multi-Alpha P0-2 control and Archive recovery migrations jointly change durable orchestration and archive readback contracts.
+  - rule_id: qe_node_health_scheduler
+    priority: 130
+    include:
+      - backend/schedulers/node_health_scheduler.py
+      - backend/tests/test_dispatch_observer_quiet.py
+    primary_module: qe.core
+    impact_modules: [platform.api]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: The process-local QE node observer owns bounded remote health and dispatch-state reconciliation while Platform API consumes its snapshot.
   - rule_id: qe_services
     priority: 80
     include:
       - backend/services/quantevolver/**
       - backend/routers/quantevolver*.py
+      - backend/tests/quantevolver/test_factor_emit_hook.py
+      - backend/tests/quantevolver/test_canonical_pit_dataset_binding.py
+      - backend/tests/test_factor_metrics_h20_contract.py
+      - backend/tests/test_qe_evolution_scheduler.py
+      - backend/tests/test_qe_experiment_status_scanner.py
+      - backend/tests/test_simulation_runtime_scheduler_startup.py
+      - backend/tests/unified_engine/test_backtest_executor.py
       - backend/tests/unified_engine/test_qe_*.py
     primary_module: qe.core
     impact_modules: [qe.single_experiment, qe.custom_evolution, qe.auto_evolution, qe.enhanced_metrics, qe.data_completeness]
     layer: backend_service
     risk_level: high
-    ownership_reason: QE service code is shared by single experiments and evolution flows.
+    ownership_reason: QE service code is shared by single experiments and evolution flows. The factor emit and H20 tests exercise the QE factor official-evaluation metrics save contract (BUG-1001).
   - rule_id: qe_mcp_data_contract
     priority: 100
     include:
@@ -228,6 +553,8 @@ rules:
       - frontend/src/app/qe-archive/**
       - frontend/tests/qe/**
       - frontend/tests/qe-archive/**
+      - frontend/tests/quantevolver/**
+      - frontend/tests/multi-alpha*.spec.ts
       - frontend/e2e/qe-label-horizon.spec.ts
     primary_module: qe.single_experiment
     impact_modules: [qe.archive, qe.enhanced_metrics, validation.center]
@@ -270,6 +597,36 @@ rules:
     layer: product_feature
     risk_level: critical
     ownership_reason: Paper v2 controls simulated execution, positions, cash, and session state.
+  - rule_id: paper_v2_history_cleanup_cli
+    priority: 96
+    include:
+      - scripts/cleanup_simulation_history.py
+      - scripts/simulation_history_cleanup_core.py
+    primary_module: paper_v2
+    impact_modules: [miniqmt_execution_runtime, strategy_package]
+    layer: script
+    risk_level: critical
+    ownership_reason: Governed simulation-history cleanup mutates the Paper v2, unified simulation, StrategyPackage runtime-release, and MiniQMT K2 persistence graphs.
+  - rule_id: simulation_stale_run_terminalization_cli
+    priority: 97
+    include:
+      - scripts/stale_simulation_run_terminalization_core.py
+      - scripts/terminalize_stale_simulation_runs.py
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2, miniqmt_execution_runtime]
+    layer: script
+    risk_level: critical
+    ownership_reason: Governed retained-package terminalization changes historical unified simulation run status while preserving broker and economic evidence.
+  - rule_id: localsim_failed_history_physical_prune_cli
+    priority: 98
+    include:
+      - scripts/localsim_failed_history_prune_core.py
+      - scripts/prune_localsim_failed_history.py
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2]
+    layer: script
+    risk_level: critical
+    ownership_reason: Governed LocalSIM-only physical pruning deletes failed historical run/economic subgraphs while protecting successful anchors, MiniQMT, StrategyPackage, and Selection evidence.
   - rule_id: miniqmt_execution_runtime_services
     priority: 95
     include:
@@ -288,6 +645,35 @@ rules:
     layer: backend_test
     risk_level: critical
     ownership_reason: MiniQMT runtime tests must select the canonical event-loop and sustained tick-driver regression plan instead of the generic backend-test fallback.
+  - rule_id: miniqmt_current_three_shadow_inventory_cli
+    priority: 96
+    include:
+      - scripts/miniqmt_current_three_inventory.py
+      - backend/tests/scripts/test_miniqmt_current_three_inventory.py
+    primary_module: miniqmt_execution_runtime
+    impact_modules: []
+    layer: script
+    risk_level: critical
+    ownership_reason: The K3 current-three inventory CLI is a read-only MiniQMT shadow evidence entrypoint and must select the canonical MiniQMT runtime plan.
+  - rule_id: miniqmt_execution_kernel_migrations
+    priority: 96
+    include:
+      - backend/migrations/miniqmt_execution_kernel_*.sql
+    primary_module: miniqmt_execution_runtime
+    impact_modules: [paper_v2]
+    layer: database
+    risk_level: critical
+    ownership_reason: Execution Kernel migrations define the durable event, delivery, transition, command, mapping, timer, and worker-fence authority consumed by the canonical MiniQMT runtime.
+  - rule_id: miniqmt_phase_one_quote_ingress
+    priority: 96
+    include:
+      - backend/infra/realtime_quote_subscriber.py
+      - backend/tests/infra/test_realtime_quote_subscriber_leases.py
+    primary_module: miniqmt_execution_runtime
+    impact_modules: [paper_v2, qmt]
+    layer: trading_infra
+    risk_level: critical
+    ownership_reason: Phase 1 realtime quote subscription and lease lifecycle are direct dependencies of the canonical MiniQMT event-loop runtime and its L2 regression plan.
   - rule_id: simulation_runtime_core
     priority: 96
     include:
@@ -299,11 +685,56 @@ rules:
     layer: trading_runtime
     risk_level: critical
     ownership_reason: Unified simulation lifecycle and operator actions require the direct simulation runtime contract plan.
+  - rule_id: simulation_localsim_successor_core
+    priority: 120
+    include:
+      - backend/migrations/localsim_successor_core_*.sql
+      - backend/services/simulation_runtime/localsim_control.py
+      - backend/services/simulation_runtime/localsim_replay.py
+      - backend/services/simulation_runtime/successor_models.py
+      - backend/services/simulation_runtime/successor_repository.py
+      - backend/tests/simulation_runtime/test_localsim_control_plane.py
+      - backend/tests/simulation_runtime/test_localsim_replay_live_transition.py
+      - backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py
+      - backend/tests/simulation_runtime/test_localsim_successor_schema.py
+    primary_module: simulation.localsim_successor_core
+    impact_modules: [simulation_runtime, platform.db, paper_v2, strategy_package]
+    layer: trading_runtime
+    risk_level: critical
+    ownership_reason: SIM-LR-B successor account, lineage, replay, safe-boundary, and schema files require one direct L2 plan plus guarded existing-DEV-database validation.
+  - rule_id: simulation_layer_foundation_tests
+    priority: 110
+    include:
+      - backend/tests/advisory_phase1/test_stage_trace.py
+      - backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py
+      - backend/tests/qmt_strategy_ledger/test_router_summary.py
+      - backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py
+      - backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py
+      - backend/tests/scripts/test_strategy_package_binding_refreeze.py
+      - backend/tests/simulation_architecture/**
+      - backend/tests/simulation_data/**
+      - backend/tests/simulation_execution/**
+      - backend/tests/simulation_signal/**
+      - backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py
+    primary_module: simulation.layer_foundation
+    impact_modules: [simulation_runtime, paper_v2, miniqmt_execution_runtime, selection_center, strategy_package]
+    layer: backend_test
+    risk_level: critical
+    ownership_reason: SIM-LR-A cross-module tests must select and execute the direct simulation core L2 plan instead of remaining unmapped.
+  - rule_id: simulation_daily_limit_authority
+    priority: 97
+    include:
+      - backend/services/trading_core/a_share_live_limit_rule.py
+      - backend/tests/trading_core/test_a_share_live_limit_rule.py
+    primary_module: simulation_runtime
+    impact_modules: [paper_v2, miniqmt_execution_runtime]
+    layer: trading_runtime
+    risk_level: critical
+    ownership_reason: Broker-specific daily limit authority and its direct contract test govern the immutable shared simulation planning context.
   - rule_id: qmt_infra
     priority: 85
     include:
       - backend/infra/qmt_client.py
-      - backend/infra/realtime_quote_subscriber.py
     primary_module: qmt
     impact_modules: [paper_v2]
     layer: trading_infra
@@ -315,6 +746,8 @@ rules:
       - backend/services/selection_center/**
       - backend/routers/selection_center.py
       - backend/tests/selection_center/**
+      - scripts/precompute_hmm_coefficients.py
+      - backend/tests/scripts/test_precompute_hmm_coefficients.py
     primary_module: selection_center
     impact_modules: [paper_v2, strategy_package, hmm]
     layer: backend_service
@@ -335,12 +768,25 @@ rules:
     layer: product_feature
     risk_level: high
     ownership_reason: Watchlist realtime quote normalization, import/display APIs, and focused tests must be attributed to watchlist so small data-display fixes use scoped validation instead of generic platform or Validation Center gates.
+  - rule_id: analysis_core_data_fetchers
+    priority: 82
+    include:
+      - backend/core/fund_flow_akshare_impl.py
+      - backend/core/qstock_news_data_impl.py
+      - backend/core/market_sentiment_data_impl.py
+    primary_module: research_assistant
+    impact_modules: [analysis]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Legacy stock-analysis data fetchers are imported by Research Assistant and require direct assistant regression plus analysis impact routing.
   - rule_id: strategy_package_services
     priority: 80
     include:
       - backend/services/strategy_package/**
       - backend/routers/strategy_package*.py
       - backend/tests/strategy_package/**
+      - frontend/src/app/strategy-package-governance/**
+      - frontend/tests/strategy-package-governance/**
       - docs/contracts/strategy_package*.md
     primary_module: strategy_package
     impact_modules: [paper_v2, selection_center, qe.single_experiment]
@@ -352,11 +798,49 @@ rules:
     include:
       - backend/execution_algos/**
       - configs/execution_algos/**
+      - backend/tests/trading_core/test_vnpy_style_execution_assets.py
+      - backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py
     primary_module: paper_v2
-    impact_modules: [qe.core, strategy_package]
+    impact_modules: [miniqmt_execution_runtime, simulation_runtime, qe.core, strategy_package]
     layer: execution_algo
     risk_level: critical
     ownership_reason: Execution algorithms define order sizing and market-state semantics shared by QE and Paper v2.
+  - rule_id: v25_execution_retirement
+    priority: 95
+    include:
+      - backend/tests/mcp/test_v25_mcp_retirement.py
+      - backend/tests/quantevolver/test_v25_execution_retirement.py
+      - backend/tests/trading_core/test_v25_execution_retirement.py
+      - scripts/add_v25_to_catalog.py
+      - scripts/add_v25_to_db.py
+      - scripts/compare_v25_vs_v25_1_1y.py
+      - scripts/paper_v2_live_validation.py
+      - scripts/v24_v25_real_test.py
+      - scripts/v24_v25_test.py
+      - scripts/v25_1_smoke_backtest.py
+      - scripts/v25_mini_backtest.py
+      - scripts/v25_minute_test.py
+      - scripts/v25_minute_test_final.py
+      - scripts/v25_verify_final.py
+      - scripts/verify_v25_integration.py
+      - scripts/verify_v25_minute_execution.py
+    primary_module: paper_v2
+    impact_modules: [simulation_runtime, miniqmt_execution_runtime, qe.core, strategy_package, platform.api, platform.mcp_gateway]
+    layer: execution_algo
+    risk_level: critical
+    ownership_reason: Repository-wide V25 retirement tests and guarded legacy startup CLIs share one fail-closed execution capability boundary across Paper, Simulation, QE, package, API, and MCP entrypoints.
+  - rule_id: qmt_strategy_ledger_execution
+    priority: 95
+    include:
+      - backend/services/qmt_strategy_ledger/order_service.py
+      - backend/services/qmt_strategy_ledger/repository.py
+      - backend/tests/qmt_strategy_ledger/test_order_service_preflight.py
+      - backend/tests/qmt_strategy_ledger/test_repository.py
+    primary_module: miniqmt_execution_runtime
+    impact_modules: [paper_v2, simulation_runtime]
+    layer: trading_ledger
+    risk_level: critical
+    ownership_reason: Managed MiniQMT order preflight and strategy-ledger lot/cash authority are direct dependencies of runtime child submission and simulation reconciliation.
   - rule_id: trading_core_minute_execution
     priority: 85
     include:
@@ -390,17 +874,58 @@ rules:
     layer: platform_configuration
     risk_level: high
     ownership_reason: The compatibility ConfigManager is the durable configuration API boundary and must preserve registered MiniQMT quote-ingress keys during UI saves.
+  - rule_id: hmm_risk_services
+    priority: 100
+    include:
+      - backend/services/hmm_risk/**
+      - backend/db/init_hmm_risk_schema.py
+      - backend/routers/hmm_risk.py
+      - backend/tests/hmm_risk/**
+      - frontend/src/app/hmm-risk/**
+      - frontend/src/components/hmm-risk/**
+      - frontend/src/lib/hmm-risk/**
+      - frontend/tests/hmm-risk/**
+      - scripts/hmm_risk/**
+    primary_module: hmm.risk
+    impact_modules: []
+    layer: research_data_pipeline
+    risk_level: high
+    ownership_reason: HMM Risk is an advisory-only isolated domain with direct L1/L2 model-set preparation, exact schema contracts, and dedicated backend/UI validation plans.
+  - rule_id: python_backend_dependency_manifest
+    priority: 80
+    include:
+      - requirements.txt
+      - requirements.lock.txt
+    primary_module: platform.config
+    impact_modules: []
+    layer: backend_dependency_manifest
+    risk_level: high
+    ownership_reason: The pinned Python dependency manifests control reproducible backend runtime package identity and production dependency aftercare.
+  - rule_id: aistock_windows_backend_launcher
+    priority: 90
+    include:
+      - start_all_ai_stock.bat
+    primary_module: platform.config
+    impact_modules: [platform.api]
+    layer: runtime_launcher
+    risk_level: high
+    ownership_reason: The canonical Windows launcher selects the production backend interpreter and must preserve deterministic backend runtime identity.
   - rule_id: hmm_evolution_services
     priority: 90
     include:
       - backend/services/hmm_evolution/**
       - backend/db/init_hmm_evolution_schema.py
       - backend/tests/hmm_evolution/**
+      - backend/tests/test_qe_hmm_canonical_pit_integration.py
+      - frontend/src/app/hmm-evolution/**
+      - frontend/tests/hmm-evolution/**
+      - scripts/hmm_acceptance/**
+      - scripts/dev_db/seed_hmm_benchmark_reference_20260721.py
     primary_module: hmm.evolution
     impact_modules: [hmm, qe.core]
     layer: research_data_pipeline
     risk_level: high
-    ownership_reason: HMM Evolution is an isolated research state machine with explicit read-only QE inputs and a dedicated backend validation plan.
+    ownership_reason: HMM Evolution is an isolated research state machine with explicit read-only QE inputs and a dedicated backend validation plan; DEV acceptance drivers (benchmark/worker/seeder) share the same validation plan.
   - rule_id: hmm_services
     priority: 75
     include:
@@ -419,6 +944,8 @@ rules:
     priority: 75
     include:
       - backend/qlib_exporter/**
+      - backend/tests/qlib_exporter/**
+      - backend/tests/test_qlib_export_stock_universe_filters.py
       - scripts/qlib_*.py
       - qlib_minute_validation/**
     primary_module: qlib_data
@@ -426,16 +953,125 @@ rules:
     layer: data_pipeline
     risk_level: critical
     ownership_reason: Qlib datasets are authoritative inputs for research and backtests.
+  - rule_id: qlib_monthly_dataset_release
+    priority: 96
+    include:
+      - backend/services/canonical_equity_pit.py
+      - backend/services/dataset_release/**
+      - backend/routers/dataset_releases.py
+      - backend/deps.py
+      - backend/tests/dataset_release/**
+      - backend/tests/routers/test_dataset_releases.py
+      - backend/tests/scripts/test_dataset_release_*.py
+      - backend/tests/scripts/test_update_backtest_dataset_monthly.py
+      - backend/tests/scripts/test_export_qe_qlib_candidate.py
+      - backend/tests/test_deps_dataset_release.py
+      - backend/tests/test_canonical_equity_pit.py
+      - backend/tests/test_dataset_refresh_audit.py
+      - scripts/dataset_release_*.py
+      - scripts/update_backtest_dataset_monthly.py
+      - scripts/export_qe_qlib_candidate.py
+      - scripts/seed_dataset_refresh_audit.py
+      - tests/aistock_validation/dataset_release_platform_smoke.py
+      - configs/datasets/qe_backtest_monthly_v1.yaml
+      - configs/datasets/qe_backtest_monthly_v2.yaml
+      - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
+      - tests/aistock_validation/pit_v2/*.json
+      - .codex/skills/update-backtest-dataset/**
+      - .claude/skills/update-backtest-dataset/**
+      - docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md
+    primary_module: qlib_data
+    impact_modules: [qe.core, local_data, platform.api]
+    layer: data_pipeline
+    risk_level: critical
+    ownership_reason: The durable candidate-only monthly QE release control plane, source freeze and provider overlays, daily/minute/H5/index materializers, validators, publisher, resource supervisors, operator API/CLI, legacy-export quarantine, and their direct fixtures form one Qlib dataset delivery boundary.
+  - rule_id: local_data_tushare_sync_engine
+    priority: 97
+    include:
+      - backend/services/tushare_sync_engine.py
+      - backend/services/tushare_sync.py
+      - backend/services/tushare_dataset_specs.py
+      - backend/tests/test_tushare_sync_engine.py
+      - backend/tests/test_local_data_management_facade.py
+    primary_module: local_data
+    impact_modules: [qlib_data, qe.core, paper_v2, selection_center]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The tushare sync engine, dataset specs, sync entrypoint, and direct tests form the local_data ingestion boundary that materializes every tushare dataset (including sw_index_member takedown fidelity), and must select the local_data focused plan instead of generic platform/scripts/tests catch-alls.
+  - rule_id: local_data_daily_basic_operator
+    priority: 96
+    include:
+      - scripts/backfill_tushare_daily_basic_fields.py
+      - scripts/ingest_tushare_daily_basic.py
+      - backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py
+      - backend/tests/scripts/test_ingest_tushare_daily_basic.py
+    primary_module: local_data
+    impact_modules: [qlib_data, qe.core, paper_v2, selection_center]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The audited daily-basic ingestion and repair operators plus their direct tests form one local_data data-quality boundary and must select the focused data sync plan instead of remaining unmapped generic scripts.
+  - rule_id: local_data_industry_pit_authority
+    priority: 98
+    include:
+      - backend/services/industry_pit/**
+      - scripts/build_industry_pit_candidates.py
+      - backend/tests/industry_pit/**
+      - backend/tests/scripts/test_build_industry_pit_candidates.py
+    primary_module: local_data
+    impact_modules: []
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: C-013 classification and SW index-membership PIT candidates, their shared fail-closed resolver, and repo-external artifact writer form one consumer-neutral local_data authority boundary; HMM, QE, and business consumer adapters remain separately owned.
+  - rule_id: local_data_stock_universe_pit
+    priority: 96
+    include:
+      - scripts/build_stock_universe_pit_spans.py
+      - scripts/prepare_canonical_pit_monthly.py
+      - backend/services/stock_universe_pit_service.py
+      - backend/routers/stock_universe.py
+      - backend/tests/test_stock_universe_pit_spans.py
+      - backend/tests/test_stock_universe_pit_service.py
+      - backend/tests/scripts/test_prepare_canonical_pit_monthly.py
+      - backend/tests/announcements/test_title_classifier.py
+      - backend/tests/test_announcement_event_schema.py
+      - backend/tests/event_signal/test_st_announcement_adapter.py
+      - backend/tests/scripts/test_sync_eastmoney_anns_metadata.py
+      - scripts/classify_announcement_titles_v0.py
+      - scripts/sync_eastmoney_anns_metadata.py
+    primary_module: local_data
+    impact_modules: [selection_center, qe.core, paper_v2]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The derived PIT stock-universe builder, service, API, and direct tests form one local_data materialization boundary feeding selection/QE/paper ST policy and the sector_data contract, and must select the local_data focused plan instead of generic platform/scripts/tests catch-alls.
+  - rule_id: local_data_sector_data_materialization
+    priority: 95
+    include:
+      - backend/services/sector_data_builder.py
+      - backend/services/sector_data_repair.py
+      - scripts/build_sector_data_candidate.py
+      - scripts/create_sw_sector_tables.py
+      - backend/db/migrations/sector_data_pit_identity_*.sql
+      - backend/tests/services/test_sector_data_builder.py
+      - backend/tests/services/test_sector_data_repair.py
+      - backend/tests/scripts/test_build_sector_data_candidate.py
+    primary_module: local_data
+    impact_modules: []
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The sector_data builder, retired repair paths, fact-only schema, dynamic PIT retirement migration, and direct contract tests form one local_data materialization boundary and must select the same focused plan, including deletion diffs.
   - rule_id: local_data_pipeline
     priority: 70
     include:
       - backend/ingestion/tdx_scheduler.py
+      - backend/tests/ingestion/test_repair_minute_via_minute_api.py
       - backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py
+      - backend/tests/test_ingestion_data_stats_readiness_api.py
       - backend/data_service/**
       - backend/services/*data*.py
       - backend/routers/local_data*.py
       - frontend/src/app/local-data/**
       - frontend/src/app/qlib/**
+      - scripts/repair_minute_via_minute_api.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2]
     layer: data_pipeline
@@ -461,19 +1097,27 @@ rules:
     layer: config
     risk_level: high
     ownership_reason: Runtime context config controls assistant dialogue, compaction, and ReAct grounding limits.
-  - rule_id: research_assistant_phase0_docs
+  - rule_id: research_assistant_architecture
     priority: 95
     include:
       - docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md
+    primary_module: research_assistant
+    impact_modules: [docs.architecture]
+    layer: docs
+    risk_level: high
+    ownership_reason: The Research Assistant architecture blueprint defines product implementation boundaries.
+  - rule_id: research_assistant_process_docs
+    priority: 95
+    include:
       - docs/process/research_assistant_baseline_verification_20260531.md
       - docs/process/research_assistant_blueprint_execution_runbook_20260531.md
       - docs/process/research_assistant_phase0_1_execution_pack_20260531.md
       - docs/process/research_assistant_codex_kickoff_command_20260601.md
-    primary_module: research_assistant
-    impact_modules: [docs.architecture, docs.standards, validation.module_quality]
+    primary_module: docs.standards
+    impact_modules: [validation.guardrails, validation.module_quality]
     layer: docs
-    risk_level: high
-    ownership_reason: Research Assistant Phase 0 baseline and blueprint process docs define the implementation boundary and closure gates.
+    risk_level: medium
+    ownership_reason: Legacy Research Assistant process documents now route developers to the current workflow authority.
   - rule_id: research_assistant_tests
     priority: 95
     include:
@@ -776,11 +1420,21 @@ rules:
     include:
       - AGENTS.md
       - AGENTS.override.md
+      - CLAUDE.md
       - docs/codex_project_memory.md
       - .codex/skills/aistock-task-router/**
+      - .codex/skills/aistock-docs-handoff/**
+      - .codex/skills/aistock-merge-aftercare/**
+      - .codex/skills/aistock-readonly-triage/**
+      - .codex/skills/aistock-validation-delegation/**
       - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
       - .claude/commands/aistock-task-router.md
+      - .claude/commands/aistock-docs-handoff.md
+      - .claude/commands/aistock-merge-aftercare.md
+      - .claude/commands/aistock-readonly-triage.md
+      - .claude/commands/aistock-validation-delegation.md
+      - .claude/commands/aistock-issue-doctor.md
       - .claude/commands/fix-aistock-issue.md
       - .claude/commands/aistock-feature-workflow.md
     primary_module: docs.standards
@@ -806,6 +1460,15 @@ rules:
     layer: docs
     risk_level: medium
     ownership_reason: Standards documents define enforced development guardrails.
+  - rule_id: runtime_target_catalog
+    priority: 110
+    include:
+      - docs/standards/aistock_runtime_targets_v1.yaml
+    primary_module: validation.guardrails
+    impact_modules: [validation.module_quality, validation.runner]
+    layer: workflow
+    risk_level: high
+    ownership_reason: Runtime target identity, user-owned restart policy, and read-only post-restart probes are fail-closed workflow contracts.
   - rule_id: docs_analysis
     priority: 50
     include:
@@ -847,6 +1510,33 @@ rules:
     layer: backend_test
     risk_level: medium
     ownership_reason: Backend tests are owned by the test system and secondarily attributed by path-specific rules.
+  - rule_id: event_signal_announcement_ingress
+    priority: 95
+    include:
+      - backend/services/event_signal/announcement_adapter.py
+      - backend/services/event_signal/announcement_issuer_binding.py
+      - backend/services/event_signal/st_announcement_adapter.py
+      - backend/tests/event_signal/test_announcement_adapter.py
+      - backend/tests/event_signal/test_announcement_issuer_binding.py
+      - backend/tests/event_signal/test_st_announcement_adapter.py
+      - scripts/repair_announcement_event_signal_issuer_binding.py
+      - backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py
+      - scripts/sync_stock_namechange.py
+      - backend/tests/scripts/test_sync_stock_namechange.py
+    primary_module: local_data
+    impact_modules: [platform.api, platform.db]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Announcement issuer binding and repair are local-data contracts that affect shared API and database consumers.
+  - rule_id: platform_api_tests
+    priority: 90
+    include:
+      - backend/tests/platform_api/**
+    primary_module: platform.api
+    impact_modules: []
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Shared Platform API tests are validated by the direct platform_api_backend plan.
   - rule_id: frontend_tests_default
     priority: 20
     include:

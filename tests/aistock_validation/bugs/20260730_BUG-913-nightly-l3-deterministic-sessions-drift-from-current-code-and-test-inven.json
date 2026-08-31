@@ -1,0 +1,403 @@
+{
+  "actual": "strategy_package_governance_ui reports no tests; research_pipeline_backend asserts an obsolete hook count; MCP/RA/MiniQMT sessions report contract or isolation failures and Paper v2 is skipped.",
+  "allowed_write_scope": [
+    "noxfile.py",
+    ".github/workflows/test.yml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/test_validation_catalog_integrity.py",
+    "backend/tests/research_pipeline/test_service.py",
+    "backend/tests/research_pipeline/test_hmm_realtime_ingestion.py",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "tests/mcp/test_gateway_profiles.py",
+    "tests/mcp/test_mcp_gateway_cli.py",
+    "tests/mcp/test_mcp_inventory_diff.py",
+    "backend/mcp/modules/qe_experiment.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py",
+    "frontend/tests/strategy-package-governance/governance.spec.ts",
+    "tests/aistock_validation/bugs/20260730_BUG-913-nightly-l3-deterministic-sessions-drift-from-current-code-and-test-inven.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-913",
+  "closed_at": "2026-07-29T19:15:37Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-29T16:28:34.785003Z",
+  "description": "strategy_package_governance_ui reports no tests; research_pipeline_backend asserts an obsolete hook count; MCP/RA/MiniQMT sessions report contract or isolation failures and Paper v2 is skipped.",
+  "events": [
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR static validation exposed a stale Nightly CodeGraph contract that still required Bash '|| true' after the workflow moved to PowerShell fail-closed handling. Update the contract to require explicit LASTEXITCODE checking and a throwing failure path.",
+      "timestamp": "2026-07-29T18:59:22.113477Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR frontend module validation selected the new governance Playwright test but the hosted CI job did not install its pinned Chromium executable. Add the conditional browser installation step and protect it with the existing workflow contract test.",
+      "timestamp": "2026-07-29T18:33:39.0681248Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR CI classified backend/tests/research_pipeline/test_hmm_realtime_ingestion.py as unmapped code. Add the missing research_pipeline test ownership rule so all CI entrypoints select the approved research_pipeline_backend plan.",
+      "timestamp": "2026-07-29T18:03:29.8345734Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Latest-origin reproduction moved the Research Pipeline failure to test_hmm_realtime_ingestion.py and confirmed MCP count/import-boundary failures in tests/mcp plus backend/mcp/modules/qe_experiment.py. RA and MiniQMT direct fix-point tests already pass and remain unchanged.",
+      "timestamp": "2026-07-29T16:41:56.1977144Z"
+    },
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260730-61d358eea6eb",
+      "timestamp": "2026-07-29T16:28:34.784996Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/30395933795"
+  ],
+  "expected": "All mandatory deterministic Nightly sessions execute real tests and pass on the exact source SHA, with no empty-test success or closed-stream cascade.",
+  "file_scope_contract": {
+    "added_files": [
+      "frontend/tests/strategy-package-governance/governance.spec.ts"
+    ],
+    "changed_files": [
+      "noxfile.py",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "backend/tests/research_pipeline/test_service.py",
+      "backend/tests/mcp/test_profiles_registry_gateway.py",
+      "backend/tests/research_assistant/test_service.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "noxfile.py",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/tests/research_pipeline/test_service.py",
+        "backend/tests/mcp/test_profiles_registry_gateway.py",
+        "backend/tests/research_assistant/test_service.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py",
+        "frontend/tests/strategy-package-governance/governance.spec.ts"
+      ],
+      "impacted_modules": [
+        "validation.runner",
+        "validation.center",
+        "validation.guardrails",
+        "validation.module_quality",
+        "tests.backend",
+        "tests.frontend",
+        "tests.validation_history",
+        "research_assistant",
+        "miniqmt_execution_runtime",
+        "paper_v2",
+        "strategy_package",
+        "selection_center",
+        "qe.single_experiment"
+      ],
+      "matched_rules": [
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/test_plans.yaml",
+          "impact_modules": [
+            "validation.center",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_test_plans"
+        },
+        {
+          "file": "backend/tests/research_pipeline/test_service.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/mcp/test_profiles_registry_gateway.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/research_assistant/test_service.py",
+          "impact_modules": [
+            "tests.backend",
+            "validation.runner"
+          ],
+          "primary_module": "research_assistant",
+          "risk_level": "high",
+          "rule_id": "research_assistant_tests"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "frontend/tests/strategy-package-governance/governance.spec.ts",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium",
+        "critical"
+      ],
+      "suggested_scope": [
+        "noxfile.py",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/tests/research_pipeline/test_service.py",
+        "backend/tests/mcp/test_profiles_registry_gateway.py",
+        "backend/tests/research_assistant/test_service.py",
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py",
+        "frontend/tests/strategy-package-governance/governance.spec.ts"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "noxfile.py",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "backend/tests/research_pipeline/test_service.py",
+      "backend/tests/mcp/test_profiles_registry_gateway.py",
+      "backend/tests/research_assistant/test_service.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py",
+      "frontend/tests/strategy-package-governance/governance.spec.ts"
+    ]
+  },
+  "first_seen_at": "2026-07-29T16:28:34.785003Z",
+  "fix_branch": null,
+  "fix_commit": "2bc502ba80ee01ed2de9071f95ed460410841500",
+  "fixed_at": "2026-07-29T19:19:02.260125Z",
+  "github_issue_number": 2204,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2204",
+  "last_seen_at": "2026-07-29T16:28:34.785003Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2901",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m nox -s strategy_package_governance_ui research_pipeline_backend mcp_gateway_manifest_quality research_assistant_backend miniqmt_execution_runtime_l2",
+  "required_verification": [
+    "l0",
+    "validation_catalog_integrity",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "miniqmt_execution_runtime_l2",
+    "paper_v2_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly L3 deterministic sessions drift from current code and test inventory",
+  "trigger_condition": {
+    "fingerprint": "61d358eea6ebfc9e14bd8e07",
+    "source_event_id": "FE-20260730-61d358eea6eb"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "noxfile.py",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "backend/tests/research_pipeline/test_service.py",
+      "backend/tests/mcp/test_profiles_registry_gateway.py",
+      "backend/tests/research_assistant/test_service.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py",
+      "frontend/tests/strategy-package-governance/governance.spec.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/main",
+    "ui_routes": [
+      "/main"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_catalog_integrity -> 6 passed",
+    "python -m pytest backend/tests/test_validation_catalog_integrity.py::test_nightly_codegraph_freshness_is_not_skipped_by_weekly_ua_guard backend/tests/scripts/test_ci_change_classifier.py::test_github_workflow_wires_workflow_validation_fast_lane -q -p no:cacheprovider -> 2 passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --module validation --changed-file .github/workflows/test.yml --changed-file backend/mcp/modules/qe_experiment.py --changed-file backend/tests/research_pipeline/test_hmm_realtime_ingestion.py --changed-file backend/tests/scripts/test_ci_change_classifier.py --changed-file backend/tests/test_validation_catalog_integrity.py --changed-file frontend/tests/strategy-package-governance/governance.spec.ts --changed-file tests/aistock_validation/catalog/file_ownership.yaml --changed-file tests/mcp/test_gateway_profiles.py --changed-file tests/mcp/test_mcp_gateway_cli.py --changed-file tests/mcp/test_mcp_inventory_diff.py -> passed",
+    "git diff --check origin/main...HEAD -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_catalog_integrity",
+        "research_assistant",
+        "research_assistant_mcp_contract",
+        "miniqmt_execution_runtime",
+        "paper_v2"
+      ],
+      "plans": [
+        "validation_catalog_integrity",
+        "research_assistant_backend",
+        "research_assistant_mcp_contract",
+        "miniqmt_execution_runtime_l2",
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_catalog_integrity",
+          "research_assistant",
+          "research_assistant_mcp_contract",
+          "miniqmt_execution_runtime",
+          "paper_v2"
+        ],
+        "plans": [
+          "validation_catalog_integrity",
+          "research_assistant_backend",
+          "research_assistant_mcp_contract",
+          "miniqmt_execution_runtime_l2",
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

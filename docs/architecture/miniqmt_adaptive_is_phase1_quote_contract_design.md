@@ -1,4 +1,4 @@
-# AIstock MiniQMT Adaptive IS Phase 1：五档行情、执行时钟与收盘竞价契约 F2 详细设计
+﻿# AIstock MiniQMT Adaptive IS Phase 1：五档行情、执行时钟与收盘竞价契约 F2 详细设计
 
 > 文档类型：F2 下位详细设计；Phase 1 quote/control/evidence 的唯一专项契约
 >
@@ -8,7 +8,7 @@
 >
 > Feature Tier：F2；风险级别：P1；运行范围：SIM-first、先观测后启用 `B0_QUOTE_V2`
 >
-> 实施进度：P1-A 已由 PR #1988 合入，P1-B 已由 PR #1994 合入，P1-C 已由 PR #2005 合入（merge `47817a63`），P1-D 已由 PR #2011 合入（merge `03ed6615`），P1-E 已由 PR #2019 合入（merge `fa0e97bf`）。Production activation wiring 已按 §8.7 完成实现并由 §13.6 验收，源代码合入状态必须以对应 PR 与 `main` readback 为准；production DDL/config/restart/binding 持久化、真实 SIM 和 broker side effect 仍分别由用户授权和执行。
+> 实施进度：P1-A/B/C/E 的quote contract、binding、adapter与broker semantics历史实现继续有效；P1-D ordinary quote-event persistence在2026-08-12审计后撤回，当前状态为`implemented_baseline_remediation_required`。`F-113/F-114/F-115/F-119/F-121`的source/schema/runtime evidence尚未完成，历史PR/CI不得冒充新边界通过。
 > 多 Alpha `B0_QUOTE_V2` pilot 的生产预注册见 §13.6.1；在对应代码合入、进程 readback 与 binding DML 完成前，当前运行仍不得宣称已经切换。
 >
 > 本文不宣布任何 Adaptive IS 下单能力已经实现或启用。
@@ -72,7 +72,7 @@ Phase 1 不实现或激活 `ADAPTIVE_IS_L1`。有效 quote 下产生的 broker s
 - `backend/infra/qmt_client.py` 已将 `get_full_tick()` 暴露为 broker 行情读取接口，并在需要 freshness 时先走 whole-quote 订阅；`SimulatorQMTClient` 对这类真实行情请求 loud 拒绝，而不是伪造行情。
 - P1-B 已在 `backend/infra/realtime_quote_subscriber.py` 与 `backend/services/miniqmt_execution_runtime/quote_ingress.py` 实现独立 logical lease、generation/bootstrap、reserved mailbox、单 writer、heartbeat/restart 和有界 raw snapshot；LEGACY_B0 的三张原 registry map 与执行 identity 未改变。
 - P1-C 已在 `quote_eligibility.py` 实现 ordering/freshness/clock continuity/tradability/eligibility evaluator 与 bounded normalized store，并由 P1-B 的同一 QuoteIngress writer 通过 `PhaseOneQuoteProjectionSink` 更新；确定性 `market_data_id` 只标识 observation，不代表 action 已获得 durable ack。
-- P1-D 已在 `quote_evidence.py`、`repository.py`、`quote_event_schema.py`、只读 diagnostics 与 CHECK migration/rollback 中实现 exact evidence schema、单事务 sequence/idempotency/readback、action/child/trade/markout link closure、60/300/900 秒 markout、auction `OBSERVE_ONLY`、bounded metrics/alerts 与 runbook；生产 CHECK DDL、ingress activation、binding 和真实 SIM 均未执行。
+- P1-D 历史实现曾在 `quote_evidence.py`、`repository.py`、`quote_event_schema.py`、只读 diagnostics 与 CHECK migration/rollback 中建立逐 quote/reject/health durable event；2026-08-12 审核确认该数据面边界错误。其 action/child/trade/markout identity、auction `OBSERVE_ONLY` 与 bounded process metrics 中可复用的部分保留，行情 event writer、quote 查询和 cadence 持久化必须由 successor remediation 退役；历史 PR/CI 仅作事实记录，不能证明 corrected boundary 已实现。
 - `backend/services/trading_calendar_status.py:TradingCalendarStatusService` 仍是交易日 authority：DB 为事实源、月度文件缓存为正常读取路径、缺行 fail loud，禁止周末/工作日推断；P1-C 的 `miniqmt_quote_context.py` 已复用该 service。`xtdata.get_trading_calendar()` 不作为第二套 scheduler authority。
 - `backend/services/paper_trading_v2/market_data.py` 的 suspend/limit/previous-close/equity-metadata authority 已通过 scheduler-owned adapter 预加载 immutable context；quote callback、writer 与 evaluator 不复制 SQL、不访问 DB。
 - `quote_normalizer.py` 只复制/规范化 `stockStatus/openint`；它们是 per-symbol 交叉证据，不是交易日或市场时段 authority。P1-C 已按 exact registered value 保留 capability/data evidence，未知或冲突不会被解释成可交易。
@@ -108,7 +108,7 @@ Phase 1 不实现或激活 `ADAPTIVE_IS_L1`。有效 quote 下产生的 broker s
 4. normal session 与 closing auction 的能力区分；当 auction 字段不可用时的显式 `UNAVAILABLE` 语义。
 5. `execution_policy` 中与 Phase 1 输入质量有关的版本化配置，及其 default-off observation rollout。
 6. LEGACY_B0 与 B0_QUOTE_V2 的版本身份、决策等价、安全差异、测试、指标、runbook 和回滚。
-7. Phase 0A 预留 `market_data_id`、benchmark/mark policy 与 Phase 0B 可重建证据的完整交接。
+7. Phase 0A 预留economic decision/TCA result identity、benchmark/mark policy 与 Phase 0B从权威历史行情源离线计算的完整交接；不预留durable `market_data_id`或行情价格字段。
 
 ### 2.1 代码 ownership（实施时）
 
@@ -121,12 +121,12 @@ Phase 1 不实现或激活 `ADAPTIVE_IS_L1`。有效 quote 下产生的 broker s
 | P1-C clock/ordering/freshness/eligibility | `backend/services/miniqmt_execution_runtime/quote_eligibility.py`（P1-C 新） | 纯 evaluator 与 bounded state；不得导入 DB/Paper/scheduler/broker submit |
 | 单写者 mailbox、raw/normalized snapshot、telemetry | `backend/services/miniqmt_execution_runtime/quote_ingress.py` | callback 不写 DB、不调 broker；每 data session 一个共享 writer，logical consumers 保留独立 lease |
 | authority context preload | `backend/services/simulation_runtime/miniqmt_quote_context.py`（P1-C 新） | scheduler 线程注入 calendar/suspend/limit/metadata authority；不得在 callback/writer 查询 DB |
-| durable market-data evidence/markout | `backend/services/miniqmt_execution_runtime/quote_evidence.py`（新） | 单写者消费端追加 evidence；不得在 callback 写 DB |
-| durable event transaction/readback | `backend/services/miniqmt_execution_runtime/repository.py` | 事务内 sequence + deterministic idempotency + post-commit readback；禁止 JSON/内存 fallback 成功 |
-| event type/source migration | `backend/migrations/miniqmt_quote_ingress_event_types_20260712.sql` 与 rollback | 只改变两个 CHECK；应用/回滚均 exact preflight，生产执行需用户授权 |
+| economic action/TCA result | 既有 transition/command/child/order/trade/TCA owner（successor remediation） | 真实action只写原生经济字段，TCA只写离线派生结果；`quote_evidence.py` writer退役，callback/ordinary quote/no-action path零DB写入 |
+| economic transaction/readback | `backend/services/miniqmt_execution_runtime/repository.py` | 与经济 owner 同事务的 deterministic idempotency + post-commit readback；禁止独立 quote event、JSON/内存 fallback 成功 |
+| corrected event-boundary migration | successor preflight/forward/rollback migration（待实现） | 历史 quote types 只读；禁止新 `KERNEL_V2 TICK`/quote-specific writer；应用与回滚均不得恢复行情持久化，生产执行需用户授权 |
 | read-only diagnostics | `backend/services/simulation_runtime/ops.py`、`backend/routers/simulation_runtime.py` | 只读分页；不得构造 subscriber/scheduler/gateway、写 event 或调用 broker |
 | operator runbook | `docs/operations/miniqmt_quote_evidence_runbook.md`（P1-D 新） | 只读诊断与自动恢复条件；无 approval/RBAC/人工 ack |
-| B0_QUOTE_V2 binding/controller | `backend/services/miniqmt_execution_runtime/b0_quote_v2.py`（P1-E 新） | 强类型 revision/assignment/action envelope、strict tick projection、evidence-first action coordinator；无 gateway/DB schema ownership |
+| B0_QUOTE_V2 binding/controller | `backend/services/miniqmt_execution_runtime/b0_quote_v2.py`（P1-E 新） | 强类型 revision/assignment/action envelope、strict tick projection、economic-owner-first action coordinator；无 gateway/DB schema ownership |
 | runtime integration | `backend/services/miniqmt_execution_runtime/runtime.py`、`client.py` | 只在显式 B0_QUOTE_V2 assignment 上调用 controller；LEGACY_B0 `on_tick`/`VnpyTick`/submit 语义不变 |
 | gateway | `backend/services/miniqmt_execution_runtime/gateway.py` | 保持唯一 submit/cancel owner；不读取 quote store、不选择 revision、不执行 parity |
 | SIM lifecycle/配置投影 | `backend/services/simulation_runtime/models.py`、`bridges.py`、`scheduler.py` | binding 显式选择 revision、plan 冻结 assignment、scheduler 独占 ingress/controller lifecycle；不增加审批或第二 scheduler |
@@ -251,113 +251,103 @@ mailbox 的行为固定如下：
 
 QuoteIngress single writer 是同一 supervisor/data session 内唯一可以更新 SnapshotStore、生成 evidence candidate 和更新 ingress metrics 的线程；多个 logical consumers 共享该 writer，但保留独立 lease identity。SnapshotStore 与 mailbox 使用同一有界 admitted-symbol union；release/replacement 必须原子替换 admission 并清除 revoked symbol，历史 symbol churn 不得使内存无界增长。writer 不等待 DB，并暴露 `thread_alive/last_drain_at/backlog/admitted_symbols/restart_count/last_failure`。watchdog 只重启 quote consumer，不重启服务、scheduler 或 broker；每次重启创建新 generation。writer heartbeat 超时或 `CONSUMER_FAILURE` 时立即 fence generation 与 writer epoch；旧 epoch 即使线程尚存活也不得再调用 frame sink，且在旧线程退出前禁止并行 writer。达到自动重试上限后 health=FAILED，合法后续 lifecycle tick 可再次自动拉起，不需要人工 acknowledge。
 
-`QuoteEvidenceCoordinator` 是每个 runtime 唯一的 quote-evidence writer。QuoteIngress single writer 只生成 immutable candidate，不等待 DB；coordinator 的高优先级 outbox 承载 action input/reject、child receipt、protection trigger 和 markout，满时不得丢弃或覆盖，必须拒绝对应 symbol 的新 B0_QUOTE_V2 action。低优先级 cadence slot 只允许按 `(runtime_id, symbol, cadence_window_start)` 合并计数和首末样本。B0_QUOTE_V2 新 child 必须在对应 action-input evidence 获得 durable ack 后才可提交；reject evidence 没有 submit 路径。persist failure 停止该 symbol 新 child。order/trade/reconcile event 通道仍独立且优先，不受 quote/cadence backlog 阻塞。
+历史 `QuoteEvidenceCoordinator` 的 quote/action/mark writer 职责必须退役。QuoteIngress single writer只更新bounded process-local view/metrics，不等待DB；真实action直接进入既有transition/command/child经济事务，TCA由Phase 0B从权威历史行情源离线计算。不存在quote evidence outbox或cadence DB queue。B0_QUOTE_V2新child必须在对应economic transition/command获得独立post-commit readback后才可提交；persist failure停止该symbol新child。order/trade/reconcile event通道仍独立且优先。
 
 quote 队列不得承载 order、trade、disconnect 或 clock。后四类事件使用独立的优先级通道；其入队失败属于运行时严重错误，必须直接进入现有 gateway loud/暂停语义，而不是等待 quote consumer drain。
 
-### 4.4 状态、identity 与持久化
+### 4.4 状态、identity 与持久化边界
+
+2026-08-12 correction：RawQuoteFrame、FiveLevelQuote、ordinary eligibility/rejection 和 normalized TICK 都是 process-local hot-market-data facts，不进入 `execution_runtime_event`。即使quote参与action/reprice/cancel/terminal reject，也不得形成独立行情evidence carrier/hash；只写既有transition/command/child/order/trade经济字段。TCA由Phase 0B从权威历史行情源离线计算并只存派生结果。普通stale/duplicate/out-of-order/zero-depth/wait只更新内存metrics/log，数据库写入为零。旧P1-D逐quote/ordinary reject/health window event合同正式退役。
 
 | 对象 | authority/identity | 存储策略 | 禁止事项 |
 |---|---|---|---|
 | `FiveLevelQuote` | `source_session_id + generation + symbol + ingress_sequence` | 仅 bounded in-memory latest snapshot | 不把 raw account、raw callback 全量写入 DB |
-| `ActionQuoteEligibility` | `runtime_id + parent/algo + symbol + clock_event_id + market_data_id` | 每次 B0_QUOTE_V2 决策都写 durable event | 不用 batch 总状态替代 per-symbol 状态 |
-| `QuoteRejectEvidence` | `market_data_id + reason + stage + policy hash` | ring buffer + structured log；被 active decision 考察时写 durable event | 不以 reject 覆盖上一次合法 quote |
+| `ActionQuoteEligibility` | `runtime_id + parent/algo + symbol + clock_event_id + market_data_id` | ordinary结果仅内存；产生economic transition时只写既有经济字段 | 不用 batch 总状态替代 per-symbol 状态 |
+| `QuoteRejectEvidence` | `market_data_id + reason + stage + policy hash` | ring buffer + structured log；真实action terminal reject只在经济transition写reason | 不以 reject 覆盖上一次合法 quote，不保存quote/hash |
 | `QuoteSnapshotBatch` | `runtime_id + clock_event_id + active/dependency-set hash + policy_sha256` | 观测汇总与 group evidence | 不作为全 runtime action gate |
 | `ClosingAuctionSnapshot` | `symbol + exchange_time + source capability version` | in-memory/read-only evidence | 不从 normal quote 推导字段 |
-| `MarketDataEvidenceV1` | stable `market_data_id` | dedicated outbox -> append-only runtime/TCA carrier | 不逐 tick 全量写、不丢 action/child/markout evidence |
-| telemetry | process/session/config hash | metrics + periodic durable aggregate + logs | 不含账号、完整 raw callback、secret |
+| economic action fact | stable transition/command/child identity | 复用既有schema，只含订单价格/数量、reason、policy version、action time；TCA只保存派生结果 | 不新增`ExecutionDecisionEvidenceV1`、quote event/table、行情价格或hash |
+| telemetry | process/session/config hash | process metrics + logs | 不写交易DB，不含账号、完整 raw callback、secret |
 
-本设计选择扩展既有 `MiniQMTExecutionEvent`：
+本设计只把action/economic facts接入既有 durable fact plane：
 
-- 新 event types：`QUOTE_OBSERVED`、`QUOTE_REJECTED`、`QUOTE_ELIGIBILITY_EVALUATED`、`QUOTE_MARK_CAPTURED`、`QUOTE_INGRESS_HEALTH`；
-- 新 source literal：`quote_ingress`；
-- action/child/markout 事件保存完整 normalized L1-L5、时间、单位、tradability reference 和 hashes；
-- 普通未使用 tick 只留 latest snapshot 与周期 aggregate，避免回调逐行写 PostgreSQL。
+- successor 不新增任何 quote-specific runtime event type、evidence carrier或行情hash；action只写transaction-owned transition/command/child既有字段，TCA只保存离线派生结果；历史 `QUOTE_OBSERVED/QUOTE_REJECTED/QUOTE_ELIGIBILITY_EVALUATED/QUOTE_INGRESS_HEALTH/QUOTE_MARK_CAPTURED` 只读兼容，禁止新 writer；
+- 不再新增 `quote_ingress` durable source literal；该字符串只允许作为process-local telemetry属性，不能写入交易event journal；
+- action只使用既有command/order/trade原生price与actual quantity、code-owned/frozen配置阈值、basis、reason和action time；不得新增evidence JSON/hash，也不得保存trigger/reference observed market price、benchmark/mark price、任何盘口层级或quote/bar payload；
+- 普通未使用tick只留process-local latest snapshot/counters；不按symbol/tick/window写DB。
 
-当前 schema 已确认 `ck_miniqmt_event_type` 和 `ck_miniqmt_event_source` 会拒绝新值，因此 P1-D 必须提交：
+当前 schema 已包含历史quote types；successor migration必须删除新writer能力而不是再扩展quote event。P1-D correction必须提交：
 
-- `backend/migrations/miniqmt_quote_ingress_event_types_20260712.sql`；
+- successor preflight/forward/rollback migration；
 - 对应 rollback；
-- transaction 内 drop/recreate 两个 CHECK，保留全部旧值并增加本文五个 event types 与 `quote_ingress` source；
+- transaction内drop/recreate CHECK：历史值只读兼容，新KERNEL_V2 writer不得使用TICK或quote-specific types；
 - schema preflight、幂等/rollback 和生产 readback 验证。
 
-不得复用 `TICK`、`ALGO_ACTION_EMITTED` 或 `runtime` source 冒充 quote evidence。代码合入后、启用 ingress 前，生产状态必须报告 `production_ddl_pending`，直到用户授权应用并验证。
+不得复用 `TICK`、`ALGO_ACTION_EMITTED` 或 `runtime` source冒充quote evidence，也不得保存完整raw callback。代码合入后、启用ingress前，production DDL状态必须独立报告，直到用户授权应用并验证。
 
-#### 4.4.1 runtime event envelope、type mapping 与关联链
+#### 4.4.1 economic owner mapping 与关联链
 
-P1-D 不新增表、列或索引；`qmt_strategy.execution_runtime_event` 同时是 append-only runtime journal 与 durable quote-evidence carrier。事件 envelope 固定为：
+P1-D原“不新增表且复用runtime journal承载全部quote evidence”决策被撤回。successor不得新增quote event/table/evidence carrier/hash；action复用既有transition/command/child字段，TCA写Phase 0A派生结果。writer/readback必须与经济owner同事务闭合：
 
 ```text
-event_id                     # quote evidence 使用确定性 identity
-runtime_id
-sequence                     # repository 在事务内分配；不参与 event/evidence hash
-event_type
-event_time                   # candidate 的业务发生时间，不等于 persisted_at
-source=quote_ingress
-payload.schema_version=miniqmt_quote_runtime_event_payload_v1
-payload.evidence             # MarketDataEvidenceV1，适用时必填
-payload.health_or_aggregate  # 仅 health/cadence event 使用
-row.created_at               # readback 映射为 persisted_at_utc，不写入 evidence hash
+transition_id / command_id / child_order_id / trade_id
+economic action fields / policy_version / action_time
+tca_result_id / derived metric / horizon / policy_version
 ```
 
-新类型与 payload 的唯一映射如下；未列组合必须 schema reject：
+owner与payload的唯一映射如下；未列组合必须schema reject：
 
-| event_type | capture_type / payload | 业务 identity 与关联要求 |
+| owner | capture_type / payload | 业务 identity 与关联要求 |
 |---|---|---|
-| `QUOTE_ELIGIBILITY_EVALUATED` | `ACTION_INPUT` | `evaluation_id + action_id + market_data_id + clock_event_id`；必须先 durable ack，P1-E 才可 submit child |
-| `QUOTE_REJECTED` | `ACTION_REJECT` | `evaluation_id + reason/stage`；`action_id` 可 null；存在 normalized observation 时必须关联其 `market_data_id`，无 observation 时必须保存 raw/clock identity 和明确 null reason |
-| `QUOTE_MARK_CAPTURED` | `CHILD_RECEIPT`、`PROTECTION_BAND_TRIGGER`、`MARKOUT_60S/300S/900S` | child/trigger/trade/mark series identity 必填；mark 可用时关联 mark quote `market_data_id`，不可用时关联 anchor evidence 并保存 unavailable reason |
-| `QUOTE_OBSERVED` | `CADENCE_AGGREGATE` | `(runtime_id, symbol, cadence_window_start, generation)` 唯一；只保存计数、coverage、首末 accepted hash，不保存每个 tick |
-| `QUOTE_INGRESS_HEALTH` | versioned health transition/periodic aggregate | owner/session/generation/config hash；禁止账号、secret、完整 raw callback |
+| transition/command/child | `ACTION_INPUT/ACTION_REJECT` | `evaluation_id + action_id + existing economic fields + policy version + clock_event_id`；只有真实action decision可写，必须先durable readback，P1-E才可submit child |
+| Phase 0A TCA row | `CHILD_RECEIPT/PROTECTION_BAND_TRIGGER/MARKOUT_60S/300S/900S` | child/trigger/trade identity、派生TCA metric、horizon、policy/version；benchmark/mark行情在查询/离线计算时从权威历史行情源读取，不入交易库 |
 
-既有 `ALGO_ACTION_EMITTED`、`CHILD_ORDER_SUBMITTED/REJECTED`、`ORDER_EVENT`、`TRADE_EVENT` 不改 type/source 语义。B0_QUOTE_V2 的 action/child payload 必须携带 `evaluation_id/action_evidence_id/action_market_data_id/control_revision`；后形成的 `CHILD_RECEIPT` evidence 以 `source_child_event_id` 反向指向既有 child event，并携带自己的 `child_receipt_evidence_id/child_receipt_market_data_id`。禁止为回填 receipt ID 而更新 append-only child event；只读 projection 根据正反向 identity 生成 bidirectional links。链路固定为：
+既有 `ALGO_ACTION_EMITTED`、`CHILD_ORDER_SUBMITTED/REJECTED`、`ORDER_EVENT`、`TRADE_EVENT` 不改 type/source语义。B0_QUOTE_V2 action/child payload只携带`evaluation_id/action_id/control_revision/policy_version`及原有经济字段；不携带`market_data_id`、quote identity、source-view hash或独立evidence identity。TCA row以trade/child identity、policy version和派生metric闭合，不保存benchmark/mark行情价格。链路固定为：
 
 ```text
-ACTION_INPUT evidence --action_evidence_id/action_market_data_id-->
-ALGO_ACTION_EMITTED --action_id-->
+ALGO_ACTION_EMITTED --action_id/policy_version-->
 CHILD_ORDER_SUBMITTED|REJECTED --child_order_id/broker_order_id-->
-CHILD_RECEIPT evidence --child_receipt_evidence_id/receipt market_data_id-->
 TRADE_EVENT --trade_id/child_order_id-->
-MARKOUT evidence --mark_series_key/horizon/anchor_trade_event_id-->
-Phase 0A execution_tca_mark.market_data_id + mark_policy_version
+Phase 0A TCA result --mark_series_key/horizon/anchor_trade_event_id/derived metric-->
+mark_policy_version
 ```
 
-任何一跳缺少 identity、hash 或 event readback 时都不得报告链路完整。broker 已接受但 receipt persistence 失败时，不得回滚或伪装 broker 事实；必须由 order/trade/reconcile 的权威 identity 重建待补 evidence，并在成功前阻止该 symbol 新 child。按 `runtime_id + market_data_id` 查询必须返回 action/reject/child/markout 的双向 links；不可用 markout 的自身 `market_data_id` 为 null，但必须保留 `anchor_market_data_id`、trade identity 和 unavailable reason。
+任何一跳缺少identity、hash或经济owner readback时都不得报告链路完整。broker已接受但economic/TCA persistence失败时，不得回滚或伪装broker事实；必须由order/trade/reconcile权威identity重建待补经济/TCA结果，并在成功前阻止该symbol新child。查询以runtime/action/transition/command/child/trade identity为入口，不提供market_data_id行情查询。
 
-#### 4.4.2 repository 事务、幂等、重试与 durable ack
+#### 4.4.2 economic transaction、幂等、重试与 durable ack
 
-quote evidence 不得直接调用当前“先读 `next_event_sequence`、再 `ON CONFLICT DO NOTHING`”路径冒充幂等成功。P1-D 必须为现有 repository protocol 增加 typed `append_evidence_event_idempotent(candidate) -> DurableEvidenceReceipt`，PostgreSQL 事务顺序固定为：
+action不得调用quote evidence append路径。P1-D必须复用transition/command/child或TCA owner transaction，事务顺序固定为：
 
-1. 校验 event/payload schema、capture-type required fields、canonical hashes 和 runtime identity；校验失败不打开事务。
-2. `BEGIN` 后 `SELECT ... FROM execution_runtime WHERE runtime_id = ? FOR UPDATE`；runtime 缺失为 non-retryable loud failure。
-3. 按 deterministic `event_id` 查询 active/archived row。若已存在且 runtime/type/source/evidence hash 全等，返回该 row 的原 sequence/created_at；任一字段不同即 `EVIDENCE_IDEMPOTENCY_CONFLICT`，禁止覆盖。
-4. 不存在时在同一 row lock 下使用 `last_event_sequence + 1`，插入 event，并更新 runtime `last_event_sequence/updated_at`；insert 与 update 必须同事务提交。
-5. commit 后按 `event_id` readback，逐字段核对 event type/source、identity、`evidence_sha256` 和 `created_at`，才返回 `durable_ack=true`。零行 insert、仅 `ON CONFLICT DO NOTHING`、内存 enqueue 或日志成功都不是 durable ack。
+1. 校验owner、经济字段allowlist、TCA schema与runtime identity；任何行情字段/hash/evidence carrier在事务前拒绝。
+2. `BEGIN`后锁exact transition/command/child或trade/TCA owner；owner缺失/non-unique为non-retryable loud failure。
+3. 同identity已存在且owner经济字段全等返回原receipt；任一字段漂移即`ECONOMIC_IDEMPOTENCY_CONFLICT`。
+4. 在同一事务写owner经济字段并提交；不分配quote event sequence/evidence identity。
+5. commit后按owner identity独立readback全部经济字段才返回`durable_ack=true`。内存enqueue或日志成功不是durable ack。
 
-`event_id = "mqrtevt_" + sha256("miniqmt_quote_event_v1", evidence_id)`；`evidence_id` 规则见 §5.9。相同 candidate 的所有 retry 必须复用同一 ID。只允许对连接中断、serialization failure、deadlock、lock timeout 等注册 SQLSTATE 做有界指数重试；schema/CHECK/FK/hash/idempotency conflict 不重试。最大次数、初始/最大 backoff 来自显式 process config，耗尽后 health=`FAILED`、对应 symbol gate closed；不得 fallback 到 JSON、内存“成功”、另一 event type/source 或 LEGACY_B0。
+相同candidate retry复用同一transition/command/action identity。只允许连接中断、serialization failure、deadlock、lock timeout等注册SQLSTATE有界重试；schema/CHECK/FK/hash/idempotency conflict不重试。不得fallback到quote event、JSON/内存“成功”或LEGACY_B0。
 
-高优先级 outbox 使用 FIFO + deterministic event_id 去重；同 ID payload 不同立即 FAILED。outbox 满时 action 在 broker 调用前 fail closed；已发生的 broker receipt/trade/reconcile candidate 进入保留槽并持续 retry，不得被 cadence 挤占。低优先级 cadence 只按窗口合并，flush 失败保留计数、首末样本和 failure count。callback、QuoteIngress writer、diagnostics endpoint 均无 repository 写权限。
+action直接使用既有economic transaction/outbox的FIFO与deterministic owner identity去重；同identity payload不同立即FAILED。outbox满时action在broker调用前fail closed；已发生broker receipt/trade/reconcile由既有经济事实优先闭合。不存在quote-evidence或cadence DB queue。callback、QuoteIngress writer、diagnostics endpoint均无repository写权限。
 
 #### 4.4.3 retention、archive 与 cardinality
 
 retention 以 archive 而非 delete 实现，P1-D 不新增删除任务：
 
-- action/reject/child/protection/markout evidence，以及仍有未终结 markout 的 `TRADE_EVENT`/child event，至少保持 active 90 个自然日，且在全部 60/300/900 秒 mark terminal、Phase 0A readback 可重建前不得由 count-based prune archive；之后可 soft archive，但按 `runtime_id + event_id/market_data_id` 的 evidence query 必须可选择读取 archived rows；
-- cadence/health aggregate 保持 active 14 个自然日后可 soft archive；普通 unused tick 从不入库；
-- 现有 `MAX_EVENTS_PER_RUNTIME/RETAIN_EVENTS_PER_RUNTIME` prune 必须改为 type-aware，不能仅按 sequence 截断 mandatory evidence 或 pending-mark anchor；P1-D 不删除 archived rows，长期物理保留沿用既有 DB backup/retention authority；
+- transition/command/child/TCA经济facts至少保持active 90个自然日；mark terminal前不得archive其trade/child/TCA anchor；之后可type-aware soft archive并按经济identity查询；
+- quote/cadence/health没有数据库retention，因为从不入库；
+- 现有event prune不能截断mandatory economic facts或pending-mark anchor；历史quote rows清理属于单独授权DML；
 - Prometheus labels 只允许 `market/capture_type/state/reason_code/stage/horizon/source_method` 等有界枚举；严禁 `runtime_id/binding_id/parent_id/child_id/trade_id/market_data_id/symbol/account` 作为 label。symbol 和 identity 只进入受限分页 diagnostics；
-- diagnostics 默认 `limit=100`、最大 `500`，要求 `runtime_id`，以 `(sequence,event_id)` cursor 分页；不得全库 JSONB 扫描或返回完整 raw callback。
+- diagnostics默认`limit=100`、最大`500`，要求runtime/economic owner，以owner sequence/identity分页；不得全库JSONB扫描或返回raw/normalized quote。
 
 ### 4.5 P1-E 单 revision binding、controller 与 side-effect 顺序
 
 P1-E 不创建第二套 runtime、scheduler 或 broker gateway。唯一新增的执行协调对象为
 `B0QuoteV2Controller`，由 `SimulationLifecycleScheduler` 构造并持有；router、只读 API、
 callback、`QuoteIngressWorker` 和算法 core 均不得构造它。controller 组合既有
-`QuoteIngressSupervisor.normalized_store/context_store`、`ActionQuoteEvaluator`、
-`QuoteEvidenceCoordinator` 与 `MiniQMTExecutionRuntime`，但不取得 gateway ownership。
+`QuoteIngressSupervisor.normalized_store/context_store`、`ActionQuoteEvaluator`
+与 `MiniQMTExecutionRuntime`，但不构造历史`QuoteEvidenceCoordinator`，也不取得gateway ownership。
 为避免 constructor cycle，scheduler 注入唯一 `B0QuoteV2ControllerFactory` 给
 `MiniQMTExecutionBridge/MiniQMTExecutionRuntimeClient`；client 创建并 recover runtime 后把
-`runtime + frozen assignments + supervisor stores + coordinator` 交给该 factory，并在任何 algo
+`runtime + frozen assignments + supervisor stores` 交给该 factory，并在任何 algo
 instance/core start 前执行一次 `runtime.bind_b0_quote_v2_controller(controller)`。runtime 只允许
 bind 一次且校验 runtime identity；未注入 factory 时只允许 LEGACY_B0，显式 B0_QUOTE_V2 必须
 loud configuration error。factory/controller 不暴露给 router 或 diagnostics。
@@ -395,34 +385,33 @@ P1-E 的 broker-neutral core 与 broker side effect 必须分开，顺序固定�
    既有 B0 core**并持久化 core state；不得复制或重写价格、数量、保护带、尾盘和 broker source
    policy。timer 产生的 action candidate 必须在同一 scheduler tick重新读取并 evaluate 当前 quote；
    不得复用旧 evaluation。
-3. 对每个 `SUBMIT` candidate，在 `ALGO_ACTION_EMITTED` 追加
-   `b0_quote_v2_action_pending_v1`，包含完整 assignment、evaluation identity、原始 `VnpyAction`
-   business fields 和 deterministic `action_id`；该事件先于 action evidence 和 broker 调用。
+3. 对每个 `SUBMIT` candidate，在既有 `ALGO_ACTION_EMITTED` economic transition 中原子携带
+   `b0_quote_v2_action_pending_v1`、完整 assignment、evaluation identity、原始 `VnpyAction`
+   business fields与deterministic `action_id`；禁止为pending/action另建quote event/evidence carrier/hash。
    `LOG/FINISH` 保持既有行为；`CANCEL/CANCEL_ALL` 只处理已存在 child，继续走既有
    cancel/reconcile，不以新 quote 作为取消前置条件。
-4. candidate 对应 quote 非 `READY` 时写带 `action_id` 的 `ACTION_REJECT` 并保持 candidate
-   pending；`READY` 时生成 `ACTION_INPUT`。`QuoteEvidenceCoordinator.enqueue()` 后只接受与该
-   `evidence_id/event_id/evidence_sha256` 完全匹配的 post-commit readback receipt。
+4. candidate 对应 quote 非 `READY` 时仅在真实 terminal/economic reject transition 中写带 `action_id` 的
+   `ACTION_REJECT` reason/policy/time；普通 WAIT 保持 process-local pending、零 DB 写入。`READY` 时把
+   action原有经济字段并入同一owner transaction。只接受与该`owner_id/action_id/economic_fields_sha256`
+   完全匹配的post-commit readback receipt。
    `durable_ack=false`、retry-not-before、outbox full、terminal persistence failure 或 receipt
    mismatch 均保持 pending 且 `broker_called=false`。
-5. 获得 durable ack 后，把 `evaluation_id/action_evidence_id/action_market_data_id/
-   control_revision` 写入原 action/child metadata并进入唯一 gateway submit path。
+5. 获得 durable ack 后，把 `evaluation_id/action_id/control_revision/policy_version`
+   写入原action/child metadata并进入唯一gateway submit path；不得写market_data_id、source-view hash或行情链接。
 6. child identity 对 B0_QUOTE_V2 固定为
    `"mqchild_" + sha256("b0_quote_v2_child_v1", runtime_id, parent_intent_id, action_id)`。
    repository 已有同 ID 且 assignment/action hash 全等时返回原 child；不同即 conflict。
    gateway timeout/unknown outcome 必须先按 deterministic order remark 和 broker snapshot
    reconcile，禁止盲重试 submit。
-7. gateway 返回后先追加既有 `CHILD_ORDER_SUBMITTED/REJECTED`，payload 携带 action evidence
-   identities；再生成 `CHILD_RECEIPT` evidence 反向指向该 child event。receipt evidence 写失败
-   不能抹除 broker fact，必须占用保留槽持续 retry，并停止该 symbol 新 child。
+7. gateway返回后追加既有`CHILD_ORDER_SUBMITTED/REJECTED`，payload只携带经济action/child identity；不生成child receipt quote event/evidence。经济事实写失败不能抹除broker fact，必须按经济owner持续retry，并停止该symbol新child。
 8. authoritative fill 到达既有 trade callback 时，先按原 OMS/reconcile 语义追加 `TRADE_EVENT`，
-   同 event payload 增加已由 P1-D 定义的 `quote_evidence_markout_anchor_v1`，逐字段引用
-   assignment/action/child receipt、fill time/price/quantity、continuous segment end 与
-   benchmark/mark policy；随后调用 coordinator `schedule_markouts()`。缺 link 或 schedule 失败
+   同一经济 transaction 增加 `tca_markout_anchor_v1`，逐字段引用
+   assignment/action/child、fill time/price/quantity、continuous segment end 与
+   benchmark/mark policy；随后只登记TCA计算horizon，不捕获或持久化mark行情。缺 link 或 schedule 失败
    不得丢失 trade fact，但关闭该 symbol 新 child并 loud retry/repair evidence；不得改写 trade。
 
-restart 时 controller 从 `ALGO_ACTION_EMITTED` pending、`ACTION_INPUT/REJECT`、child event、
-broker snapshot 与 receipt evidence 重建状态。已有 durable action evidence 且无 child 的 action
+restart 时 controller 从 `ALGO_ACTION_EMITTED` pending、economic transition/command、child event、
+broker snapshot 与 TCA result 重建状态。已有 durable economic action 且无 child 的 action
 可继续 submit；已有 child 或 broker fact 的 action只做 reconcile/receipt repair，不再次 submit；
 已有 pending action在新 observation上只重新 evaluate 同一 candidate，不再次驱动 core 或生成新
 action ID；尚未产生 action 的 pending algo才在下一次 `READY` quote上驱动 core。该重建不依赖
@@ -596,7 +585,7 @@ RawQuoteFrame
 
 `QuoteEvaluationContextStore` 由 scheduler lifecycle 原子替换，只保存已预加载的 `CalendarSnapshotSet`、per-symbol `TradabilitySnapshot`、board/unit evidence 和 policy hash；加载 DB/provider 发生在 scheduler 线程，不在 callback/writer。context 缺失或版本不匹配时 projection loud 且不覆盖 normalized latest；RawQuoteFrame 仍保留为观测事实。
 
-P1-C 为每个 accepted normalized observation 生成确定性的 in-memory `market_data_id = "md_" + sha256(source_session_id, ingress_generation, symbol, source_timestamp_raw, source_payload_sha256, normalized_quote_sha256, tradability.evidence_sha256, calendar.set_sha256, policy_sha256)`。它不是 durable-success 声明；P1-D 必须持久化并 readback 同一 ID。exact duplicate 复用原 ID，correction 因 payload/normalized hash 变化产生新 ID，DB sequence/当前时间/随机 UUID 均不得参与 identity。
+P1-C 为每个 accepted normalized observation 生成确定性的 **process-local** `market_data_id = "md_" + sha256(source_session_id, ingress_generation, symbol, source_timestamp_raw, source_payload_sha256, normalized_quote_sha256, tradability.evidence_sha256, calendar.set_sha256, policy_sha256)`。它只用于内存 ordering、coalescing 与 diagnostics，不进入 durable carrier、DB index、hash列或查询接口。该 observation 参与真实 action时，经济owner也只写既有业务字段；TCA在Phase 0B按权威历史行情源离线计算。exact duplicate复用内存ID，correction产生新ID；DB sequence、当前时间和随机UUID不得参与identity。
 
 ordering decision 固定为：
 
@@ -701,75 +690,32 @@ source_field_names / source_payload_sha256 / reasons
 
 选择 LEGACY_B0 时继续原 B0 terminal protected-limit；选择 B0_QUOTE_V2 时继续同 revision 的 B0 terminal policy。未来 B1 若需要 auction action，必须由 Phase 3 明确定义，禁止运行中切换到 B0。
 
-### 5.9 `MarketDataEvidenceV1` 与 Phase 0A handoff
+### 5.9 economic action 与 Phase 0A TCA handoff
 
-`MarketDataEvidenceV1` 使用 `extra=forbid` 的强类型 schema；禁止把任意 dict 当作 evidence。字段分组如下：
+`MarketDataEvidenceV1` 中保存完整L1-L5、ordinary reject、child receipt quote和cadence aggregate的旧合同正式退役。新writer不得创建该carrier；历史rows只读。successor不新增任何行情evidence carrier，只有既有economic facts和TCA derived result：
 
-| 分组 | 精确字段 |
-|---|---|
-| schema/identity | `evidence_schema_version=market_data_evidence_v1`、`evidence_id`、`evidence_revision>=1`、`supersedes_evidence_id|null`、`capture_type` |
-| runtime/business identity | `runtime_id`、`binding_id|null`、`trade_date`、`parent_intent_id|null`、`algo_instance_id|null`、`evaluation_id|null`、`action_id|null`、`source_child_event_id|null`、`child_order_id|null`、`broker_order_id|null`、`trade_id|null`、`symbol`、`side|null` |
-| quote link | `market_data_id|null`、`anchor_market_data_id|null`、`action_evidence_id|null`、`child_receipt_evidence_id|null`、`clock_event_id`、`tradability_id|null` |
-| mark identity | `mark_series_key|null`、`horizon_seconds|null`、`target_time_utc|null`、`anchor_trade_event_id|null`、`mark_status=CAPTURED|UNAVAILABLE|null`、`unavailable_reason|null` |
-| source/time | `source`、`source_method`、`source_session_id`、`ingress_generation`、`ingress_sequence`、`source_exchange_time_utc|null`、`received_at_utc`、`event_time_utc`；`persisted_at_utc` 只来自 event row readback |
-| normalized quote | `price_basis`、`depth_quantity_unit`、`bid_prices[5]`、`bid_quantities[5]`、`ask_prices[5]`、`ask_quantities[5]`、`bid1/ask1/mid/last`；UNAVAILABLE mark 可全部 null，但不得填 fallback |
-| quality/failure | `receive_age_ms|null`、`source_lag_ms|null`、`exchange_age_ms|null`、`clock_age_divergence_ms|null`、`eligibility_state|null`、`quality`、`reason_code|null`、`stage|null` |
-| version chain | `benchmark_policy_version`、`mark_policy_version`、`control_revision`、`policy_sha256`、`config_sha256`、`adapter_sha256`、`code_sha256`、`schema_sha256`、`calendar_sha256`、`tradability_sha256|null`、`source_payload_sha256|null`、`normalized_quote_sha256|null` |
-| hashes | `source_input_sha256`、`evidence_sha256` |
+| carrier | exact owner | allowed fields | forbidden fields |
+|---|---|---|---|
+| existing transition/command/child/order/trade | 原表/原owner | runtime/parent/algo/action/symbol/side、command/order/trade原生price、actual quantity、frozen配置阈值、price basis、reason、action time、policy/config/code version | 任何新增行情carrier/hash、trigger/reference observed market price、benchmark/mark price、market_data payload、bid/ask arrays、BBO、last/pre-close、bar、raw/normalized quote、receive/source lag、cadence counters |
+| Phase 0A TCA result | order/trade/TCA series | child/order/trade identity、derived slippage/markout metric、horizon、policy/version、`COMPUTED|UNAVAILABLE` reason | arrival/decision/benchmark/mark行情价格、行情hash/时间序列、depth、raw/normalized quote、quote history、可还原market_data payload |
 
-`capture_type` 只允许 `ACTION_INPUT/ACTION_REJECT/CHILD_RECEIPT/MARKOUT_60S/MARKOUT_300S/MARKOUT_900S/PROTECTION_BAND_TRIGGER/CADENCE_AGGREGATE`。required-field matrix 固定为：
+existing economic carriers继续使用各自strict schema/hash/readback；successor schema必须明确`extra=forbid`并拒绝market-data字段、source-view hash和evidence JSON。相同economic identity不同payload typed conflict。只有真实action/reprice/cancel/terminal reject/economic transition才写既有业务字段；ordinary wait/reject/no-action tick零写。
 
-- `ACTION_INPUT`：evaluation/action/parent/algo、side、`market_data_id`、完整 normalized L1-L5、eligibility=`READY`、clock/tradability 与全部 version hashes 必填；
-- `ACTION_REJECT`：evaluation/parent/algo、state/reason/stage 与 clock 必填，`action_id` 可 null；若 evaluator 考察过 normalized quote，`market_data_id` 与其 hashes 必填；`WAITING_FIRST_QUOTE/CLOCK_INVALID` 等没有 quote 的拒绝必须令 `market_data_id=null`，并保存 raw/clock identity，禁止指向旧合法 quote；
-- `CHILD_RECEIPT`：`source_child_event_id`、child、action evidence、action market-data link、broker receipt identity/time 必填；receipt 时存在合法 quote 则该 quote 是本 evidence 的 `market_data_id`，否则明确 unavailable，不能复用 action quote 冒充 receipt quote；
-- `PROTECTION_BAND_TRIGGER`：action/child、trigger identity、触发时 quote 或明确 unavailable、保护带 policy hash 必填；
-- markout：trade/child、anchor trade event、mark series/horizon/target、anchor evidence 与 mark status 必填；`CAPTURED` 必须携带 target 后 mark quote 的 `market_data_id` 和完整 BBO/L1-L5，`UNAVAILABLE` 必须 `market_data_id=null` 且有 stable unavailable reason；
-- `CADENCE_AGGREGATE`：不携带 action/child/trade，保存窗口、accepted/rejected/coalesced/capacity counts、coverage、first/last hashes 与 generation；不得嵌入逐 tick 数组列表。
+实时 markout selector 全部退役。Phase 0B查询或离线TCA作业按trade/horizon/policy从权威历史行情源读取并计算，只把派生metric和policy/version写入TCA authority；无法证明时写`UNAVAILABLE`及stable reason。child/order/trade事实本身已包含broker经济identity，不另存“receipt quote”。
 
-identity 与 hash 规则固定如下：
+Phase 0A/0B read API必须从transition/command/child/TCA经济owners投影action/markout completeness；不得以缺少历史full-depth evidence为由恢复quote writer，也不得保存或查询source-view hash。
 
-```text
-market_data_id = P1-C §5.6.1 deterministic identity，不重新生成
-evaluation_id = "qeval_" + sha256(runtime_id, parent_intent_id,
-                  algo_instance_id, symbol, side, clock_event_id,
-                  market_data_id|null, source_payload_sha256|null,
-                  policy_sha256)
-mark_series_key = sha256(runtime_id, trade_id, child_order_id,
-                         horizon_seconds, mark_policy_version)
-evidence_id = "mde_" + sha256(
-    evidence_schema_version, capture_type, runtime_id, trade_date,
-    evaluation_id|action_id|child_order_id|trade_id|mark_series_key|cadence_window,
-    market_data_id, anchor_market_data_id, source_input_sha256,
-    policy_sha256, mark_policy_version, evidence_revision)
-evidence_sha256 = sha256(canonical MarketDataEvidenceV1 excluding
-    event_id, runtime sequence, persisted_at_utc and transport retry counters)
-```
+持久化触发点完整固定为：真正产生action/reprice/cancel/terminal reject/economic transition的既有经济字段、child/order/trade事实、保护带业务结果，以及Phase 0B离线生成的60/300/900秒派生TCA metric。无可证明历史行情时写`UNAVAILABLE` result。ordinary reject/wait/no-action tick以及cadence/coverage/coalesce/capacity全部零写库，只进入process metrics/log。
 
-canonical JSON 使用排序 key、UTC ISO-8601、Decimal string、显式 null 与固定五档长度；不得使用 float repr、DB sequence、当前时间、随机 UUID 或 dict insertion order。相同 source input/policy/revision 必须产生同一 ID/hash；同 ID 不同 hash 是 invariant failure。late source 只能 append `evidence_revision+1` 并指向 `supersedes_evidence_id`，不得覆盖旧 event。
+`persisted_at` 在 repository 成功提交后生成；DB 失败必须 loud，不能把内存action当 durable success。该失败只停止 B0_QUOTE_V2 对应的新 economic action path，不回滚 broker 已确认的事实，也不改变 LEGACY_B0。
 
-`source_input_sha256` 也必须按 capture type 可重算：action input/reject 对 canonical evaluation request + result；child receipt 对 action evidence + source child event + canonical broker receipt + receipt quote；protection trigger 对 trigger identity + band policy + trigger quote；markout 对 trade event hash + target/horizon + selector coverage + selected quote 或 unavailable reason；cadence 对 window/generation/counters/first-last hashes。任何 capture 不得把 exception text、retry count、DB sequence、persist time 或本地随机值放入 source input hash。
+#### 5.9.1 TCA offline computation、late fill 与 restart recovery
 
-`market_data_id` 必须写入 Phase 0A 已预留的 benchmark/mark evidence link。Phase 1 只能追加 evidence 或产生 superseding result，不能覆盖已冻结 decision/arrival。
+markout anchor 是 authoritative `TRADE_EVENT` 的 broker trade time，不是本地 receipt time、child submit time或 scheduler 当前时间。每个 `(runtime_id, trade_id, horizon, mark_policy_version)` 派生一个 `mark_series_key`，target 为trade time加`60/300/900`秒。Phase 0B查询或离线TCA作业按trade date、symbol、target与显式`markout_max_lag_ms`从权威历史行情源读取target之后第一份eligible observation；交易runtime/QuoteIngress不维护用于持久化的mark history，不创建due timer、evidence candidate或quote row。
 
-持久化触发点完整固定为：每次 B0_QUOTE_V2 action 输入或拒绝、child receipt、保护带触发、以及每个 authoritative fill 对应的 60/300/900 秒 markout。markout 到点无可证明的 eligible quote 也必须写 `UNAVAILABLE` evidence。普通未使用 tick 不逐条写库，只写周期 cadence/coverage/coalesce/capacity aggregate。
+离线计算必须证明historical dataset/version/as-of、session segment、source time、freshness、tradability和first-after-target选择规则。late fill到达后使用同一确定性key计算；跨trading date、跨continuous-session segment或历史行情覆盖不足输出`UNAVAILABLE`稳定reason。不得选择更晚、更有利行情，不得回查交易库quote event，也不得使用重启后live latest quote。
 
-`persisted_at` 在 repository 成功提交后生成；DB 失败必须 loud，不能把内存 evidence 当 durable success。该失败只停止 B0_QUOTE_V2 对应的新 action evidence path，不回滚 broker 已确认的事实，也不改变 LEGACY_B0。
-
-#### 5.9.1 markout scheduling、late fill 与 restart recovery
-
-markout anchor 是 authoritative `TRADE_EVENT` 的 broker trade time，不是本地 receipt time、child submit time或 scheduler 当前时间。每个 `(runtime_id, trade_id, horizon)` 派生一个 `mark_series_key`，target 为 trade time 加 `60/300/900` 秒。selector 复用 Phase 0A `mark_policy_version` 与显式 `markout_max_lag_ms`：选择 target 之后第一份 accepted normalized quote，且 `0 <= source_exchange_time-target <= max_lag`、quote freshness/clock/tradability/hash 全部可证明。
-
-QuoteIngress single writer 维护仅供 mark selector 使用的 bounded recent accepted-quote history；时间窗口为 `900s + markout_max_lag_ms`，总 sample 上限来自 process config。history capacity/generation/restart gap 必须显式记录；一旦无法证明“target 后第一份”，结果只能是 `UNAVAILABLE`，不得选择更晚、更有利或下一交易日 quote。已有 pending target 到达时，writer 将第一份 eligible quote 作为高优先级 evidence candidate；这只按 due mark 持久化一条，不是逐 tick 入库。
-
-coordinator state 可完全从 runtime journal 重建，不新增 job 表：启动/重启时读取当前 runtime 的 `TRADE_EVENT`、child/action links 和 `QUOTE_MARK_CAPTURED`，为每个缺失 horizon 派生状态：
-
-1. target 尚未来到：重新入 deterministic timer heap；
-2. target 已到但仍在 max-lag window，且 in-memory history coverage 从 target 起连续可证明：立即选择第一份 eligible quote；
-3. late fill 在 target 后到达：仅当 history 覆盖 target 且无 generation/capacity gap时补 capture；否则 append `UNAVAILABLE:LATE_FILL_HISTORY_UNAVAILABLE`；
-4. target 已过 max-lag、跨 trading date、跨 continuous-session segment、收盘或午休边界：append `UNAVAILABLE:MARKET_SESSION_ENDED|MARK_WINDOW_EXPIRED`；不得等下午/下一交易日；
-5. crash 发生在 candidate 形成但 durable ack 前，恢复时不能证明原 first quote：append `UNAVAILABLE:RECOVERY_FIRST_QUOTE_UNPROVABLE` 并保留 persist failure；不得用重启后 latest quote 替代。
-
-同一 mark series 的 deterministic evidence retry 幂等；若后来获得此前真实存在且 hash 可证明的 durable source，只能按 Phase 0A 规则 append revision/supersede，不能 update 原 unavailable row。mark terminal 指 `CAPTURED` 或上述 stable `UNAVAILABLE`，两者都计入 due denominator；coverage 只把 CAPTURED 计入 numerator。
+同一mark series重复计算使用trade/TCA identity和policy version幂等；派生metric相同返回原result，不同则typed conflict并保留两侧dataset/policy identity。TCA result只保存derived metric或`UNAVAILABLE` reason，不保存mark price、source-view hash或行情时间序列。
 
 ### 5.10 API / DB / UI / MCP 边界
 
@@ -778,11 +724,11 @@ Phase 1 不新增提交 API、交易按钮、审批界面或角色模型。只�
 - 查询不得启动订阅、重连、scheduler、订单或撤单；
 - 默认只输出 hashes、symbol、reason/stage、计数、时间和版本，不输出 secret、account id 或完整 raw callback；
 - API schema 必须版本化；
-- 新 event type/source/retention 和 `market_data_id` 必须在实现中显式注册；
+- 新economic event type/source/retention必须在实现中显式注册；`market_data_id`只存在进程内，禁止进入DB/API查询；
 - 不允许以 UI/API 可见“成功”替代 durable evidence；
 - 只允许应用 §4.4 已定义的 CHECK-constraint migration；任何新增表、列、索引或其他 DB 对象必须停止并另获用户授权。
 
-P1-D 只新增或扩展以下 read-only contract，不新增 POST/PUT/DELETE：
+P1-D correction 只保留以下 read-only contract，不新增 POST/PUT/DELETE：
 
 ```text
 GET /simulation-runtime/miniqmt/quote-diagnostics
@@ -790,13 +736,13 @@ GET /simulation-runtime/miniqmt/quote-diagnostics
   optional: symbol, cursor, limit<=500
   response schema: miniqmt_quote_diagnostics_v1
 
-GET /simulation-runtime/miniqmt/quote-evidence
-  required: runtime_id, market_data_id|evidence_id
+GET /simulation-runtime/miniqmt/economic-evidence
+  required: runtime_id, action_id|child_order_id|trade_id
   optional: include_archived=false, cursor, limit<=500
-  response schema: miniqmt_quote_evidence_readback_v1
+  response schema: miniqmt_economic_evidence_readback_v1
 ```
 
-diagnostics 返回 owner/generation/bootstrap、bounded per-symbol eligibility、capability、outbox、persist/markout summary、最近 reason/stage 和 version hashes；evidence readback 返回 event envelope、durable receipt、双向 action/child/trade/mark links 与 Phase 0A policy link。endpoint 只能调用 repository read methods，测试必须证明不会构造 subscriber/scheduler/gateway、不会调用 broker、不会 append event、不会自动 repair。`ok=true` 只表示查询成功；每条 evidence 仍单独返回 `durable_ack/readback_verified/link_complete`，禁止把空结果包装成成功闭环。
+diagnostics 返回当前进程owner/generation/bootstrap、bounded per-symbol eligibility、capability、经济outbox、TCA summary、最近reason/stage和version；economic readback返回既有transition/command/child/order/trade/TCA links。endpoint只能调用对应经济repository read methods，测试必须证明不会构造subscriber/scheduler/gateway、不会调用broker、不会append event、不会自动repair，也不会查询历史quote rows。`ok=true`只表示查询成功；每条经济fact仍单独返回`readback_verified/link_complete`，禁止把空结果包装成成功闭环。
 
 ### 5.11 P1-E strict `VnpyTick` projection 与 action envelope
 
@@ -826,7 +772,7 @@ schema_version=b0_quote_v2_action_envelope_v1
 runtime_id / binding_id / trade_date / parent_intent_id / algo_instance_id
 assignment_id / revision_id / control_revision=B0_QUOTE_V2
 action_id / action_type / direction / price / volume / order_type / reason
-evaluation_id / action_evidence_id / action_market_data_id / clock_event_id / tradability_id
+evaluation_id / action_id / clock_event_id / tradability_id
 policy_sha256 / config_sha256 / adapter_sha256 / code_sha256 / evidence_schema_sha256
 action_business_sha256
 ```
@@ -837,7 +783,7 @@ side/quantity/price/price_type/protection/tail/source 必须从同一 action及�
 controller 不得改值。
 
 parity canonical payload 必须包含除以下字段外的完整 recursive action + child intent + managed
-order request：`action_id/event_id/evaluation_id/evidence_id/market_data_id/clock_event_id/
+order request：`action_id/event_id/evaluation_id/clock_event_id/
 tradability_id/created_at/updated_at/submitted_at/trace_id`。排除清单 exact 且版本化为
 `b0_quote_v2_parity_exclusions_v1`；unknown 新字段默认**纳入**比较，禁止调用方临时忽略。
 至少比较 `action_type/direction/price/volume/order_type/reason`、child
@@ -846,37 +792,37 @@ marketable-limit reference/policy、protection-band/tick/limit、tail-sweep/repr
 strategy/account/order remark 的既有 business 值。任何 diff 输出 field path、legacy/v2 canonical
 hash 与 bounded redacted values，并触发 `PARITY_VIOLATION`；不执行第二次 broker submit。
 
-### 5.12 Phase 0B quote-control evidence export v2
+### 5.12 Phase 0B economic/TCA result export v2
 
-P1-E 在现有 `TcaReadService.export_execution_evidence` 上新增显式版本
-`miniqmt_execution_tca_evidence_v2`；v1 输出逐字节保持不变。v2 仍无写 API，并在同一个
+P1-E 在现有 `TcaReadService.export_execution_evidence` 上提供显式版本
+`miniqmt_execution_tca_evidence_v2`；v1 历史输出逐字节保持兼容但不得驱动新 quote writer。v2 仍无写 API，并在同一个
 repeatable-read snapshot 内按 `(binding_id, trade_date)` 解析 execution plans/daily runs 得到
-有限 `runtime_id` 集合，再按这些 runtime IDs 查询 active+archived runtime events。禁止无
-runtime 约束的全表 JSONB 扫描、跨 snapshot 拼接或 diagnostics 自动 repair。
+有限 `runtime_id` 集合，再读取对应 economic transitions、commands、children、orders、trades 与 TCA rows。禁止无
+runtime 约束的全表 JSONB 扫描、跨 snapshot 拼接、行情 event 查询或 diagnostics 自动 repair。
 `TcaReadService` 是 snapshot owner；runtime repository 新 read method必须接收该外部只读 cursor，
 不得另开 connection、commit/rollback、写 archive 或调用现有会自行开事务的 diagnostics method。
 
 v2 record kind 固定为：
 
 ```text
-CONTROL_REVISION / PARENT_ASSIGNMENT / ACTION_INPUT / ACTION_REJECT
-CHILD_RECEIPT / TRADE_ANCHOR / MARKOUT / CADENCE_AGGREGATE / INGRESS_HEALTH
+CONTROL_REVISION / PARENT_ASSIGNMENT / EXECUTION_DECISION / ACTION_REJECT
+CHILD_RECEIPT / TRADE_ANCHOR / MARKOUT
 TCA_PARENT / TCA_MARK / TCA_TRADE / TCA_RESULT
 ```
 
 manifest 除 v1 字段外必须包含 `binding_hash/trade_date/control_revision/revision_ids`、
-policy/config/adapter/code/schema hash sets、每种 record count、action-ready/reject counts、
-five-level/depth/age/cadence/60-300-900 markout coverage、`missing_link_count`、
+policy/config/adapter/code/schema hash sets、每种 economic record count、action-ready/terminal-reject counts、
+60/300/900 markout coverage、`missing_link_count`、
 `duplicate_child_count`、`revision_conflict_count` 和 `quote_control_complete`。后者只有以下条件
-全部满足才为 true：每个 parent 恰好一个 assignment；每个 submitted child 有 action evidence
+全部满足才为 true：每个 parent 恰好一个 assignment；每个 submitted child 有 economic action/command owner
 与 receipt link；每个 authoritative trade 有 3 个 terminal mark；hash sets 与 assignment一致；
 无 duplicate child/revision conflict。空结果、missing links 或 unavailable mark 可以如实导出，
 但不得把 coverage null/0 包装为 complete。
 
 record 使用 `(record_kind,runtime_id,sequence,event_id,parent_intent_id)` 稳定排序；manifest 与
 records 分别 canonical hash，并由 manifest hash 封口。账号继续使用现有 pseudonymizer，symbol
-只作为 record 字段，不作为 metric label。Phase 0B 以该 v2 export 作为 quote/depth/age/cadence/
-markout 单查询重建契约，不直接读取 subscriber 内存。
+只作为 economic record 字段，不作为 metric label。Phase 0B 以该 v2 export 作为 decision/child/trade/TCA/
+TCA result单查询重建契约；历史quote/depth/age/cadence不可查询，也不直接读取subscriber内存冒充durable fact。
 
 ---
 
@@ -899,19 +845,14 @@ markout 单查询重建契约，不直接读取 subscriber 内存。
   "MINIQMT_QUOTE_INGRESS_RESTART_MAX_BACKOFF_MS": 30000,
   "MINIQMT_QUOTE_INGRESS_RESTART_MAX_ATTEMPTS": 3,
   "MINIQMT_QUOTE_INGRESS_LOUD_INTERVAL_SECONDS": 30,
-  "MINIQMT_QUOTE_EVIDENCE_OUTBOX_MAX_EVENTS": 4096,
-  "MINIQMT_QUOTE_EVIDENCE_FLUSH_BATCH_SIZE": 128,
-  "MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_ATTEMPTS": 5,
-  "MINIQMT_QUOTE_EVIDENCE_RETRY_INITIAL_BACKOFF_MS": 100,
-  "MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_BACKOFF_MS": 5000,
-  "MINIQMT_QUOTE_EVIDENCE_CADENCE_SECONDS": 30,
-  "MINIQMT_QUOTE_MARK_HISTORY_MAX_SAMPLES": 65536
+  "MINIQMT_QUOTE_PROCESS_DIAGNOSTIC_MAX_SYMBOLS": 4096,
+  "MINIQMT_QUOTE_PROCESS_FAILURE_RING_SIZE": 1024
 }
 ```
 
-这些字段管理进程容量/lifecycle，不能放进 per-binding execution policy。`RESTART_MAX_ATTEMPTS` 明确限定同一 lifecycle epoch 内的自动 writer 重建次数；达到上限后 health=`FAILED`，后续合法 scheduler lifecycle tick 自动开启新 epoch，不需要人工 acknowledge。evidence retry 只适用于 §4.4.2 的注册 transient SQLSTATE；cadence 是观测窗口，不改变 action；mark history 是全进程有界 sample 上限，容量不足只产生明确 unavailable/gap evidence，不能选择错误 mark。所有键必须注册到 `ConfigManager.default_config/write_env` 或改为无损保留 unknown keys，并添加 round-trip 测试，确保配置页面保存不会删除 TCA/quote 配置。
+这些字段管理进程容量/lifecycle，不能放进 per-binding execution policy。`RESTART_MAX_ATTEMPTS` 明确限定同一 lifecycle epoch 内的自动 writer 重建次数；达到上限后 health=`FAILED`，后续合法 scheduler lifecycle tick 自动开启新 epoch，不需要人工 acknowledge。经济transaction retry只适用于原repository注册的transient SQLSTATE；quote metrics/failure ring是进程内有界观测，不改变action且不写DB。所有键必须注册到 `ConfigManager.default_config/write_env` 或无损保留unknown keys，并添加round-trip测试，确保配置页面保存不会删除TCA/quote配置。
 
-`benchmark_policy_version`、`mark_policy_version` 与 `markout_max_lag_ms` 必须由 immutable execution/TCA policy 显式提供并进入 policy hash；P1-D 不从代码常量、LEGACY_B0、环境历史值或 Phase 0A 示例默认推断业务值。缺任一字段时 markout coordinator 为 configuration invalid，仍可保留 ingress health/cadence，但不得产生伪造 mark 或报告 Phase 0A handoff complete。
+`benchmark_policy_version`、`mark_policy_version` 与 `markout_max_lag_ms` 必须由 immutable execution/TCA policy 显式提供并进入 policy hash；P1-D 不从代码常量、LEGACY_B0、环境历史值或 Phase 0A 示例默认推断业务值。缺任一字段时Phase 0B离线TCA计算为configuration invalid；不得产生伪造markout或报告Phase 0A handoff complete。
 
 **immutable execution policy**：
 
@@ -936,8 +877,8 @@ markout 单查询重建契约，不直接读取 subscriber 内存。
     "max_dependency_group_skew_ms": "<explicit>",
     "auction_mode": "OBSERVE_ONLY"
   },
-  "quote_evidence": {
-    "schema_version": "miniqmt_quote_evidence_policy_v1",
+  "tca_policy": {
+    "schema_version": "miniqmt_tca_policy_v1",
     "benchmark_policy_version": "<explicit>",
     "mark_policy_version": "<explicit>",
     "markout_max_lag_ms": "<explicit non-negative integer>"
@@ -947,7 +888,7 @@ markout 单查询重建契约，不直接读取 subscriber 内存。
 
 action 阈值没有全局默认值，也不得从环境变量、LEGACY_B0 或 300 秒旧 freshness 默认推断。`max_clock_age_divergence_ms` 与其他五个阈值一样是 required positive integer，必须进入 canonical `policy_sha256`；旧 P1-A policy payload 缺该字段时显式 schema invalid，不得自动补值。B0_QUOTE_V2 execution plan 必须从 immutable execution policy 显式携带全部阈值和 canonical `policy_sha256`；binding 只选择 control revision，不复制 policy 字段。合法范围由 schema validator 验证。Phase 1 observation 先统计实际 cadence/age/skew，P1-E 的 pilot policy 使用预注册显式值，Phase 0B 再据实冻结正式 baseline revision。
 
-`execution_policy.quote_evidence` 的 allowed fields 严格固定为 `schema_version`、
+`execution_policy.tca_policy` 的 allowed fields 严格固定为 `schema_version`、
 `benchmark_policy_version`、`mark_policy_version`、`markout_max_lag_ms`；缺失、unknown、bool/
 string lag 或从 Phase 0A 示例、环境、LEGACY 推断都为 `POLICY_SCHEMA_INVALID`。该对象与
 `quote_contract` 一起进入 immutable execution policy hash，但不复制到 binding。
@@ -984,7 +925,7 @@ control_revision=B0_QUOTE_V2
 execution_policy_version_id / execution_policy_sha256 / quote_policy_sha256
 adapter_version / adapter_sha256
 code_revision / code_sha256
-evidence_schema_version / evidence_schema_sha256
+economic_schema_version / economic_schema_sha256
 benchmark_policy_version / mark_policy_version / markout_max_lag_ms
 ```
 
@@ -1003,15 +944,15 @@ binding_id / binding_hash / trade_date / parent_intent_id
 control_revision / revision_id | null
 execution_policy_version_id / execution_policy_sha256
 quote_policy_sha256 | null / adapter_sha256 | null / code_sha256 | null
-evidence_schema_sha256 | null
+economic_schema_sha256 | null
 assignment_sha256
 ```
 
 `LEGACY_B0` assignment 的 revision/hash fields 必须按 schema 明确 null；`B0_QUOTE_V2` 全部必填。
 plan、daily run、runtime 和 algo instance必须逐字段 readback 同一 assignment。同
 `(binding_id,trade_date,parent_intent_id)` 已存在不同 assignment/revision 时 loud conflict，禁止
-覆盖；同 hash retry 幂等返回原 assignment。process `config_sha256` 在 runtime start 时追加到
-runtime/action evidence，不改变已冻结 revision 或 plan hash。
+覆盖；同 hash retry 幂等返回原 assignment。process `config_sha256` 在runtime start时写入
+runtime经济metadata，不改变已冻结revision或plan hash，也不创建action evidence。
 
 ### 6.2 capability probe
 
@@ -1073,10 +1014,10 @@ code_sha256 = canonical_sha256({
   parity_exclusions_version
 })
 
-evidence_schema_sha256 = canonical_sha256({
-  MarketDataEvidenceV1 field/type/required-null registry,
-  event type/source mapping,
-  evidence identity/hash version,
+economic_schema_sha256 = canonical_sha256({
+  economic action field allowlist + market-data field/hash denylist,
+  economic owner mapping,
+  economic/TCA result identity/hash version,
   parent assignment/action envelope/tick projection schema versions,
   Phase 0B v2 record/manifest schema
 })
@@ -1199,25 +1140,25 @@ stage registry 固定为 `OWNER/SUBSCRIBE/BOOTSTRAP/INGRESS/NORMALIZE/UNIT/CLOCK
 
 2026-07-12 设计前置审核结论：原 §8.4 只有范围清单和一句退出条件，缺少可编码 schema、repository transaction/idempotency、mark recovery、migration refusal、retention/cardinality、direct nodeid 和 runbook，因此当时**未达到可直接实施级别**。本次修订已将缺口前后一致地闭合到 §4.4、§5.8–§5.10、§6.1、§7、§9、§10.3 与 §12–§14；当前状态为 `design_ready`，只表示可直接派生 P1-D 实施任务，不表示代码、DDL、生产配置或运行态已经完成。
 
-P1-D 是下一实施阶段，必须作为一个完整 evidence/observation slice 交付；不得拆出无 repository、无 migration、无 recovery 或 mock-only 的“最小版”。实现顺序固定为：
+P1-D correction 是下一实施阶段，必须作为一个完整 hot-data-boundary/economic-evidence slice 交付；不得拆出无 repository、无 migration、无 recovery 或 mock-only 的“最小版”。实现顺序固定为：
 
-1. **schema 与 registry**：在算法中立 contracts 完整实现 §5.8/§5.9 的 `ClosingAuctionSnapshot`、`MarketDataEvidenceV1`、capture-type required matrix、canonical hash/identity；在 runtime model 注册五个 event types 和 `quote_ingress` source，未知组合 typed reject。
-2. **精确 migration**：提交 `backend/migrations/miniqmt_quote_ingress_event_types_20260712.sql` 与 `.rollback.sql`，只改变 `ck_miniqmt_event_type/ck_miniqmt_event_source`；实现 §10.3 preflight、idempotent apply、rollback refusal 和 readback tests。不得新增表/列/索引、role 或隐式 startup DDL。
-3. **repository 与 coordinator**：实现 §4.4.2 的 transaction-owned sequence、deterministic idempotency、post-commit readback、registered retry 与 `DurableEvidenceReceipt`；实现高/低优先级 outbox、single coordinator、type-aware retention。callback/QuoteIngress writer 仍不写 DB。
-4. **完整链路**：action input/reject、child receipt、protection trigger、existing child/order/trade events 与 `market_data_id/evidence_id` 双向关联；P1-D 只接 observation seam，不创建 parent、submit/cancel broker 或绑定 revision。测试用 fail-closed broker spy 证明无 durable ack 时调用数保持 0，不以 spy 替代 repository/dev-DB 集成测试。
+1. **schema 与 registry**：实现§5.9 economic field allowlist、market-data field/hash denylist和Phase 0A TCA派生结果映射；旧`MarketDataEvidenceV1`只读，禁止创建替代carrier。
+2. **精确 migration**：提交successor preflight/forward/rollback，禁止新KERNEL_V2 TICK/quote-specific event/evidence carrier/hash；复用既有transition/command/child schema并删除/拒绝行情字段。实现§10.3 readback；不自动执行DDL。
+3. **repository 与 coordinator**：实现§4.4.2 owner-transaction idempotency、post-commit readback与registered retry；删除quote evidence coordinator/outbox/cadence DB queue。callback/QuoteIngress writer仍不写DB。
+4. **完整链路**：action/reject、child/order/trade与TCA只通过economic identity/policy version关联，不提供market_data_id或行情hash查询。测试证明无durable economic action readback时broker call=0，并走真实repository/DEV DB。
 5. **markout**：实现 authoritative fill anchor、60/300/900 秒 deterministic schedule、bounded history、same-session selector、late fill、restart recovery、unavailable/revision semantics和 Phase 0A mark-policy link；不新增 quote query、不使用 next-day/午休后/更有利 quote。
 6. **auction**：实现 source-manifest capability probe 与 `AVAILABLE/UNAVAILABLE/INVALID`，默认 `OBSERVE_ONLY`；真实 provider 没有字段时完整交付 UNAVAILABLE path，不从普通 quote 合成任何 auction-only 字段。
-7. **observability**：实现 30 秒 cadence aggregate、§9.4 metrics/alerts、两个只读 versioned diagnostics contract 与 operator runbook；API 不启动/修复/重连/写库/调用 broker。
+7. **observability**：实现process-local bounded metrics/alerts、两个只读versioned diagnostics contract与operator runbook；不写quote cadence event，API不启动/修复/重连/写库/调用broker。
 8. **验证与回填**：完成 §9.1.2 直接 nodeid、dev-DB migration/apply/rollback/readback、schema、failure/restart、coverage、LEGACY_B0 与 BUG-599/600/604/614 定向不变式；在 §13 新增真实 P1-D implementation acceptance record 后才可请求代码 PR。
 
 **P1-D exit checklist**：
 
-- `MarketDataEvidenceV1` 每种 capture type 的 required/null 规则、deterministic ID/hash 与 runtime event mapping 都由 direct schema test 证明；
-- 任一 action/reject/child receipt/protection/markout 可从 `runtime_id + market_data_id/evidence_id` 重建到 event、parent/action/child/trade、Phase 0A policy link；unavailable mark 也能从 anchor market-data identity重建；
-- action evidence 未 durable ack 时 broker spy 调用为零；receipt/trade 已发生而 persistence 失败时保留权威 broker facts、自动 retry/recovery 且不报 durable success；
-- 60/300/900 秒 mark 对 normal、late fill、restart、午休、收盘、跨交易日、history gap 全部产生 deterministic CAPTURED 或 stable UNAVAILABLE；
+- economic carrier allowlist、market-data field/hash denylist与owner mapping由direct schema test证明，且独立行情carrier数为0；
+- 任一action/reject/child/protection/markout可从runtime + economic identity重建到transition/command/child/trade/TCA policy link；不能从任何carrier重建quote/depth；
+- economic action 未 durable readback 时 broker spy 调用为零；receipt/trade 已发生而 persistence 失败时保留权威 broker facts、自动 retry/recovery 且不报 durable success；
+- 60/300/900秒离线TCA对normal、late fill、午休、收盘、跨交易日和history gap全部产生deterministic COMPUTED或stable UNAVAILABLE；交易runtime重启不影响离线计算且不恢复live mark capture；
 - auction `AVAILABLE` 只来自 versioned raw capability manifest，普通 quote 合成反例全拒绝；
-- cadence/retention/cardinality、metrics/alerts、分页只读 diagnostics 与 runbook 均实现，不含新增审批、RBAC 或人工 acknowledge；
+- zero quote/cadence DB write、economic retention/cardinality、metrics/alerts、分页只读diagnostics与runbook均实现，不含新增审批、RBAC或人工acknowledge；
 - migration apply/second-apply/rollback/second-rollback/drift/refusal/schema readback tests 通过；生产 DDL 未经用户授权时保持 `production_ddl_pending`，ingress switch=false；
 - changed code line coverage `>=80%`、branch coverage `>=70%`，直接矩阵、changed-file lint/compile/diff、`nox l0`、module registry、F2 validator 与 required CI 全绿。
 
@@ -1237,14 +1178,14 @@ P1-E 的一个实现 PR 必须原子覆盖以下四个内部切片；任一项�
 - runtime/client/bridge 只接受 plan 中已冻结 assignment，不从 env、algo code、broker backend、
   approval state 或是否存在 quote consumer 推断 revision。
 
-#### P1-E2：scheduler-owned lifecycle 与 evidence-first adapter
+#### P1-E2：scheduler-owned lifecycle 与 economic-owner-first adapter
 
 - `SimulationLifecycleScheduler` 是唯一 controller/supervisor construction root；同 data session
   共享 physical feed，每 runtime 独立 lease/coordinator/pending action。
 - `MiniQMTExecutionRuntimeClient` 与 `MiniQMTExecutionRuntime` 接收注入的 controller，不自行
   创建 subscriber、读取 DB policy 或取得第二 gateway。
-- 所有 `SUBMIT` action 执行 §4.5.1 的 pending event、per-symbol eligibility、action evidence
-  durable ack、strict projection、deterministic child、gateway、child event、receipt evidence顺序。
+- 所有 `SUBMIT` action 执行 §4.5.1 的 pending economic transition、per-symbol eligibility、economic owner
+  durable readback、strict projection、deterministic child、gateway与child event顺序；无quote evidence carrier。
 - BUG-604 tick-driver 在 B0_QUOTE_V2 上调用 controller lifecycle tick；LEGACY_B0 继续原
   quote provider/`on_tick`，不得把两个 quote source 同时送入同一 parent。
 
@@ -1370,33 +1311,32 @@ test_lifecycle_scheduler.py::test_quote_context_health_does_not_change_pending_r
 
 属性测试至少生成 threshold 边界前后 1 ms、所有 precedence 条件的两两组合、SH/SZ/BJ symbol 与 phase 组合、BUY/SELL opposite-depth/limit 组合，以及输入 permutation；主 state/reason/stage 必须不随 mapping/list 顺序变化。
 
-#### 9.1.2 P1-D 必须存在的直接测试
+#### 9.1.2 P1-D correction 必须存在的直接测试
 
-下列 nodeid 是 P1-D 实现命名与验收契约。允许按现有 fixture 组织做等价重命名，但 PR 必须在 §13 的 implementation record 提供逐项 mapping；不得用一个 happy-path、纯 mock repository 或 API 200 响应替代：
+下列 nodeid 是corrected boundary的实现命名与验收契约。允许按现有fixture组织做等价重命名，但PR必须在§13的implementation record提供逐项mapping；不得用一个happy-path、纯mock repository或API 200响应替代：
 
 ```text
-test_quote_evidence.py::test_market_data_evidence_v1_required_fields_by_capture_type
-test_quote_evidence.py::test_evidence_and_event_identity_are_deterministic_and_exclude_transport_fields
-test_quote_evidence.py::test_action_reject_links_market_data_when_present_and_never_reuses_old_quote_when_absent
-test_quote_evidence.py::test_action_requires_durable_ack_before_any_broker_submit
-test_quote_evidence.py::test_child_receipt_and_trade_markout_chain_rebuilds_from_market_data_id
-test_quote_evidence.py::test_high_priority_outbox_never_drops_and_cadence_slot_only_coalesces_same_window
-test_quote_evidence.py::test_persist_failure_is_loud_and_never_returns_durable_success
-test_quote_evidence.py::test_idempotent_retry_returns_original_sequence_and_conflicting_hash_fails
-test_quote_evidence.py::test_markout_60_300_900_selects_first_eligible_quote_after_target
-test_quote_evidence.py::test_restart_rebuilds_pending_marks_without_duplicate_events
-test_quote_evidence.py::test_late_fill_uses_proven_history_or_writes_history_unavailable
-test_quote_evidence.py::test_markout_never_crosses_lunch_close_trade_date_or_generation_gap
-test_quote_evidence.py::test_type_aware_retention_pins_pending_mark_anchors_and_archives_cadence
+test_hot_market_data_boundary.py::test_one_million_no_action_ticks_have_zero_repository_calls
+test_hot_market_data_boundary.py::test_action_uses_existing_economic_owner_without_market_data_carrier_or_hash
+test_hot_market_data_boundary.py::test_terminal_reject_writes_reason_only_and_ordinary_wait_writes_nothing
+test_hot_market_data_boundary.py::test_action_requires_economic_owner_readback_before_any_broker_submit
+test_hot_market_data_boundary.py::test_restart_waits_for_next_live_quote_and_never_reads_historical_tick
+test_hot_market_data_boundary.py::test_same_symbol_multi_algo_shares_one_in_memory_view
+test_hot_market_data_boundary.py::test_economic_persist_failure_is_loud_and_never_returns_success
+test_hot_market_data_postgres.py::test_runtime_event_writer_rejects_tick_quote_and_market_data_hash_fields
+test_hot_market_data_postgres.py::test_action_child_trade_rows_contain_only_economic_allowlist
+test_tca_offline_markout.py::test_markout_60_300_900_reads_authoritative_historical_market_source
+test_tca_offline_markout.py::test_tca_result_stores_only_derived_metric_policy_and_reason
+test_tca_offline_markout.py::test_late_fill_and_history_gap_are_deterministic_without_live_quote_persistence
 test_closing_auction_contract.py::test_auction_available_requires_versioned_raw_field_manifest
 test_closing_auction_contract.py::test_normal_quote_depth_last_preclose_and_limit_never_synthesize_auction_fields
-test_quote_evidence_repository_dev_db.py::test_append_evidence_allocates_sequence_and_runtime_update_in_one_transaction
-test_quote_evidence_repository_dev_db.py::test_same_event_retry_readbacks_original_row_and_hash_conflict_rolls_back
+test_hot_market_data_postgres.py::test_economic_owner_transaction_and_independent_readback_are_atomic
+test_hot_market_data_postgres.py::test_same_economic_identity_retry_is_idempotent_and_conflict_rolls_back
 test_miniqmt_quote_ingress_event_type_migration.py::test_preflight_accepts_only_exact_old_or_target_constraints
 test_miniqmt_quote_ingress_event_type_migration.py::test_apply_and_second_apply_are_idempotent_with_exact_readback
 test_miniqmt_quote_ingress_event_type_migration.py::test_rollback_and_second_rollback_are_idempotent
 test_miniqmt_quote_ingress_event_type_migration.py::test_rollback_refuses_while_new_type_or_source_rows_exist
-test_miniqmt_quote_diagnostics.py::test_quote_diagnostics_and_evidence_readback_are_paginated_and_strictly_read_only
+test_miniqmt_quote_diagnostics.py::test_quote_diagnostics_and_economic_readback_are_paginated_and_strictly_read_only
 test_miniqmt_quote_metrics.py::test_metric_labels_are_bounded_and_exclude_runtime_symbol_and_business_ids
 ```
 
@@ -1413,14 +1353,14 @@ test_b0_quote_v2_binding.py::test_legacy_binding_without_quote_control_is_legacy
 test_b0_quote_v2_binding.py::test_revision_and_parent_assignment_hashes_are_deterministic_and_conflicts_fail_loud
 test_b0_quote_v2_binding.py::test_plan_runtime_and_algo_readback_preserve_the_same_assignment
 test_b0_quote_v2_lifecycle.py::test_only_scheduler_constructs_controller_and_read_only_paths_never_start_ingress
-test_b0_quote_v2_lifecycle.py::test_runtime_leases_share_physical_feed_but_isolate_coordinator_and_symbol_failure
+test_b0_quote_v2_lifecycle.py::test_runtime_leases_share_physical_feed_but_isolate_controller_and_symbol_failure
 test_b0_quote_v2_lifecycle.py::test_switch_false_drains_active_parent_and_rejects_only_new_assignment
 test_b0_quote_v2_adapter.py::test_normalized_quote_projects_exact_vnpy_tick_without_time_price_depth_or_unit_fallback
-test_b0_quote_v2_adapter.py::test_action_pending_event_and_durable_action_receipt_precede_gateway_submit
+test_b0_quote_v2_adapter.py::test_action_pending_economic_transition_and_readback_precede_gateway_submit
 test_b0_quote_v2_adapter.py::test_reject_or_persist_failure_keeps_action_pending_and_gateway_call_count_zero
-test_b0_quote_v2_adapter.py::test_timer_emitted_submit_is_subject_to_the_same_quote_and_evidence_contract
-test_b0_quote_v2_adapter.py::test_child_event_and_receipt_rebuild_bidirectional_market_data_chain
-test_b0_quote_v2_adapter.py::test_authoritative_trade_attaches_markout_anchor_and_schedules_all_horizons
+test_b0_quote_v2_adapter.py::test_timer_emitted_submit_is_subject_to_the_same_quote_and_economic_contract
+test_b0_quote_v2_adapter.py::test_child_event_and_receipt_rebuild_economic_identity_chain_without_market_data_fields
+test_b0_quote_v2_adapter.py::test_authoritative_trade_closes_tca_offline_horizon_identity_without_live_mark_capture
 test_b0_quote_v2_restart.py::test_restart_submits_durable_action_without_child_once
 test_b0_quote_v2_restart.py::test_restart_with_child_or_unknown_broker_outcome_reconciles_without_resubmit
 test_b0_quote_v2_restart.py::test_same_action_has_deterministic_child_and_conflicting_payload_fails
@@ -1429,15 +1369,15 @@ test_b0_quote_v2_parity.py::test_best_limit_fresh_valid_buy_sell_business_fields
 test_b0_quote_v2_parity.py::test_twap_lite_fresh_valid_buy_sell_tail_and_protection_fields_match_legacy_b0
 test_b0_quote_v2_parity.py::test_only_registered_quote_safety_differences_are_allowed
 test_b0_quote_v2_parity.py::test_parity_violation_invalidates_revision_without_legacy_fallback
-test_b0_quote_v2_phase0b_export.py::test_v2_export_rebuilds_assignment_quote_depth_age_cadence_child_trade_and_markouts
+test_b0_quote_v2_phase0b_export.py::test_v2_export_rebuilds_assignment_action_child_trade_and_tca_results_without_quote_records
 test_b0_quote_v2_phase0b_export.py::test_v2_export_marks_missing_duplicate_or_revision_conflict_incomplete
 test_b0_quote_v2_phase0b_export.py::test_v1_export_is_byte_stable_and_v2_uses_one_bounded_read_snapshot
 test_miniqmt_execution_runtime_event_loop.py::test_b0_quote_v2_pending_tick_driver_continues_without_duplicate_child
 test_miniqmt_phase1_gateway_event_source.py::test_legacy_and_b0_quote_v2_parent_never_share_or_switch_quote_source
 ```
 
-真实 repository integration 必须证明 `ALGO_ACTION_EMITTED -> ACTION_INPUT durable receipt ->
-CHILD_ORDER_* -> CHILD_RECEIPT` sequence、idempotent restart 和 archived readback；fake gateway
+真实 repository integration 必须证明 `ALGO_ACTION_EMITTED economic transition ->
+CHILD_ORDER_* -> order/trade/TCA result` sequence、idempotent restart 和 archived readback；fake gateway
 只用于计数 broker call/no-call，不能替代 repository transaction。三类 parity fixture 必须复用现有
 BUG-614 参数与既有 core，比较所有注册 business fields，并对排除字段清单做 schema test。
 
@@ -1455,7 +1395,9 @@ backend/tests/miniqmt_execution_runtime/test_quote_contract.py
 backend/tests/miniqmt_execution_runtime/test_quote_ingress.py
 backend/tests/miniqmt_execution_runtime/test_quote_eligibility.py
 backend/tests/simulation_runtime/test_miniqmt_quote_context.py
-backend/tests/miniqmt_execution_runtime/test_quote_evidence.py
+backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py
+backend/tests/miniqmt_execution_runtime/test_hot_market_data_postgres.py
+backend/tests/miniqmt_execution_runtime/test_tca_offline_markout.py
 backend/tests/miniqmt_execution_runtime/test_closing_auction_contract.py
 backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_binding.py
 backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py
@@ -1479,11 +1421,11 @@ P1-E 的真实 SIM 证据最少包含：
 3. capability probe 区分 session capability、per-symbol quality、单位、exchange timestamp、tradability 与 auction；
 4. 每个 active symbol 的 eligibility、age、market phase、reason/stage；不得只展示 batch 总状态；
 5. capacity/coalesce/restart metrics，且 order/trade/clock/tick-driver 持续前进；
-6. MarketDataEvidenceV1 对 action、child receipt、protection-band 与 markout 可 readback/rebuild；
+6. ordinary quote/TICK/reject/health/cadence 的 durable 新增量为零；真实 action/terminal reject/child/trade 从 existing economic owner readback，独立行情carrier/hash数量为0，markout只回读离线派生TCA结果；
 7. LEGACY_B0 与 B0_QUOTE_V2 fresh/valid golden action diff 为零，异常安全差异符合预注册；
 8. B0_QUOTE_V2 的 broker_called/order/trade/reconcile 证据与无重复 parent/revision；
 9. auction 缺失明确 UNAVAILABLE，continuous B0_QUOTE_V2 不被无关阻塞；
-10. Phase 0B 查询可重建 quote age、五档 coverage、Q/depth、cadence 和 markout。
+10. Phase 0B 查询只重建 action/child/trade/TCA scalar completeness 与 markout；quote age、五档 coverage、Q/depth、cadence 只能来自当前进程 diagnostics/metrics，不提供历史 DB 查询。
 
 这些证据只验收 B0_QUOTE_V2 market-data control，不证明 ADAPTIVE_IS_L1、M1/B1 或策略效果。
 
@@ -1504,46 +1446,45 @@ miniqmt_quote_valid_depth_ratio
 miniqmt_quote_action_ready_ratio
 miniqmt_quote_age_ms{quantile}
 miniqmt_quote_clock_age_divergence_ms{quantile}
-miniqmt_quote_market_data_persist_failures_total
-miniqmt_quote_evidence_outbox_backlog
-miniqmt_quote_markout_coverage_ratio
+miniqmt_hot_path_repository_violation_total
+miniqmt_tca_offline_result_coverage_ratio
 miniqmt_b0_quote_v2_parity_violations_total
 miniqmt_b0_quote_v2_assignment_conflicts_total
 miniqmt_b0_quote_v2_pending_actions
 miniqmt_b0_quote_v2_duplicate_children_prevented_total
-miniqmt_b0_quote_v2_durable_to_submit_latency_ms
+miniqmt_b0_quote_v2_economic_commit_to_submit_latency_ms
 ```
 
 metric 类型与 labels 固定为：
 
 | metric | type | allowed labels / 语义 |
 |---|---|---|
-| owner、generation、bootstrap、heartbeat、outbox backlog | gauge | process/session hash 作为 value-side metadata，不作任意字符串 label；backlog 同时暴露 capacity ratio |
-| callback/coalesced/capacity/restart/persist failure/parity/assignment conflict/duplicate prevented | counter | `source_method/reason_code/stage/control_revision` 有界枚举 |
-| valid depth/action ready/markout coverage/pending actions | gauge | `market/capture_type/horizon/state/control_revision`；coverage 同时暴露 due/captured/unavailable counts |
-| quote age/clock divergence/persist latency/durable-to-submit latency | histogram | `market/capture_type/control_revision`；不得手工构造 `quantile` label，若 exporter 输出 quantile 由 backend 标准实现负责 |
+| owner、generation、bootstrap、heartbeat | gauge | process/session hash 作为 value-side metadata，不作任意字符串 label |
+| callback/coalesced/capacity/restart/hot-path repository violation/parity/assignment conflict/duplicate prevented | counter | `source_method/reason_code/stage/control_revision` 有界枚举 |
+| valid depth/action ready/offline TCA result coverage/pending actions | gauge | `market/horizon/state/control_revision`；coverage 同时暴露computed/unavailable counts |
+| quote age/clock divergence/economic-commit-to-submit latency | histogram | `market/control_revision`；不得手工构造 `quantile` label，若 exporter 输出 quantile 由 backend 标准实现负责 |
 
 alerts 固定最低规则：
 
-- owner conflict、assignment conflict、outbox full、parity violation 或 persist failure counter 在 5 分钟窗口增加任意一次：critical；只 gate 对应 B0_QUOTE_V2 symbol/revision；
+- owner conflict、assignment conflict、economic outbox full、parity violation、hot-path repository violation或economic persist failure在5分钟窗口增加任意一次：critical；只影响对应B0_QUOTE_V2 symbol/revision；
 - duplicate child prevented counter 增加时 warning 并要求可读 restart/reconcile evidence；若同时存在 broker duplicate fact 则 critical，revision 停止接纳新 parent；
 - 新 generation 发布 60 秒后 bootstrap coverage 仍 `<1.0`，或 writer heartbeat age 超显式 timeout：critical；
-- outbox capacity ratio `>=0.8` 持续 60 秒：warning，达到 1.0 立即 critical；
+- economic outbox capacity ratio `>=0.8` 持续 60 秒：warning，达到 1.0 立即 critical；
 - active symbol 的 capability/unit 缺失持续 5 分钟：warning；reason 恢复后自动清除当前 condition，不删除历史事件；
-- 最近 30 分钟到期 mark 至少 20 个时，任一 horizon captured/due `<0.95`：warning；unavailable reason 分布必须可查；样本不足只报 sample count，不误报 coverage success；
+- Phase 0B离线TCA最近一个批次任一horizon computed/eligible `<0.95`：warning；unavailable reason分布必须可查；样本不足只报sample count，不误报coverage success；
 - clock negative skew/divergence 任一越过 policy：对应 symbol critical evidence；不得全局暂停 LEGACY_B0 或无关 binding。
 
-P1-D operator runbook 作为 `docs/operations/miniqmt_quote_evidence_runbook.md` 随代码 PR 提交，并与本节保持逐项一致。固定只读顺序为：
+P1-D correction必须修订既有 `docs/operations/miniqmt_quote_evidence_runbook.md`（或在同PR安全重命名为economic evidence runbook），并与本节保持逐项一致。固定只读顺序为：
 
 1. 读取 process config hash、schema preflight/readback 和 ingress switch，禁止在 runbook 自动 apply DDL；
-2. 查询 owner/session/generation、bootstrap coverage、writer/coordinator heartbeat 和 outbox backlog；
+2. 查询 owner/session/generation、bootstrap coverage、writer heartbeat 和 economic outbox backlog；
 3. 查询指定 runtime/symbol 的 capability、clock、latest accepted quote、eligibility、first/last failure；
-4. 以 `market_data_id/evidence_id` 查询 durable receipt、action/child/trade/mark links、archived flag 与 Phase 0A policy version；
-5. 比对 due/captured/unavailable markout denominator 和 reason，检查午休/收盘/late-fill/restart gap；
+4. 以 `runtime_id + transition/command/child/trade identity` 查询economic/TCA receipt、action/child/trade/TCA links、archived flag与policy version；不提供`market_data_id`、行情hash或盘口查询；
+5. 比对Phase 0B离线TCA computed/unavailable denominator和reason，检查午休/收盘/late-fill/history gap；
 6. 仅在 broker fact 已发生时读取现有 order/trade/reconcile 状态，绝不由 diagnostics 触发 broker 操作；
 7. 输出 exact failure、自动恢复条件与需要用户另行授权的 DDL/config/restart/binding 操作。
 8. P1-E 读取 binding quote-control、plan parent assignment、runtime/algo readback 与 active/DRAINING 状态，验证同 parent 只有一个 revision；
-9. 读取 pending action、durable action receipt、deterministic child、broker reconcile 与 child receipt 顺序，并生成 §5.12 v2 export；不得由 runbook 重放 submit。
+9. 读取 pending action、durable economic-owner receipt、deterministic child、broker reconcile 与 TCA顺序，并生成 §5.12 v2 export；不得由 runbook 重放 submit。
 
 恢复由合法配置/行情和 worker lifecycle 自动完成；runbook 不包含人工 approval、RBAC、acknowledge、清空 evidence 或“点确认后继续”。配置变更、重启、DDL 或 binding 变更只报告给用户，由用户授权相应操作。
 
@@ -1581,13 +1522,13 @@ P1-D operator runbook 作为 `docs/operations/miniqmt_quote_evidence_runbook.md`
 - 取消其他 B0 lease；
 - 自动取消活动订单；
 - 改写 active parent revision、run status、scheduler 状态、execution policy 或 broker client singleton；
-- 擦除已有 quote reject/observation evidence。
+- 擦除已有历史 quote reject/observation rows；其清理属于另行授权的数据治理，不是 rollback。
 
 若发现 shared subscriber 影响 LEGACY_B0，停止新的 B0_QUOTE_V2 assignment，保持 active facts reconcile，并回退到上一个已验证 subscriber build；不能通过关闭 loud 校验掩盖。代码合入、配置持久化、重启、进程状态、binding revision、broker side effect 和运行证据必须分别报告。
 
 ### 10.3 P1-D CHECK migration / rollback / production readback
 
-migration 只允许把现有 event type 集合增加 `QUOTE_OBSERVED/QUOTE_REJECTED/QUOTE_ELIGIBILITY_EVALUATED/QUOTE_MARK_CAPTURED/QUOTE_INGRESS_HEALTH`，把 source 集合增加 `quote_ingress`。exact old sets 固定为：
+原P1-D migration只增加五类quote event的方案已被2026-08-12 correction取代。successor migration必须从KERNEL_V2新写允许集中移除`TICK/QUOTE_OBSERVED/QUOTE_REJECTED/QUOTE_ELIGIBILITY_EVALUATED/QUOTE_INGRESS_HEALTH`及所有quote-specific event/evidence carrier/hash；action只写既有transition/command/child经济字段，markout进入TCA派生结果，quote health不进入DB。exact historical predecessor sets仍用于只读兼容与guarded migration：
 
 ```text
 event_type = RUNTIME_CREATED, GATEWAY_CONNECTED, GATEWAY_DISCONNECTED,
@@ -1602,18 +1543,18 @@ event_type = RUNTIME_CREATED, GATEWAY_CONNECTED, GATEWAY_DISCONNECTED,
 source = runtime, gateway, oms, algo, operator, recovery
 ```
 
-target set 等于 old set 加本文五个 type/source literal，不多不少。禁止顺手增加其他 type/source、改表、加列/索引或修改数据；runtime Python enum/Literal、DDL CHECK 与 schema tests 必须由同一 canonical registry 比对，三处漂移即 validation failure。
+target set只包含durable business/session/order/trade/account/reconcile/operator/EOD event，不新增quote-specific type/source/carrier/hash。既有transition/command/child只保留经济字段；允许为reconciliation/run normalization增加经本文批准的schema。禁止raw tick表、quote表、tick索引、health window表、行情hash列或逐tick JSON。runtime Python enum/Literal、DDL CHECK与schema tests必须由同一canonical registry比对，三处漂移即validation failure。
 
 apply preflight 在任何 `ALTER TABLE` 前只读执行并输出 compact receipt：
 
 1. `to_regclass('qmt_strategy.execution_runtime_event')` 必须存在；两个 constraint 名必须各唯一存在且为 CHECK；
-2. 通过 `pg_get_constraintdef` canonicalize allowed literal set；只接受 **exact old set** 或 **exact target set**。缺值、未知额外值、同名非 CHECK 或 expression drift 一律 abort；
+2. 通过 `pg_get_constraintdef` canonicalize allowed literal set；只接受 exact historical predecessor 或 exact corrected target。缺值、未知额外值、同名非 CHECK 或 expression drift 一律 abort；
 3. 统计当前 event type/source distinct values，任一不在 target set 内 abort；
 4. 记录 schema/table/constraint OID、definition hash、row counts 和 migration file sha256，禁止修改行。
 
 apply 在单事务内设置显式 `lock_timeout/statement_timeout`，取得 `SHARE ROW EXCLUSIVE` table lock，再重复 preflight 防 TOCTOU：target set 已存在则 no-op；old set 才 drop/recreate 两个同名 CHECK（可 `NOT VALID` 后立即 `VALIDATE CONSTRAINT`），随后用 `pg_get_constraintdef` 验证 exact target definition并 commit。任何一步失败整事务 rollback。不得由应用 startup 自动运行。
 
-rollback 同样只接受 exact target 或 exact old：old 已存在则 no-op；target 存在时先统计五个新 event types 和 `quote_ingress` source，任一行存在即 loud refusal并输出 counts/min-max sequence，不删除或改写数据；零行时才在同一事务恢复 exact old constraints并 readback。definition drift 一律拒绝。该 rollback 仅撤销 schema allowlist，不删除 P1-D 代码/evidence，也不切换 active parent revision。
+rollback同样只接受exact corrected target或最近安全predecessor；任何rollback target都必须继续拒绝新TICK/ordinary quote persistence。存在successor economic facts时loud refusal并输出counts/min-max sequence，不删除或改写数据；零行时才恢复安全约束并readback。不得回滚到旧五类quote-event writer合同，也不得删除既有经济facts或TCA派生结果。
 
 生产应用后的只读 readback 必须记录：constraint names/OIDs/validated flags、canonical definitions与 hashes、旧/new type/source row counts、unknown-value count=0、migration file sha256、查询时间和 DB identity。只有 readback exact match 才可报告 `production_ddl_gate=applied_and_verified`；代码已合入但用户未授权/未执行时必须报告 `production_ddl_gate=pending`，不得启用 ingress或以本地 migration test 代替生产状态。
 
@@ -1631,8 +1572,8 @@ rollback 同样只接受 exact target 或 exact old：old 已存在则 no-op；t
 | policy/schema/阈值缺失 | 对应 B0_QUOTE_V2 assignment loud invalid | 无；不得切换 LEGACY_B0 |
 | owner conflict/capacity不足 | 拒绝第二 owner或新 symbol admission；已有 symbols 继续 | 无 |
 | 当前 symbol 无五档/单位/timestamp/tradability | 该 symbol WAIT/INVALID 并自动等下一证据 | 无；不阻塞无关 symbol |
-| quote stale/duplicate/out-of-order | 该 symbol 不释放新 child并写 durable reject | 无；下一合法 quote 自动恢复 |
-| market suspended/limit/zero depth | 明确 WAIT/NO_FILL，保持 pending liveness | 无 |
+| quote stale/duplicate/out-of-order | 该 symbol不释放新child并更新process aggregate；若终结真实action才写decision reject | 无；下一合法quote自动恢复 |
+| market suspended/limit/zero depth | 进程内明确 WAIT/NO_FILL，保持 pending liveness；无 action 时零 event/NO_FILL/cursor DB 写入 | 无 |
 | evidence 持久化失败 | 对应 B0_QUOTE_V2 停止新 child，已有 broker facts reconcile | 无；不得报 durable success |
 | action 已 durable、child 未出现 | 下一 lifecycle tick按同 deterministic action/child identity继续；broker call 前再次查 durable/broker fact | 无 |
 | restart/timeout 已存在 child 或 broker unknown fact | 只 reconcile 和补 receipt；禁止再次 submit | 无；不得人工点击重放 |
@@ -1657,8 +1598,13 @@ rollback 同样只接受 exact target 或 exact old：old 已存在则 no-op；t
 | F-016 | owner、subscription、bootstrap、payload、capacity、clock、tradability、persist、markout、parity、consumer 失败均引用统一 loud registry；禁止任何 silent fallback/业务逻辑漂移/简化交付 |
 | F-017 | SIM-first/default-off/active-parent drain/显式 revision 回滚与 LIVE hard lock不变；不新增审批、RBAC、permit、confirm-run 或人工 ack |
 | F-019 | generation lease、bootstrap、reserved slots、single writer、heartbeat/restart、独立高优先级通道、per-symbol eligibility 与 dependency-group watermark 完整 |
-| F-020 | `market_data_id`、MarketDataEvidenceV1 exact schema/hash、action/reject/child/protection/markout/cadence chain、single-writer/outbox/retry、late-fill/restart/session-boundary、auction raw capability、event types、read-only API、retention/cardinality、metrics/alerts/runbook、精确 CHECK migration/rollback/readback，以及 Phase 0B v2 单查询 export/coverage/completeness 完整 |
+| F-020 | process-local `market_data_id`/FiveLevelQuote、zero-DB ordinary quote path、existing economic owners、TCA derived result、single-writer/retry、late-fill/restart/session-boundary、auction raw capability、bounded process diagnostics、corrected CHECK migration/rollback/readback，以及 Phase 0B economic completeness 查询完整；独立行情carrier/hash数量为0 |
 | F-021 | production scheduler composition 唯一、switch=true eager/switch=false durable-recovery-only lazy schema readback 自动 fail closed、READY/DRAINING、Phase 1 bootstrap 不创建 LEGACY subscription、不可变 binding exact create 与 unattended roll-forward revision 保持完整；不执行 DDL/config/restart/binding mutation/broker，也不新增人工门禁 |
+| F-113 | ordinary B0 TICK/quote reject/wait只走process-local single-writer，repository/query/write为零，restart等待下一live quote |
+| F-114 | action/reprice/cancel/terminal reject只写existing economic transition/command/child字段，禁止行情carrier/hash或observed market price |
+| F-115 | durable writer只允许business/session/order/trade/account/reconcile/operator/EOD与TCA派生结果，不保存raw/normalized行情流、行情hash或health window |
+| F-119 | corrected successor migration与rollback永不恢复五类ordinary quote event writer；历史清理独立授权 |
+| F-121 | 1M tick soak、same-symbol multi-algo、restart、capacity/aggregate/DB transaction evidence可执行 |
 
 ---
 
@@ -1668,16 +1614,21 @@ rollback 同样只接受 exact target 或 exact old：old 已存在则 no-op；t
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-003 | §5.1–§5.3、§8.1、§9.1 | exact field map、five-level prefix/order、basis/unit、UTC/monotonic、dual hash、duplicate/ordering tests 已定义 | design_ready | none |
-| F-008 | §5.5、§5.8、§8.3–§8.5、§10 | multi-market clock/calendar、auction OBSERVE_ONLY、terminal ownership 与 rollout/rollback tests 已定义 | design_ready | none |
-| F-009 | §5.4、§5.7、§7、§9.1 | per-symbol tradability/eligibility 将 WAIT/NO_FILL 与 data/config failure 分离，reason evidence 完整 | design_ready | none |
-| F-011 | §0.1、§4.5、§5.11、§6.1.1、§8.5、§9.1.3、§10 | exact binding/revision/assignment、pending action、durable-before-submit、deterministic child/restart、fresh/valid parity、safety difference 与 single-revision parent 已定义 | design_ready | none |
-| F-015 | §2.1、§4.1、§4.5、§5.1–§5.3、§5.11、§8.1、§8.5 | neutral contracts、scheduler/controller/runtime/gateway ownership、strict tick field map、LEGACY_B0 `VnpyTick`/core unchanged 与 no-algo-switch tests 已定义 | design_ready | none |
-| F-016 | §0.2–§0.3、§7、§9 | no-simplification/no-silent-business-drift、统一 reason/stage、failure health/evidence 与 direct tests 已定义 | design_ready | none |
-| F-017 | §0.4、§4.5.2、§6.1.1、§8.5、§10–§11 | default-off SIM、显式 revision selection、scheduler-owned自动恢复、user-owned config/restart/binding activation、active drain、LIVE hard lock、no approval/RBAC/permit 已定义 | design_ready | none |
-| F-019 | §4.2–§4.3、§5.6–§5.7、§8.2–§8.3、§9.4 | bootstrap/generation/reserved slot/worker/priority/per-symbol/group watermark、metrics/alerts/runbook 已定义 | design_ready | none |
-| F-020 | §4.4.1–§4.5、§5.8–§5.12、§6.1、§7、§8.4–§8.5、§9.1.2–§9.4、§10.3 | P1-D exact evidence/repository/migration 与 P1-E action/child/restart closure、Phase 0B v2 bounded snapshot export、coverage/completeness、metrics/alerts/runbook 均已定义到直接 nodeid | design_ready | none |
-| F-021 | §4.5、§6.1–§6.1.1、§8.7、§9.1、§10–§11 | unique production composition、eager/lazy 只读 DDL readback、READY/BLOCKED/DRAINING、durable-active recovery、pure LEGACY startup parity、exact bootstrap、binding create/roll-forward 与禁止原地切换均已定义到直接 nodeid | design_ready | none |
+| F-003 | §5.1–§5.3、§8.1、§9.1 | `backend/tests/miniqmt_execution_runtime/test_quote_contract.py` exact field/depth/unit/time/hash matrix | design_ready | none |
+| F-008 | §5.5、§5.8、§8.3–§8.5、§10 | `backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py` calendar/auction/session tests | design_ready | none |
+| F-009 | §5.4、§5.7、§7、§9.1 | `backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_adapter.py` per-symbol WAIT/NO_FILL/error matrix | design_ready | none |
+| F-011 | §0.1、§4.5、§5.11、§6.1.1、§8.5、§9.1.3、§10 | `backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_binding.py`与`test_b0_quote_v2_restart.py` | design_ready | none |
+| F-015 | §2.1、§4.1、§4.5、§5.1–§5.3、§5.11、§8.1、§8.5 | `backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_adapter.py` strict projection/no-algo-switch | design_ready | none |
+| F-016 | §0.2–§0.3、§7、§9 | `backend/tests/miniqmt_execution_runtime/test_quote_contract.py` typed reason/failure matrix | design_ready | none |
+| F-017 | §0.4、§4.5.2、§6.1.1、§8.5、§10–§11 | `backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py` drain/no-approval tests | design_ready | none |
+| F-019 | §4.2–§4.3、§5.6–§5.7、§8.2–§8.3、§9.4 | `backend/tests/miniqmt_execution_runtime/test_quote_ingress.py` generation/mailbox/worker tests | design_ready | none |
+| F-020 | §4.4.1–§4.5、§5.8–§5.12、§6.1、§7、§8.4–§8.5、§9.1.2–§9.4、§10.3 | `backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py`与`test_vnpy_compatibility_receipts.py` | design_ready | none |
+| F-021 | §4.5、§6.1–§6.1.1、§8.7、§9.1、§10–§11 | `backend/tests/simulation_runtime/test_lifecycle_scheduler.py`与`test_miniqmt_quote_activation.py` | design_ready | none |
+| F-113 | §4.1–§4.4、§5.6–§5.9 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py`：1M ordinary tick/reject/wait与fresh-process zero SQL | design_ready | none |
+| F-114 | §4.4、§5.9 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py`：action/no-action、economic allowlist、market-data carrier/hash rejection、durable-before-submit/fault injection | design_ready | none |
+| F-115 | §4.4、§5.9、§10.3 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_postgres.py`：writer inventory/CHECK/raw callback negative | design_ready | none |
+| F-119 | §10.2–§10.3 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_migration_postgres.py`：DEV migration/readback/no-tick rollback/cleanup dry-run | design_ready | none |
+| F-121 | §9.1–§9.4 | target artifact `tests/aistock_validation/receipts/miniqmt_hot_market_data_normal_day_v1.json`：soak/restart/aggregate/DB delta | design_ready | none |
 
 ---
 
@@ -1694,7 +1645,7 @@ SIM observation、DDL、durable evidence 或 `ADAPTIVE_IS_L1` 已实现或已启
 | 统一 loud reason/stage registry | `backend/execution_algos/adaptive_is/reasons.py` | registry completeness/不可变性、reason/allowed-stage matching、severity、retry_class、typed loud payload tests；calendar fault 保留 `CALENDAR` stage | implemented_verified | runtime first/last/count 聚合、metrics、health/restart 与 durable event 仍分别属于 P1-B/P1-D |
 | process config 与 immutable policy schema | `backend/miniqmt_quote_contract_env.py`、`backend/miniqmt_quote_contract_config.py`、`backend/config_manager_compat.py`、`backend/routers/config_env.py` | `test_config_manager_quote_ingress_roundtrip.py`：default-off、strict explicit thresholds、factory/direct constructor 同一校验、非法 quote 配置在保存前 loud 拒绝、canonical policy hash、existing unknown/TCA key round-trip preservation、new unknown key 拒绝、ConfigManager 不加载 execution-algorithm package、env read/reload failure 不伪装保存成功 | implemented_verified | 未持久化 binding policy，未切换 revision，未启用 ingress |
 | F-008/F-009 的 contract foundation | `CalendarSnapshot*`、`ExecutionClockEvent`、`TradabilitySnapshot`、`ActionQuoteEligibility` DTOs | calendar market-set、tradability data-invalid vs suspension、eligibility reason/stage tests | P1-A_scope_complete | phase projection、freshness、per-symbol evaluator、dependency watermark 仍必须由 P1-C 完整实现，不得据此宣称 runtime ready |
-| F-020 evidence/auction contract foundation | `MarketDataEvidenceV1`、`ClosingAuctionSnapshot` | 完整 source/exchange/receive/persist、L1-L5、age/lag、benchmark/mark version、source/evidence hash；capture/revision/reason-stage/schema/hash 与 auction unavailable/不合成字段反例测试 | P1-A_scope_complete | repository durable ack、markout 调度、cadence aggregate、event carrier 与 migration 仍由 P1-D 实现 |
+| F-020 evidence/auction contract foundation | 历史 `MarketDataEvidenceV1`、`ClosingAuctionSnapshot` | 原合同对source/exchange/receive、L1-L5、age/lag与auction unavailable/不合成字段的正反测试仍可用于normalizer边界 | HISTORICAL_SUPERSEDED_PARTIAL | `MarketDataEvidenceV1`的durable部分已撤回；successor只保留in-memory quote contract、existing economic facts与TCA派生结果，独立行情carrier/hash数量为0，source remediation未开始 |
 
 本切片新增代码及 tests 还执行 AST import-boundary 证明：算法中立 contracts 不依赖
 `backend.services`/`backend.infra`/`backend.db`/FastAPI/xtquant/vn.py，MiniQMT
@@ -1723,7 +1674,7 @@ normalizer 不依赖 xtdata、DB、broker 或 HTTP。任何后续切片若破坏
 | generation-bound callback、capture/prepare ack、atomic publish、fence/unsubscribe 的替换顺序 | `RealtimeQuoteSubscriber._replace_phase_one_feed`、`_bootstrap_phase_one_states`、`_safe_generation_prepared`、`_on_phase_one_quote` | mapping 存在但 raw capture 拒绝时 coverage 保持 0 且不 publish；prepare 拒绝与 replacement bootstrap failure 均保留旧 feed；old closure `STALE_GENERATION`；callback sequence 胜出 | implemented_verified | 不作 freshness/duplicate/exchange-time business eligibility；该完整 evaluator 属于 P1-C |
 | immutable raw callback boundary、reserved per-symbol mailbox 与原子 release | `ReservedSymbolMailbox.replace_admitted`、`PhaseOneRawQuoteSnapshotStore.replace_admitted`、`RealtimeQuoteSubscriber.release_phase_one_lease` | release 缩容 replacement 失败时 lease/symbol union/旧 feed 全保留；capacity-only-new-admission、unexpected symbol loud、revoked snapshot 清除与历史 churn 有界均有定向测试 | implemented_verified | raw frame 只入 bounded in-memory snapshot，不送 strategy/action/DB/broker；normalization/projector 属于 P1-C/P1-E |
 | supervisor/data-session 单 writer、health、watchdog、bounded restart 与 epoch fencing | `QuoteIngressWorker`、`QuoteIngressSupervisor` | 多 logical consumers 共享一个 writer；`CONSUMER_FAILURE` 和 alive-but-stale heartbeat 均 fence generation/writer epoch 并请求 rebuild；旧线程退出前禁止 parallel writer；同 lifecycle epoch `RESTART_MAX_ATTEMPTS` 有界 | implemented_verified | 没有重启服务、scheduler 或 broker；runtime scheduler 的实际 lifecycle wiring 与 B0 revision assignment 仍属于 P1-E |
-| loud registry、failure first/last/count 与 ingress telemetry/config | `reasons.py`、`miniqmt_quote_contract_env.py`、`miniqmt_quote_contract_config.py`、subscriber/worker health | `UNEXPECTED_SYMBOL` 注册；error health 保留 first/last/occurrence count；loud interval 不丢计数；health 提供 owner/generation/bootstrap coverage/callback/coalesce/capacity/restart/heartbeat metrics | implemented_verified | Prometheus/API presentation、durable aggregate/evidence/alert routing 仍属于 P1-D；未增加 approval/RBAC/permit/ack |
+| loud registry、failure first/last/count 与 ingress telemetry/config | `reasons.py`、`miniqmt_quote_contract_env.py`、`miniqmt_quote_contract_config.py`、subscriber/worker health | `UNEXPECTED_SYMBOL` 注册；error health 保留 first/last/occurrence count；loud interval 不丢计数；health 提供 owner/generation/bootstrap coverage/callback/coalesce/capacity/restart/heartbeat metrics | implemented_verified | Prometheus/API presentation保留process-local；不得新增durable cadence/health aggregate；未增加 approval/RBAC/permit/ack |
 
 本切片的本地验证回执如下（均在 P1-B task worktree，未持久化配置、未启动或重启任何服务）：
 
@@ -1760,23 +1711,23 @@ P1-C 保持 P1-B candidate physical bootstrap 的 all-or-nothing 语义；`WAITI
 
 ---
 
-### 13.4 P1-D implementation acceptance record（2026-07-12）
+### 13.4 P1-D historical implementation record（2026-07-12；2026-08-12 correction）
 
-本记录对应权威实现 PR #2011，证明 §8.4 的 durable evidence/observation 切片已按设计实现并完成定向及
-disposable dev-DB 验证。它不表示生产 CHECK DDL 已执行、SIM ingress 已激活、
-`B0_QUOTE_V2` 已绑定或任何 broker side effect 已发生；这些状态继续分别受
-§10.3、§11 与 P1-E 约束。
+本记录对应历史 PR #2011，只证明当时定义的 durable evidence/observation slice 曾被实现和测试。
+2026-08-12 架构审核撤回逐 quote/reject/health event、quote query 与 cadence persistence，因此相关行改为
+`HISTORICAL_SUPERSEDED_PARTIAL`；只有不依赖行情落库的auction capability、离线TCA policy和业务边界证据可以复用。
+不得把本表历史 CI 当作 `F-113..F-121` remediation 完成证据。
 
 | P1-D implementation item | implementation refs | test/evidence | status | explicit boundary |
 |---|---|---|---|---|
-| capture-type 强 schema、required/null matrix、canonical source/evidence identity | `contracts.py::MarketDataEvidenceV1`、`_validate_evidence_null_matrix`、`_evidence_source_input_payload`；`repository.py::QuoteEvidenceEventCandidate` | `test_market_data_evidence_v1_required_fields_by_capture_type`、`test_market_data_evidence_is_complete_typed_and_hash_stable`、非法跨 capture 字段与伪造 source hash 反例 | implemented_verified | 只接受 `B0_QUOTE_V2` evidence identity；不创建或绑定 parent revision |
-| runtime event registry 与 exact CHECK migration/rollback/readback | `models.py::MiniQMTExecutionEventType`、`quote_event_schema.py`、`miniqmt_quote_ingress_event_types_20260712.sql/.rollback.sql` | exact old/target、expression drift、validated flags、apply/second apply、rollback/second rollback、row-exists refusal、DB identity/query time readback；disposable PostgreSQL 16 实测 | implemented_verified | migration 只改变两个 CHECK；生产 DDL 仍为 `pending`，不由 startup 执行 |
-| transaction-owned sequence、idempotency、post-commit readback、retry/outbox isolation | `repository.py::append_evidence_event_idempotent`、`QuoteEvidenceCoordinator`、receipt reserve/per-symbol gate | disposable dev-DB transaction/sequence/idempotency/readback `3 passed`；outbox dedup、registered retry、terminal failure、unrelated-symbol continuity、JSON restart durability direct tests | implemented_verified | callback 不写 DB；无 JSON/内存生产 fallback；无 broker submit/cancel |
-| action/reject/child/trade/mark identity 闭包、retention 与只读分页 diagnostics | `repository.py::list_evidence_receipts` recursive identity closure、`list_quote_events_page`、`existing_evidence_ids`、`_archive_events_for_runtime`；`ops.py::_missing_required_evidence_links` | action market-data 查询重建不同 receipt market-data 的 child evidence；source child/trade event 精确 readback；诊断 spy 禁止 `list_events` 全量读取；14/90 天及 pending mark retention SQL 在 dev DB 执行 | implemented_verified | API 只读，不启动/修复 subscriber、scheduler 或 gateway；identity/symbol 不进入 metrics label |
-| authoritative fill 60/300/900 markout、late fill、restart 与 durable terminal | `quote_evidence.py::MarkoutAnchor`、`rebuild_pending_markouts`、`drain_markouts`、bounded time/sample history | normal、late fill、restart-before/after-target、generation gap、午休/收盘/跨日、history gap、durable-ack-before-terminal、bool/string recovery input 反例 | implemented_verified | 不查询补行情、不跨 session/day、不选择更有利 quote；不可证明时写 stable `UNAVAILABLE` |
+| capture-type quote schema 与 durable observation identity | `contracts.py::MarketDataEvidenceV1`、`repository.py::QuoteEvidenceEventCandidate` | 历史 schema/hash 正反测试 | HISTORICAL_SUPERSEDED_PARTIAL | carrier必须退役为只读；successor不得新写或以其作为action authority |
+| quote event registry 与旧 CHECK migration | `models.py::MiniQMTExecutionEventType`、`quote_event_schema.py`、`miniqmt_quote_ingress_event_types_20260712.sql/.rollback.sql` | 历史migration exact-set测试 | HISTORICAL_SUPERSEDED_PARTIAL | corrected successor migration必须禁止新TICK/quote-specific writer，且rollback不得恢复 |
+| quote event sequence/idempotency/readback/outbox | `repository.py::append_evidence_event_idempotent`、`QuoteEvidenceCoordinator` | 历史dev-DB transaction测试 | HISTORICAL_SUPERSEDED_PARTIAL | successor改为economic owner transaction；普通quote/cadence DB queue必须删除 |
+| quote-query identity closure、retention与分页 | `repository.py::list_evidence_receipts`、`list_quote_events_page`、`existing_evidence_ids` | 历史quote query/retention测试 | HISTORICAL_SUPERSEDED_PARTIAL | successor不提供market_data_id/quote query；历史row治理需独立DML授权 |
+| authoritative fill 60/300/900 markout、late fill、restart 与 durable terminal | 历史`quote_evidence.py::MarkoutAnchor/rebuild_pending_markouts/drain_markouts` | 历史normal/late-fill/restart/session-gap测试 | HISTORICAL_SUPERSEDED_PARTIAL | 实时selector/history/persistence全部退役；successor由Phase 0B从权威历史行情源计算并只写派生TCA metric/policy，不写mark价格、行情hash或盘口 |
 | closing auction raw capability OBSERVE_ONLY | `quote_auction.py::ClosingAuctionCapabilityProbe`、`contracts.py::ClosingAuctionSnapshot` | versioned manifest AVAILABLE；provider 未声明 UNAVAILABLE；已声明但字段缺失/非法 INVALID；last/pre-close/depth/limit 合成反例拒绝 | implemented_verified | auction snapshot 不进入 action adapter，不释放 child |
-| cadence、health、metrics/alerts 与 operator runbook | generation-aware cadence slot、独立 low-priority health slot、`quote_metrics.py`、`docs/operations/miniqmt_quote_evidence_runbook.md` | 30 秒 aggregate merge/different-generation isolation；metrics 缺字段/假零值 loud reject；bounded labels；alerts 无 ack/RBAC/approval | implemented_verified | observation-only；生产配置未写，ingress switch 保持 false |
-| P1-E/LEGACY_B0/BUG 边界 | P1-D diff 未修改 runtime binding、gateway submit/cancel、LEGACY_B0 policy、scheduler pending tick-driver | direct matrix `72 passed`；dev-DB matrix `3 passed`；changed-file ruff/compile/diff、L0/module registry/F2 validator 作为本 PR gate | implemented_verified | P1-E 才负责 binding、真实 SIM parity 与 broker/reconcile 运行证据；BUG-599/600/604/614 行为不在本切片改写 |
+| cadence、health、metrics/alerts 与 operator runbook | `quote_metrics.py`、`docs/operations/miniqmt_quote_evidence_runbook.md` | 历史30秒durable aggregate实现被撤回；process metrics缺字段/假零值loud reject、bounded labels、alerts无ack/RBAC/approval的证据保留 | HISTORICAL_SUPERSEDED_PARTIAL | source remediation not_started；quote health DB write目标为0 |
+| P1-E/LEGACY_B0/BUG 边界 | P1-D diff 未修改 runtime binding、gateway submit/cancel、LEGACY_B0 policy、scheduler pending tick-driver | 历史direct matrix与CI | implemented_verified_historical_boundary | successor仍不得改策略信号、价格数量、gateway或broker route |
 
 覆盖率回执：`contracts.py` 82%、`quote_evidence.py` 81%、`quote_auction.py` 96%、
 `quote_event_schema.py` 83%、`quote_metrics.py` 81%（均启用 branch coverage）；
@@ -1795,10 +1746,10 @@ binding 持久化、真实 SIM 或 broker side effect 已完成，后续生产�
 | exact binding/revision/parent assignment | `simulation_runtime/models.py::assert_binding_payload_boundary`、`decision.py::ExecutionPlanCompiler.compile_plan`、`b0_quote_v2.py::{QuoteControlBindingV1,B0QuoteV2RevisionV1,ParentQuoteControlAssignmentV1}` | `test_b0_quote_v2_binding.py` 5 个 direct nodeids：exact schema/hash/readback/conflict，并证明历史缺 quote-control binding 的 plan payload/hash 不变 | implemented_verified | 不复制 execution policy，不读取 approval state；显式 LEGACY/B0 assignment 均冻结，历史 binding identity 不变 |
 | scheduler-owned controller/lifecycle/drain | `scheduler.py`/`lifecycle.py`/`bridges.py` 的唯一 factory 注入；`B0QuoteV2ControllerFactory` registry；`PhaseOneQuoteProjectionSink` 多 consumer isolation | `test_b0_quote_v2_lifecycle.py`：single construction、共享 physical feed/独立 coordinator、switch=false 仅 durable active `DRAINING`；factory/lease failure cleanup 反例 | implemented_verified | 不创建第二 scheduler/feed/gateway；不由 read API 构造；服务重启和 process config 仍由用户所有 |
 | strict normalized-to-B0 adapter | `b0_quote_v2.py::project_vnpy_tick`、controller lifecycle；`runtime.py::{bind_b0_quote_v2_controller,dispatch_b0_quote_v2_tick}`；`client.py::_b0_quote_v2_assignments` | `test_b0_quote_v2_adapter.py` 7 项 exact tick/timer/reject/chain/anchor；contract failure 12 项；LEGACY/B0 quote-source direct regression | implemented_verified | 不调用 LEGACY quote provider/on_tick；不改三个 vn.py core、price/quantity/protection/tail business fields；source 不可切换 |
-| action durable-before-submit 与 child receipt | `B0QuoteV2Controller.handle_submit_action/_resume_pending/_persist_child_receipt`、`QuoteEvidenceCoordinator`、`MiniQMTExecutionRuntime.submit_b0_quote_v2_child` | pending event < durable ACTION_INPUT < child < CHILD_RECEIPT；transient persist 时 gateway=0；Postgres repository external-cursor bounded readback；bidirectional market-data chain direct tests | implemented_verified | broker fact 不因 receipt 失败回滚；persist failure 保持 pending 且无新 child；无内存/JSON 假 durable success |
+| action durable-before-submit 与 child receipt | `B0QuoteV2Controller.handle_submit_action/_resume_pending/_persist_child_receipt`、历史`QuoteEvidenceCoordinator`、`MiniQMTExecutionRuntime.submit_b0_quote_v2_child` | 历史pending/quote-event/child链与PostgreSQL测试 | HISTORICAL_SUPERSEDED_PARTIAL | durable-before-submit语义保留；quote evidence coordinator/carrier必须退役，改为existing economic owner readback |
 | restart/reconcile/no duplicate | immutable `action_evidence_candidate` recovery、durable receipt lookup、deterministic child/hash conflict、existing child receipt repair | `test_b0_quote_v2_restart.py` 3 项 + tampered recovery/unknown child event 反例；crash-before-ack、durable-before-child、child-exists 均保持最多一次 gateway submit | implemented_verified | 不盲重试 submit、不取消既有 order、不切 revision；unknown broker outcome 先 reconcile |
 | LEGACY parity 与预注册安全差异 | existing `SNIPER/BEST_LIMIT/TWAP_LITE` cores、`canonical_parity_payload/assert_b0_quote_v2_parity`、factory revision invalidation | `test_b0_quote_v2_parity.py`：三类 core BUY/SELL、TWAP timer/tail/protection、排除字段 exact schema、业务字段 diff invalidates revision；BUG-604/614 direct regressions | implemented_verified | 无双跑 broker；unknown 字段默认参与比较；parity violation 不回退 LEGACY、不接纳该 revision 新 parent |
-| Phase 0B export v2 | `tca_read_api.py::_export_quote_control_evidence_v2`、`repository.py::read_quote_control_snapshot`、P1-E runbook | v1 deterministic、v2 one read snapshot、bounded runtime IDs/external cursor、depth/age/cadence/action/child/trade/60-300-900 markout closure；missing/duplicate/hash/revision conflict incomplete | implemented_verified | 只读、无全表 JSONB scan、无自动 repair/broker；`quote_control_complete` 不代表 runtime activation |
+| Phase 0B export v2 | `tca_read_api.py::_export_quote_control_evidence_v2`、`repository.py::read_quote_control_snapshot`、P1-E runbook | 历史depth/age/cadence/action/child/trade/markout export测试 | HISTORICAL_SUPERSEDED_PARTIAL | successor只导出decision/child/trade/TCA scalars；必须删除quote/depth/age/cadence DB依赖，且不自动repair/broker |
 | quality/metrics/F2 evidence | bounded metric registry/factory health、P1-E direct tests、本 §13.5 与 runbook | P1-E direct `41 passed`；P1-A～E contract matrix `184 passed`；changed-source line `86.40%`、branch `70.33%`；ruff/compile/diff、guardrail changed-only、L0、module registry、F2 validator 全通过 | implemented_verified | `no_simplified_delivery/no_silent_error/no_business_semantic_drift/no_unrequested_gate_or_approval` 均逐项通过；未执行 DDL/config/restart/broker/真实 SIM |
 
 本地扩大回归为 `389 passed, 7 failed, 1 skipped`；同 7 个失败已在未修改的最新
@@ -1831,13 +1782,13 @@ immutable runtime release/binding，不创建或修改 StrategyPackage，不改�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| source observation / pilot preregistration | runtime `mqrt_sim_a02d3f2bdd17624043c2fae8`；`miniqmt_b0_quote_v2_pilot.py::build_pilot_artifacts` | 2026-07-13 MiniQMT gateway `TICK=1505`；transport lag p99 `16719.207ms`、max `55830.979ms`；p99 向上注册 20s，55s 异常仍 fail closed；不把测试 fixture 数值冒充生产 observation | implemented_verified | none |
-| exact quote policy | `_build_execution_policy`、`QuoteContractPolicy.from_execution_policy` | receive/source/exchange `20000ms`；negative skew `1000ms`；clock divergence `1000ms`；dependency-group skew `20000ms`；auction `OBSERVE_ONLY`；production dry-run exact policy/hash readback；六项均 required 且进入 immutable hash | implemented_verified | none |
-| TCA benchmark policy | `_build_execution_policy`、`TcaBenchmarkPolicy`、Phase 0A §3.2.2 | version `miniqmt_execution_tca_benchmark_v1`；max age `10000ms`；arrival forward `2000ms`；clock skew `1000ms`；transport `3000ms`；direct schema tests；只影响 TCA quality | implemented_verified | none |
-| mark policy | `quote_evidence_policy`、`B0QuoteV2RevisionV1` | `miniqmt_execution_tca_mark_selector_v1`；`markout_max_lag_ms=10000`；revision/readback direct tests；缺合法 quote 写 `UNAVAILABLE` | implemented_verified | none |
-| policy/revision identity | `decision.py::_immutable_execution_policy_json`、`source_build_manifest()`、`B0QuoteV2RevisionV1` | execution policy id `b0_quote_v2:SNIPER_MINIQMT:ma_8ec5e389:20260714:v1`；binding `miniqmt_quote_control_binding_v1/B0_QUOTE_V2`；nested immutable `policy_json` execution-plan direct test；plan 保留 version/hash envelope | implemented_verified | none |
-| production tool and transaction | `scripts/miniqmt_b0_quote_v2_pilot.py` | dry-run 默认；全部业务值 required；同 strategy/date 冲突反例；advisory transaction lock、release+binding rollback、independent readback、idempotent already-current tests；production dry-run `conflicts=[]`；不调用 broker、不创建 package | implemented_verified | none |
-| activation state separation | source PR/merge、运行进程 readback、production DML/readback、正常交易日 SIM evidence | DESIGN-COMPLIANCE-001、F2 validator、CI、live scheduler/quote diagnostics/Phase 0B v2 query 分阶段记录；代码/dry-run 不得冒充已激活 | implemented_verified | none |
+| source observation / pilot preregistration | runtime `mqrt_sim_a02d3f2bdd17624043c2fae8`；`scripts/miniqmt_b0_quote_v2_pilot.py::build_pilot_artifacts` | artifact: `docs/architecture/miniqmt_adaptive_is_phase1_quote_contract_design.md`；§13.6.1 2026-07-13 TICK/lag receipt | implemented_verified | none |
+| exact quote policy | `scripts/miniqmt_b0_quote_v2_pilot.py::_build_execution_policy`、`QuoteContractPolicy.from_execution_policy` | `backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_binding.py` exact policy/hash readback | implemented_verified | none |
+| TCA benchmark policy | `scripts/miniqmt_b0_quote_v2_pilot.py::_build_execution_policy`、`TcaBenchmarkPolicy` | `backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_adapter.py` TCA policy schema tests | implemented_verified | none |
+| Phase 0B offline TCA policy | successor `execution_policy.tca_policy`、`B0QuoteV2RevisionV1` | target `backend/tests/miniqmt_execution_runtime/test_tca_offline_markout.py`：policy/version/readback/unavailable 与 zero-live-mark-persistence | design_ready | none |
+| policy/revision identity | `decision.py::_immutable_execution_policy_json`、`source_build_manifest()`、`B0QuoteV2RevisionV1` | `backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_binding.py` nested immutable policy/plan hash | implemented_verified | none |
+| production tool and transaction | `scripts/miniqmt_b0_quote_v2_pilot.py` | `backend/tests/simulation_runtime/test_miniqmt_b0_quote_v2_pilot.py` dry-run/lock/rollback/readback/idempotency | implemented_verified | none |
+| activation state separation | source PR/merge、运行进程readback、production DML/readback、正常交易日SIM evidence | artifact: `docs/operations/miniqmt_quote_evidence_runbook.md`；本文件§13.6分阶段receipt | implemented_verified | none |
 
 截至本记录写入时，production activation 的事实状态仍为：待 source merge、用户重启、binding DML/readback
 与 `2026-07-14` 正常交易日实际 SIM evidence；此状态说明不构成验收矩阵缺口，也不得被改写为已切换。
@@ -1862,7 +1813,7 @@ DESIGN-COMPLIANCE-001 四项结论：
 - F2 Feature Workflow validator 通过，Design Acceptance Matrix 无未批准缺口。
 - `git diff --check` 通过，文档仅位于本任务 worktree，未污染运行根目录。
 - 对现有订阅/五档/时钟/B0 source guard 的代码事实和官方 xtquant 能力边界已经记录。
-- 与唯一上位蓝图的 MiniQMT 单路径约束，以及算法域下位蓝图的 Phase 1 mandatory B0 revision、Phase 0A market_data_id/markout handoff 和 Phase 0B baseline query 一致。
+- 与唯一上位蓝图的 MiniQMT 单路径约束，以及算法域下位蓝图的 Phase 1 mandatory B0 revision、Phase 0A economic/TCA-result handoff 和 Phase 0B economic baseline query 一致；不存在 `market_data_id` durable handoff、行情hash或行情查询。
 - 每个实施切片都有 ownership、完整范围、测试、metrics/alerts/runbook、B0 不变式与运行验证边界。
 - P1-E 的 binding/revision/assignment exact schema、scheduler lifecycle、strict `VnpyTick` projection、durable-before-submit、restart/no-duplicate、Phase 0B v2 export 与直接 nodeids 已闭合。
 - 不得把静态、占位、简化或 mock-only 产物写成已完成。

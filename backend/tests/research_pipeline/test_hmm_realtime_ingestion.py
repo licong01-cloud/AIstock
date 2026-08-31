@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import inspect
+import textwrap
 from typing import Any
 
 from backend.services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
@@ -209,15 +211,20 @@ def test_qe_scheduler_research_hook_delegates_safely(monkeypatch) -> None:
 
 def test_qe_scheduler_has_research_hook_after_both_archive_hooks() -> None:
     source = inspect.getsource(AutoEvolutionScheduler)
+    tree = ast.parse(textwrap.dedent(source))
 
-    archive_call = "self._archive_completed_loop_best_effort(task_id, evolution_loop_db_id, loop_index)"
-    research_call = "self._record_research_backtest_best_effort(task_id, evolution_loop_db_id, loop_index)"
-    assert source.count(archive_call) == 2
-    assert source.count(research_call) == 2
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    ]
+    archive_lines = sorted(
+        node.lineno for node in calls if node.func.attr == "_archive_completed_loop_best_effort"
+    )
+    research_lines = sorted(
+        node.lineno for node in calls if node.func.attr == "_record_research_backtest_best_effort"
+    )
 
-    search_from = 0
-    for _ in range(2):
-        archive_index = source.index(archive_call, search_from)
-        research_index = source.index(research_call, archive_index)
-        assert archive_index < research_index
-        search_from = research_index + len(research_call)
+    assert len(archive_lines) >= 2
+    assert len(research_lines) == len(archive_lines)
+    assert all(archive_line < research_line for archive_line, research_line in zip(archive_lines, research_lines, strict=True))

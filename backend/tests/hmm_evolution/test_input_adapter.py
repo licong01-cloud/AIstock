@@ -8,14 +8,18 @@ import pandas as pd
 import pytest
 
 from backend.services.hmm_evolution.candidate_artifact import CandidateArtifactResolver
-from backend.services.hmm_evolution.errors import ArtifactHashMismatchError
-from backend.services.hmm_evolution.input_adapter import HMMEvaluationInputAdapter
+from backend.services.hmm_evolution.errors import ArtifactHashMismatchError, InvalidSpecError
+from backend.services.hmm_evolution.input_adapter import (
+    HMMEvaluationInputAdapter,
+    _verify_artifact_receipts,
+)
 from backend.services.hmm_evolution.market_repository import MarketReturnRead, MarketWatermark
 from backend.services.hmm_evolution.models import (
     CandidateLifecycle,
     CandidateRecord,
     EvaluationSpec,
 )
+from backend.services.hmm_evolution.universe import ResolvedEvaluationUniverse
 
 
 class _Source:
@@ -71,6 +75,7 @@ class _MarketRepository:
     def __init__(self):
         self.watermark_calls = 0
         self.return_calls = 0
+        self.future_return = 0.1
 
     def resolve_watermark(self, *, policy, requested_date):
         self.watermark_calls += 1
@@ -99,7 +104,11 @@ class _MarketRepository:
     ):
         self.return_calls += 1
         frame = pd.DataFrame(
-            [(item, symbol, 10, 0.1, date(2026, 1, 20)) for item in trade_dates for symbol in symbols],
+            [
+                (item, symbol, 10, self.future_return, date(2026, 1, 20))
+                for item in trade_dates
+                for symbol in symbols
+            ],
             columns=["trade_date", "symbol", "horizon_days", "future_return", "label_date"],
         )
         return MarketReturnRead(
@@ -110,6 +119,37 @@ class _MarketRepository:
             horizon_trading_days=horizon_trading_days,
             as_of_date=as_of_date,
             read_only_transaction={"transaction_read_only": True},
+        )
+
+
+class _UniverseResolver:
+    def resolve(self, *, evaluation_spec, predictions, labels):
+        return ResolvedEvaluationUniverse(
+            predictions=predictions.copy(),
+            labels=labels.copy(),
+            evidence={
+                "type": "source_loop_stock_pool_st_pit",
+                "universe_id": "fixture_pool:fixture_st_pit",
+                "universe_hash": "e" * 64,
+                "symbol_count": int(predictions["symbol"].nunique()),
+                "eligible_pair_count": len(predictions),
+                "st_pit": {
+                    "artifact_name": "qe_event_risk_policy.json",
+                    "artifact_sha256": "f" * 64,
+                    "binding_mode": "legacy_allowlisted_compatibility_artifact_v1",
+                    "compatibility_receipt": {
+                        "source_loop_config_sha256": "a" * 64,
+                        "source_loop_stock_pool_sha256": "b" * 64,
+                        "artifact_source": {
+                            "task_id": "qe_20260705_004409_4437",
+                            "loop_name": "Loop10",
+                            "artifact_name": "qe_event_risk_policy.json",
+                        },
+                        "artifact_sha256": "f" * 64,
+                        "artifact_size_bytes": 1781296,
+                    },
+                },
+            },
         )
 
 
@@ -177,17 +217,30 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
         candidate_resolver=resolver,
         market_repository=market_repository,
         source_factory=lambda _spec, preference: preferences.append(preference) or source,
+        universe_resolver=_UniverseResolver(),
     )
 
     prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
 
     assert len(prepared.plans) == 1
     plan = prepared.plans[0]
+    assert plan.source_manifest["schema_version"] == "hmm_evaluation_source_manifest_v3"
     assert plan.resolved_as_of_date == date(2026, 1, 30)
     assert plan.source_manifest["artifacts"][0]["zero_copy"] is True
     assert [item["row_count"] for item in plan.source_manifest["artifacts"]] == [20, 18]
     assert [item["selected_row_count"] for item in plan.source_manifest["artifacts"]] == [2, 2]
     assert plan.source_manifest["market_forward_return"]["price_row_count"] == 4
+    assert len(plan.source_manifest["market_forward_return"]["market_return_content_hash"]) == 64
+    assert plan.source_manifest["universe"]["st_pit"]["artifact_name"] == (
+        "qe_event_risk_policy.json"
+    )
+    assert plan.source_manifest["universe"]["st_pit"]["compatibility_receipt"][
+        "artifact_source"
+    ] == {
+        "task_id": "qe_20260705_004409_4437",
+        "loop_name": "Loop10",
+        "artifact_name": "qe_event_risk_policy.json",
+    }
     assert prepared.market_returns is not None
     assert len(prepared.market_returns) == 2
     assert preferences == ["prediction_store_first"]
@@ -251,6 +304,74 @@ def test_input_adapter_loads_shared_phase0_inputs_once_and_freezes_plan(tmp_path
     assert market_repository.return_calls == 3
 
 
+def test_replay_rejects_market_value_drift_when_row_counts_are_unchanged(tmp_path) -> None:
+    trade_date = date(2026, 1, 5)
+    predictions = pd.DataFrame([(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"])
+    labels = pd.DataFrame(
+        [(trade_date, "A", 10, 0.1)],
+        columns=["trade_date", "symbol", "horizon_days", "future_return"],
+    )
+    root = tmp_path / "coefficients"
+    root.mkdir()
+    (root / "candidate.json").write_text(
+        json.dumps(
+            {
+                "daily_coefficients": {trade_date.isoformat(): {"S": 1.0}},
+                "stock_sector_map": {"A": "S"},
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    resolver = CandidateArtifactResolver(artifact_roots={"research": root})
+    preview = resolver.preview_configured_local(root_alias="research", relative_path="candidate.json")
+    now = datetime.now(timezone.utc)
+    candidate = CandidateRecord(
+        candidate_id=preview.candidate_id,
+        manifest_hash=preview.manifest_hash,
+        display_name="candidate",
+        source_type=preview.manifest.source_type,
+        source_ref=preview.manifest.source_ref,
+        artifact_manifest=preview.manifest,
+        algorithm_version=preview.manifest.algorithm_version,
+        lifecycle_status=CandidateLifecycle.RESEARCH_ONLY,
+        created_by="tester",
+        row_version=1,
+        created_at=now,
+        updated_at=now,
+    )
+    spec = EvaluationSpec(
+        base_loop_ref="qe_task/Loop8",
+        window_start=trade_date,
+        window_end=trade_date,
+        as_of={"policy": "latest_common_completed", "requested_date": None},
+        label_horizon_days=10,
+        topk=1,
+        market_forward_return={"mode": "required", "horizon_trading_days": 10},
+    )
+    market_repository = _MarketRepository()
+    adapter = HMMEvaluationInputAdapter(
+        candidate_resolver=resolver,
+        market_repository=market_repository,
+        source_factory=lambda _spec, _preference: _Source(predictions, labels),
+        universe_resolver=_UniverseResolver(),
+    )
+    prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
+    market_repository.future_return = 0.2
+
+    with pytest.raises(ArtifactHashMismatchError, match="values changed"):
+        asyncio.run(
+            adapter.load_evaluation(
+                evaluation={
+                    "eval_id": "hmme_market_drift",
+                    "evaluation_spec": spec.model_dump(mode="json"),
+                    "source_manifest": prepared.plans[0].source_manifest,
+                },
+                candidate=candidate,
+            )
+        )
+
+
 def test_input_adapter_disabled_market_mode_never_queries_market_repository(tmp_path) -> None:
     trade_date = date(2026, 1, 5)
     predictions = pd.DataFrame([(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"])
@@ -301,6 +422,7 @@ def test_input_adapter_disabled_market_mode_never_queries_market_repository(tmp_
         candidate_resolver=resolver,
         market_repository=market_repository,
         source_factory=lambda _spec, _preference: _Source(predictions, labels),
+        universe_resolver=_UniverseResolver(),
     )
 
     prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
@@ -369,6 +491,7 @@ def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
         candidate_resolver=resolver,
         market_repository=_MarketRepository(),
         source_factory=lambda _spec, _preference: sources.pop(0),
+        universe_resolver=_UniverseResolver(),
     )
     prepared = asyncio.run(adapter.prepare_batch(candidates=[candidate], evaluation_spec=spec))
 
@@ -383,3 +506,71 @@ def test_replay_rejects_phase0_artifact_receipt_drift(tmp_path) -> None:
                 candidate=candidate,
             )
         )
+
+    legacy_spec = EvaluationSpec(
+        schema_version="hmm_evaluation_spec_v1",
+        base_loop_ref="qe_task/Loop8",
+        window_start=trade_date,
+        window_end=trade_date,
+        as_of={"policy": "explicit", "requested_date": trade_date.isoformat()},
+        label_horizon_days=10,
+        universe={"type": "prediction_artifact_all"},
+        topk=1,
+        market_forward_return={"mode": "disabled", "horizon_trading_days": 10},
+        metric_version="hmm_replacement_metrics_v1",
+    )
+    with pytest.raises(InvalidSpecError, match="view-only"):
+        asyncio.run(
+            adapter.load_evaluation(
+                evaluation={
+                    "eval_id": "hmme_legacy_v1",
+                    "evaluation_spec": legacy_spec.model_dump(mode="json"),
+                    "source_manifest": prepared.plans[0].source_manifest,
+                },
+                candidate=candidate,
+            )
+        )
+
+
+def test_replay_allows_acquisition_fallback_policy_to_change_for_same_artifacts() -> None:
+    trade_date = date(2026, 1, 5)
+    predictions = pd.DataFrame(
+        [(trade_date, "A", 1.0)], columns=["trade_date", "symbol", "score"]
+    )
+    labels = pd.DataFrame(
+        [(trade_date, "A", 10, 0.1)],
+        columns=["trade_date", "symbol", "horizon_days", "future_return"],
+    )
+    frozen_artifacts = []
+    current_source_info = {}
+    for name, sha in (("pred.pkl", "b" * 64), ("label.pkl", "c" * 64)):
+        row_count = len(predictions if name == "pred.pkl" else labels)
+        frozen_artifacts.append(
+            {
+                "artifact_name": name,
+                "source": "qe_workspace_cache",
+                "uri": f"qe://qe_task/Loop1/mlruns/1/recorder/artifacts/{name}",
+                "sha256": sha,
+                "size_bytes": 100,
+                "row_count": row_count,
+                "selected_row_count": row_count,
+                "zero_copy": False,
+                "fallback": True,
+            }
+        )
+        current_source_info[name] = {
+            "source": "qe_workspace_cache",
+            "uri": f"qe://qe_task/Loop1/mlruns/1/recorder/artifacts/{name}",
+            "sha256": sha,
+            "size_bytes": 100,
+            "row_count": row_count,
+            "zero_copy": False,
+            "fallback": False,
+        }
+
+    _verify_artifact_receipts(
+        {"artifacts": frozen_artifacts},
+        current_source_info,
+        predictions,
+        labels,
+    )

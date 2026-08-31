@@ -9,7 +9,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import simulation_runtime
+from backend.services.simulation_runtime import ops as simulation_ops
 from backend.services.miniqmt_execution_runtime.models import (
+    MiniQMTChildOrder,
+    MiniQMTChildOrderStatus,
+    MiniQMTExecutionEvent,
+    MiniQMTExecutionEventType,
     MiniQMTExecutionRuntimeConfig,
     MiniQMTExecutionRuntimeRecord,
 )
@@ -17,7 +22,6 @@ from backend.services.miniqmt_execution_runtime.repository import InMemoryMiniQM
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-    DailySelectionEvidence,
     InMemorySimulationRuntimeRepository,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
@@ -27,8 +31,11 @@ from backend.services.simulation_runtime import (
     SimulationRunContext,
     SimulationRuntimeOpsService,
     StaticSimulationRunContextProvider,
-    StrategyPackageSelectionResult,
     StrategyRuntimeReleaseService,
+)
+from backend.services.simulation_signal import (
+    DailySelectionEvidence,
+    StrategyPackageSelectionResult,
 )
 from backend.services.simulation_runtime.models import (
     LocalSimExecutionRuntimeStatus,
@@ -71,12 +78,14 @@ class _PlatformDiagnosticsBackgroundScheduler:
         window_id: str | None = None,
         errors: list[dict[str, Any]] | None = None,
         has_blocking_result: bool = False,
+        kernel_product_runtimes: list[dict[str, Any]] | None = None,
     ) -> None:
         self.last_run_at = last_run_at
         self.market_phase = market_phase
         self.window_id = window_id
         self.errors = list(errors or [])
         self.has_blocking_result = has_blocking_result
+        self.kernel_product_runtimes = list(kernel_product_runtimes or [])
 
     def status(self) -> dict[str, object]:
         last_result: dict[str, object] = {
@@ -114,7 +123,10 @@ class _PlatformDiagnosticsBackgroundScheduler:
                 "execution_gate": False,
                 "auto_clears_on_success": True,
             },
-            "miniqmt_quote_ingress_activation": {"status": "NOT_CONFIGURED"},
+            "miniqmt_quote_ingress_activation": {
+                "status": "NOT_CONFIGURED" if not self.kernel_product_runtimes else "RUNNING",
+                "kernel_product_runtimes": list(self.kernel_product_runtimes),
+            },
             "b0_quote_v2_controllers": {"status": "NOT_CONFIGURED", "controller_count": 0},
             **_scheduler_component_status(),
         }
@@ -364,7 +376,7 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["restart_recovery_mode"] == "persisted_state_only"
     assert scheduler["selection_inference"]["mode"] == "artifact_hit_sync_else_background"
     assert scheduler["binding_watchdog"]["timeout_seconds"] > 0
-    assert scheduler["miniqmt_sim_runtime"]["sim_runtime_kind"] == "event_loop"
+    assert scheduler["miniqmt_sim_runtime"]["sim_runtime_kind"] == "KERNEL_V2"
     assert isinstance(scheduler["miniqmt_quote_context"], dict)
     assert scheduler["miniqmt_quote_ingress_activation"] == {
         "schema_version": "miniqmt_quote_ingress_activation_v1",
@@ -658,6 +670,192 @@ def test_scheduler_status_keeps_current_day_failed_runs_visible_after_noop_windo
     assert blockers["execution_gate"] is False
 
 
+def test_scheduler_verification_status_scopes_blockers_without_mutating_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_TRADE_DATE", TRADE_DATE.isoformat())
+    repo, local_run_id, _plan_id = repo_with_plan
+    release_service = StrategyRuntimeReleaseService(repository=repo)
+    release = release_service.create_release(
+        package_id="pkg_scheduler_verification_qmt",
+        manifest_sha256="manifest_scheduler_verification_qmt",
+        runtime_profile_id="runtime_profile_scheduler_verification_qmt",
+        runtime_profile_version_id="runtime_profile_scheduler_verification_qmt_v1",
+        runtime_profile_sha256="runtime_profile_scheduler_verification_qmt_hash",
+        daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
+        execution_policy_version_id="vnpy_asset:SNIPER_MINIQMT",
+        execution_policy_sha256=canonical_json_sha256(_b0_quote_policy()),
+        execution_policy_json=_b0_quote_policy(),
+        tail_policy_version_id="tail_policy_close_v1",
+        tail_policy_sha256="tail_policy_hash_close_v1",
+        created_by="unit-test",
+        created_reason="scheduler verification status test",
+    )
+    binding = release_service.create_binding(
+        strategy_id="strategy_scheduler_verification_qmt",
+        release=release,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        capital_allocation=100_000,
+        broker_account_id="QMT_SIM_ACCOUNT",
+        account_group_id="ag_scheduler_verification_qmt",
+        strategy_slot_id="slot_scheduler_verification_qmt",
+        strategy_name="SchedulerVerificationQMT",
+        order_remark_prefix="scheduler-verification-qmt",
+        miniqmt_quote_control=MINIQMT_B0_QUOTE_CONTROL,
+        approval_state=SimulationBindingApprovalState.SIM_PASSED,
+        created_by="unit-test",
+        created_reason="scheduler verification status test",
+    )
+    miniqmt_run_id = "simrun_0123456789abcdef"
+    repo.save_simulation_daily_run(
+        SimulationDailyRun(
+            run_id=miniqmt_run_id,
+            trade_date=TRADE_DATE,
+            strategy_id=binding.strategy_id,
+            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+            release_id=release.release_id,
+            release_hash=release.release_hash,
+            binding_id=binding.binding_id,
+            binding_hash=binding.binding_hash,
+            account_group_id=binding.account_group_id,
+            strategy_slot_id=binding.strategy_slot_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            run_payload_json={
+                "last_stage": "FAILED_RETRYABLE",
+                "submit_failure": {"reason_code": "MINIQMT_KERNEL_V2_PLAN_START_FAILED"},
+            },
+        )
+    )
+    before = {run_id: run.model_dump(mode="json") for run_id, run in repo.daily_runs.items()}
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    local = service.scheduler_verification_status(
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+    )
+    miniqmt = service.scheduler_verification_status(
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+    )
+    exact = service.scheduler_verification_status(run_id=miniqmt_run_id)
+
+    assert local["schema_version"] == "simulation_scheduler_verification_status_v1"
+    assert local["current_trade_date_blockers"]["status"] == "CLEAR"
+    assert local["current_trade_date_blockers"]["blocker_count"] == 0
+    assert local["verification_scope"]["broker_backend"] == "local_sim"
+    assert miniqmt["current_trade_date_blockers"]["status"] == "BLOCKED"
+    assert miniqmt["current_trade_date_blockers"]["blockers"][0]["run_id"] == miniqmt_run_id
+    assert "subject_components" not in local
+    assert miniqmt["subject_components"]["miniqmt_sim_runtime"]["sim_runtime_kind"] == "KERNEL_V2"
+    assert exact["verification_scope"]["run_id"] == miniqmt_run_id
+    assert exact["verification_scope"]["broker_backend"] == "minqmt_sim"
+    assert exact["current_trade_date_blockers"]["blocker_count"] == 1
+    assert local_run_id in repo.daily_runs
+    assert {run_id: run.model_dump(mode="json") for run_id, run in repo.daily_runs.items()} == before
+
+
+def test_scheduler_verification_status_requires_a_valid_subject(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo = repo_with_plan[0]
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as missing:
+        service.scheduler_verification_status()
+    assert missing.value.context["reason_code"] == "SIMULATION_SCHEDULER_VERIFICATION_SUBJECT_REQUIRED"
+
+    with pytest.raises(RuntimeConfigInvalidError) as malformed:
+        service.scheduler_verification_status(run_id="not-a-run")
+    assert malformed.value.context["reason_code"] == "SIMULATION_SCHEDULER_VERIFICATION_SUBJECT_INVALID"
+    with pytest.raises(RuntimeConfigInvalidError):
+        service.scheduler_verification_status(run_id=" simrun_0123456789abcdef")
+
+
+def test_scheduler_verification_status_never_filters_global_loop_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_TRADE_DATE", TRADE_DATE.isoformat())
+
+    class _BlockedLoopScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "running": True,
+                "thread_alive": True,
+                "scheduler_control_api_enabled": True,
+                "scheduler_loop_health": {
+                    "schema_version": "simulation_background_scheduler_loop_health_v1",
+                    "status": "BLOCKED",
+                    "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                    "active_failure": {
+                        "schema_version": "simulation_background_scheduler_loop_failure_v1",
+                        "status": "BLOCKED",
+                        "reason_code": "SIMULATION_BACKGROUND_SCHEDULER_RUN_LOOP_EXCEPTION",
+                        "stage": "BACKGROUND_SCHEDULER_RUN_LOOP",
+                        "exception_type": "DataUnavailableError",
+                        "exception_message": "dependency failed",
+                        "underlying_reason_code": "SIMULATION_DEPENDENCY_UNAVAILABLE",
+                        "underlying_stage": "DEPENDENCY_READ",
+                        "trade_date": TRADE_DATE.isoformat(),
+                        "first_failure_at": "2026-05-21T01:20:00+00:00",
+                        "failure_at": "2026-05-21T01:21:00+00:00",
+                        "context": {},
+                        "execution_gate": False,
+                        "auto_clears_on_success": True,
+                    },
+                    "last_failure": None,
+                    "last_successful_tick_at": "2026-05-21T01:19:00+00:00",
+                    "consecutive_failure_count": 1,
+                    "total_failure_count": 1,
+                    "total_success_count": 0,
+                    "execution_gate": False,
+                    "auto_clears_on_success": True,
+                },
+                "miniqmt_quote_ingress_activation": {"status": "RUNNING"},
+                "b0_quote_v2_controllers": {"status": "RUNNING", "controller_count": 1},
+                **_scheduler_component_status(),
+            }
+
+    projected = SimulationRuntimeOpsService(
+        repository=InMemorySimulationRuntimeRepository(),
+        scheduler=_BlockedLoopScheduler(),  # type: ignore[arg-type]
+    ).scheduler_verification_status(broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    assert projected["effective_runtime_health"] == "BLOCKED"
+    assert projected["current_trade_date_blockers"]["blocker_count"] == 1
+    assert projected["current_trade_date_blockers"]["blockers"][0]["component"] == (
+        "simulation_background_scheduler_run_loop"
+    )
+
+
+def test_scheduler_verification_status_route_is_scoped_and_fail_closed(client: TestClient) -> None:
+    missing = client.get("/api/v1/simulation-runtime/scheduler/verification-status")
+    invalid = client.get(
+        "/api/v1/simulation-runtime/scheduler/verification-status",
+        params={"broker_backend": "paper"},
+    )
+    scoped = client.get(
+        "/api/v1/simulation-runtime/scheduler/verification-status",
+        params={"broker_backend": "local_sim"},
+    )
+
+    assert missing.status_code == 400
+    assert invalid.status_code == 422
+    assert scoped.status_code == 200
+    payload = scoped.json()
+    assert payload["ok"] is True
+    assert payload["scheduler"]["read_only"] is True
+    assert payload["scheduler"]["verification_scope"]["broker_backend"] == "local_sim"
+    assert payload["scheduler"]["current_trade_date_blockers"]["status"] == "CLEAR"
+
+
 def test_scheduler_status_reads_current_day_blockers_before_first_scheduler_tick(
     monkeypatch: pytest.MonkeyPatch,
     repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
@@ -937,6 +1135,142 @@ def test_missing_run_maps_to_404(client: TestClient) -> None:
     detail = response.json()["detail"]
     assert detail["error_code"] == "DATA_UNAVAILABLE"
     assert detail["context"]["run_id"] == "missing"
+
+
+def _terminalization_carrier(run_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": "localsim_historical_legacy_plan_terminalization_v1",
+        "reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+        "run_id": run_id,
+        "previous_status": "FAILED_RETRYABLE",
+        "terminal_status": "FAILED_TERMINAL",
+        "authoritative_state_count": 492,
+        "authoritative_state_set_sha256": "a" * 64,
+        "parent_resubmitted": False,
+        "broker_replayed": False,
+        "verified_at": "2026-08-18T06:00:00+00:00",
+    }
+
+
+def test_run_terminal_evidence_projects_typed_terminalization_carrier(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    carrier = _terminalization_carrier(run_id)
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_TERMINAL,
+        payload_patch={
+            "last_stage": "FAILED_TERMINAL",
+            "localsim_historical_legacy_plan_terminalization_v1": carrier,
+            "untyped_note": "not a carrier",
+            "mismatched_key": {"schema_version": "some_other_schema_v1", "reason_code": "IGNORED"},
+            "no_reason_carrier": {"schema_version": "no_reason_carrier"},
+            " whitespace_padded_key_v1": {
+                "schema_version": " whitespace_padded_key_v1",
+                "reason_code": "IGNORED",
+            },
+        },
+    )
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["schema_version"] == "simulation_run_terminal_evidence_v1"
+    assert payload["read_only"] is True
+    run = payload["run"]
+    assert run["run_id"] == run_id
+    assert run["status"] == "FAILED_TERMINAL"
+    assert run["last_stage"] == "FAILED_TERMINAL"
+    assert run["terminal_evidence"] == [carrier]
+
+
+def test_run_terminal_evidence_returns_empty_carriers_when_none_recorded(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    _, run_id, _plan_id = repo_with_plan
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schema_version"] == "simulation_run_terminal_evidence_v1"
+    assert payload["run"]["run_id"] == run_id
+    assert payload["run"]["terminal_evidence"] == []
+
+
+def test_run_terminal_evidence_missing_run_maps_to_404(client: TestClient) -> None:
+    response = client.get("/api/v1/simulation-runtime/runs/missing/terminal-evidence")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "DATA_UNAVAILABLE"
+    assert detail["context"]["run_id"] == "missing"
+
+
+def test_run_terminal_evidence_fails_closed_on_carrier_count_bound(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    payload_patch = {
+        f"typed_carrier_{index:02d}_v1": {
+            "schema_version": f"typed_carrier_{index:02d}_v1",
+            "reason_code": f"REASON_{index:02d}",
+        }
+        for index in range(simulation_ops._TERMINAL_EVIDENCE_CARRIER_LIMIT + 1)
+    }
+    repo.update_simulation_daily_run(run_id, payload_patch=payload_patch)
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["context"]["reason_code"] == "SIMULATION_RUN_TERMINAL_EVIDENCE_UNBOUNDED"
+    assert detail["context"]["carrier_count"] == simulation_ops._TERMINAL_EVIDENCE_CARRIER_LIMIT + 1
+
+
+def test_run_terminal_evidence_fails_closed_on_serialized_size_bound(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    carrier = _terminalization_carrier(run_id)
+    carrier["oversized_blob"] = "x" * (simulation_ops._TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT + 1)
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"localsim_historical_legacy_plan_terminalization_v1": carrier},
+    )
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["context"]["reason_code"] == "SIMULATION_RUN_TERMINAL_EVIDENCE_UNBOUNDED"
+    assert detail["context"]["carrier_bytes"] > simulation_ops._TERMINAL_EVIDENCE_CARRIER_BYTES_LIMIT
+
+
+def test_run_terminal_evidence_fails_closed_on_unserializable_carrier(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    carrier = _terminalization_carrier(run_id)
+    carrier["raw_object"] = {"not_json_safe"}
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"localsim_historical_legacy_plan_terminalization_v1": carrier},
+    )
+
+    response = client.get(f"/api/v1/simulation-runtime/runs/{run_id}/terminal-evidence")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["context"]["reason_code"] == "SIMULATION_RUN_TERMINAL_EVIDENCE_UNSERIALIZABLE"
 
 
 def test_invalid_filter_values_are_rejected(client: TestClient) -> None:
@@ -1262,6 +1596,137 @@ def test_platform_diagnostics_is_read_only_layered_and_low_cardinality(
     assert repo.get_simulation_daily_run(run_id).model_dump(mode="json") == before
 
 
+def test_platform_diagnostics_projects_k2_kernel_facts_read_only_and_auto_clears() -> None:
+    repo = InMemorySimulationRuntimeRepository()
+    scheduler = _PlatformDiagnosticsBackgroundScheduler(
+        last_run_at=datetime(2026, 7, 27, 1, 30, tzinfo=UTC),
+        market_phase="OPEN_AM",
+        kernel_product_runtimes=[
+            {
+                "runtime_id": "runtime_k2d_diagnostics",
+                "binding_id": "binding_k6d_diagnostics",
+                "trade_date": TRADE_DATE.isoformat(),
+                "source_capability_sha256": "8" * 64,
+            }
+        ],
+    )
+    durable_payload = {
+        "schema_version": "miniqmt_kernel_diagnostics_v1",
+        "schema_status": "READY",
+        "runtime_id": "runtime_k2d_diagnostics",
+        "trade_date": TRADE_DATE.isoformat(),
+        "missing_tables": [],
+        "event_type_counts": {"TIMER": 2},
+        "delivery_status_counts": {"APPLIED": 2},
+        "outbox_status_counts": {"OUTCOME_UNKNOWN": 1},
+        "outbox_command_type_counts": {"SUBMIT_LIMIT": 1},
+        "timer_status_counts": {"EMITTED": 2},
+        "timer_occurrence_status_counts": {"EVENT_COMMITTED": 2},
+        "diagnostic_reason_family_counts": {"OUTCOME_UNKNOWN": 1},
+        "predecessor_gap_count": 0,
+        "mapping_lineage_pending_count": 0,
+        "expired_dispatching_lease_count": 0,
+        "oldest_delivery_lag_seconds": 0,
+        "oldest_due_timer_lag_seconds": 0,
+        "runtime_status": "ACTIVE",
+        "product_route": {
+            "schema_version": "miniqmt_k6d_product_route_diagnostics_v1",
+            "status": "ACTIVE",
+            "runtime_id": "runtime_k2d_diagnostics",
+            "binding_id": "binding_k6d_diagnostics",
+            "trade_date": TRADE_DATE.isoformat(),
+            "route_owner": "KERNEL_V2",
+            "route_epoch": 1,
+            "effective_new_instance_sequence": 1,
+            "owner_row_version": 1,
+            "owner_sha256": "1" * 64,
+            "current_receipt_sha256": "2" * 64,
+            "legacy_active_instance_count": 0,
+            "kernel_active_instance_count": 1,
+            "cutover_legacy_active_instance_count": 0,
+            "cutover_kernel_active_instance_count": 0,
+            "catalog_sha256": "3" * 64,
+            "gateway_capability_catalog_sha256": "4" * 64,
+            "exchange_session_authority_sha256": "5" * 64,
+            "migration_readback_sha256": "6" * 64,
+            "product_authority_schema_sha256": "7" * 64,
+            "coordination_status_counts": {},
+            "read_only": True,
+        },
+        "recent_command_chains": [],
+        "limit": 100,
+        "truncated": False,
+        "next_cursor": None,
+        "read_only": True,
+    }
+    calls: list[dict[str, Any]] = []
+    read_failure = False
+
+    def reader(**values: Any) -> dict[str, Any]:
+        calls.append(dict(values))
+        if read_failure:
+            raise RuntimeError("injected kernel scalar readback drift")
+        return dict(durable_payload)
+
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=scheduler,  # type: ignore[arg-type]
+        kernel_diagnostics_reader=reader,
+    )
+    runtime_repository = InMemoryMiniQMTExecutionRuntimeRepository()
+    runtime_repository.upsert_runtime(
+        MiniQMTExecutionRuntimeRecord(
+            **MiniQMTExecutionRuntimeConfig(
+                runtime_id="runtime_k2d_diagnostics",
+                account_group_id="account_k2d_diagnostics",
+                trade_date=TRADE_DATE,
+                runtime_config_hash="d" * 64,
+            ).model_dump()
+        )
+    )
+    degraded = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id="runtime_k2d_diagnostics",
+        runtime_repository=runtime_repository,
+        generated_at=datetime(2026, 7, 27, 1, 30, 10, tzinfo=UTC),
+    )
+    assert calls == [{"runtime_id": "runtime_k2d_diagnostics", "trade_date": TRADE_DATE, "limit": 100, "cursor": None}]
+    assert degraded["layers"]["miniqmt_kernel"]["status"] == "BLOCKED"
+    assert degraded["layers"]["miniqmt_k6d"]["status"] == "HEALTHY"
+    assert degraded["layers"]["miniqmt_k6d"]["execution_gate"] is False
+    assert any(item["alert_type"] == "MINIQMT_KERNEL_DURABLE_HEALTH" for item in degraded["alerts"]["items"])
+    assert degraded["side_effect_contract"]["read_only"] is True
+    assert degraded["alerts"]["acknowledge_required"] is False
+    assert all(
+        not ({"runtime_id", "algo_instance_id", "command_id", "symbol"} & set(item["labels"]))
+        for item in degraded["metrics"]["series"]
+    )
+
+    durable_payload["outbox_status_counts"] = {"ACKED": 1}
+    durable_payload["diagnostic_reason_family_counts"] = {}
+    recovered = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id="runtime_k2d_diagnostics",
+        runtime_repository=runtime_repository,
+        generated_at=datetime(2026, 7, 27, 1, 30, 20, tzinfo=UTC),
+    )
+    assert recovered["layers"]["miniqmt_kernel"]["status"] == "HEALTHY"
+    assert not any(item["alert_type"] == "MINIQMT_KERNEL_DURABLE_HEALTH" for item in recovered["alerts"]["items"])
+
+    read_failure = True
+    failed = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id="runtime_k2d_diagnostics",
+        runtime_repository=runtime_repository,
+        generated_at=datetime(2026, 7, 27, 1, 30, 30, tzinfo=UTC),
+    )
+    assert failed["layers"]["miniqmt_kernel"]["status"] == "BLOCKED"
+    assert any(
+        item["reason_code"] == "MINIQMT_KERNEL_READBACK_FAILED" and item["status"] == "CRITICAL"
+        for item in failed["alerts"]["items"]
+    )
+
+
 def test_platform_diagnostics_surfaces_zero_run_scheduler_blocker_and_auto_clears() -> None:
     repo = InMemorySimulationRuntimeRepository()
     scheduler = _PlatformDiagnosticsBackgroundScheduler(
@@ -1463,6 +1928,230 @@ def test_platform_diagnostics_supports_exact_runtime_query_before_daily_run_exis
     miniqmt_backend = next(layer for layer in backend_layers if layer["identity"]["backend"] == "minqmt_sim")
     assert miniqmt_backend["facts"]["runtime_id"] == "runtime_platform_diagnostics_only"
     assert miniqmt_backend["facts"]["quote_health_status"] == "DEGRADED"
+    assert payload["runtime_projection_consistency"]["status"] == "NOT_APPLICABLE"
+
+
+def test_runtime_projection_does_not_treat_pre_broker_child_rejection_as_broker_call() -> None:
+    runtime_id = "runtime_projection_pre_broker_rejection"
+    runtime_repository = InMemoryMiniQMTExecutionRuntimeRepository()
+    runtime_repository.upsert_runtime(
+        MiniQMTExecutionRuntimeRecord(
+            **MiniQMTExecutionRuntimeConfig(
+                runtime_id=runtime_id,
+                account_group_id="ag_projection_pre_broker_rejection",
+                trade_date=TRADE_DATE,
+                runtime_config_hash="c" * 64,
+            ).model_dump()
+        )
+    )
+    child = runtime_repository.upsert_child_order(
+        MiniQMTChildOrder(
+            child_order_id="child_projection_pre_broker_rejection",
+            runtime_id=runtime_id,
+            algo_instance_id="algo_projection_pre_broker_rejection",
+            parent_intent_id="parent_projection_pre_broker_rejection",
+            strategy_slot_id="slot_projection_pre_broker_rejection",
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=100,
+            price=10.0,
+            status=MiniQMTChildOrderStatus.REJECTED,
+            metadata={"gateway_ack": {"broker_called": False, "error_code": "QMT_PLACE_ORDER_UNAVAILABLE"}},
+        )
+    )
+    runtime_repository.append_event(
+        MiniQMTExecutionEvent(
+            event_id="event_projection_pre_broker_rejection",
+            runtime_id=runtime_id,
+            sequence=1,
+            event_type=MiniQMTExecutionEventType.CHILD_ORDER_REJECTED,
+            source="gateway",
+            payload={
+                "child_order_id": child.child_order_id,
+                "broker_order_id": None,
+                "accepted": False,
+                "broker_called": False,
+            },
+        )
+    )
+
+    result = simulation_ops._miniqmt_runtime_projection_consistency(
+        run=None,
+        runtime_repository=runtime_repository,
+        runtime_id=runtime_id,
+    )
+
+    assert result["actual"]["broker_called"] is False
+
+
+def test_platform_diagnostics_degrades_stale_miniqmt_projection_and_auto_clears(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, source_run_id, _plan_id = repo_with_plan
+    source_run = repo.get_simulation_daily_run(source_run_id)
+    release = repo.get_strategy_runtime_release(source_run.release_id)
+    binding = StrategyRuntimeReleaseService(repository=repo).create_binding(
+        strategy_id="strategy_platform_projection_stale",
+        release=release,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        capital_allocation=100_000,
+        broker_account_id="QMT_SIM_ACCOUNT",
+        account_group_id="ag_platform_projection_stale",
+        strategy_slot_id="slot_platform_projection_stale",
+        strategy_name="PlatformProjectionStale",
+        order_remark_prefix="platform-projection-stale",
+        miniqmt_quote_control=MINIQMT_B0_QUOTE_CONTROL,
+        approval_state=SimulationBindingApprovalState.SIM_PASSED,
+        created_by="unit-test",
+        created_reason="platform diagnostics runtime projection consistency",
+    )
+    runtime_id = "runtime_platform_projection_stale"
+    batch_id = "batch_platform_projection_stale"
+    pending_result = {
+        "success": False,
+        "intent_id": "parent_platform_projection_stale",
+        "qmt_order_id": None,
+        "broker_message": "event_loop algo dispatched and running; child order pending tick trigger",
+        "broker_called": False,
+        "preflight": {"allowed": True},
+    }
+    run = source_run.model_copy(
+        update={
+            "run_id": "simrun_platform_projection_stale",
+            "strategy_id": binding.strategy_id,
+            "binding_id": binding.binding_id,
+            "binding_hash": binding.binding_hash,
+            "account_group_id": binding.account_group_id,
+            "strategy_slot_id": binding.strategy_slot_id,
+            "broker_backend": SimulationBrokerBackend.MINIQMT_SIM,
+            "execution_plan_id": None,
+            "execution_plan_hash": None,
+            "status": SimulationDailyRunStatus.INTRADAY_RUNNING,
+            "run_payload_json": {
+                "last_stage": "INTRADAY_RUNNING",
+                "broker_called": False,
+                "submitted_intents": 0,
+                "failed_intents": 0,
+                "pending_intents": 1,
+                "qmt_batch_result": {
+                    "batch_id": batch_id,
+                    "batch_status": "SUBMITTING",
+                    "results": [pending_result],
+                    "total": 1,
+                    "success": True,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "pending": 1,
+                    "runtime_evidence": {
+                        "runtime_id": runtime_id,
+                        "child_order_ids": [],
+                        "submitted_child_count": 0,
+                        "rejected_child_count": 0,
+                        "trade_event_count": 0,
+                    },
+                },
+            },
+        }
+    )
+    repo.save_simulation_daily_run(run)
+    runtime_repository = InMemoryMiniQMTExecutionRuntimeRepository()
+    runtime_repository.upsert_runtime(
+        MiniQMTExecutionRuntimeRecord(
+            **MiniQMTExecutionRuntimeConfig(
+                runtime_id=runtime_id,
+                account_group_id=binding.account_group_id or "ag_platform_projection_stale",
+                trade_date=TRADE_DATE,
+                runtime_config_hash="b" * 64,
+            ).model_dump()
+        )
+    )
+    child = runtime_repository.upsert_child_order(
+        MiniQMTChildOrder(
+            child_order_id="child_platform_projection_stale",
+            runtime_id=runtime_id,
+            algo_instance_id="algo_platform_projection_stale",
+            parent_intent_id="parent_platform_projection_stale",
+            strategy_slot_id=binding.strategy_slot_id or "slot_platform_projection_stale",
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=100,
+            price=10.0,
+            status=MiniQMTChildOrderStatus.SUBMITTED,
+            broker_order_id="100001",
+        )
+    )
+    runtime_repository.append_event(
+        MiniQMTExecutionEvent(
+            event_id="event_platform_projection_stale",
+            runtime_id=runtime_id,
+            sequence=1,
+            event_type=MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+            source="gateway",
+            payload={
+                "child_order_id": child.child_order_id,
+                "broker_order_id": child.broker_order_id,
+                "accepted": True,
+            },
+        )
+    )
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_PlatformDiagnosticsBackgroundScheduler(last_run_at=datetime.now(UTC)),  # type: ignore[arg-type]
+    )
+
+    stale = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id=runtime_id,
+        runtime_repository=runtime_repository,
+    )
+
+    assert stale["runtime_projection_consistency"]["status"] == "STALE"
+    durability = stale["layers"]["durability"][0]
+    assert durability["status"] == "DEGRADED"
+    assert durability["reason_code"] == "MINIQMT_RUNTIME_PROJECTION_STALE"
+    assert stale["overall_health"]["status"] != "HEALTHY"
+    assert any(alert["alert_type"] == "MINIQMT_RUNTIME_PROJECTION_STALE" for alert in stale["alerts"]["items"])
+
+    accepted_result = {
+        **pending_result,
+        "success": True,
+        "qmt_order_id": child.broker_order_id,
+        "broker_message": "accepted",
+        "broker_called": True,
+    }
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={
+            "broker_called": True,
+            "submitted_intents": 1,
+            "pending_intents": 0,
+            "qmt_batch_result": {
+                "batch_id": batch_id,
+                "batch_status": "SUCCEEDED",
+                "results": [accepted_result],
+                "total": 1,
+                "success": True,
+                "succeeded": 1,
+                "failed": 0,
+                "pending": 0,
+                "runtime_evidence": {
+                    "runtime_id": runtime_id,
+                    "child_order_ids": [child.child_order_id],
+                    "submitted_child_count": 1,
+                    "rejected_child_count": 0,
+                    "trade_event_count": 0,
+                },
+            },
+        },
+    )
+    consistent = service.platform_diagnostics(
+        trade_date=TRADE_DATE,
+        runtime_id=runtime_id,
+        runtime_repository=runtime_repository,
+    )
+    assert consistent["runtime_projection_consistency"]["status"] == "CONSISTENT"
+    assert consistent["layers"]["durability"][0]["reason_code"] == "MINIQMT_DURABLE_BATCH_VALID"
+    assert not any(alert["alert_type"] == "MINIQMT_RUNTIME_PROJECTION_STALE" for alert in consistent["alerts"]["items"])
 
 
 def test_platform_diagnostics_emits_scheduler_tick_lag_metric_and_auto_clear_alert() -> None:
@@ -1496,13 +2185,16 @@ def test_platform_diagnostics_emits_scheduler_tick_lag_metric_and_auto_clear_ale
     assert not any(alert["alert_type"] == "SIMULATION_SCHEDULER_TICK_LAG" for alert in recovered["alerts"]["items"])
 
 
-def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
-    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
-) -> None:
-    repo, run_id, plan_id = repo_with_plan
-    run = repo.get_simulation_daily_run(run_id)
-    last_bar = datetime(2026, 5, 21, 1, 30, tzinfo=UTC)
-    state = LocalSimExecutionStateV1(
+def _platform_observability_local_sim_state(
+    *,
+    run: SimulationDailyRun,
+    plan_id: str,
+) -> LocalSimExecutionStateV1:
+    # Production TDX bars are naive Asia/Shanghai timestamps.  The causal
+    # cursor precedes the first processed bar; cursor-minus-bar therefore used
+    # to collapse to zero and hide a genuinely stalled LocalSIM event loop.
+    last_bar = datetime(2026, 5, 21, 9, 30)
+    return LocalSimExecutionStateV1(
         run_id=run.run_id,
         binding_id=run.binding_id,
         trade_date=run.trade_date,
@@ -1518,18 +2210,39 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
         remaining_quantity=80,
         algo_code="V25",
         order_status="PARTIAL",
-        runtime_status=LocalSimExecutionRuntimeStatus.ACTIVE,
+        runtime_status=LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_DATA,
         schedule_version="v25_platform_observability",
-        causality_cursor=last_bar.replace(minute=35),
+        causality_cursor=last_bar.replace(second=0) - timedelta(seconds=5),
         last_processed_bar_time=last_bar,
+        waiting_reason_code="LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE",
         idempotency_key="localsim-platform-observability",
     )
+
+
+def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, plan_id = repo_with_plan
+    run = repo.get_simulation_daily_run(run_id)
+    state = _platform_observability_local_sim_state(run=run, plan_id=plan_id)
     repo.update_simulation_daily_run(
         run_id,
         status=SimulationDailyRunStatus.INTRADAY_RUNNING,
         payload_patch={
             "last_stage": "INTRADAY_RUNNING",
-            "local_sim_execution_states_v1": [state.model_dump(mode="json")],
+            "local_sim_execution_states_v1": {
+                state.state_id: state.model_dump(mode="json"),
+            },
+            "local_sim_persistence": {
+                "schema_version": "local_sim_persistence_v2",
+                "status": "INTRADAY_PERSISTED",
+                "order_count": 1,
+                "fill_count": 1,
+                "order_event_count": 1,
+                "cash_ledger_count": 1,
+                "position_count": 1,
+                "terminal": False,
+            },
         },
     )
     observed_at = datetime(2026, 5, 21, 1, 35, tzinfo=UTC)
@@ -1552,6 +2265,121 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
     assert metrics["simulation_localsim_active_algo_count"] == 1
     assert metrics["simulation_localsim_partial_count"] == 1
     assert metrics["simulation_localsim_causal_bar_lag_seconds"] == 300.0
+
+    lunch_at = datetime(2026, 5, 21, 4, 0, tzinfo=UTC)
+    lunch_service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_PlatformDiagnosticsBackgroundScheduler(
+            last_run_at=lunch_at,
+            market_phase="LUNCH_BREAK",
+        ),  # type: ignore[arg-type]
+    )
+    lunch = lunch_service.platform_diagnostics(run_id=run_id, generated_at=lunch_at)
+    assert lunch["layers"]["business"][0]["facts"]["max_bar_lag_seconds"] == 9000.0
+    assert not any(alert["alert_type"] == "LOCAL_SIM_CAUSAL_BAR_NOT_PROGRESSING" for alert in lunch["alerts"]["items"])
+
+    future_state_payload = state.model_dump(mode="python")
+    future_state_payload.update(
+        {
+            "last_processed_bar_time": datetime(2026, 5, 21, 9, 36),
+            "state_hash": "",
+        }
+    )
+    future_state = LocalSimExecutionStateV1.model_validate(future_state_payload)
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                future_state.state_id: future_state.model_dump(mode="json"),
+            },
+        },
+    )
+    with pytest.raises(RuntimeConfigInvalidError) as future_exc:
+        service.platform_diagnostics(run_id=run_id, generated_at=observed_at)
+    assert future_exc.value.context["reason_code"] == "SIMULATION_PLATFORM_LOCAL_SIM_BAR_TIME_IN_FUTURE"
+
+
+@pytest.mark.parametrize(
+    "persistence_status",
+    [
+        "INTRADAY_WAITING_FOR_CAUSAL_BAR",
+        "INTRADAY_PERSISTED",
+        "PERSISTED",
+        "PERSISTED_WITH_CAPACITY_RESIDUAL",
+        "PERSISTED_WITH_RESIDUAL",
+        "PERSISTED_WITH_TERMINAL_FAILURE",
+    ],
+)
+def test_platform_diagnostics_accepts_every_scheduler_emitted_localsim_persistence_status(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+    persistence_status: str,
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={
+            "last_stage": SimulationDailyRunStatus.INTRADAY_RUNNING.value,
+            "local_sim_persistence": {
+                "schema_version": "local_sim_persistence_v2",
+                "status": persistence_status,
+                "order_count": 0,
+                "fill_count": 0,
+                "order_event_count": 0,
+                "cash_ledger_count": 0,
+                "position_count": 0,
+                "terminal": persistence_status.startswith("PERSISTED"),
+            },
+        },
+    )
+    observed_at = datetime(2026, 5, 21, 1, 35, tzinfo=UTC)
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_PlatformDiagnosticsBackgroundScheduler(last_run_at=observed_at),  # type: ignore[arg-type]
+    )
+
+    payload = service.platform_diagnostics(run_id=run_id, generated_at=observed_at)
+
+    assert payload["layers"]["durability"][0]["facts"]["persistence_status"] == persistence_status
+
+
+def test_platform_diagnostics_exposes_unreconstructible_localsim_submitted_projection(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "last_stage": "FAILED_RETRYABLE",
+            "broker_called": False,
+            "submitted_intents": 248,
+            "failed_intents": 0,
+            "pending_intents": 0,
+            "submit_failure": {
+                "stage": "LOCAL_SIM_PERSISTENCE",
+                "reason_code": "LOCALSIM_ECONOMIC_PERSISTENCE_UNEXPECTED",
+                "message": "Unable to serialize unknown type: mappingproxy",
+            },
+        },
+    )
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    payload = service.platform_diagnostics(run_id=run_id)
+
+    durability = payload["layers"]["durability"][0]
+    assert durability["status"] == "BLOCKED"
+    assert durability["reason_code"] == "LOCAL_SIM_DURABLE_FACTS_UNRECONSTRUCTIBLE"
+    assert durability["facts"]["projected_submitted_intents"] == 248
+    assert durability["facts"]["durable_facts_reconstructible"] is False
+    assert any(
+        alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE"
+        and alert["reason_code"] == "LOCAL_SIM_DURABLE_FACTS_UNRECONSTRUCTIBLE"
+        for alert in payload["alerts"]["items"]
+    )
 
 
 def test_platform_diagnostics_projects_localsim_outbox_backlog_terminal_failure_and_recovery(
@@ -1635,6 +2463,66 @@ def test_platform_diagnostics_projects_localsim_outbox_backlog_terminal_failure_
     assert not any(alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE" for alert in recovered["alerts"]["items"])
 
 
+def test_platform_diagnostics_distinguishes_active_and_stale_localsim_valuation_pending(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, _plan_id = repo_with_plan
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={
+            "last_stage": "LOCAL_SIM_ECONOMIC_COMMITTED_VALUATION_PENDING",
+            "local_sim_persistence": {
+                "schema_version": "local_sim_persistence_v2",
+                "status": "INTRADAY_VALUATION_PENDING",
+                "order_count": 1,
+                "fill_count": 1,
+                "order_event_count": 2,
+                "cash_ledger_count": 1,
+                "position_count": 2,
+                "nav": None,
+                "valuation_status": "WAITING_FOR_AUTHORITATIVE_MARKS",
+                "missing_mark_symbols": ["000003.SZ"],
+            },
+            "local_sim_projection_outbox_v1": {
+                "status": "PENDING",
+                "attempt_count": 0,
+                "readback_attempt_count": 0,
+                "generation": 1,
+            },
+        },
+    )
+    pending_run = repo.get_simulation_daily_run(run_id)
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=_PlatformDiagnosticsBackgroundScheduler(last_run_at=pending_run.updated_at),  # type: ignore[arg-type]
+    )
+
+    active = service.platform_diagnostics(
+        run_id=run_id,
+        generated_at=pending_run.updated_at + timedelta(seconds=60),
+    )
+    active_durability = active["layers"]["durability"][0]
+    assert active_durability["status"] == "IN_PROGRESS"
+    assert active_durability["reason_code"] == "LOCAL_SIM_VALUATION_PENDING"
+    assert active_durability["facts"]["valuation_pending"] is True
+    assert active_durability["facts"]["missing_mark_symbols"] == ["000003.SZ"]
+    assert not any(alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE" for alert in active["alerts"]["items"])
+
+    stale = service.platform_diagnostics(
+        run_id=run_id,
+        generated_at=pending_run.updated_at + timedelta(seconds=121),
+    )
+    stale_durability = stale["layers"]["durability"][0]
+    assert stale_durability["status"] == "DEGRADED"
+    assert stale_durability["reason_code"] == "LOCAL_SIM_VALUATION_PENDING_STALE"
+    assert any(
+        alert["alert_type"] == "SIMULATION_DURABILITY_FAILURE"
+        and alert["reason_code"] == "LOCAL_SIM_VALUATION_PENDING_STALE"
+        for alert in stale["alerts"]["items"]
+    )
+
+
 def test_platform_diagnostics_projects_valid_miniqmt_pending_batch_and_rejects_counter_conflict(
     repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
 ) -> None:
@@ -1685,6 +2573,10 @@ def test_platform_diagnostics_projects_valid_miniqmt_pending_batch_and_rejects_c
                     "runtime_evidence": {
                         "runtime_id": "runtime_platform_valid_miniqmt",
                         "source": "simulation_runtime_event_loop_tick_driver",
+                        "submitted_child_count": 0,
+                        "rejected_child_count": 0,
+                        "pending_algo_count": 1,
+                        "trade_event_count": 0,
                     },
                 },
             },
@@ -1717,7 +2609,11 @@ def test_platform_diagnostics_rejects_malformed_localsim_durable_state(
     repo.update_simulation_daily_run(
         run_id,
         status=SimulationDailyRunStatus.INTRADAY_RUNNING,
-        payload_patch={"local_sim_execution_states_v1": [{"schema_version": "local_sim_execution_state_v1"}]},
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                "state_malformed": {"schema_version": "local_sim_execution_state_v1"},
+            }
+        },
     )
     service = SimulationRuntimeOpsService(
         repository=repo,
@@ -1728,6 +2624,58 @@ def test_platform_diagnostics_rejects_malformed_localsim_durable_state(
         service.platform_diagnostics(run_id=run_id)
 
     assert exc_info.value.context["reason_code"] == "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID"
+
+
+def test_platform_diagnostics_rejects_legacy_localsim_state_list_carrier(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, plan_id = repo_with_plan
+    run = repo.get_simulation_daily_run(run_id)
+    state = _platform_observability_local_sim_state(run=run, plan_id=plan_id)
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={
+            "local_sim_execution_states_v1": [state.model_dump(mode="json")],
+        },
+    )
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        service.platform_diagnostics(run_id=run_id)
+
+    assert exc_info.value.context["reason_code"] == "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID"
+    assert exc_info.value.context["durable_reason_code"] == "LOCALSIM_DURABLE_STATE_PAYLOAD_INVALID"
+
+
+def test_platform_diagnostics_rejects_localsim_state_map_identity_conflict(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, plan_id = repo_with_plan
+    run = repo.get_simulation_daily_run(run_id)
+    state = _platform_observability_local_sim_state(run=run, plan_id=plan_id)
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                "state_wrong_identity": state.model_dump(mode="json"),
+            }
+        },
+    )
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        service.platform_diagnostics(run_id=run_id)
+
+    assert exc_info.value.context["reason_code"] == "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID"
+    assert exc_info.value.context["durable_reason_code"] == "LOCALSIM_DURABLE_STATE_IDENTITY_CONFLICT"
 
 
 def test_platform_diagnostics_keeps_binding_failure_isolated_and_alert_auto_clears(

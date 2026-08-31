@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 from pathlib import Path
+
+import pytest
+import yaml
+
+from backend.services.validation.file_ownership import FileOwnershipCatalog
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
 CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.yaml"
+RUNTIME_TARGET_CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
+WINDOWS_LAUNCHER_PATH = ROOT / "start_all_ai_stock.bat"
 
 
 def _load_module():
@@ -20,6 +28,19 @@ def _load_module():
     return module
 
 
+def _unified_controls(catalog: dict) -> dict[str, dict]:
+    controls: dict[str, dict] = {}
+    for item in catalog["rules"]:
+        control_id = item["rule_id"]
+        assert control_id not in controls
+        controls[control_id] = item
+    for item in catalog.get("manual_review_controls", []):
+        control_id = item["control_id"]
+        assert control_id not in controls
+        controls[control_id] = item
+    return controls
+
+
 def test_catalog_loads_and_compiles_regex_rules() -> None:
     scanner = _load_module()
 
@@ -27,10 +48,89 @@ def test_catalog_loads_and_compiles_regex_rules() -> None:
     rules = scanner.compile_rules(catalog)
 
     rule_ids = {rule.rule_id for rule in rules}
+    rules_by_id = {rule.rule_id: rule for rule in rules}
     assert "ARCH-WSL-001" in rule_ids
     assert "ERR-FALLBACK-001" in rule_ids
     assert "MEMORY-DATAFRAME-001" in rule_ids
+    assert "BACKEND-RESTART-OWNERSHIP-001" in rule_ids
     assert "DB-COMMENT-001" not in rule_ids  # external checker, not regex scanner scope
+    assert rules_by_id["ROOT-POLLUTION-001"].effect == "block"
+    assert rules_by_id["DOC-LOCATION-001"].effect == "warn"
+
+
+def test_ci_workflow_policy_is_enforced_by_guardrail_scanner(tmp_path: Path) -> None:
+    scanner = _load_module()
+    workflow = tmp_path / ".github" / "workflows" / "bad.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(
+        """
+        jobs:
+          test:
+            services:
+              postgres:
+                image: postgres:16
+            steps:
+              - uses: actions/setup-python@v5
+              - run: python -m pip install pytest
+        """,
+        encoding="utf-8",
+    )
+
+    findings = scanner.scan_ci_workflow_policy([workflow], tmp_path)
+
+    assert {finding.rule_id for finding in findings} == {
+        "CI-DATABASE-SAFETY-001",
+        "CI-ENVIRONMENT-PARITY-001",
+    }
+    assert all(finding.severity == "P0" for finding in findings)
+
+
+def test_changed_standard_digest_drift_is_a_blocking_finding(tmp_path: Path) -> None:
+    scanner = _load_module()
+    standard = tmp_path / "standard.md"
+    catalog_path = tmp_path / "standard.yaml"
+    standard.write_text("# Authority\n\nchanged\n", encoding="utf-8")
+    catalog_path.write_text("source_sha256: stale\n", encoding="utf-8")
+    catalog = {
+        "source_standard": "standard.md",
+        "source_sha256": "stale",
+        "rule_sync_policy": {"source_digest_required": True},
+    }
+
+    findings = scanner.scan_standard_digest_consistency(
+        [standard, catalog_path],
+        root=tmp_path,
+        catalog=catalog,
+        catalog_path=catalog_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "STANDARD-SOURCE-DIGEST"
+    assert findings[0].severity == "P1"
+    assert "expected=" in findings[0].message
+    assert "set source_sha256" in findings[0].remediation
+    assert scanner.blocking_findings(findings, "P1", fail_new_only=True) == findings
+
+
+def test_unchanged_standard_digest_contract_is_not_scanned(tmp_path: Path) -> None:
+    scanner = _load_module()
+    standard = tmp_path / "standard.md"
+    catalog_path = tmp_path / "standard.yaml"
+    standard.write_text("# Authority\n", encoding="utf-8")
+    catalog_path.write_text("source_sha256: stale\n", encoding="utf-8")
+
+    findings = scanner.scan_standard_digest_consistency(
+        [tmp_path / "unrelated.py"],
+        root=tmp_path,
+        catalog={
+            "source_standard": "standard.md",
+            "source_sha256": "stale",
+            "rule_sync_policy": {"source_digest_required": True},
+        },
+        catalog_path=catalog_path,
+    )
+
+    assert findings == []
 
 
 def test_catalog_references_current_human_readable_standard() -> None:
@@ -41,16 +141,182 @@ def test_catalog_references_current_human_readable_standard() -> None:
     standard_text = standard_path.read_text(encoding="utf-8")
 
     assert catalog["source_version"] == "1.5"
+    assert catalog["rule_sync_policy"]["catalog_role"] == "machine_enforcement_metadata_only"
+    normalized_standard = standard_text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+    assert catalog["source_digest_normalization"] == "utf8_lf"
+    assert catalog["source_sha256"] == hashlib.sha256(normalized_standard).hexdigest()
     assert standard_path.name == "aistock_development_standard_v1.5_20260523.md"
+    effects = set(catalog["control_taxonomy"]["effects"])
+    phases = set(catalog["control_taxonomy"]["enforcement_phases"])
     for rule in catalog["rules"]:
         if not rule.get("enabled", True):
             continue
         assert rule.get("standard_ref", "").startswith(catalog["source_standard"])
         assert rule["rule_id"] in standard_text
+        assert rule["effect"] in effects
+        assert rule["enforcement_phase"] in phases
+        if (rule.get("checker") or {}).get("type") == "manual_review":
+            assert rule.get("failure_policy")
     for control in catalog.get("manual_review_controls", []):
         assert control.get("standard_ref", "").startswith(catalog["source_standard"])
         control_ref = control["standard_ref"].split("#", 1)[1]
         assert control_ref in standard_text
+        assert control["effect"] in effects
+        assert control["enforcement_phase"] in phases
+        assert control.get("failure_policy")
+
+    controls = _unified_controls(catalog)
+    assert len(controls) == 32
+    assert set(item["control_id"] for item in catalog["manual_review_controls"]) == {
+        "DESIGN-COMPLIANCE-001",
+        "ISSUE-GITHUB-SYNC-001",
+        "DESIGN-MAIN-001",
+        "STD-SYNC-001",
+    }
+    effect_counts = {effect: sum(item["effect"] == effect for item in controls.values()) for effect in effects}
+    assert effect_counts == {"block": 22, "warn": 8, "advisory": 2}
+
+
+def test_rdagent_release_identity_control_is_fail_closed() -> None:
+    scanner = _load_module()
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    controls = _unified_controls(catalog)
+    control = controls["RDAGENT-RELEASE-IDENTITY-001"]
+
+    assert control["failure_policy"] == "block_release_deploy_restart_and_verified_claims"
+    assert {
+        "merged_commit_in_target_branch",
+        "clean_source_checkout",
+        "repository_merge_tree_manifest_match",
+        "immutable_release_path",
+        "repo_external_rdagent_state_root",
+        "deployment_receipt",
+        "atomic_current_pointer",
+        "separate_source_deploy_restart_runtime_states",
+        "rollback_target",
+        "no_source_overlay",
+    } <= set(control["checker"]["required_evidence"])
+
+
+def test_worktree_cleanup_evidence_control_is_fail_closed() -> None:
+    scanner = _load_module()
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    control = _unified_controls(catalog)["WORKTREE-CLEANUP-EVIDENCE-001"]
+
+    assert control["effect"] == "block"
+    assert control["enforcement_phase"] == "issue_lifecycle"
+    assert control["failure_policy"] == (
+        "block_cleanup_done_when_durable_or_unknown_artifacts_or_four_state_drift_remain"
+    )
+    assert {
+        "compact_commit_bound_receipt_persisted",
+        "runtime_post_restart_receipt_summary_durable_before_local_copy_cleanup",
+        "ignored_artifact_manifest_classifies_transient_protected_unknown",
+        "active_process_and_path_boundary_preflight",
+        "manifest_unchanged_before_purge",
+        "path_registration_local_remote_four_state_readback",
+    } <= set(control["checker"]["required_evidence"])
+
+
+def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
+    scanner = _load_module()
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    controls = _unified_controls(catalog)
+
+    assert controls["BACKEND-RESTART-OWNERSHIP-001"]["failure_policy"] == (
+        "block_process_control_and_runtime_verified_claims"
+    )
+    assert controls["BUG-RESTART-EFFECTIVE-001"]["failure_policy"] == (
+        "block_issue_close_sync_and_verified_claims"
+    )
+
+    runtime_catalog = yaml.safe_load(RUNTIME_TARGET_CATALOG_PATH.read_text(encoding="utf-8"))
+    assert runtime_catalog["schema_version"] == "aistock_runtime_target_catalog_v1"
+    assert runtime_catalog["policy"]["backend_restart_owner"] == "user"
+    assert runtime_catalog["policy"]["post_restart_verify_mode"] == "read_only"
+    assert runtime_catalog["targets"]["backend-main"]["production_port"] == 8001
+    assert runtime_catalog["targets"]["backend-main"]["isolated_validation_ports"] == [8011, 8012]
+    assert "start_all_ai_stock.bat" in runtime_catalog["targets"]["backend-main"]["source_globs"]
+    assert {
+        "scripts/aistock_runner_health.py",
+        "scripts/configure_aistock_github_runner.ps1",
+    } <= set(runtime_catalog["non_runtime_source_paths"])
+
+
+def test_windows_backend_launcher_uses_the_aistock_interpreter_in_both_branches() -> None:
+    text = WINDOWS_LAUNCHER_PATH.read_text(encoding="utf-8")
+    backend_commands = [line.strip() for line in text.splitlines() if "backend.main:app" in line]
+
+    assert backend_commands == [
+        (
+            '; new-tab --title "AIstock Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% && '
+            "call %AISTOCK_CONDA_BAT% activate AIstock && %AISTOCK_BACKEND_PYTHON% -m uvicorn "
+            'backend.main:app --host 0.0.0.0 --port 8001" ^'
+        ),
+        'start "AIstock Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% && '
+        "call %AISTOCK_CONDA_BAT% activate AIstock && %AISTOCK_BACKEND_PYTHON% -m uvicorn "
+        'backend.main:app --host 0.0.0.0 --port 8001"',
+    ]
+    assert "call conda activate AIstock & uvicorn backend.main:app" not in text
+    assert " & uvicorn backend.main:app" not in text
+
+
+def test_windows_backend_launcher_fails_before_startup_when_runtime_paths_are_missing() -> None:
+    text = WINDOWS_LAUNCHER_PATH.read_text(encoding="utf-8")
+
+    assert 'set "AISTOCK_CONDA_BAT=C:\\Users\\lc999\\miniconda3\\condabin\\conda.bat"' in text
+    assert 'set "AISTOCK_BACKEND_PYTHON=C:\\Users\\lc999\\miniconda3\\envs\\AIstock\\python.exe"' in text
+    assert (
+        'if not exist "%AISTOCK_CONDA_BAT%" (\n'
+        "  echo ERROR: Conda activation script not found: %AISTOCK_CONDA_BAT%\n"
+        "  pause\n"
+        "  exit /b 1\n"
+        ")"
+    ) in text
+    assert (
+        'if not exist "%AISTOCK_BACKEND_PYTHON%" (\n'
+        "  echo ERROR: AIstock backend Python not found: %AISTOCK_BACKEND_PYTHON%\n"
+        "  pause\n"
+        "  exit /b 1\n"
+        ")"
+    ) in text
+    assert text.index('if not exist "%AISTOCK_CONDA_BAT%"') < text.index("where wt")
+    assert text.index('if not exist "%AISTOCK_BACKEND_PYTHON%"') < text.index("where wt")
+
+
+def test_windows_backend_launcher_has_platform_config_ownership() -> None:
+    ownership = FileOwnershipCatalog().match_path("start_all_ai_stock.bat")
+
+    assert ownership.ownership_status == "mapped"
+    assert ownership.primary_module == "platform.config"
+    assert "platform.api" in ownership.impact_modules
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Restart-Service backend-api\n",
+        "python scripts/_restart_backend.py\n",
+        "python backend/main.py\n",
+        "uvicorn backend.main:app --port " + str(8000 + 1) + "\n",
+        "sc.exe stop backend-api\n",
+    ],
+)
+def test_scanner_blocks_user_backend_process_control_in_client_workflow(
+    tmp_path: Path,
+    command: str,
+) -> None:
+    scanner = _load_module()
+    command_file = tmp_path / ".claude" / "commands" / "unsafe.md"
+    command_file.parent.mkdir(parents=True)
+    command_file.write_text(command, encoding="utf-8")
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    findings = scanner.scan_files([command_file], rules=scanner.compile_rules(catalog), root=tmp_path)
+
+    assert any(finding.rule_id == "BACKEND-RESTART-OWNERSHIP-001" for finding in findings)
 
 
 def test_scanner_detects_silent_fallback_in_runtime_code(tmp_path: Path) -> None:
@@ -120,6 +386,20 @@ def test_scanner_detects_root_pollution_by_path(tmp_path: Path) -> None:
     findings = scanner.scan_files([root_script], rules=rules, root=tmp_path)
 
     assert any(finding.rule_id == "ROOT-POLLUTION-001" for finding in findings)
+
+
+def test_scanner_allows_root_agents_authority_file(tmp_path: Path) -> None:
+    scanner = _load_module()
+    agents_file = tmp_path / "AGENTS.md"
+    agents_file.write_text("# Repository instructions\n", encoding="utf-8")
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    findings = scanner.scan_files([agents_file], rules=scanner.compile_rules(catalog), root=tmp_path)
+
+    assert not any(
+        finding.rule_id in {"ROOT-POLLUTION-001", "DOC-LOCATION-001"}
+        for finding in findings
+    )
 
 
 def test_scanner_allows_debug_tools_one_off_scripts(tmp_path: Path) -> None:
@@ -279,6 +559,27 @@ def test_baseline_status_and_new_only_blocking(tmp_path: Path) -> None:
     assert scanner.blocking_findings(classified, "P1", fail_new_only=False) == classified
 
 
+def test_only_block_effect_can_fail_the_gate() -> None:
+    scanner = _load_module()
+    common = {
+        "title": "Repository placement finding",
+        "severity": "P1",
+        "category": "repository_hygiene",
+        "file": "AGENTS.md",
+        "line": 1,
+        "message": "Repository placement finding",
+        "remediation": "Review placement.",
+        "baseline_policy": "block_new_only",
+        "baseline_status": "new",
+    }
+    block = scanner.Finding(rule_id="BLOCK-001", fingerprint="block", effect="block", **common)
+    warn = scanner.Finding(rule_id="WARN-001", fingerprint="warn", effect="warn", **common)
+    advisory = scanner.Finding(rule_id="ADVISORY-001", fingerprint="advisory", effect="advisory", **common)
+
+    assert scanner.blocking_findings([block, warn, advisory], "P1", fail_new_only=True) == [block]
+    assert warn.to_dict()["effect"] == "warn"
+
+
 def test_missing_baseline_marks_findings_as_new() -> None:
     scanner = _load_module()
     finding = scanner.Finding(
@@ -344,6 +645,7 @@ def test_guardrail_summarize_includes_scope_visibility_without_changing_blocking
 
     summary = scanner.summarize(findings)
 
+    assert summary["by_effect"] == {"block": 2}
     assert summary["by_scope"] == {"docs_or_historical": 1, "runtime_or_pipeline": 1}
     assert summary["by_scope_and_severity"]["runtime_or_pipeline"]["P0"] == 1
     assert summary["top_runtime_or_pipeline_rules"] == [{"rule_id": "ERR-FALLBACK-001", "count": 1}]
@@ -384,10 +686,12 @@ def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
     assert payload["schema_version"] == "aistock_guardrail_scan_result_v1"
     assert payload["gate"]["status"] == "failed"
     assert payload["summary"]["by_baseline_status"]["new"] >= 1
+    assert payload["summary"]["by_effect"]["block"] >= 1
     assert payload["summary"]["by_scope"]["runtime_or_pipeline"] >= 1
     assert payload["summary"]["total_findings"] >= 1
     assert "AIstock Guardrail Baseline Scan" in summary
     assert "Summary By Baseline Status" in summary
+    assert "Summary By Effect" in summary
     assert "Summary By Scope" in summary
     assert "Top Runtime Or Pipeline Rules" in summary
     assert "ERR-FALLBACK-001" in summary

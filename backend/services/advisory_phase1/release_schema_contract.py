@@ -1200,7 +1200,7 @@ def make_release_plan_request(
 
 
 RELEASE_SCHEMA_REGISTRY_ROOT = Path(__file__).resolve().parent / "release_schema_registry"
-DEFAULT_RELEASE_SCHEMA_REGISTRY = RELEASE_SCHEMA_REGISTRY_ROOT / "advisory_phase1_dataset_foundation_v3.json"
+DEFAULT_RELEASE_SCHEMA_REGISTRY = RELEASE_SCHEMA_REGISTRY_ROOT / "advisory_phase1_dataset_foundation_v4.json"
 
 
 def load_release_schema_contract(path: Path | None = None) -> ReleaseSchemaContract:

@@ -21,7 +21,7 @@ def test_schema_bootstrap_is_complete_commented_and_operator_controlled() -> Non
         len(columns) for columns in schema.EXPECTED_COLUMNS.values()
     )
 
-    assert schema.SCHEMA_VERSION == "hmm_evolution_v1"
+    assert schema.SCHEMA_VERSION == "hmm_evolution_v3"
     assert joined.count("comment on ") == expected_comment_count
     assert "create role" not in joined
     assert " grant " not in joined
@@ -40,6 +40,10 @@ def test_schema_contract_exposes_all_required_constraints() -> None:
     ]
     assert "batch_test_item_ordinal_key" in schema.EXPECTED_CONSTRAINTS["batch_test_item"]
     assert "candidate_source_type_ck" in schema.EXPECTED_CONSTRAINTS["candidate"]
+    assert "request_payload" in schema.EXPECTED_COLUMNS["batch_test_run"]
+    assert "preparation_queued" in schema.EXPECTED_CONSTRAINT_DEFINITIONS["batch_test_run"][
+        "batch_test_run_status_ck"
+    ]
 
 
 def test_schema_bootstrap_uses_one_managed_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,6 +88,8 @@ def test_repository_write_allowlist_is_exact_and_no_external_business_schema_is_
         "hmm_evolution.offline_evaluation",
         "hmm_evolution.batch_test_run",
         "hmm_evolution.batch_test_item",
+        "hmm_evolution.performance_receipt",
+        "hmm_evolution.worker_runtime_status",
     }
     source = inspect.getsource(HMMEvolutionRepository).lower()
     for forbidden in (

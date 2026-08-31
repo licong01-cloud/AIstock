@@ -1,10 +1,49 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from scripts import llm_provider_adapter as adapter
+
+
+def test_failed_discovery_writes_loud_receipts_for_deterministic_continuation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "hypotheses.json"
+    selected = tmp_path / "selected-plans.json"
+
+    def fail_provider(*_args, **_kwargs):
+        raise adapter.ProviderAdapterError("deepseek_api unavailable")
+
+    monkeypatch.setattr(adapter, "build_nightly_discovery_hypotheses", fail_provider)
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "nightly-discovery-hypothesis",
+            "--provider",
+            "deepseek_api",
+            "--input-pack",
+            str(tmp_path / "input.json"),
+            "--output",
+            str(output),
+            "--selected-plans-output",
+            str(selected),
+        ]
+    )
+
+    assert exit_code == 2
+    failure = json.loads(output.read_text(encoding="utf-8"))
+    selected_payload = json.loads(selected.read_text(encoding="utf-8"))
+    assert failure["workflow_gate"] == "failed"
+    assert failure["planner_status"] == "failed"
+    assert failure["error"] == "deepseek_api unavailable"
+    assert selected_payload["workflow_gate"] == "failed"
+    assert selected_payload["planner_status"] == "failed"
+    assert selected_payload["selected_plan_keys"] == []
+    assert selected_payload["warning_only"] is True
 
 
 def test_llm_triage_config_defaults_are_safe():
@@ -42,7 +81,7 @@ def test_validate_config_allows_enabled_deepseek_v4_pro_fallback():
 def test_validate_deepseek_provider_bootstraps_from_canonical_env_file(monkeypatch, tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        'DEEPSEEK_API_KEY="env-file-secret"\nDEEPSEEK_BASE_URL="https://api.deepseek.com/v1"\n',
+        'DEEPSEEK_API_KEY="x"\nDEEPSEEK_BASE_URL="https://api.deepseek.com/v1"\n',
         encoding="utf-8",
     )
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -227,7 +266,7 @@ def test_triage_quality_smoke_cli_uses_compact_success_output(capsys, tmp_path):
     assert output.exists()
 
 
-def test_test_plan_advice_allows_runner_enabled_catalog_plan():
+def test_test_plan_advice_blocks_runner_plans_outside_changed_file_selection():
     payload = adapter.build_test_plan_advice(
         "github_models",
         adapter.load_config(),
@@ -238,10 +277,10 @@ def test_test_plan_advice_allows_runner_enabled_catalog_plan():
 
     assert payload["schema_version"] == adapter.TEST_PLAN_ADVICE_SCHEMA_VERSION
     assert payload["provider"] == "github_models"
-    assert payload["deterministic_gate"]["workflow_gate"] == "ready"
+    assert payload["deterministic_gate"]["workflow_gate"] == "blocked"
     assert payload["deterministic_gate"]["runner_enabled_only"] is True
     assert payload["deterministic_gate"]["command_keys_allowlisted"] is True
-    assert payload["deterministic_gate"]["validation_select_compatible"] is True
+    assert payload["deterministic_gate"]["validation_select_compatible"] is False
     assert payload["deterministic_gate"]["shell_commands_allowed"] is False
     assert payload["llm_invocation_evidence"]["invoked"] is False
     assert [item["plan_key"] for item in payload["test_plan_advice"]] == [
@@ -314,7 +353,7 @@ def test_test_plan_advice_cli_uses_compact_success_output(capsys, tmp_path):
     assert exit_code == 0
     assert '"check": "test-plan-advice"' in captured.out
     assert '"workflow_gate": "passed"' not in captured.out
-    assert '"advised_plan_count": 3' in captured.out
+    assert '"advised_plan_count": 1' in captured.out
     assert '"llm_invoked": false' in captured.out
     assert output.exists()
 

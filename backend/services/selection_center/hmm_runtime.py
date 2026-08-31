@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from backend.services.selection_center.models import SelectionCandidate
+from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion
 from backend.services.selection_center.prospective_evidence import (
     CandidateStageName,
     HMMAdjustmentResult,
@@ -80,6 +80,7 @@ class SectorHMMRuntime:
         manifest_sha256: str,
         require_frozen_snapshot: bool = False,
         effective_trade_date: date | None = None,
+        receipt_admissibility: str = "PROSPECTIVE_FIRST_OBSERVED",
     ) -> HMMAdjustmentResult:
         if not profile.enabled:
             return HMMAdjustmentResult(
@@ -168,7 +169,12 @@ class SectorHMMRuntime:
         payload = artifact.payload
         day_key = trade_date.isoformat()
         daily_coefficients = payload.get("daily_coefficients")
-        stock_sector_map = payload.get("stock_sector_map")
+        stock_sector_map = _stock_sector_map_for_day(
+            payload,
+            day_key=day_key,
+            package_id=package_id,
+            coefficients_path=artifact.path,
+        )
         if not isinstance(daily_coefficients, dict) or not isinstance(stock_sector_map, dict):
             raise HMMRuntimeUnavailableError(
                 "HMM coefficient artifact is missing required keys",
@@ -192,9 +198,31 @@ class SectorHMMRuntime:
             )
 
         adjusted: list[SelectionCandidate] = []
+        exclusions: list[SelectionExclusion] = []
         for candidate in candidates:
+            raw_score = _finite_float(
+                candidate.score,
+                message="HMM runtime requires finite candidate scores",
+                context={"package_id": package_id, "symbol": candidate.symbol, "raw_score": candidate.score},
+            )
             sector_code = stock_sector_map.get(candidate.symbol)
             if sector_code is None or not str(sector_code).strip():
+                if profile.missing_sector_policy == "exclude_candidate":
+                    exclusions.append(
+                        SelectionExclusion(
+                            symbol=candidate.symbol,
+                            score=raw_score,
+                            rank=candidate.rank,
+                            reason="HMM_SECTOR_MAPPING_MISSING",
+                            source="sector_hmm_runtime",
+                            context={
+                                "trade_date": day_key,
+                                "model_snapshot_id": profile.model_snapshot_id,
+                                "missing_sector_policy": profile.missing_sector_policy,
+                            },
+                        )
+                    )
+                    continue
                 raise HMMRuntimeUnavailableError(
                     "HMM coefficient artifact is missing stock sector mapping",
                     context={
@@ -204,6 +232,7 @@ class SectorHMMRuntime:
                         "trade_date": day_key,
                         "symbol": candidate.symbol,
                         "raw_rank": candidate.rank,
+                        "missing_sector_policy": profile.missing_sector_policy,
                         "coefficients_path": str(artifact.path),
                     },
                 )
@@ -219,11 +248,6 @@ class SectorHMMRuntime:
                     "sector_code": str(sector_code),
                     "coefficient": coeff_value,
                 },
-            )
-            raw_score = _finite_float(
-                candidate.score,
-                message="HMM runtime requires finite candidate scores",
-                context={"package_id": package_id, "symbol": candidate.symbol, "raw_score": candidate.score},
             )
             component_scores = dict(candidate.component_scores or {})
             component_scores.setdefault("raw_rank", candidate.rank)
@@ -256,6 +280,14 @@ class SectorHMMRuntime:
         coefficients_sha256 = _file_sha256(artifact.path)
         model_sha256 = _file_sha256(model_path)
         generation_mode = "EXACT_SNAPSHOT" if requested_snapshot_id else "DYNAMIC_LATEST_RESOLVED"
+        input_data_max_dates = _input_data_max_dates_for_day(
+            payload,
+            snapshot=snapshot,
+            day_key=day_key,
+            package_id=package_id,
+            coefficients_path=artifact.path,
+        )
+        excluded_symbols = sorted(item.symbol for item in exclusions)
         hmm_metadata = {
             "enabled": True,
             "status": "COMPLETE",
@@ -270,20 +302,25 @@ class SectorHMMRuntime:
             "as_of_trade_date": trade_date.isoformat(),
             "effective_trade_date": effective_trade_date.isoformat() if effective_trade_date else None,
             "first_observed_at": observed_at.isoformat(),
-            "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+            "admissibility": receipt_admissibility,
             "model_sha256": model_sha256,
             "model_artifact_sha256": model_sha256,
             "coefficients_sha256": coefficients_sha256,
             "coefficient_sha256": coefficients_sha256,
             "coefficients_payload_sha256": canonical_evidence_json_sha256(artifact.payload),
             "coefficient_trade_date": day_key,
-            "input_data_max_dates": snapshot.get("input_data_max_dates"),
+            "input_data_max_dates": input_data_max_dates or None,
             "input_data_max_dates_hash": (
-                canonical_evidence_json_sha256(snapshot["input_data_max_dates"])
-                if snapshot.get("input_data_max_dates") is not None
+                canonical_evidence_json_sha256(input_data_max_dates)
+                if input_data_max_dates
                 else None
             ),
             "freshness_lag": snapshot.get("freshness_lag"),
+            "missing_sector_policy": profile.missing_sector_policy,
+            "missing_sector_excluded_count": len(excluded_symbols),
+            "missing_sector_excluded_symbols_hash": canonical_evidence_json_sha256(
+                excluded_symbols
+            ),
             # Paths are diagnostic only and intentionally omitted from receipt semantics.
             "model_path": str(model_path),
             "coefficients_path": str(artifact.path),
@@ -293,6 +330,7 @@ class SectorHMMRuntime:
             status=StageReceiptStatus.COMPLETE,
             input_count=len(candidates),
             candidates=reranked,
+            exclusions=exclusions,
             semantic_payload={
                 key: hmm_metadata[key]
                 for key in (
@@ -317,6 +355,9 @@ class SectorHMMRuntime:
                     "coefficient_trade_date",
                     "input_data_max_dates_hash",
                     "freshness_lag",
+                    "missing_sector_policy",
+                    "missing_sector_excluded_count",
+                    "missing_sector_excluded_symbols_hash",
                 )
             },
         )
@@ -328,11 +369,21 @@ class SectorHMMRuntime:
         trade_date: date,
         profile: RuntimeHMMProfile,
         package_id: str,
+        require_frozen_snapshot: bool = False,
     ) -> dict[str, Any]:
         """Validate the HMM artifact shape before live selection inference starts."""
 
         if not profile.enabled:
             return {"enabled": False}
+        if require_frozen_snapshot and profile.model_config_id and not profile.model_snapshot_id:
+            raise HMMRuntimeUnavailableError(
+                "historical HMM preflight requires an explicit model_snapshot_id",
+                context={
+                    "reason_code": "ADVISORY_HR_HMM_FROZEN_EVIDENCE_UNAVAILABLE",
+                    "package_id": package_id,
+                    "model_config_id": profile.model_config_id,
+                },
+            )
         profile = self._resolve_profile_snapshot(profile)
         if not profile.model_snapshot_id:
             raise HMMRuntimeUnavailableError(
@@ -372,9 +423,16 @@ class SectorHMMRuntime:
             profile=profile,
             trade_date=trade_date,
             package_id=package_id,
+            allow_generate=not require_frozen_snapshot,
         )
+        day_key = trade_date.isoformat()
         daily_coefficients = artifact.payload.get("daily_coefficients")
-        stock_sector_map = artifact.payload.get("stock_sector_map")
+        stock_sector_map = _stock_sector_map_for_day(
+            artifact.payload,
+            day_key=day_key,
+            package_id=package_id,
+            coefficients_path=artifact.path,
+        )
         if not isinstance(daily_coefficients, dict) or not isinstance(stock_sector_map, dict):
             raise HMMRuntimeUnavailableError(
                 "HMM coefficient artifact is missing required keys",
@@ -385,7 +443,6 @@ class SectorHMMRuntime:
                     "keys": sorted(str(key) for key in artifact.payload),
                 },
             )
-        day_key = trade_date.isoformat()
         day_coefficients = daily_coefficients.get(day_key)
         if not isinstance(day_coefficients, dict):
             raise HMMRuntimeUnavailableError(
@@ -484,6 +541,7 @@ class SectorHMMRuntime:
             "enabled": True,
             "model_config_id": profile.model_config_id,
             "snapshot_id": profile.model_snapshot_id,
+            "model_snapshot_id": profile.model_snapshot_id,
             "snapshot_status": snapshot.get("status"),
             "signal_preset": profile.signal_preset,
             "model_path": str(model_path),
@@ -492,6 +550,21 @@ class SectorHMMRuntime:
             "sector_count": len(day_coefficients),
             "coefficient_count": len(valid_sector_codes),
             "stock_sector_map_count": len(stock_sector_map),
+            "generation_mode": "EXACT_SNAPSHOT" if require_frozen_snapshot else "PREFLIGHT",
+            "model_artifact_sha256": _file_sha256(model_path),
+            "coefficient_sha256": _file_sha256(artifact.path),
+            "input_data_max_dates_hash": _input_data_max_dates_hash(
+                artifact.payload,
+                snapshot=snapshot,
+                day_key=day_key,
+                package_id=package_id,
+                coefficients_path=artifact.path,
+            ),
+            "snapshot_trained_at": _time_value(snapshot.get("trained_at")),
+            "available_at": _time_value(snapshot.get("available_at")),
+            "training_information_cutoff": _time_value(snapshot.get("training_information_cutoff")),
+            "as_of_trade_date": day_key,
+            "effective_trade_date": day_key,
         }
 
     def _load_snapshot(self, snapshot_id: str) -> dict[str, Any]:
@@ -755,6 +828,72 @@ def _read_coefficients(path: Path, *, package_id: str) -> dict[str, Any]:
             context={"package_id": package_id, "coefficients_path": str(path)},
         )
     return payload
+
+
+def _stock_sector_map_for_day(
+    payload: dict[str, Any],
+    *,
+    day_key: str,
+    package_id: str,
+    coefficients_path: Path,
+) -> dict[str, Any] | Any:
+    maps_by_date = payload.get("stock_sector_map_by_date")
+    if maps_by_date is not None:
+        if not isinstance(maps_by_date, dict) or not isinstance(maps_by_date.get(day_key), dict):
+            raise HMMRuntimeUnavailableError(
+                "HMM coefficient artifact has no point-in-time stock sector map for trade_date",
+                context={
+                    "package_id": package_id,
+                    "trade_date": day_key,
+                    "coefficients_path": str(coefficients_path),
+                },
+            )
+        return maps_by_date[day_key]
+    return payload.get("stock_sector_map")
+
+
+def _input_data_max_dates_for_day(
+    payload: dict[str, Any],
+    *,
+    snapshot: dict[str, Any],
+    day_key: str,
+    package_id: str,
+    coefficients_path: Path,
+) -> dict[str, Any]:
+    snapshot_dates = snapshot.get("input_data_max_dates")
+    base = dict(snapshot_dates) if isinstance(snapshot_dates, dict) else {}
+    by_date = payload.get("input_data_max_dates_by_date")
+    if by_date is not None:
+        day_dates = by_date.get(day_key) if isinstance(by_date, dict) else None
+        if not isinstance(day_dates, dict) or not day_dates:
+            raise HMMRuntimeUnavailableError(
+                "HMM coefficient artifact has no point-in-time input watermark for trade_date",
+                context={
+                    "package_id": package_id,
+                    "trade_date": day_key,
+                    "coefficients_path": str(coefficients_path),
+                },
+            )
+        base.update(day_dates)
+    return base
+
+
+def _input_data_max_dates_hash(
+    payload: dict[str, Any],
+    *,
+    snapshot: dict[str, Any],
+    day_key: str,
+    package_id: str,
+    coefficients_path: Path,
+) -> str | None:
+    dates = _input_data_max_dates_for_day(
+        payload,
+        snapshot=snapshot,
+        day_key=day_key,
+        package_id=package_id,
+        coefficients_path=coefficients_path,
+    )
+    return canonical_evidence_json_sha256(dates) if dates else None
 
 
 def _file_sha256(path: Path) -> str:

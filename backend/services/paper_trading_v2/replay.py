@@ -6,7 +6,8 @@ from datetime import date
 from typing import Any
 
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.trading_core.errors import (
     InvalidStateTransitionError,
@@ -33,6 +34,7 @@ class PaperTradingHistoricalReplay:
         package_repository: StrategyPackageRepository | Any | None = None,
         calendar_provider: TradeCalendarProvider | Any | None = None,
         day_runner: PaperTradingDayRunner | None = None,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.package_repository = package_repository
@@ -41,6 +43,7 @@ class PaperTradingHistoricalReplay:
             repository=self.repository,
             package_repository=self.package_repository,
             calendar_provider=self.calendar_provider,
+            pit_authority_resolver=pit_authority_resolver,
         )
 
     def run(
@@ -53,6 +56,7 @@ class PaperTradingHistoricalReplay:
         rerun_policy: str = "reject_existing",
         confirm_reset: bool = False,
         confirm_text: str | None = None,
+        inherit_existing_pit_lease: bool = False,
     ) -> PaperReplayResult:
         if rerun_policy not in {"reject_existing", "reset_portfolio"}:
             raise UnsupportedFeatureError(
@@ -126,6 +130,7 @@ class PaperTradingHistoricalReplay:
                 portfolio_id=portfolio_id,
                 trade_date=trade_date,
                 runtime_config=config,
+                inherit_existing_pit_lease=inherit_existing_pit_lease,
             )
             actual_bar_count = self._actual_bar_count_for_run(
                 portfolio_id=portfolio_id,

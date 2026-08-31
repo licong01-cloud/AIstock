@@ -11,19 +11,19 @@ from backend.services.hmm_evolution.errors import SchemaUnavailableError
 
 
 VALID_SPEC = {
-    "schema_version": "hmm_evaluation_spec_v1",
+    "schema_version": "hmm_evaluation_spec_v2",
     "base_loop_ref": "qe_20260706_013235_bbd4/Loop8",
     "window_start": "2025-01-02",
     "window_end": "2025-12-31",
     "as_of": {"policy": "latest_common_completed", "requested_date": None},
     "label_horizon_days": 20,
-    "universe": {"type": "prediction_artifact_all"},
+    "universe": {"type": "source_loop_stock_pool_st_pit"},
     "topk": 50,
     "date_coverage_policy": "batch_common_intersection_with_evidence",
     "missing_sector_policy": "neutral_with_evidence",
     "market_forward_return": {"mode": "required", "horizon_trading_days": 10},
     "sort_policy": "score_desc_symbol_asc_v1",
-    "metric_version": "hmm_replacement_metrics_v1",
+    "metric_version": "hmm_replacement_metrics_v2",
     "recommendation_version": "hmm_recommendation_v1",
 }
 
@@ -35,16 +35,38 @@ class _Service:
     def list_candidates(self, **_kwargs: Any) -> list[Any]:
         return []
 
-    async def prepare_and_create_batch(self, **kwargs: Any) -> tuple[dict[str, Any], bool]:
+    def submit_batch(self, **kwargs: Any) -> tuple[dict[str, Any], bool]:
         self.captured = kwargs
         return (
             {
                 "batch_id": "hmmb_test",
-                "status": "queued",
+                "status": "preparation_queued",
                 "candidate_count": len(kwargs["candidate_ids"]),
+                "request_hash": "b" * 64,
+                "execution_purpose": "evaluation",
+                "benchmark_id": None,
             },
             True,
         )
+
+
+class _ReceiptRepository:
+    """Minimal receipt surface used by the router's API-stage persistence."""
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+        self.merged: list[dict[str, Any]] = []
+
+    def create_performance_receipt(self, **kwargs: Any) -> tuple[dict[str, Any], bool]:
+        self.created.append(kwargs)
+        return ({"receipt_id": "hmpr_test", "row_version": 1}, True)
+
+    def merge_performance_receipt_progress(self, **kwargs: Any) -> dict[str, Any]:
+        self.merged.append(kwargs)
+        return {"receipt_id": kwargs["receipt_id"], "row_version": kwargs["expected_row_version"] + 1}
+
+    def get_performance_receipt(self, **_kwargs: Any) -> None:
+        return None
 
 
 class _FailingService(_Service):
@@ -93,7 +115,8 @@ class _AssetReader:
 def _client(service: Any) -> TestClient:
     app = FastAPI()
     app.include_router(hmm_evolution.router, prefix="/api/v1")
-    app.dependency_overrides[hmm_evolution.get_runtime] = lambda: SimpleNamespace(service=service)
+    runtime = SimpleNamespace(service=service, repository=_ReceiptRepository())
+    app.dependency_overrides[hmm_evolution.get_runtime] = lambda: runtime
     return TestClient(app)
 
 

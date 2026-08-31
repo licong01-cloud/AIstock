@@ -1,0 +1,289 @@
+{
+  "actual": "Production read-only exact-key preflight on the frozen PIT universe (2022-01-01..2024-06-30, 601 trading dates) proves 466 daily_basic and 1093 moneyflow_ts apparent candidates. All 466 daily-basic dates are exact stock suspension dates and no DML candidate exists. C-009 source implementation resolves 591 moneyflow rows through immutable 302132.SZ -> 300114.SZ dataset-specific identity, preserves 502 provider-audit-bound absences as explicit NA, and resolves 348 causal circ_mv rows with maximum 30 market-trading-day staleness. The complete 601-day source-only preflight finished with no fits, selection, D6, model/READY, database write or runtime action, but correctly blocked on the existing train observation coverage contract: legacy L1=31/31 valid, legacy L2=130/131 valid with 801881.SI at 96 rows, autocycle L1=0/31 valid and autocycle L2=0/131 valid. No coverage threshold, rolling window, cross-section completeness, universe, hard semantic authority or model logic was changed.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/security_identity.py",
+    "backend/services/hmm_risk/provider_absence.py",
+    "backend/services/hmm_risk/manifests/security_source_identity_v1.json",
+    "backend/services/hmm_risk/manifests/provider_absence_v1.json",
+    "backend/services/hmm_risk/stock_fact_repository.py",
+    "backend/services/hmm_risk/stock_fact_observation.py",
+    "backend/services/hmm_risk/stock_fact_gap_repair.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "scripts/hmm_risk/repair_b3_stock_fact_gaps.py",
+    "backend/tests/hmm_risk/test_security_identity.py",
+    "backend/tests/hmm_risk/test_provider_absence.py",
+    "backend/tests/hmm_risk/test_stock_fact_repository.py",
+    "backend/tests/hmm_risk/test_stock_fact_observation.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "tests/aistock_validation/bugs/20260726_BUG-877-hmm-b3-frozen-train-source-has-exact-date-daily-basic-and-689009-moneyfl.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-877",
+  "closed_at": "2026-07-27T12:03:23.764139Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-26T17:21:23.347912Z",
+  "description": "The HMM B3 frozen stock-fact source has 466 exact daily_basic candidates and 1093 apparent moneyflow candidates. Read-only provider and lineage audit separates the moneyflow set into 591 historical rows present under predecessor code 300114.SZ for canonical code 302132.SZ, plus 502 rows absent from Tushare's own moneyflow authority. The guarded repair must enumerate every exact key, reject incomplete or mismatched provider identity, remain insert-only with canonical readback/idempotency/exact rollback, and keep alias semantics, production DML, training, selection, model/READY, database and runtime actions behind their existing separate authorization boundaries.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260726-4763032b2877",
+      "timestamp": "2026-07-26T17:21:23.347905Z"
+    },
+    {
+      "action": "expand_exact_key_lineage_evidence",
+      "actor": "codex",
+      "note": "Production read-only preflight found 466 daily-basic and 1093 moneyflow candidates; 591 moneyflow dates are complete under predecessor code 300114.SZ, while the remaining 502 exact rows are absent from Tushare trade-date authority. No DML or alias rewrite was executed.",
+      "timestamp": "2026-07-26T19:07:44.5377569Z"
+    },
+    {
+      "action": "repair_framework_validated_provider_resolution_pending",
+      "actor": "codex",
+      "note": "Implemented hashed dataset-scoped plans, exact provider validation, insert-only apply, durable pre-commit receipt preparation, canonical readback/idempotency, guarded rollback, strict DEV/production identity, and bounded typed provider retry. Provider completeness remained pending at this step; no production DML was executed.",
+      "timestamp": "2026-07-26T20:07:37.4313284Z"
+    },
+    {
+      "action": "classify_suspension_contract_not_data_loss",
+      "actor": "codex",
+      "note": "Confirmed all 466 daily-basic keys are suspension dates with no provider row, all 1093 moneyflow keys lack a same-identity provider row, and production DML has no legal candidate. Proposed C-009-A causal as-of circ_mv contract remains unapproved and unimplemented.",
+      "timestamp": "2026-07-26T20:19:35.5598999Z"
+    },
+    {
+      "action": "approve_c009_source_contract_and_expand_scope",
+      "actor": "user",
+      "note": "Approved C-009-A/B/C/D and expanded BUG-877 for the source-specific security resolver, causal circ_mv as-of, provider-absence NA evidence, and a 601-trading-day read-only preflight. Production DML, 5184 fits, selection, D6, model/READY, runtime actions, and source merge remain outside this authorization.",
+      "timestamp": "2026-07-27T02:42:07.1188081Z"
+    },
+    {
+      "action": "complete_c009_source_and_block_on_train_coverage",
+      "actor": "codex",
+      "note": "Implemented immutable security source identity, provider-absence NA evidence, causal circ_mv as-of, and bounded split-query execution. The 601-day read-only preflight completed with exact 591 alias, 502 provider absence and 348 stale circ_mv evidence, then failed closed because all four family/level train coverage receipts were not complete. No training, selection, D6, model/READY, DML or runtime action was executed.",
+      "timestamp": "2026-07-27T05:34:56.6918588Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/validation/hmm_risk/bug877_production_full_plan_v2.json: selected_datasets=[daily_basic,moneyflow_ts] daily_basic=466 moneyflow_ts=1093 candidate_key_sha256=a69df9ec676031541824c314f154403a41fe596c410c933ebfba55aef0f696f3 plan_sha256=9583b1a46a87b655c566662a77e9da8139c7507ee069367808da48e0dab0fe75 db_writes=false",
+    "tmp/validation/hmm_risk/bug877_production_daily_basic_plan_v2.json: selected_datasets=[daily_basic] daily_basic=466 moneyflow_ts=0 candidate_key_sha256=4c1a755a14e40bfd6d734381e5b7757e4bd7809100ffc605118932a5be0f0e29 plan_sha256=5b48d1fa46f3a5a5f01c7a0b3e1778b24471007d738575b2a29d349577d83709 db_writes=false",
+    "read-only DB lineage: canonical price rows=2627746 required price NULL rows=0; current missing-price rows=0; stk_limit/up_limit gaps=0; conflicting duplicate groups=0",
+    "read-only DB lineage: 302132.SZ target dates=591; 300114.SZ exact source rows=591; required NULL rows=0; source-row SHA-256=c43da698b9c53dc753dd81f7f05cb9b35cd183bae8564c5b7a527ec0b18c655d",
+    "Tushare trade-date moneyflow evidence: 689009.SH pre-2024-01-19 and the five one-off exact keys are absent; 302132.SZ history is returned under 300114.SZ before the 2025-02-17 code change",
+    "local-data MCP daily_basic date-level gap check=0 ranges; proves platform day coverage does not detect per-symbol holes",
+    "local-data MCP plan IDs ldmp_f0741df963256b8e495142eb and ldmp_eba647da9ec4a9202422867c are plan-only and were not applied",
+    "DEV preflight: failed closed because the DEV source does not cover every frozen trading date; db_writes=false",
+    "DEV transaction rollback smoke: synthetic exact row insert=1 readback=1 exact delete=1 post-delete=0 transaction_committed=false production_touched=false",
+    "direct repair contract tests: 17 passed",
+    "nox hmm_risk_backend: 92 passed; total branch coverage=73.92%",
+    "explicit changed-file nox l0: PASS, files=6, blocking=0",
+    "nox validation_module_registry_l0: 8 passed; catalog mapping 14/14",
+    "changed-file ownership: 6/6 mapped, unmapped=0, ambiguous=0",
+    "Feature Workflow F2 validation: PASS, design_items=3, matrix_rows=8, warnings=0",
+    "provider audit first run failed explicitly on HTTP proxy read timeout; bounded three-attempt typed retry was added and partial results were not accepted",
+    "completed Tushare daily-basic audit: exact provider rows=0/466; missing=466; no partial result accepted",
+    "suspension lineage: 466/466 daily-basic candidate dates have suspend_d, 0/466 have kline, and 0/466 are unexplained",
+    "tmp/validation/hmm_risk/bug877_c009_stock_fact_preflight.json: 601 trading dates, canonical report sha256=b45d71d318e6793728dc8d570bd84be7d39f67e9d72937848b346fe4c37077d2, status=blocked, fit/selection/D6/model/READY/database/runtime=false",
+    "C-009 source statistics: alias=591 provider_absence=502 causal_circ_mv_stale=348 max_staleness_trading_days=30",
+    "C-009 train coverage: legacy L1=31/31, legacy L2=130/131 (801881.SI=96), autocycle L1=0/31, autocycle L2=0/131; failure=hmm_risk_model_train_observation_coverage_insufficient"
+  ],
+  "expected": "The HMM stock-fact contract must distinguish suspension-day absence, true provider absence, and cross-source security-code identity without fabricating database rows. Production DML is allowed only for an exact same-identity authoritative provider row; none currently exist. A suspension-aware causal circ_mv as-of contract may use only a source date before t, must persist source date/staleness, and must fail closed when no causal row exists, but this business-contract change requires explicit user approval before implementation or retraining.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/services/hmm_risk/provider_absence.py",
+      "backend/services/hmm_risk/manifests/security_source_identity_v1.json",
+      "backend/services/hmm_risk/manifests/provider_absence_v1.json",
+      "backend/services/hmm_risk/stock_fact_gap_repair.py",
+      "scripts/hmm_risk/repair_b3_stock_fact_gaps.py",
+      "backend/tests/hmm_risk/test_security_identity.py",
+      "backend/tests/hmm_risk/test_provider_absence.py",
+      "backend/tests/hmm_risk/test_stock_fact_gap_repair.py"
+    ],
+    "changed_files": [
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/services/hmm_risk/provider_absence.py",
+      "backend/services/hmm_risk/manifests/security_source_identity_v1.json",
+      "backend/services/hmm_risk/manifests/provider_absence_v1.json",
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/services/hmm_risk/stock_fact_gap_repair.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "scripts/hmm_risk/repair_b3_stock_fact_gaps.py",
+      "backend/tests/hmm_risk/test_security_identity.py",
+      "backend/tests/hmm_risk/test_provider_absence.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ]
+  },
+  "first_seen_at": "2026-07-26T17:21:23.347912Z",
+  "fix_branch": "bug/BUG-877-hmm-b3-frozen-train-source-has-exact-date-daily-20260726",
+  "fix_commit": "fa69225c394691c0bf404ad7881b7ebcf354b509",
+  "fixed_at": "2026-07-27T12:03:23.764152Z",
+  "github_issue_number": 2772,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2772",
+  "last_seen_at": "2026-07-27T05:34:56.6918588Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval.",
+    "Do not execute production DML, a local-data confirmed repair, HMM training, selection, model/READY writes, or PIT identity changes in this source PR."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2796",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_dml_gate": "noop_no_authoritative_candidate",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run the BUG-877 production read-only exact-key preflight for 2022-01-01..2024-06-30; expect daily_basic=466, moneyflow_ts=1093, candidate_key_sha256=a69df9ec676031541824c314f154403a41fe596c410c933ebfba55aef0f696f3, and no database writes.",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM B3 exact previous-day circ_mv contract misclassifies suspension/provider identity absence as repairable data loss",
+  "trigger_condition": {
+    "fingerprint": "4763032b2877d08be02457bf",
+    "source_event_id": "FE-20260726-4763032b2877"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_risk/test_security_identity.py backend/tests/hmm_risk/test_provider_absence.py backend/tests/hmm_risk/test_stock_fact_repository.py backend/tests/hmm_risk/test_stock_fact_observation.py backend/tests/hmm_risk/test_stock_fact_gap_repair.py backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -q -p no:cacheprovider -> passed (56 tests)",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 tests; 14/14 mapped)"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

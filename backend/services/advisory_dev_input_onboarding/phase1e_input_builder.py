@@ -16,6 +16,7 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     O4ArtifactKind,
     PartitionGranularity,
     Phase1EProgramDateInput,
+    Phase1EProgramCompilerDependency,
     Phase1EProgramInputUnit,
     Phase1ERealInputBundle,
     ProgramCapacityStatus,
@@ -359,14 +360,8 @@ def reconcile_dse_and_build_requirement_set(
 def build_program_input_unit(
     *,
     program_date: Phase1EProgramDateInput,
-    historical_program_run_ref: AdvisoryImmutableArtifactRef | None,
-    historical_program_run_hash: str | None,
-    phase0a_audit_ref: AdvisoryImmutableArtifactRef | None,
-    phase0a_audit_hash: str | None,
-    handoff_readiness_ref: AdvisoryImmutableArtifactRef | None,
-    handoff_readiness_hash: str | None,
-    handoff_bundle_ref: AdvisoryImmutableArtifactRef | None,
-    handoff_bundle_hash: str | None,
+    compiler_dependency_ref: AdvisoryImmutableArtifactRef | None,
+    compiler_dependency_hash: str | None,
     source_requirement_set_ref: AdvisoryImmutableArtifactRef | None,
     source_requirement_set_hash: str | None,
     source_resolution_receipt_ref: AdvisoryImmutableArtifactRef | None,
@@ -378,18 +373,18 @@ def build_program_input_unit(
     capacity_coverage: Phase1ECapacityProgramCoverageV1 | None,
     phase1e_program_date_request_ref: AdvisoryImmutableArtifactRef | None,
     phase1e_program_date_request_hash: str | None,
+    phase1e_batch_request_ref: AdvisoryImmutableArtifactRef | None = None,
+    phase1e_batch_request_hash: str | None = None,
+    identity_blocked: bool = False,
     reason_codes: tuple[str, ...] = (),
 ) -> Phase1EProgramInputUnit:
     """Derive one Program readiness state from exact evidence presence and typed outcomes."""
 
     identity_pairs = {
-        "historical_program_run": (historical_program_run_ref, historical_program_run_hash),
-        "phase0a_audit": (phase0a_audit_ref, phase0a_audit_hash),
-        "handoff_readiness": (handoff_readiness_ref, handoff_readiness_hash),
-        "handoff_bundle": (handoff_bundle_ref, handoff_bundle_hash),
+        "compiler_dependency": (compiler_dependency_ref, compiler_dependency_hash),
     }
     identity_missing = tuple(name for name, pair in identity_pairs.items() if pair[0] is None or pair[1] is None)
-    if program_date.historical_status.value == "FAILED":
+    if program_date.historical_status.value == "FAILED" or identity_blocked:
         identity_readiness = ProgramIdentityReadiness.BLOCKED
     elif program_date.historical_status.value == "COMPLETE" and not identity_missing:
         identity_readiness = ProgramIdentityReadiness.COMPLETE
@@ -543,14 +538,8 @@ def build_program_input_unit(
         manifest_sha256=program_date.manifest_sha256,
         alpha_mode=program_date.alpha_mode,
         style_family=program_date.style_family,
-        historical_program_run_ref=historical_program_run_ref,
-        historical_program_run_hash=historical_program_run_hash,
-        phase0a_audit_ref=phase0a_audit_ref,
-        phase0a_audit_hash=phase0a_audit_hash,
-        handoff_readiness_ref=handoff_readiness_ref,
-        handoff_readiness_hash=handoff_readiness_hash,
-        handoff_bundle_ref=handoff_bundle_ref,
-        handoff_bundle_hash=handoff_bundle_hash,
+        compiler_dependency_ref=compiler_dependency_ref,
+        compiler_dependency_hash=compiler_dependency_hash,
         source_requirement_set_ref=source_requirement_set_ref,
         source_requirement_set_hash=source_requirement_set_hash,
         source_resolution_receipt_ref=source_resolution_receipt_ref,
@@ -561,6 +550,8 @@ def build_program_input_unit(
         capacity_coverage_hash=capacity_coverage_hash,
         phase1e_program_date_request_ref=phase1e_program_date_request_ref,
         phase1e_program_date_request_hash=phase1e_program_date_request_hash,
+        phase1e_batch_request_ref=phase1e_batch_request_ref,
+        phase1e_batch_request_hash=phase1e_batch_request_hash,
         identity_readiness=identity_readiness,
         source_readiness=effective_source_readiness,
         capacity_status=capacity_status,
@@ -575,22 +566,8 @@ def build_real_input_bundle(
     build_request_ref: AdvisoryImmutableArtifactRef,
     build_request_hash: str,
     target_database_identity_hash: str,
-    phase0a_policy_registry_ref: AdvisoryImmutableArtifactRef,
-    phase0a_policy_registry_hash: str,
-    source_query_registry_ref: AdvisoryImmutableArtifactRef,
-    source_query_registry_hash: str,
-    calendar_registry_ref: AdvisoryImmutableArtifactRef,
-    calendar_registry_hash: str,
-    label_policy_bundle_ref: AdvisoryImmutableArtifactRef,
-    label_policy_bundle_hash: str,
-    partition_policy_ref: AdvisoryImmutableArtifactRef,
-    partition_policy_hash: str,
-    store_backend_policy_ref: AdvisoryImmutableArtifactRef,
-    store_backend_policy_hash: str,
     capacity_policy_ref: AdvisoryImmutableArtifactRef,
     capacity_policy_hash: str,
-    phase1e_artifact_store_policy_ref: AdvisoryImmutableArtifactRef,
-    phase1e_artifact_store_policy_hash: str,
     source_mapping_registry_ref: AdvisoryImmutableArtifactRef,
     source_mapping_registry_hash: str,
     source_requirement_registry_ref: AdvisoryImmutableArtifactRef | None,
@@ -599,8 +576,6 @@ def build_real_input_bundle(
     capacity_request_hash: str | None,
     capacity_receipt_ref: AdvisoryImmutableArtifactRef | None,
     capacity_receipt_hash: str | None,
-    phase1e_revalidation_batch_request_ref: AdvisoryImmutableArtifactRef | None,
-    phase1e_revalidation_batch_request_hash: str | None,
     program_inputs: tuple[Phase1EProgramInputUnit, ...],
 ) -> Phase1ERealInputBundle:
     """Build batch statistics without changing any independent Program readiness fact."""
@@ -629,22 +604,8 @@ def build_real_input_bundle(
         build_request_ref=build_request_ref,
         build_request_hash=build_request_hash,
         target_database_identity_hash=target_database_identity_hash,
-        phase0a_policy_registry_ref=phase0a_policy_registry_ref,
-        phase0a_policy_registry_hash=phase0a_policy_registry_hash,
-        source_query_registry_ref=source_query_registry_ref,
-        source_query_registry_hash=source_query_registry_hash,
-        calendar_registry_ref=calendar_registry_ref,
-        calendar_registry_hash=calendar_registry_hash,
-        label_policy_bundle_ref=label_policy_bundle_ref,
-        label_policy_bundle_hash=label_policy_bundle_hash,
-        partition_policy_ref=partition_policy_ref,
-        partition_policy_hash=partition_policy_hash,
-        store_backend_policy_ref=store_backend_policy_ref,
-        store_backend_policy_hash=store_backend_policy_hash,
         capacity_policy_ref=capacity_policy_ref,
         capacity_policy_hash=capacity_policy_hash,
-        phase1e_artifact_store_policy_ref=phase1e_artifact_store_policy_ref,
-        phase1e_artifact_store_policy_hash=phase1e_artifact_store_policy_hash,
         source_mapping_registry_ref=source_mapping_registry_ref,
         source_mapping_registry_hash=source_mapping_registry_hash,
         source_requirement_registry_ref=source_requirement_registry_ref,
@@ -653,8 +614,6 @@ def build_real_input_bundle(
         capacity_request_hash=capacity_request_hash,
         capacity_receipt_ref=capacity_receipt_ref,
         capacity_receipt_hash=capacity_receipt_hash,
-        phase1e_revalidation_batch_request_ref=phase1e_revalidation_batch_request_ref,
-        phase1e_revalidation_batch_request_hash=phase1e_revalidation_batch_request_hash,
         program_inputs=program_inputs,
         counts_by_identity_readiness=counts("identity_readiness"),
         counts_by_source_readiness=counts("source_readiness"),
@@ -666,74 +625,43 @@ def build_real_input_bundle(
 
 def build_phase1e_batch_request(
     *,
-    program_inputs: tuple[Phase1EProgramInputUnit, ...],
-    program_date_requests: tuple[Phase1EProgramDateRequest, ...],
-    phase0a_policy_hash: str,
+    program_input: Phase1EProgramInputUnit,
+    program_date_request: Phase1EProgramDateRequest,
+    compiler_dependency: Phase1EProgramCompilerDependency,
     source_requirement_registry_hash: str,
-    query_registry_hash: str,
-    calendar_hash: str,
-    label_policy_bundle_hash: str,
-    dataset_schema_fingerprint: str,
-    partition_policy_hash: str,
-    store_backend_config_hash: str,
     capacity_request_ref: AdvisoryImmutableArtifactRef,
     capacity_receipt_ref: AdvisoryImmutableArtifactRef,
-    compiler_version: str,
-    serializer_version: str,
-    compiler_source_hash: str,
-    artifact_store_policy_hash: str,
+    capacity_coverage: Phase1ECapacityProgramCoverageV1,
 ) -> Phase1ERevalidationBatchRequest | None:
-    """Compile exactly the FULL_READY Program set; never turn zero-ready into success."""
+    """Build one exact single-Program compiler request from its immutable O4 closure."""
 
-    full_by_identity = {
-        (item.program_id, item.decision_trade_date): item
-        for item in program_inputs
-        if item.plan_readiness is ProgramPlanReadiness.FULL_READY
-    }
-    request_by_identity = {
-        (item.program_id, item.decision_trade_date): item for item in program_date_requests
-    }
-    if len(request_by_identity) != len(program_date_requests):
-        raise RealDevOnboardingError(
-            REASON_SOURCE_MAPPING_CONFLICT,
-            "Phase 1E Program/date requests contain duplicate identities",
-        )
-    if not full_by_identity:
-        if request_by_identity:
-            raise RealDevOnboardingError(
-                REASON_SOURCE_MAPPING_CONFLICT,
-                "Phase 1E requests cannot exist when no Program is FULL_READY",
-            )
+    if program_input.plan_readiness is not ProgramPlanReadiness.FULL_READY:
         return None
-    if set(request_by_identity) != set(full_by_identity):
+    identity = (program_input.program_id, program_input.decision_trade_date)
+    if identity != (program_date_request.program_id, program_date_request.decision_trade_date):
+        raise RealDevOnboardingError(REASON_SOURCE_MAPPING_CONFLICT, "Phase 1E Program request identity differs")
+    if identity != (compiler_dependency.program_id, compiler_dependency.decision_trade_date):
+        raise RealDevOnboardingError(REASON_SOURCE_MAPPING_CONFLICT, "compiler dependency identity differs")
+    expected = (
+        program_date_request.expected_package_id,
+        program_date_request.expected_manifest_sha256,
+        program_date_request.expected_alpha_mode,
+        program_date_request.expected_style_family,
+    )
+    actual = (
+        program_input.package_id,
+        program_input.manifest_sha256,
+        program_input.alpha_mode.value,
+        program_input.style_family,
+    )
+    if expected != actual:
         raise RealDevOnboardingError(
             REASON_SOURCE_MAPPING_CONFLICT,
-            "Phase 1E request identities must exactly equal the FULL_READY Program set",
-            context={
-                "full_ready": [list(item) for item in sorted(full_by_identity, key=str)],
-                "requests": [list(item) for item in sorted(request_by_identity, key=str)],
-            },
+            "Phase 1E request expected identity differs from the FULL_READY Program input",
+            context={"program_id": program_input.program_id},
         )
-    for identity, request in request_by_identity.items():
-        program = full_by_identity[identity]
-        expected = (
-            request.expected_package_id,
-            request.expected_manifest_sha256,
-            request.expected_alpha_mode,
-            request.expected_style_family,
-        )
-        actual = (
-            program.package_id,
-            program.manifest_sha256,
-            program.alpha_mode.value,
-            program.style_family,
-        )
-        if expected != actual:
-            raise RealDevOnboardingError(
-                REASON_SOURCE_MAPPING_CONFLICT,
-                "Phase 1E request expected identity differs from the FULL_READY Program input",
-                context={"program_id": program.program_id, "decision_trade_date": program.decision_trade_date.isoformat()},
-            )
+    if program_input.capacity_program_workload_hash != capacity_coverage.program_workload_hash:
+        raise RealDevOnboardingError(REASON_SOURCE_MAPPING_CONFLICT, "capacity coverage differs from Program workload")
     _require_ref(
         ref=capacity_request_ref,
         digest=capacity_request_ref.semantic_hash,
@@ -747,21 +675,23 @@ def build_phase1e_batch_request(
         field_name="capacity_receipt",
     )
     return Phase1ERevalidationBatchRequest(
-        program_dates=tuple(request_by_identity.values()),
-        phase0a_policy_hash=phase0a_policy_hash,
+        program_dates=(program_date_request,),
+        phase0a_policy_hash=compiler_dependency.phase0a_policy_registry_hash,
         source_requirement_registry_hash=source_requirement_registry_hash,
-        query_registry_hash=query_registry_hash,
-        calendar_hash=calendar_hash,
-        label_policy_bundle_hash=label_policy_bundle_hash,
-        dataset_schema_fingerprint=dataset_schema_fingerprint,
-        partition_policy_hash=partition_policy_hash,
-        store_backend_config_hash=store_backend_config_hash,
-        capacity_request_ref=capacity_request_ref.relative_path,
-        capacity_receipt_ref=capacity_receipt_ref.relative_path,
-        compiler_version=compiler_version,
-        serializer_version=serializer_version,
-        compiler_source_hash=compiler_source_hash,
-        artifact_store_policy_hash=artifact_store_policy_hash,
+        query_registry_hash=compiler_dependency.source_query_registry_hash,
+        calendar_hash=compiler_dependency.calendar_identity_hash,
+        label_policy_bundle_hash=None,
+        dataset_schema_fingerprint=compiler_dependency.dataset_schema_fingerprint,
+        partition_policy_hash=compiler_dependency.partition_policy_hash,
+        store_backend_config_hash=compiler_dependency.store_backend_policy_hash,
+        capacity_request_ref=capacity_request_ref.semantic_hash,
+        capacity_receipt_ref=capacity_receipt_ref.semantic_hash,
+        capacity_program_workload_hash=program_input.capacity_program_workload_hash,
+        capacity_program_coverage_hash=str(capacity_coverage.coverage_hash),
+        compiler_version=compiler_dependency.compiler_version,
+        serializer_version=compiler_dependency.serializer_version,
+        compiler_source_hash=compiler_dependency.compiler_source_hash,
+        artifact_store_policy_hash=compiler_dependency.artifact_store_policy_hash,
     )
 
 

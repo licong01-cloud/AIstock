@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import pandas as pd
 
 from backend.db.pg_pool import get_conn
 
 from .errors import MarketDataUnavailableError
+from .models import canonical_json_sha256
+
+
+MARKET_RETURN_CALCULATOR_VERSION = "hmm_market_forward_return_v2_float_close_li"
+
+_PRICE_DATE_BATCH_SIZE = 64
+_PRICE_SYMBOL_BATCH_SIZE = 500
 
 
 def _readonly_transaction_conn() -> Any:
@@ -64,15 +72,26 @@ class MarketReturnRead:
     horizon_trading_days: int
     as_of_date: date
     read_only_transaction: dict[str, Any]
+    missing_evidence: tuple[Mapping[str, Any], ...] = ()
 
     def as_manifest_evidence(self) -> dict[str, Any]:
+        missing_reason_counts = Counter(
+            str(item.get("reason") or "unknown") for item in self.missing_evidence
+        )
         return {
+            "market_return_calculator_version": MARKET_RETURN_CALCULATOR_VERSION,
+            "market_return_content_hash": market_return_content_hash(
+                self.returns,
+                self.missing_evidence,
+            ),
             "price_row_count": self.price_row_count,
             "return_row_count": len(self.returns),
             "requested_symbol_count": self.requested_symbol_count,
             "requested_date_count": self.requested_date_count,
             "horizon_trading_days": self.horizon_trading_days,
             "as_of_date": self.as_of_date.isoformat(),
+            "missing_return_count": len(self.missing_evidence),
+            "missing_return_reason_counts": dict(sorted(missing_reason_counts.items())),
             "price_field": "market.kline_daily_raw.close_li",
             "read_only_transaction": dict(self.read_only_transaction),
         }
@@ -181,7 +200,9 @@ class HMMMarketReturnRepository:
         horizon_trading_days: int,
         as_of_date: date,
     ) -> MarketReturnRead:
-        normalized_symbols = sorted({str(item or "").strip() for item in symbols if str(item or "").strip()})
+        normalized_symbols = sorted(
+            {str(item or "").strip() for item in symbols if str(item or "").strip()}
+        )
         normalized_dates = sorted(set(trade_dates))
         if not normalized_symbols or not normalized_dates:
             return MarketReturnRead(
@@ -213,73 +234,113 @@ class HMMMarketReturnRepository:
                             WHERE is_trading = TRUE
                               AND cal_date >= %s
                               AND cal_date <= %s
-                        ), selected_calendar AS (
-                            SELECT trade_date, label_date
-                            FROM calendar
-                            WHERE trade_date = ANY(%s)
-                              AND label_date IS NOT NULL
-                              AND label_date <= %s
                         )
-                        , priced AS (
-                            SELECT
-                                c.trade_date,
-                                c.label_date,
-                                RTRIM(k1.ts_code) AS symbol,
-                                k1.close_li AS start_close,
-                                k2.close_li AS end_close
-                            FROM selected_calendar c
-                            JOIN market.kline_daily_raw k1
-                              ON k1.trade_date = c.trade_date
-                             AND RTRIM(k1.ts_code) = ANY(%s)
-                            JOIN market.kline_daily_raw k2
-                              ON k2.ts_code = k1.ts_code
-                             AND k2.trade_date = c.label_date
-                            WHERE k1.close_li IS NOT NULL AND k1.close_li > 0
-                              AND k2.close_li IS NOT NULL AND k2.close_li > 0
-                        ), price_points AS (
-                            SELECT trade_date, symbol FROM priced
-                            UNION
-                            SELECT label_date, symbol FROM priced
-                        )
-                        SELECT
-                            p.trade_date,
-                            p.symbol,
-                            %s AS horizon_days,
-                            (p.end_close / NULLIF(p.start_close, 0) - 1.0) AS future_return,
-                            p.label_date,
-                            (SELECT COUNT(*) FROM price_points) AS price_row_count
-                        FROM priced p
-                        ORDER BY p.trade_date, p.symbol
+                        SELECT trade_date, label_date
+                        FROM calendar
+                        WHERE trade_date = ANY(%s)
+                        ORDER BY trade_date
                         """,
                         (
                             horizon_trading_days,
                             normalized_dates[0],
                             as_of_date,
                             normalized_dates,
-                            as_of_date,
-                            normalized_symbols,
-                            horizon_trading_days,
                         ),
                     )
-                    rows = cursor.fetchall()
+                    calendar_rows = cursor.fetchall()
+                    price_dates = sorted(
+                        {
+                            item
+                            for trade_date, label_date in calendar_rows
+                            for item in (trade_date, label_date)
+                            if item is not None
+                        }
+                    )
+                    prices: dict[tuple[date, str], Any] = {}
+                    for date_offset in range(0, len(price_dates), _PRICE_DATE_BATCH_SIZE):
+                        date_batch = price_dates[
+                            date_offset : date_offset + _PRICE_DATE_BATCH_SIZE
+                        ]
+                        for symbol_offset in range(
+                            0,
+                            len(normalized_symbols),
+                            _PRICE_SYMBOL_BATCH_SIZE,
+                        ):
+                            symbol_batch = normalized_symbols[
+                                symbol_offset : symbol_offset + _PRICE_SYMBOL_BATCH_SIZE
+                            ]
+                            cursor.execute(
+                                """
+                                SELECT trade_date, RTRIM(ts_code) AS symbol, close_li
+                                FROM market.kline_daily_raw
+                                WHERE trade_date = ANY(%s)
+                                  AND ts_code = ANY(%s)
+                                  AND close_li IS NOT NULL
+                                  AND close_li > 0
+                                """,
+                                (date_batch, symbol_batch),
+                            )
+                            for price_date, symbol, close_li in cursor.fetchall():
+                                prices[(price_date, str(symbol).strip())] = close_li
         except Exception as exc:
             raise MarketDataUnavailableError(
                 "failed to read HMM trading-day forward returns",
                 context={"error_type": type(exc).__name__},
             ) from exc
-        price_row_count = int(rows[0][5]) if rows else 0
+        return_rows: list[tuple[date, str, int, float, date]] = []
+        missing_rows: list[tuple[date, str, date | None, str]] = []
+        used_price_points: set[tuple[date, str]] = set()
+        for trade_date, label_date in calendar_rows:
+            for symbol in normalized_symbols:
+                if label_date is None:
+                    missing_rows.append(
+                        (trade_date, symbol, None, "forward_horizon_not_completed")
+                    )
+                    continue
+                start_close = prices.get((trade_date, symbol))
+                if start_close is None:
+                    missing_rows.append((trade_date, symbol, label_date, "start_price_missing"))
+                    continue
+                end_close = prices.get((label_date, symbol))
+                if end_close is None:
+                    missing_rows.append(
+                        (trade_date, symbol, label_date, "horizon_price_missing")
+                    )
+                    continue
+                future_return = float(end_close) / float(start_close) - 1.0
+                return_rows.append(
+                    (
+                        trade_date,
+                        symbol,
+                        horizon_trading_days,
+                        future_return,
+                        label_date,
+                    )
+                )
+                used_price_points.add((trade_date, symbol))
+                used_price_points.add((label_date, symbol))
         frame = pd.DataFrame(
-            [row[:5] for row in rows],
+            return_rows,
             columns=["trade_date", "symbol", "horizon_days", "future_return", "label_date"],
+        )
+        missing_evidence = tuple(
+            {
+                "trade_date": row[0].isoformat(),
+                "symbol": str(row[1]).strip(),
+                "label_date": row[2].isoformat() if row[2] is not None else None,
+                "reason": str(row[3]),
+            }
+            for row in missing_rows
         )
         return MarketReturnRead(
             returns=frame,
-            price_row_count=price_row_count,
+            price_row_count=len(used_price_points),
             requested_symbol_count=len(normalized_symbols),
             requested_date_count=len(normalized_dates),
             horizon_trading_days=horizon_trading_days,
             as_of_date=as_of_date,
             read_only_transaction=self._receipt(),
+            missing_evidence=missing_evidence,
         )
 
     @staticmethod
@@ -293,3 +354,71 @@ class HMMMarketReturnRepository:
             "isolation_level": "repeatable_read",
             "write_relations": [],
         }
+
+
+def market_return_content_hash(
+    returns: pd.DataFrame,
+    missing_evidence: Sequence[Mapping[str, Any]],
+) -> str:
+    """Hash canonical return values and missing evidence, not merely their counts."""
+
+    required_columns = {
+        "trade_date",
+        "symbol",
+        "horizon_days",
+        "future_return",
+        "label_date",
+    }
+    if not required_columns.issubset(returns.columns):
+        raise ValueError("market return frame is missing canonical identity columns")
+    return_rows = sorted(
+        (
+            {
+                "trade_date": _iso_date(row.trade_date),
+                "symbol": str(row.symbol).strip(),
+                "horizon_days": int(row.horizon_days),
+                "future_return_hex": float(row.future_return).hex(),
+                "label_date": _iso_date(row.label_date),
+            }
+            for row in returns.loc[:, sorted(required_columns)].itertuples(index=False)
+        ),
+        key=lambda item: (
+            item["trade_date"],
+            item["symbol"],
+            item["horizon_days"],
+            item["label_date"],
+        ),
+    )
+    missing_rows = sorted(
+        (
+            {
+                "trade_date": str(item.get("trade_date") or ""),
+                "symbol": str(item.get("symbol") or "").strip(),
+                "label_date": (
+                    str(item.get("label_date")) if item.get("label_date") is not None else None
+                ),
+                "reason": str(item.get("reason") or "unknown"),
+            }
+            for item in missing_evidence
+        ),
+        key=lambda item: (
+            item["trade_date"],
+            item["symbol"],
+            str(item["label_date"] or ""),
+            item["reason"],
+        ),
+    )
+    return canonical_json_sha256(
+        {
+            "schema_version": "hmm_market_return_content_v1",
+            "calculator_version": MARKET_RETURN_CALCULATOR_VERSION,
+            "returns": return_rows,
+            "missing_evidence": missing_rows,
+        }
+    )
+
+
+def _iso_date(value: Any) -> str:
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())
+    return str(value)

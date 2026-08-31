@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
+import json
 import os
 
 import pytest
@@ -13,7 +14,9 @@ from backend.services.advisory_phase1.dataset_build import (
     BuildCheckpoint,
     DatasetBuild,
     FixtureDatasetBuildRequest,
+    FrozenIdentity,
     InMemoryDatasetBuildRepository,
+    RetrospectiveDatasetBuildRequest,
 )
 from backend.services.advisory_phase1.dataset_store import (
     LocalContentAddressedStore,
@@ -25,6 +28,7 @@ from backend.services.advisory_phase1.snapshot_writer import (
     BATCH_D_BUILDER_VERSION,
     BATCH_D_WRITER_VERSION,
     SNAPSHOT_ARROW_SCHEMAS_V1,
+    SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1,
     DatasetCapabilityManifest,
     DatasetCapabilityRow,
     DatasetCasPromoter,
@@ -389,6 +393,189 @@ def _capability_manifest() -> DatasetCapabilityManifest:
     )
 
 
+def _retrospective_request() -> RetrospectiveDatasetBuildRequest:
+    scope = FrozenIdentity(identity_id="range-scope", identity_hash=_hash("range-scope"))
+    policy_hash = _hash("range-policy")
+    captures = (
+        {
+            "capture_batch_id": "range-label",
+            "capture_request_hash": _hash("range-label-request"),
+            "capture_receipt_hash": _hash("range-label-receipt"),
+            "membership_hash": _hash("range-label-membership"),
+            "capture_purpose": "LABEL_CAPTURE_V1",
+            "range_lineage_scope_id": scope.identity_id,
+            "range_lineage_scope_hash": scope.identity_hash,
+            "source_revision_set_id": "snapshot-source-v1",
+            "source_revision_set_hash": _hash("source-revision"),
+            "date_start": TRADE_DATE,
+            "date_end": TRADE_DATE,
+        },
+        {
+            "capture_batch_id": "range-observation",
+            "capture_request_hash": _hash("range-observation-request"),
+            "capture_receipt_hash": _hash("range-observation-receipt"),
+            "membership_hash": _hash("range-observation-membership"),
+            "capture_purpose": "OBSERVATION_CAPTURE_V1",
+            "range_lineage_scope_id": scope.identity_id,
+            "range_lineage_scope_hash": scope.identity_hash,
+            "source_revision_set_id": "snapshot-source-v1",
+            "source_revision_set_hash": _hash("source-revision"),
+            "date_start": TRADE_DATE,
+            "date_end": TRADE_DATE,
+        },
+    )
+    return RetrospectiveDatasetBuildRequest(
+        range_lineage_scopes=(scope,),
+        captures=captures,
+        date_start=TRADE_DATE,
+        date_end=date(2026, 7, 2),
+        selected_observation_mappings=(
+            {"identity_id": "observation-map-1", "identity_hash": _hash("observation-map-1")},
+        ),
+        selected_label_mappings=(
+            {"identity_id": "label-map-1", "identity_hash": _hash("label-map-1")},
+        ),
+        label_policy_bundle_id="range-policy",
+        label_policy_bundle_hash=policy_hash,
+        historical_range_policy_bundle_ref={
+            "artifact_kind": "REQUEST",
+            "relative_path": f"requests/{_hash('range-policy-envelope')}.json",
+            "semantic_content_hash": _hash("range-policy-envelope"),
+            "payload_sha256": policy_hash,
+            "file_sha256": _hash("range-policy-file"),
+            "producer_contract_version": "advisory_phase1r_r4_outcome_policy_v1",
+            "payload_schema_version": "advisory_historical_range_outcome_policy_bundle_v1",
+        },
+        label_targets=(
+            {
+                "horizon_trading_days": 5,
+                "projection": "RETURN_NET_ABSOLUTE",
+                "projection_schema_version": "advisory_phase1_outcome_calculation_v1",
+            },
+        ),
+        universe_policy_hash=_hash("universe"),
+        benchmark_policy_hash=_hash("benchmark"),
+        cost_policy_hash=_hash("cost"),
+        calendar_hash=_hash("calendar"),
+        symbol_normalization_policy_hash=_hash("symbol"),
+        query_registry_version="queries-v1",
+        query_registry_hash=_hash("queries"),
+        snapshot_source_revision_set_id="snapshot-source-v1",
+        snapshot_source_revision_set_hash=_hash("source-revision"),
+        required_composite_capabilities=(
+            {"component": "LABEL", "capability": "INTERNAL_BOOTSTRAP", "required": True},
+            {"component": "OBSERVATION", "capability": "RESEARCH_AUDIT", "required": True},
+        ),
+        builder_version=BATCH_D_BUILDER_VERSION,
+        code_commit="commit-r4",
+        writer_version=BATCH_D_WRITER_VERSION,
+        snapshot_schema_version="snapshot-r4-retrospective",
+        schema_fingerprint=_hash("schema-r4"),
+        partition_policy_id="partition-v1",
+        partition_policy_hash=_hash("partition"),
+        policy_compatibility_hash=_hash("compatibility"),
+        compression_config={"codec": "zstd", "level": 3},
+        requested_source_cutoff=date(2026, 7, 2),
+        label_as_of_ts=UTC_TS,
+        selector_policy_hash=_hash("range-selector"),
+        selected_range_day_outcome_set_hash=_hash("range-day-outcome-set"),
+        policy_component_set_hash=_hash("policy-components"),
+    )
+
+
+def _retrospective_capability_manifest() -> DatasetCapabilityManifest:
+    return DatasetCapabilityManifest(
+        rows=(
+            DatasetCapabilityRow(component="LABEL", capability="INTERNAL_BOOTSTRAP", status="FULL"),
+            DatasetCapabilityRow(component="OBSERVATION", capability="RESEARCH_AUDIT", status="FULL"),
+            DatasetCapabilityRow(component="MODEL", capability="MODEL_TRAINING_READY", status="false"),
+            DatasetCapabilityRow(component="RUNTIME", capability="RUNTIME_ADVISORY_READY", status="false"),
+            DatasetCapabilityRow(component="TRADING", capability="TRADING_EXECUTION_READY", status="false"),
+        )
+    )
+
+
+def _range_fixture_rows() -> dict[str, tuple[LogicalDatasetRow, ...]]:
+    formal = _fixture_rows()
+    range_schema = SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1
+    rows: dict[str, tuple[LogicalDatasetRow, ...]] = {}
+    for role, source_rows in formal.items():
+        converted: list[LogicalDatasetRow] = []
+        for source_row in source_rows:
+            if role == "universe_outcomes" or (
+                role in {"outcome_labels", "outcome_source_evidence"}
+                and source_row.values.get("owner_type") == "UNIVERSE"
+            ):
+                continue
+            values = {
+                field.name: _default_value(field.name, field.arrow_type, field.nullable)
+                for field in range_schema[role]
+            }
+            values.update(source_row.values)
+            if role == "selected_observations":
+                values["selection_policy_hash"] = _hash("range-selector")
+            elif role == "observation_versions":
+                for key in (
+                    "phase0a_signal_context_hash", "selection_evidence_id", "selection_evidence_hash",
+                    "selection_run_id", "selection_run_content_hash", "selection_score_artifact_id",
+                    "selection_score_artifact_hash",
+                ):
+                    values[key] = None
+                values.update(
+                    {
+                        "lineage_identity_type": "HISTORICAL_RANGE",
+                        "range_signal_context_hash": _hash("range-signal-context"),
+                        "range_run_id": "range-run-1",
+                        "range_day_run_id": "range-day-1",
+                        "candidate_artifact_ref": {"artifact_kind": "CANDIDATE_ARTIFACT"},
+                        "candidate_artifact_hash": _hash("candidate-artifact"),
+                    }
+                )
+            elif role == "lineage":
+                for key in (
+                    "phase0a_audit_id", "phase0a_audit_manifest_hash", "handoff_readiness_hash",
+                    "admission_scope_id", "admission_scope_hash", "phase0a_signal_context_hash",
+                    "program_id", "binding_version_id", "review_run_id", "list_version_id",
+                ):
+                    values[key] = None
+                values.update(
+                    {
+                        "historical_range_request_ref": {"artifact_kind": "REQUEST"},
+                        "historical_range_request_hash": _hash("range-request"),
+                        "historical_range_frozen_program_ref": {"artifact_kind": "FROZEN_PROGRAM"},
+                        "historical_range_frozen_program_hash": _hash("frozen-program"),
+                        "range_run_id": "range-run-1",
+                        "range_day_run_id": "range-day-1",
+                        "candidate_artifact_ref": {"artifact_kind": "CANDIDATE_ARTIFACT"},
+                        "candidate_artifact_hash": _hash("candidate-artifact"),
+                        "range_lineage_identity_hash": _hash("range-lineage"),
+                        "range_signal_context_hash": _hash("range-signal-context"),
+                    }
+                )
+            elif role in {"outcome_labels", "universe_outcomes"}:
+                values.update(
+                    {
+                        "label_policy_bundle_id": None,
+                        "label_policy_bundle_hash": None,
+                        "policy_lineage_type": "HISTORICAL_RANGE_OUTCOME_POLICY",
+                        "historical_range_policy_bundle_ref": {"artifact_kind": "REQUEST"},
+                        "historical_range_policy_bundle_hash": _hash("range-policy"),
+                        "policy_component_set_hash": _hash("policy-components"),
+                    }
+                )
+            converted.append(
+                LogicalDatasetRow(
+                    logical_role=role,
+                    partition_key=source_row.partition_key,
+                    sort_key=_logical_sort_key(role, values),
+                    values=values,
+                )
+            )
+        rows[role] = tuple(converted)
+    rows["universe_outcomes"] = ()
+    return rows
+
+
 def _write_full_fixture(tmp_path):  # type: ignore[no-untyped-def]
     writer = DeterministicParquetWriter()
     rows = _fixture_rows()
@@ -408,6 +595,127 @@ def _write_full_fixture(tmp_path):  # type: ignore[no-untyped-def]
             )
         )
     return writer, tuple(files)
+
+
+def test_retrospective_writer_uses_separate_schema_and_closes_selector_hash(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    request = _retrospective_request()
+    build = InMemoryDatasetBuildRepository(now_provider=lambda: UTC_TS).create_or_get(
+        request,
+        actor="test",
+    )
+    writer = DeterministicParquetWriter(lineage_identity_type="HISTORICAL_RANGE")
+    files = []
+    rows = _range_fixture_rows()
+    staging_root = tmp_path / "store" / "staging" / build.build_id / "range-materialized"
+    for role in sorted(SNAPSHOT_ARROW_SCHEMAS_RETROSPECTIVE_V1):
+        files.append(
+            writer.write_schema_descriptor(
+                path=staging_root / "schemas" / f"{role}.json",
+                logical_role=role,
+            )
+        )
+        role_rows = rows[role]
+        partition = role_rows[0].partition_key if role_rows else {}
+        files.append(
+            writer.write_parquet(
+                path=staging_root / "data" / f"{role}.parquet",
+                logical_path=_logical_parquet_path(role=role, partition_key=partition),
+                logical_role=role,
+                partition_key=partition,
+                ordinal=0,
+                rows=role_rows,
+            )
+        )
+    payload = build.model_dump(mode="python")
+    payload.update(
+        checkpoint=BuildCheckpoint.MATERIALIZED,
+        materialized_attempt_id="range-materialized",
+        materialize_receipt_hash=_hash("range-materialize-receipt"),
+        materialized_file_set_hash=_hash("range-file-set"),
+        row_version=2,
+    )
+    materialized = DatasetBuild.model_validate(payload)
+    receipt = FullParquetVerifier(
+        lineage_identity_type="HISTORICAL_RANGE"
+    ).verify_files(
+        build=materialized,
+        files=tuple(files),
+        capability_manifest=_retrospective_capability_manifest(),
+    )
+
+    assert receipt.lineage_identity_type == "HISTORICAL_RANGE"
+    assert receipt.selector_policy_hash == request.selector_policy_hash
+    assert {item.selector_policy_hash for item in receipt.selected_observations} == {
+        request.selector_policy_hash
+    }
+    assert {item.selector_policy_hash for item in receipt.selected_labels} == {
+        request.selector_policy_hash
+    }
+    assert receipt.maturity_coverage_hash
+    assert receipt.source_revision_closure_hash
+
+    verified_payload = materialized.model_dump(mode="python")
+    verified_payload.update(
+        checkpoint=BuildCheckpoint.VERIFIED,
+        verified_attempt_id="range-verify",
+        verify_receipt_hash=receipt.receipt_hash,
+        verified_file_set_hash=receipt.file_set_hash,
+        verification_contract_version=receipt.verification_contract_version,
+        row_version=3,
+    )
+    verified = DatasetBuild.model_validate(verified_payload)
+    store = LocalContentAddressedStore(
+        root=tmp_path / "store",
+        repository_root=tmp_path / "repo",
+        store_identity=_identity(),
+    )
+    promoter = DatasetCasPromoter(store=store)
+    snapshot_files = snapshot_files_from_published(
+        promoter.publish_files(tuple(files))
+    )
+    manifest = build_dataset_manifest(
+        build=verified,
+        verification=receipt,
+        files=snapshot_files,
+        capability_manifest=_retrospective_capability_manifest(),
+        store_backend_hash=store.store_backend_hash,
+    )
+    canonical_core = json.loads(manifest.canonical_bytes())["core"]
+
+    assert manifest.core.handoff_readiness_hash is None
+    assert manifest.core.admission_scope_set_hash is None
+    assert canonical_core["handoff_readiness_hash"] is None
+    assert canonical_core["admission_scope_set_hash"] is None
+
+    promoter.publish_manifest(manifest)
+    promotion = build_promotion_receipt(
+        build=verified,
+        verification=receipt,
+        manifest=manifest,
+    )
+    promotion_object = promoter.publish_promotion_receipt(promotion)
+    promoted_payload = verified.model_dump(mode="python")
+    promoted_payload.update(
+        checkpoint=BuildCheckpoint.PROMOTED,
+        promoted_attempt_id="range-promote",
+        promotion_receipt_hash=promotion.receipt_sha256,
+        promoted_manifest_hash=manifest.manifest_sha256,
+        current_attempt_id="range-seal",
+        current_fencing_token=2,
+        row_version=4,
+    )
+    snapshot = assemble_sealed_snapshot(
+        build=DatasetBuild.model_validate(promoted_payload),
+        seal_attempt_id="range-seal",
+        verification=receipt,
+        manifest=manifest,
+        promotion=promotion,
+        promotion_object=promotion_object,
+        label_maturity_event_summary=receipt.relational_closure_summary,
+    )
+
+    assert snapshot.handoff_readiness_hash is None
+    assert snapshot.admission_scope_set_hash is None
 
 
 def test_writer_and_full_verifier_cover_every_role_and_are_byte_deterministic(tmp_path) -> None:  # type: ignore[no-untyped-def]

@@ -18,7 +18,7 @@ import pytest
 
 from backend.db import init_qe_archive_schema, init_trading_core_v2_schema
 from backend.routers.strategy_packages import _record_payload
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun
@@ -189,7 +189,9 @@ def test_devdb_qe_candidate_to_paper_v2_flow() -> None:
             "schemas": ["strategy_pkg", "selection", "paper_v2", "qe_archive"],
         }
 
-        factory = lambda: _conn_factory(conn)
+        def factory():
+            return _conn_factory(conn)
+
         manifest = build_devdb_e2e_manifest()
         snapshot = build_devdb_candidate_snapshot(manifest)
         resolver = _ToggleResolver(snapshot)
@@ -343,7 +345,10 @@ def test_devdb_qe_candidate_to_paper_v2_flow() -> None:
         assert "_precomputed_hmm_coefficients_json" not in stripped_strategy_config
         assert "hmm_snapshot_id" not in stripped_strategy_config
         assert "st_pit_snapshot_id" not in stripped_universe_policy
-        assert build_default_runtime_config_bundle(package_record.current_manifest())["config_sha256"] == runtime_bundle["config_sha256"]
+        assert (
+            build_default_runtime_config_bundle(package_record.current_manifest())["config_sha256"]
+            == runtime_bundle["config_sha256"]
+        )
         assert refreshed.artifact_refs["storage_policy"] == "uri_and_hash_only"
 
         report["phases"]["phase_4_invariants_and_report"] = {

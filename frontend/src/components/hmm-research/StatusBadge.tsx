@@ -5,6 +5,8 @@ const LABELS: Record<string, string> = {
   research_only: "研究候选",
   retired: "已退役",
   invalid: "无效",
+  preparation_queued: "等待输入冻结",
+  preparing: "正在冻结输入",
   queued: "排队中",
   running: "运行中",
   cancel_requested: "取消中",
@@ -25,7 +27,7 @@ export default function StatusBadge({
 }) {
   const className = ["completed", "succeeded", "research_only", "reused"].includes(status)
     ? styles.tagGood
-    : ["running", "queued", "waiting_shared", "cancel_requested"].includes(status)
+    : ["preparation_queued", "preparing", "running", "queued", "waiting_shared", "cancel_requested"].includes(status)
       ? styles.tagWarn
       : ["failed", "partial_failed", "timed_out", "invalid"].includes(status)
         ? styles.tagDanger

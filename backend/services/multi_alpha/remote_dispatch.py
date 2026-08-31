@@ -10,8 +10,8 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Mapping
+from pathlib import Path, PurePosixPath
+from typing import Any, Collection, Mapping, Sequence
 from urllib.parse import urlparse
 
 import requests
@@ -20,20 +20,33 @@ from backend.db.pg_pool import get_conn
 from backend.services.multi_alpha.combine_backtest import (
     DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS,
     MultiAlphaCombineBacktestError,
+    RUNTIME_EXTERNAL_DATA_LINK_NAMES,
     _pred_backtest_error_context,
     apply_pred_backtest_overrides,
     ingest_enhanced_metrics,
     prepare_pred_backtest_workspace,
 )
+from backend.services.multi_alpha.qe_subprocess_env import (
+    db_credential_scrub_command,
+    is_qe_subprocess_credential_key,
+)
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
+from backend.services.quantevolver.qe_active_execution_capacity import (
+    QEExecutionSourceClaimFactory,
+    QEWorkspaceSubmissionCoordinator,
+    QEWorkspaceSubmissionPayload,
+    QEWorkspaceSubmissionSource,
+    qe_submission_owner_id,
+    submission_intent_hash_for_source,
+)
 
 
 _LOCAL_HOSTS = {"", "localhost", "127.0.0.1", "::1"}
 _REMOTE_TASK_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_WSL_DRIVE_MOUNT_RE = re.compile(r"^/mnt/[A-Za-z](?:/|$)")
 _CHUNK_SIZE = 1024 * 1024
 _QE_FILE_SYNC_MAX_FILE_SIZE = 10 * 1024 * 1024
 _REMOTE_SMALL_TEXT_SUFFIXES = {".csv", ".json", ".py", ".txt", ".yaml", ".yml"}
-_REMOTE_SMALL_BINARY_SUFFIXES = {".parquet"}
 _REMOTE_SMALL_EXCLUDED_NAMES = {
     "combined_factors_df.parquet",
     "combined_prediction.pkl",
@@ -54,6 +67,12 @@ _REMOTE_SMALL_EXCLUDED_NAMES = {
     "static_factors.parquet",
 }
 _REMOTE_SMALL_EXCLUDED_PREFIXES = ("minute_trades", "minute_summary")
+_REMOTE_RUNTIME_CAS_BINDING = "workspace_artifact_cas"
+_REMOTE_RUNTIME_FILE_MANIFEST_SCHEMA = "multi_alpha_remote_runtime_file_manifest_v1"
+_REMOTE_RUNTIME_CACHE_DIR_NAMES = frozenset(
+    {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+)
+_REMOTE_RUNTIME_CACHE_SUFFIXES = frozenset({".pyc", ".pyo"})
 
 
 @dataclass(frozen=True)
@@ -249,12 +268,14 @@ class RemotePredBacktestExecutor:
         node_resolver=get_compute_node_info,
         artifact_client_factory: Any | None = None,
         workspace_client_factory: Any | None = None,
+        submission_coordinator: Any | None = None,
         small_file_syncer: Any | None = None,
         poll_interval_seconds: float = 2.0,
     ) -> None:
         self._node_resolver = node_resolver
         self._artifact_client_factory = artifact_client_factory
         self._workspace_client_factory = workspace_client_factory or QEWorkspaceClient.for_node
+        self._submission_coordinator = submission_coordinator or QEWorkspaceSubmissionCoordinator()
         self._small_file_syncer = small_file_syncer
         self._poll_interval_seconds = float(poll_interval_seconds)
 
@@ -297,12 +318,34 @@ class RemotePredBacktestExecutor:
             artifact_manifest=artifact_manifest,
             prediction_artifact_sha256=str(prediction_artifact_manifest["sha256"]),
         )
+        runtime_file_manifest = _build_remote_runtime_file_manifest(workspace=workspace)
+        runtime_artifact_bindings = _sync_remote_runtime_artifacts(
+            workspace=workspace,
+            node=node,
+            node_id=node_id,
+            artifact_client=artifact_client,
+            remote_paths=remote_paths,
+            runtime_file_manifest=runtime_file_manifest,
+        )
         task_id = _remote_task_id(backtest_config=backtest_config, workspace=workspace)
         loop_index = _remote_loop_index(backtest_config=backtest_config)
         timeout_seconds = int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS))
-        small_files = _remote_small_files(workspace=workspace, pred_pkl=pred_pkl, include_prediction=False)
+        small_files = _remote_small_files(
+            workspace=workspace,
+            pred_pkl=pred_pkl,
+            include_prediction=False,
+            cas_bound_names={str(item["name"]) for item in runtime_artifact_bindings},
+            runtime_file_manifest=runtime_file_manifest,
+        )
         self._sync_small_files(node=node, task_id=task_id, loop_index=loop_index, files=small_files, timeout_seconds=timeout_seconds)
-        wsl_command = _remote_wsl_command(workspace=workspace, remote_paths=remote_paths, backtest_config=backtest_config)
+        wsl_command = _remote_wsl_command(
+            workspace=workspace,
+            node=node,
+            remote_paths=remote_paths,
+            backtest_config=backtest_config,
+            runtime_artifact_bindings=runtime_artifact_bindings,
+            runtime_file_manifest=runtime_file_manifest,
+        )
         try:
             loop_id, enhanced = asyncio.run(
                 self._run_remote_loop(
@@ -315,11 +358,16 @@ class RemotePredBacktestExecutor:
                         "backtest_name": str(backtest_config.get("backtest_name") or workspace.name),
                         "artifact_manifest": artifact_manifest,
                         "prediction_artifact_manifest": prediction_artifact_manifest,
+                        "runtime_artifact_bindings": runtime_artifact_bindings,
+                        "runtime_file_manifest": runtime_file_manifest,
                         "remote_paths": remote_paths,
                     },
                     experiment_files={},
                     wsl_command=wsl_command,
                     timeout_seconds=timeout_seconds,
+                    run_id=workspace.parent.name,
+                    backtest_name=str(backtest_config.get("backtest_name") or workspace.name),
+                    requested_node_capacity=backtest_config.get("node_parallelism_limit"),
                 )
             )
         except MultiAlphaCombineBacktestError:
@@ -339,6 +387,8 @@ class RemotePredBacktestExecutor:
             "loop_id": loop_id,
             "artifact_manifest": artifact_manifest,
             "prediction_artifact_manifest": prediction_artifact_manifest,
+            "runtime_artifact_bindings": runtime_artifact_bindings,
+            "runtime_file_manifest": runtime_file_manifest,
         }
         return metrics
 
@@ -396,23 +446,84 @@ class RemotePredBacktestExecutor:
         experiment_files: dict[str, str],
         wsl_command: str,
         timeout_seconds: int,
+        run_id: str,
+        backtest_name: str,
+        requested_node_capacity: int | None,
     ) -> tuple[str, dict[str, Any]]:
         client = self._workspace_client_factory(node_id)
         try:
-            loop_id = await client.create_and_run_loop(
-                task_id=task_id,
-                loop_index=loop_index,
-                config=config,
-                experiment_files=experiment_files,
-                wsl_command=wsl_command,
+            expected_loop_id = f"Loop{loop_index}"
+            source_execution_id = f"{run_id}:{backtest_name}"
+            claim_source, record_waiting = QEExecutionSourceClaimFactory.pred_backtest_run(
+                run_id=run_id,
+                backtest_name=backtest_name,
+                node_id=node_id,
             )
             deadline = time.monotonic() + timeout_seconds
+            source = QEWorkspaceSubmissionSource(
+                source_kind="multi_alpha_pred_backtest",
+                source_execution_id=source_execution_id,
+                node_id=node_id,
+                submission_intent_hash=submission_intent_hash_for_source(
+                    source_kind="multi_alpha_pred_backtest",
+                    source_execution_id=source_execution_id,
+                    node_id=node_id,
+                    task_id=task_id,
+                    loop_id=expected_loop_id,
+                ),
+                owner_id=qe_submission_owner_id(),
+                claim_source=claim_source,
+                record_waiting_capacity=record_waiting,
+                requested_node_capacity=requested_node_capacity,
+            )
+            submission = await self._submission_coordinator.submit(
+                client=client,
+                source=source,
+                payload=QEWorkspaceSubmissionPayload(
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    config=config,
+                    experiment_files=experiment_files,
+                    wsl_command=wsl_command,
+                ),
+            )
+            while submission.waiting_capacity and time.monotonic() <= deadline:
+                await asyncio.sleep(self._poll_interval_seconds)
+                submission = await self._submission_coordinator.submit(
+                    client=client,
+                    source=source,
+                    payload=QEWorkspaceSubmissionPayload(
+                        task_id=task_id,
+                        loop_index=loop_index,
+                        config=config,
+                        experiment_files=experiment_files,
+                        wsl_command=wsl_command,
+                    ),
+                )
+            if submission.waiting_capacity:
+                raise MultiAlphaCombineBacktestError(
+                    "remote pred-backtest remained queued for canonical node capacity",
+                    reason_code="remote_pred_backtest_waiting_capacity_timeout",
+                    context={
+                        "node_id": node_id,
+                        "task_id": task_id,
+                        "loop_id": expected_loop_id,
+                        "active_count": submission.active_count,
+                        "node_capacity": submission.node_capacity,
+                    },
+                )
+            loop_id = submission.loop_id
             last_status: Mapping[str, Any] | None = None
             while time.monotonic() <= deadline:
                 status_payload = await client.get_loop_status(task_id, loop_id)
                 last_status = dict(status_payload or {})
                 status = str(last_status.get("status") or "").lower()
                 if status == "completed":
+                    self._submission_coordinator.record_authoritative_remote_status(
+                        source=source,
+                        outcome=submission,
+                        remote_status="completed",
+                    )
                     enhanced = await client.get_workspace_file(task_id, loop_id, "qlib_results_enhanced.json")
                     if not isinstance(enhanced, dict):
                         raise MultiAlphaCombineBacktestError(
@@ -427,6 +538,11 @@ class RemotePredBacktestExecutor:
                         )
                     return loop_id, enhanced
                 if status in {"failed", "cancelled"}:
+                    self._submission_coordinator.record_authoritative_remote_status(
+                        source=source,
+                        outcome=submission,
+                        remote_status=status,
+                    )
                     stderr_tail = ""
                     try:
                         stderr_tail = str(await client.get_workspace_file(task_id, loop_id, "run.log"))[-2000:]
@@ -531,13 +647,37 @@ def _remote_paths(
 
 
 def _require_remote_linux_path(*, path_name: str, value: str, node: ComputeNodeInfo) -> None:
-    invalid = "\\" in value or re.match(r"^[A-Za-z]:", value) is not None or not value.startswith("/") or value.startswith("/mnt/")
-    if invalid:
+    if not _is_remote_linux_path_allowed(value=value, node=node):
         raise MultiAlphaCombineBacktestError(
             f"remote {path_name} must be a node-local Linux absolute path, got: {value}",
             reason_code="remote_path_invalid",
             context={"node_id": node.node_id, "api_base_url": node.api_base_url, "path_name": path_name, "value": value},
         )
+
+
+def _is_remote_linux_path_allowed(*, value: str, node: ComputeNodeInfo | None) -> bool:
+    windows_mount = value.startswith("/mnt/")
+    allowed_wsl_mount = (
+        _WSL_DRIVE_MOUNT_RE.match(value) is not None
+        and node is not None
+        and _is_loopback_wsl_node(node)
+    )
+    return not (
+        "\\" in value
+        or re.match(r"^[A-Za-z]:", value) is not None
+        or not value.startswith("/")
+        or (windows_mount and not allowed_wsl_mount)
+    )
+
+
+def _is_loopback_wsl_node(node: ComputeNodeInfo) -> bool:
+    parsed = urlparse(str(node.api_base_url or ""))
+    hostname = (parsed.hostname or "").lower()
+    return (
+        node.node_id.strip().lower().startswith("wsl")
+        and parsed.scheme.lower() in {"http", "https"}
+        and hostname in (_LOCAL_HOSTS - {""})
+    )
 
 
 def _remote_task_id(*, backtest_config: Mapping[str, Any], workspace: Path) -> str:
@@ -567,27 +707,64 @@ def _remote_loop_index(*, backtest_config: Mapping[str, Any]) -> int:
     return loop_index
 
 
-def _remote_small_files(*, workspace: Path, pred_pkl: Path, include_prediction: bool) -> dict[str, str]:
+def _remote_small_files(
+    *,
+    workspace: Path,
+    pred_pkl: Path,
+    include_prediction: bool,
+    cas_bound_names: Collection[str] = (),
+    runtime_file_manifest: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    manifest = dict(runtime_file_manifest or _build_remote_runtime_file_manifest(workspace=workspace))
+    entries = _validated_remote_runtime_file_entries(manifest, workspace=workspace)
+    excluded = _validated_cas_bound_names(
+        cas_bound_names,
+        workspace=workspace,
+        runtime_file_manifest=manifest,
+    )
+    required_cas = {str(item["path"]) for item in entries if item["transfer"] == "cas"}
+    if excluded != required_cas:
+        raise MultiAlphaCombineBacktestError(
+            "remote runtime manifest CAS bindings are incomplete",
+            reason_code="remote_runtime_artifact_binding_invalid",
+            context={
+                "required": sorted(required_cas),
+                "bound": sorted(excluded),
+                "missing": sorted(required_cas - excluded),
+                "unexpected": sorted(excluded - required_cas),
+            },
+        )
     files: dict[str, str] = {}
-    for name in sorted(_iter_remote_small_file_names(workspace=workspace)):
-        path = workspace / name
+    for entry in entries:
+        name = str(entry["path"])
+        transfer = str(entry["transfer"])
+        if transfer in {"cas", "empty_file"}:
+            continue
+        path = _workspace_runtime_path(workspace, name)
         if name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py") and not path.exists():
             raise MultiAlphaCombineBacktestError(
                 f"remote pred-backtest workspace missing required file: {name}",
                 reason_code="remote_workspace_file_missing",
                 context={"workspace": str(workspace), "file": name},
         )
-        if path.suffix.lower() in _REMOTE_SMALL_BINARY_SUFFIXES:
+        if transfer == "small_binary":
             files[f"{name}.b64"] = _b64_file(path)
-        else:
+        elif transfer == "small_text":
             try:
-                files[name] = path.read_text(encoding="utf-8")
+                raw = path.read_bytes()
+                files[name] = raw.decode("utf-8")
             except (OSError, UnicodeDecodeError) as exc:
                 raise MultiAlphaCombineBacktestError(
                     f"failed to package remote text workspace file: {type(exc).__name__}: {exc}",
                     reason_code="remote_workspace_file_packaging_failed",
                     context={"path": str(path), "workspace": str(workspace)},
                 ) from exc
+        else:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime file manifest contains an unsupported transfer mode",
+                reason_code="remote_runtime_file_manifest_invalid",
+                context={"path": name, "transfer": transfer},
+            )
     if include_prediction:
         files[f"{pred_pkl.name}.b64"] = _b64_file(pred_pkl)
     too_large = {name: len(content.encode("utf-8")) for name, content in files.items() if len(content.encode("utf-8")) > _QE_FILE_SYNC_MAX_FILE_SIZE}
@@ -600,27 +777,345 @@ def _remote_small_files(*, workspace: Path, pred_pkl: Path, include_prediction: 
     return files
 
 
-def _iter_remote_small_file_names(*, workspace: Path) -> set[str]:
-    required = {"conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"}
-    names: set[str] = set(required)
-    for path in workspace.iterdir():
-        name = path.name
-        suffix = path.suffix.lower()
-        if name in _REMOTE_SMALL_EXCLUDED_NAMES or name.startswith(_REMOTE_SMALL_EXCLUDED_PREFIXES):
+def _validated_cas_bound_names(
+    names: Collection[str],
+    *,
+    workspace: Path,
+    runtime_file_manifest: Mapping[str, Any] | None = None,
+) -> set[str]:
+    manifest = dict(runtime_file_manifest or _build_remote_runtime_file_manifest(workspace=workspace))
+    entries = _validated_remote_runtime_file_entries(manifest, workspace=workspace)
+    cas_entries = {str(item["path"]): item for item in entries if item["transfer"] == "cas"}
+    validated: set[str] = set()
+    for raw_name in names:
+        name = str(raw_name)
+        if not _is_safe_runtime_relative_path(name) or name in validated:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime CAS binding contains an invalid or duplicate workspace filename",
+                reason_code="remote_runtime_artifact_binding_invalid",
+                context={"name": name},
+            )
+        if name not in cas_entries:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime CAS binding contains an invalid or duplicate workspace filename",
+                reason_code="remote_runtime_artifact_binding_invalid",
+                context={"name": name},
+            )
+        validated.add(name)
+    return validated
+
+
+def _base64_encoded_size(size: int) -> int:
+    return 4 * ((int(size) + 2) // 3)
+
+
+def _sync_remote_runtime_artifacts(
+    *,
+    workspace: Path,
+    node: ComputeNodeInfo,
+    node_id: str,
+    artifact_client: WorkspaceArtifactSyncClient,
+    remote_paths: Mapping[str, str],
+    runtime_file_manifest: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Route oversized portable runtime binaries through the workspace CAS.
+
+    Top-level small files retain the qe_file_sync contract.  Nested files and
+    files whose encoded payload would exceed that contract use CAS; canonical
+    QE data links and dedicated L2/prediction artifacts are excluded by the
+    explicit runtime-file manifest.
+    """
+
+    artifact_path = str(remote_paths.get("artifact_path") or "")
+    if "/" not in artifact_path:
+        raise MultiAlphaCombineBacktestError(
+            "remote artifact path cannot provide a CAS root for runtime artifacts",
+            reason_code="remote_artifact_store_root_missing",
+            context={"node_id": node_id, "artifact_path": artifact_path},
+        )
+    expected_root = artifact_path.rsplit("/", 1)[0].rstrip("/")
+    _require_remote_linux_path(path_name="artifact_store_root", value=expected_root, node=node)
+
+    manifest = dict(runtime_file_manifest or _build_remote_runtime_file_manifest(workspace=workspace))
+    entries = _validated_remote_runtime_file_entries(manifest, workspace=workspace)
+    bindings: list[dict[str, Any]] = []
+    observed_names: set[str] = set()
+    for entry in entries:
+        if entry["transfer"] != "cas":
             continue
-        if suffix not in _REMOTE_SMALL_TEXT_SUFFIXES and suffix not in _REMOTE_SMALL_BINARY_SUFFIXES:
+        name = str(entry["path"])
+        path = _workspace_runtime_path(workspace, name)
+        if not _is_safe_runtime_relative_path(name) or name in observed_names:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime artifact filename is unsafe or duplicated",
+                reason_code="remote_runtime_artifact_binding_invalid",
+                context={"name": name, "workspace": str(workspace)},
+            )
+        observed_names.add(name)
+        local_sha256, local_size = sha256_file(path)
+        if local_sha256 != entry["sha256"] or local_size != entry["size"]:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime file changed after manifest creation",
+                reason_code="remote_runtime_file_manifest_mismatch",
+                context={"path": name, "manifest_entry": dict(entry)},
+            )
+        artifact_receipt = artifact_client.ensure_artifact(path, node_id=node_id)
+        status = (
+            artifact_receipt.get("status")
+            if isinstance(artifact_receipt.get("status"), Mapping)
+            else None
+        )
+        actual_sha256 = str(artifact_receipt.get("sha256") or "")
+        actual_size = int(artifact_receipt.get("size") or -1)
+        remote_size = int((status or {}).get("size") or -1)
+        remote_root = str((status or {}).get("artifact_store_root") or "").rstrip("/")
+        if (
+            actual_sha256 != local_sha256
+            or actual_size != local_size
+            or status is None
+            or status.get("exists") is not True
+            or remote_size != local_size
+            or not remote_root
+            or remote_root != expected_root
+        ):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime artifact CAS receipt does not match the local artifact",
+                reason_code="remote_runtime_artifact_receipt_mismatch",
+                context={
+                    "node_id": node_id,
+                    "name": name,
+                    "local_sha256": local_sha256,
+                    "local_size": local_size,
+                    "expected_artifact_store_root": expected_root,
+                    "manifest": dict(artifact_receipt),
+                },
+            )
+        remote_path = f"{remote_root}/{local_sha256}"
+        _require_remote_linux_path(path_name=f"runtime_artifact:{name}", value=remote_path, node=node)
+        bindings.append(
+            {
+                "name": name,
+                "binding": _REMOTE_RUNTIME_CAS_BINDING,
+                "sha256": local_sha256,
+                "size": local_size,
+                "remote_path": remote_path,
+                "artifact_store_root": remote_root,
+                "cas_status": "uploaded" if artifact_receipt.get("uploaded") is True else "reused",
+            }
+        )
+    return bindings
+
+
+def _build_remote_runtime_file_manifest(*, workspace: Path) -> dict[str, Any]:
+    required = {"conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"}
+    entries: list[dict[str, Any]] = []
+    for path in sorted(workspace.rglob("*")):
+        relative = path.relative_to(workspace)
+        if any(part in _REMOTE_RUNTIME_CACHE_DIR_NAMES for part in relative.parts):
+            continue
+        if path.suffix.lower() in _REMOTE_RUNTIME_CACHE_SUFFIXES:
+            continue
+        name = relative.as_posix()
+        if len(relative.parts) == 1 and (
+            name in _REMOTE_SMALL_EXCLUDED_NAMES
+            or name in RUNTIME_EXTERNAL_DATA_LINK_NAMES
+            or name.startswith(_REMOTE_SMALL_EXCLUDED_PREFIXES)
+        ):
             continue
         try:
             is_file = path.is_file()
         except OSError as exc:
             raise MultiAlphaCombineBacktestError(
-                f"failed to inspect remote small-file candidate: {type(exc).__name__}: {exc}",
+                f"failed to inspect remote runtime file: {type(exc).__name__}: {exc}",
                 reason_code="remote_workspace_file_scan_failed",
                 context={"path": str(path), "workspace": str(workspace)},
             ) from exc
-        if is_file:
-            names.add(name)
-    return names
+        if not is_file:
+            continue
+        if path.is_symlink() or not _is_safe_runtime_relative_path(name):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime file path is unsafe or symlinked",
+                reason_code="remote_runtime_file_manifest_invalid",
+                context={"path": str(path), "relative_path": name},
+            )
+        sha256, size = _runtime_file_digest(path)
+        kind = "text" if path.suffix.lower() in _REMOTE_SMALL_TEXT_SUFFIXES else "binary"
+        if size == 0:
+            transfer = "empty_file"
+        elif len(relative.parts) > 1 or _base64_encoded_size(size) > _QE_FILE_SYNC_MAX_FILE_SIZE:
+            transfer = "cas"
+        else:
+            transfer = "small_text" if kind == "text" else "small_binary"
+        entries.append(
+            {
+                "path": name,
+                "sha256": sha256,
+                "size": size,
+                "kind": kind,
+                "transfer": transfer,
+            }
+        )
+    observed = {str(item["path"]) for item in entries}
+    missing = sorted(required - observed)
+    if missing:
+        raise MultiAlphaCombineBacktestError(
+            "remote pred-backtest workspace is missing required runtime files",
+            reason_code="remote_workspace_file_missing",
+            context={"workspace": str(workspace), "missing": missing},
+        )
+    payload: dict[str, Any] = {
+        "schema_version": _REMOTE_RUNTIME_FILE_MANIFEST_SCHEMA,
+        "files": entries,
+    }
+    payload["manifest_hash"] = _runtime_manifest_hash(payload)
+    return payload
+
+
+def _validated_remote_runtime_file_entries(
+    manifest: Mapping[str, Any],
+    *,
+    workspace: Path,
+) -> list[dict[str, Any]]:
+    payload = dict(manifest)
+    manifest_hash = str(payload.pop("manifest_hash", ""))
+    if (
+        payload.get("schema_version") != _REMOTE_RUNTIME_FILE_MANIFEST_SCHEMA
+        or not manifest_hash
+        or manifest_hash != _runtime_manifest_hash(payload)
+    ):
+        raise MultiAlphaCombineBacktestError(
+            "remote runtime file manifest hash or schema is invalid",
+            reason_code="remote_runtime_file_manifest_invalid",
+        )
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, list):
+        raise MultiAlphaCombineBacktestError(
+            "remote runtime file manifest files must be a list",
+            reason_code="remote_runtime_file_manifest_invalid",
+        )
+    entries: list[dict[str, Any]] = []
+    observed: set[str] = set()
+    for raw in raw_files:
+        if not isinstance(raw, Mapping):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime file manifest entry must be an object",
+                reason_code="remote_runtime_file_manifest_invalid",
+            )
+        entry = dict(raw)
+        name = str(entry.get("path") or "")
+        sha256 = str(entry.get("sha256") or "")
+        try:
+            size = int(entry.get("size"))
+        except (TypeError, ValueError):
+            size = -1
+        if (
+            not _is_safe_runtime_relative_path(name)
+            or name in observed
+            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+            or size < 0
+            or entry.get("kind") not in {"text", "binary"}
+            or entry.get("transfer") not in {"small_text", "small_binary", "cas", "empty_file"}
+            or (size == 0) != (entry.get("transfer") == "empty_file")
+        ):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime file manifest entry is invalid",
+                reason_code="remote_runtime_file_manifest_invalid",
+                context={"entry": entry},
+            )
+        path = _workspace_runtime_path(workspace, name)
+        if path.is_symlink():
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime file became symlinked after manifest creation",
+                reason_code="remote_runtime_file_manifest_mismatch",
+                context={"path": name},
+            )
+        actual_sha256, actual_size = _runtime_file_digest(path)
+        if actual_sha256 != sha256 or actual_size != size:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime file manifest does not match workspace bytes",
+                reason_code="remote_runtime_file_manifest_mismatch",
+                context={
+                    "path": name,
+                    "expected_sha256": sha256,
+                    "actual_sha256": actual_sha256,
+                    "expected_size": size,
+                    "actual_size": actual_size,
+                },
+            )
+        expected_kind = "text" if path.suffix.lower() in _REMOTE_SMALL_TEXT_SUFFIXES else "binary"
+        relative = PurePosixPath(name)
+        if size == 0:
+            expected_transfer = "empty_file"
+        elif len(relative.parts) > 1 or _base64_encoded_size(size) > _QE_FILE_SYNC_MAX_FILE_SIZE:
+            expected_transfer = "cas"
+        else:
+            expected_transfer = "small_text" if expected_kind == "text" else "small_binary"
+        if entry["kind"] != expected_kind or entry["transfer"] != expected_transfer:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime file manifest classification is invalid",
+                reason_code="remote_runtime_file_manifest_invalid",
+                context={
+                    "path": name,
+                    "expected_kind": expected_kind,
+                    "actual_kind": entry["kind"],
+                    "expected_transfer": expected_transfer,
+                    "actual_transfer": entry["transfer"],
+                },
+            )
+        observed.add(name)
+        entries.append(entry)
+    required = {"conf.yaml", "qrun_limit_minute.py", "read_exp_res.py"}
+    missing = sorted(required - observed)
+    if missing:
+        raise MultiAlphaCombineBacktestError(
+            "remote runtime file manifest is missing required files",
+            reason_code="remote_runtime_file_manifest_invalid",
+            context={"missing": missing},
+        )
+    return entries
+
+
+def _runtime_file_digest(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(_CHUNK_SIZE), b""):
+                digest.update(chunk)
+                size += len(chunk)
+    except OSError as exc:
+        raise MultiAlphaCombineBacktestError(
+            f"failed to read remote runtime file: {type(exc).__name__}: {exc}",
+            reason_code="remote_workspace_file_scan_failed",
+            context={"path": str(path)},
+        ) from exc
+    return digest.hexdigest(), size
+
+
+def _runtime_manifest_hash(payload: Mapping[str, Any]) -> str:
+    canonical = json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _is_safe_runtime_relative_path(name: str) -> bool:
+    if not name or "\\" in name:
+        return False
+    path = PurePosixPath(name)
+    return (
+        not path.is_absolute()
+        and path.as_posix() == name
+        and all(part not in {"", ".", ".."} for part in path.parts)
+    )
+
+
+def _workspace_runtime_path(workspace: Path, name: str) -> Path:
+    if not _is_safe_runtime_relative_path(name):
+        raise MultiAlphaCombineBacktestError(
+            "remote runtime file path is invalid",
+            reason_code="remote_runtime_file_manifest_invalid",
+            context={"path": name},
+        )
+    return workspace.joinpath(*PurePosixPath(name).parts)
 
 
 def _b64_file(path: Path) -> str:
@@ -634,26 +1129,41 @@ def _b64_file(path: Path) -> str:
         ) from exc
 
 
-def _remote_wsl_command(*, workspace: Path, remote_paths: Mapping[str, str], backtest_config: Mapping[str, Any]) -> str:
-    conda_env = str(backtest_config.get("remote_conda_env") or backtest_config.get("conda_env") or "").strip()
-    conda_activation = ""
-    if conda_env:
-        conda_activation = (
-            "source ~/miniconda3/etc/profile.d/conda.sh; "
-            "conda activate " + _shell_quote(conda_env) + "; "
-        )
+def _remote_wsl_command(
+    *,
+    workspace: Path,
+    node: ComputeNodeInfo | None = None,
+    remote_paths: Mapping[str, str],
+    backtest_config: Mapping[str, Any],
+    runtime_artifact_bindings: Sequence[Mapping[str, Any]] = (),
+    runtime_file_manifest: Mapping[str, Any] | None = None,
+) -> str:
+    conda_activation = _remote_conda_activation(node=node, backtest_config=backtest_config)
     artifact_path = _shell_quote(remote_paths["artifact_path"])
     prediction_artifact_path = _shell_quote(remote_paths["prediction_artifact_path"])
     qlib_path = _shell_quote(remote_paths["qlib_data_path"])
     factor_cache = _shell_quote(remote_paths["factor_cache_dir"])
     env_exports = _remote_env_exports(backtest_config)
     workspace_cd = _remote_workspace_cd(workspace=workspace, remote_paths=remote_paths, backtest_config=backtest_config)
+    runtime_artifact_links = _remote_runtime_artifact_link_commands(runtime_artifact_bindings, node=node)
+    runtime_empty_files = _remote_runtime_empty_file_commands(runtime_file_manifest or {})
+    runtime_file_verification = _remote_runtime_file_verify_commands(runtime_file_manifest or {})
+    scrub_credentials = db_credential_scrub_command() + "; "
     command = "".join(
         [
             "set -euo pipefail; ",
+            # QE data plane is file-only: the QE workspace subprocess must never
+            # inherit PostgreSQL credentials or have any database fallback.
+            scrub_credentials,
             workspace_cd,
             "test -f conf.yaml; test -f qrun_limit_minute.py; test -f read_exp_res.py; ",
-            "python -c \"import base64,pathlib; [p.with_suffix('').write_bytes(base64.b64decode(p.read_text())) for p in pathlib.Path('.').glob('*.b64')]\"; ",
+            env_exports,
+            conda_activation,
+            scrub_credentials,
+            "python -c \"import base64,pathlib; [p.with_suffix('').write_bytes(base64.b64decode(p.read_text())) for p in pathlib.Path('.').rglob('*.b64')]\"; ",
+            runtime_artifact_links,
+            runtime_empty_files,
+            runtime_file_verification,
             "ln -sfn " + artifact_path + " combined_factors_df.parquet; ",
             "test -f combined_factors_df.parquet; ",
             "ln -sfn " + prediction_artifact_path + " combined_prediction.pkl; ",
@@ -665,13 +1175,239 @@ def _remote_wsl_command(*, workspace: Path, remote_paths: Mapping[str, str], bac
             "export FACTOR_CACHE_DIR=" + factor_cache + "; ",
             "export RDAGENT_FACTOR_DATA_WSL=" + factor_cache + "; ",
             "export FACTOR_CACHE_DATA_MODE='backtest_factor_data_dir'; ",
-            env_exports,
-            conda_activation,
+            scrub_credentials,
             "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl; ",
+            scrub_credentials,
             "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py",
         ]
     )
-    return "bash -lc " + _shell_quote(command)
+    return "bash --noprofile --norc -c " + _shell_quote(command)
+
+
+def _remote_conda_activation(
+    *,
+    node: ComputeNodeInfo | None,
+    backtest_config: Mapping[str, Any],
+) -> str:
+    conda_env = str(
+        backtest_config.get("remote_conda_env")
+        or backtest_config.get("conda_env")
+        or ""
+    ).strip()
+    conda_sh = str(backtest_config.get("remote_conda_sh") or "").strip()
+
+    if node is not None and _is_loopback_wsl_node(node):
+        conda_env = str(
+            conda_env
+            or backtest_config.get("wsl_conda_env")
+            or os.getenv("QLIB_WSL_CONDA_ENV")
+            or ""
+        ).strip()
+        conda_sh = str(
+            conda_sh
+            or backtest_config.get("wsl_conda_sh")
+            or os.getenv("QLIB_WSL_CONDA_SH")
+            or ""
+        ).strip()
+        missing = [
+            name
+            for name, value in (
+                ("QLIB_WSL_CONDA_SH", conda_sh),
+                ("QLIB_WSL_CONDA_ENV", conda_env),
+            )
+            if not value
+        ]
+        if missing:
+            raise MultiAlphaCombineBacktestError(
+                f"local WSL remote runtime configuration is missing: {missing}",
+                reason_code="remote_wsl_runtime_config_missing",
+                context={"node_id": node.node_id, "missing": missing},
+            )
+        if not _is_remote_linux_path_allowed(value=conda_sh, node=node):
+            raise MultiAlphaCombineBacktestError(
+                "local WSL conda activation script must be an absolute Linux path",
+                reason_code="remote_wsl_runtime_config_invalid",
+                context={"node_id": node.node_id, "field": "QLIB_WSL_CONDA_SH"},
+            )
+    elif not conda_env:
+        return ""
+
+    activation_script = _shell_quote(conda_sh) if conda_sh else "~/miniconda3/etc/profile.d/conda.sh"
+    return (
+        "set +u; test -f "
+        + activation_script
+        + "; source "
+        + activation_script
+        + "; conda activate "
+        + _shell_quote(conda_env)
+        + "; set -u; command -v python >/dev/null; "
+    )
+
+
+def _remote_runtime_artifact_link_commands(
+    bindings: Sequence[Mapping[str, Any]],
+    *,
+    node: ComputeNodeInfo | None = None,
+) -> str:
+    commands: list[str] = []
+    observed_names: set[str] = set()
+    for raw_binding in bindings:
+        binding = dict(raw_binding)
+        name = str(binding.get("name") or "")
+        sha256 = str(binding.get("sha256") or "")
+        remote_path = str(binding.get("remote_path") or "")
+        try:
+            size = int(binding.get("size") or -1)
+        except (TypeError, ValueError):
+            size = -1
+        invalid = (
+            binding.get("binding") != _REMOTE_RUNTIME_CAS_BINDING
+            or not name
+            or not _is_safe_runtime_relative_path(name)
+            or name in observed_names
+            or name in _REMOTE_SMALL_EXCLUDED_NAMES
+            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+            or size <= 0
+            or not _is_remote_linux_path_allowed(value=remote_path, node=node)
+            or remote_path.rsplit("/", 1)[-1] != sha256
+        )
+        if invalid:
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime artifact binding is invalid",
+                reason_code="remote_runtime_artifact_binding_invalid",
+                context={"binding": binding},
+            )
+        observed_names.add(name)
+        quoted_remote_path = _shell_quote(remote_path)
+        quoted_name = _shell_quote(name)
+        quoted_parent = _shell_quote(str(PurePosixPath(name).parent))
+        commands.extend(
+            [
+                "test -f " + quoted_remote_path + "; ",
+                "test \"$(stat -c %s -- " + quoted_remote_path + ")\" -eq " + str(size) + "; ",
+                "test \"$(sha256sum -- " + quoted_remote_path + " | awk '{print $1}')\" = " + _shell_quote(sha256) + "; ",
+                "mkdir -p -- " + quoted_parent + "; ",
+                "ln -sfn -- " + quoted_remote_path + " " + quoted_name + "; ",
+                "test -f " + quoted_name + "; ",
+            ]
+        )
+    return "".join(commands)
+
+
+def _remote_runtime_empty_file_commands(manifest: Mapping[str, Any]) -> str:
+    if not manifest:
+        return ""
+    payload = dict(manifest)
+    manifest_hash = str(payload.pop("manifest_hash", ""))
+    if (
+        payload.get("schema_version") != _REMOTE_RUNTIME_FILE_MANIFEST_SCHEMA
+        or manifest_hash != _runtime_manifest_hash(payload)
+        or not isinstance(payload.get("files"), list)
+    ):
+        raise MultiAlphaCombineBacktestError(
+            "remote runtime file manifest is invalid while building empty files",
+            reason_code="remote_runtime_file_manifest_invalid",
+        )
+    commands: list[str] = []
+    observed: set[str] = set()
+    for raw in payload["files"]:
+        if not isinstance(raw, Mapping) or raw.get("transfer") != "empty_file":
+            continue
+        name = str(raw.get("path") or "")
+        if (
+            not _is_safe_runtime_relative_path(name)
+            or name in observed
+            or raw.get("size") != 0
+            or raw.get("sha256") != hashlib.sha256(b"").hexdigest()
+        ):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime empty-file manifest entry is invalid",
+                reason_code="remote_runtime_file_manifest_invalid",
+                context={"entry": dict(raw)},
+            )
+        observed.add(name)
+        quoted_name = _shell_quote(name)
+        quoted_parent = _shell_quote(str(PurePosixPath(name).parent))
+        commands.extend(
+            [
+                "mkdir -p -- " + quoted_parent + "; ",
+                ": > " + quoted_name + "; ",
+                "test -f " + quoted_name + "; ",
+            ]
+        )
+    return "".join(commands)
+
+
+def _remote_runtime_file_verify_commands(manifest: Mapping[str, Any]) -> str:
+    if not manifest:
+        return ""
+    payload = dict(manifest)
+    manifest_hash = str(payload.pop("manifest_hash", ""))
+    raw_files = payload.get("files")
+    if (
+        payload.get("schema_version") != _REMOTE_RUNTIME_FILE_MANIFEST_SCHEMA
+        or manifest_hash != _runtime_manifest_hash(payload)
+        or not isinstance(raw_files, list)
+    ):
+        raise MultiAlphaCombineBacktestError(
+            "remote runtime file manifest is invalid while building verification commands",
+            reason_code="remote_runtime_file_manifest_invalid",
+        )
+    commands: list[str] = []
+    observed: set[str] = set()
+    for raw in raw_files:
+        if not isinstance(raw, Mapping):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime verification entry must be an object",
+                reason_code="remote_runtime_file_manifest_invalid",
+            )
+        name = str(raw.get("path") or "")
+        sha256 = str(raw.get("sha256") or "")
+        try:
+            size = int(raw.get("size"))
+        except (TypeError, ValueError):
+            size = -1
+        if (
+            not _is_safe_runtime_relative_path(name)
+            or name in observed
+            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+            or size < 0
+        ):
+            raise MultiAlphaCombineBacktestError(
+                "remote runtime verification entry is invalid",
+                reason_code="remote_runtime_file_manifest_invalid",
+                context={"entry": dict(raw)},
+            )
+        observed.add(name)
+        quoted_name = _shell_quote(name)
+        commands.extend(
+            [
+                "if [ ! -f "
+                + quoted_name
+                + " ]; then printf 'QE_RUNTIME_FILE_VERIFY_FAILED path=%s kind=missing\\n' "
+                + quoted_name
+                + " >&2; exit 91; fi; ",
+                "runtime_observed_size=$(stat -Lc %s -- "
+                + quoted_name
+                + "); if [ \"$runtime_observed_size\" -ne "
+                + str(size)
+                + " ]; then printf 'QE_RUNTIME_FILE_VERIFY_FAILED path=%s kind=size expected=%s observed=%s\\n' "
+                + quoted_name
+                + " "
+                + str(size)
+                + " \"$runtime_observed_size\" >&2; exit 92; fi; ",
+                "runtime_observed_sha256=$(sha256sum -- "
+                + quoted_name
+                + " | awk '{print $1}'); if [ \"$runtime_observed_sha256\" != "
+                + _shell_quote(sha256)
+                + " ]; then printf 'QE_RUNTIME_FILE_VERIFY_FAILED path=%s kind=sha256 expected=%s observed=%s\\n' "
+                + quoted_name
+                + " "
+                + _shell_quote(sha256)
+                + " \"$runtime_observed_sha256\" >&2; exit 93; fi; ",
+            ]
+        )
+    return "".join(commands)
 
 
 def _remote_workspace_cd(*, workspace: Path, remote_paths: Mapping[str, str], backtest_config: Mapping[str, Any]) -> str:
@@ -696,6 +1432,12 @@ def _remote_env_exports(backtest_config: Mapping[str, Any]) -> str:
             raise MultiAlphaCombineBacktestError(
                 "remote_env contains an invalid shell variable name",
                 reason_code="remote_env_invalid",
+                context={"key": key_str},
+            )
+        if is_qe_subprocess_credential_key(key_str):
+            raise MultiAlphaCombineBacktestError(
+                "remote_env contains a credential or process-injection variable forbidden in QE compute",
+                reason_code="remote_env_credential_forbidden",
                 context={"key": key_str},
             )
         exports.append(f"export {key_str}={_shell_quote(str(value))}; ")

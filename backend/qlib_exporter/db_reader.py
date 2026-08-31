@@ -837,20 +837,26 @@ class DBReader:
         当前仅包含基础 OHLCV + amount 列。
         """
 
-        codes = list(ts_codes)
+        codes = list(
+            dict.fromkeys(
+                normalized
+                for code in ts_codes
+                if (normalized := self._normalize_ts_code(code))
+            )
+        )
         if not codes:
             return pd.DataFrame()
 
-        conditions: list[str] = ["ts_code = ANY(%(codes)s)", "freq = %(freq)s"]
-        params: dict[str, object] = {"codes": codes, "freq": freq}
+        conditions: list[str] = ["ts_code = %(ts_code)s", "freq = %(freq)s"]
+        common_params: dict[str, object] = {"freq": freq}
 
         if start is not None:
             conditions.append("trade_time >= %(start_ts)s")
-            params["start_ts"] = datetime.combine(start, datetime.min.time())
+            common_params["start_ts"] = datetime.combine(start, datetime.min.time())
         if end is not None:
             # Keep the predicate sargable for minute-table indexes; avoid trade_time::date.
             conditions.append("trade_time < %(end_next_ts)s")
-            params["end_next_ts"] = datetime.combine(end + timedelta(days=1), datetime.min.time())
+            common_params["end_next_ts"] = datetime.combine(end + timedelta(days=1), datetime.min.time())
 
         where_clause = " AND ".join(conditions)
 
@@ -869,11 +875,23 @@ class DBReader:
             ORDER BY trade_time, ts_code
         """
 
+        # Timescale compressed chunks regress from an index-pruned equality scan
+        # to a broad Custom Scan when psycopg2 binds a one-element array to
+        # ``ts_code = ANY(...)``.  Query one code at a time on the same snapshot:
+        # this keeps every row-producing response bounded and preserves the
+        # compressed-chunk segment/index pruning used by PostgreSQL.
+        frames: list[pd.DataFrame] = []
         with get_conn() as conn:  # type: ignore[attr-defined]
-            df = pd.read_sql(sql, conn, params=params)
+            for code in codes:
+                params = {**common_params, "ts_code": code}
+                frame = pd.read_sql(sql, conn, params=params)
+                if not frame.empty:
+                    frames.append(frame)
 
-        if df.empty:
-            return df
+        if not frames:
+            return pd.DataFrame()
+        df = pd.concat(frames, axis=0, ignore_index=True)
+        df = df.sort_values(["trade_time", "ts_code"], kind="mergesort").reset_index(drop=True)
 
         rename_map = {
             FIELD_MAPPING_DB_MINUTE["datetime"]: "datetime",
@@ -1730,7 +1748,13 @@ class DBReader:
         Returns:
             符合 Qlib 格式的 DataFrame
         """
-        codes = list(ts_codes)
+        codes = list(
+            dict.fromkeys(
+                normalized
+                for code in ts_codes
+                if (normalized := self._normalize_ts_code(code))
+            )
+        )
         if not codes:
             return pd.DataFrame()
 
@@ -1744,26 +1768,49 @@ class DBReader:
                 k.low_li,
                 k.close_li,
                 k.volume_hand,
-                k.amount_li,
-                sl.up_limit,
-                sl.down_limit
+                k.amount_li
             FROM {MINUTE_RAW_TABLE} k
-            LEFT JOIN market.stk_limit sl
-                ON k.ts_code = sl.ts_code
-                AND k.trade_time::date = sl.trade_date
-            WHERE k.ts_code = ANY(%(codes)s)
+            WHERE k.ts_code = %(ts_code)s
               AND k.freq = %(freq)s
-              AND k.trade_time::date >= %(start)s
-              AND k.trade_time::date <= %(end)s
+              AND k.trade_time >= %(start_ts)s
+              AND k.trade_time < %(end_next_ts)s
             ORDER BY k.trade_time, k.ts_code
         """
-        params = {"codes": codes, "freq": freq, "start": start, "end": end}
-
+        limits_sql = """
+            SELECT ts_code, trade_date, up_limit, down_limit
+            FROM market.stk_limit
+            WHERE ts_code = %(ts_code)s
+              AND trade_date >= %(start)s
+              AND trade_date <= %(end)s
+            ORDER BY trade_date
+        """
+        common_params = {
+            "freq": freq,
+            "start_ts": datetime.combine(start, datetime.min.time()),
+            "end_next_ts": datetime.combine(end + timedelta(days=1), datetime.min.time()),
+        }
+        frames: list[pd.DataFrame] = []
+        limit_frames: list[pd.DataFrame] = []
         with get_conn() as conn:
-            price_df = pd.read_sql(sql, conn, params=params)
+            for code in codes:
+                frame = pd.read_sql(sql, conn, params={**common_params, "ts_code": code})
+                if not frame.empty:
+                    frames.append(frame)
+                    limit_frame = pd.read_sql(
+                        limits_sql,
+                        conn,
+                        params={"ts_code": code, "start": start, "end": end},
+                    )
+                    if not limit_frame.empty:
+                        limit_frames.append(limit_frame)
 
-        if price_df.empty:
+        if not frames:
             return pd.DataFrame()
+        price_df = (
+            pd.concat(frames, axis=0, ignore_index=True)
+            .sort_values(["trade_time", "ts_code"], kind="mergesort")
+            .reset_index(drop=True)
+        )
 
         # 2. 获取日线复权因子
         adj_provider = AdjFactorProvider(use_tushare_fallback=use_tushare_adj)
@@ -1782,6 +1829,18 @@ class DBReader:
 
         # 提取分钟线的日期
         price_df["trade_date"] = pd.to_datetime(price_df["trade_time"]).dt.date
+        if limit_frames:
+            limits = pd.concat(limit_frames, axis=0, ignore_index=True)
+            limits["trade_date"] = pd.to_datetime(limits["trade_date"]).dt.date
+            price_df = price_df.merge(
+                limits,
+                on=["ts_code", "trade_date"],
+                how="left",
+                validate="many_to_one",
+            )
+        else:
+            price_df["up_limit"] = np.nan
+            price_df["down_limit"] = np.nan
 
         # 合并复权因子（按日期匹配）
         price_df = price_df.merge(

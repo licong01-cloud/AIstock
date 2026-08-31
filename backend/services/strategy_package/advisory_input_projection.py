@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+import re
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from backend.data_service.preprocessor import get_required_data_window
-from backend.services.advisory_phase0a.policy import canonical_json_sha256
 from backend.services.strategy_package.models import (
     AlphaMode,
     FactorAsset,
     RuntimeAssetManifest,
     StrategyPackageManifest,
+    StrategyPackageCanonicalPitBindingV2,
 )
+from backend.services.strategy_package.canonical_pit_compatibility import (
+    require_canonical_pit_strategy_package,
+)
+from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 
 
 PROJECTION_SCHEMA_VERSION = "strategy_package_advisory_input_projection_v1"
+HISTORICAL_RANGE_PROJECTION_SCHEMA_VERSION = "strategy_package_historical_range_input_projection_v1"
 PROJECTION_SOURCE = "ADMITTED_MANIFEST_ONLY"
 REASON_INPUT_PROJECTION_UNAVAILABLE = "ADVISORY_INPUT_PROJECTION_UNAVAILABLE"
 REASON_INPUT_PROJECTION_CONFLICT = "ADVISORY_INPUT_PROJECTION_CONFLICT"
@@ -65,6 +71,89 @@ SELECTION_QUERY_CONTRACT_PAYLOAD = {
     ],
 }
 SELECTION_QUERY_CONTRACT_HASH = canonical_json_sha256(SELECTION_QUERY_CONTRACT_PAYLOAD)
+
+HISTORICAL_RANGE_QUERY_CONTRACT_ID = "strategy_package_historical_range_inference_inputs"
+HISTORICAL_RANGE_QUERY_CONTRACT_VERSION = "v1"
+HISTORICAL_RANGE_QUERY_CONTRACT_PAYLOAD = {
+    "contract_id": HISTORICAL_RANGE_QUERY_CONTRACT_ID,
+    "contract_version": HISTORICAL_RANGE_QUERY_CONTRACT_VERSION,
+    "include_reference_price": False,
+    "logical_inputs": [
+        {
+            **item,
+            "fixed_parameters": {**item["fixed_parameters"], "ensure": False},
+        }
+        if item["source_role"] == "pit_universe"
+        else dict(item)
+        for item in SELECTION_QUERY_CONTRACT_PAYLOAD["logical_inputs"]
+        if item["source_role"] != "reference_price"
+    ],
+}
+HISTORICAL_RANGE_QUERY_CONTRACT_HASH = canonical_json_sha256(HISTORICAL_RANGE_QUERY_CONTRACT_PAYLOAD)
+
+CANONICAL_SELECTION_QUERY_CONTRACT_ID = "strategy_package_canonical_pit_live_inference_inputs"
+CANONICAL_SELECTION_QUERY_CONTRACT_VERSION = "v1"
+CANONICAL_SELECTION_QUERY_CONTRACT_PAYLOAD = {
+    "contract_id": CANONICAL_SELECTION_QUERY_CONTRACT_ID,
+    "contract_version": CANONICAL_SELECTION_QUERY_CONTRACT_VERSION,
+    "pit_training_identity_source": "strategy_package_manifest",
+    "pit_runtime_identity_source": "selection_runtime_authority_lease",
+    "logical_inputs": [
+        {
+            "source_role": "pit_universe",
+            "dataset_id": "market.stock_universe_pit",
+            "query_template_id": "CanonicalPitAuthorityResolver.resolve_live_binding",
+            "query_template_version": "v2",
+            "parameter_source": "selection_runtime_authority_lease",
+        },
+        *[
+        item
+        for item in SELECTION_QUERY_CONTRACT_PAYLOAD["logical_inputs"]
+        if item["source_role"] != "pit_universe"
+        ],
+    ],
+}
+CANONICAL_SELECTION_QUERY_CONTRACT_HASH = canonical_json_sha256(CANONICAL_SELECTION_QUERY_CONTRACT_PAYLOAD)
+
+CANONICAL_HISTORICAL_QUERY_CONTRACT_ID = "strategy_package_canonical_pit_historical_inference_inputs"
+CANONICAL_HISTORICAL_QUERY_CONTRACT_VERSION = "v1"
+CANONICAL_HISTORICAL_QUERY_CONTRACT_PAYLOAD = {
+    "contract_id": CANONICAL_HISTORICAL_QUERY_CONTRACT_ID,
+    "contract_version": CANONICAL_HISTORICAL_QUERY_CONTRACT_VERSION,
+    "pit_identity_source": "strategy_package_manifest.canonical_pit_binding",
+    "pit_universe_source": "frozen_release_snapshot",
+    "include_reference_price": False,
+    "logical_inputs": [
+        {
+            "source_role": "pit_universe",
+            "dataset_id": "market.stock_universe_pit",
+            "query_template_id": "StockUniversePitService.get_eligible_codes",
+            "query_template_version": "v2",
+            "parameter_source": "strategy_package_manifest.canonical_pit_binding.frozen_universe_key",
+            "ensure": False,
+        },
+        *[
+        item
+        for item in CANONICAL_SELECTION_QUERY_CONTRACT_PAYLOAD["logical_inputs"]
+        if item["source_role"] not in {"pit_universe", "reference_price"}
+        ],
+    ],
+}
+CANONICAL_HISTORICAL_QUERY_CONTRACT_HASH = canonical_json_sha256(
+    CANONICAL_HISTORICAL_QUERY_CONTRACT_PAYLOAD
+)
+
+
+def get_strategy_package_inference_required_window(factor_order: tuple[str, ...] | list[str]) -> int:
+    """Return the exact window used by the authoritative StrategyPackage WSL runner."""
+
+    max_window = 61
+    for factor in factor_order:
+        for match in re.findall(r"(\d+)\s*d", str(factor), flags=re.IGNORECASE):
+            max_window = max(max_window, int(match) + 5)
+        if "250" in str(factor):
+            max_window = max(max_window, 260)
+    return max_window
 
 
 class AdvisoryInputProjectionError(ValueError):
@@ -143,6 +232,151 @@ class StrategyPackageAdvisoryInputProjectionV1(BaseModel):
         return self
 
 
+class StrategyPackageAdvisoryInputProjectionV2(BaseModel):
+    """Canonical package projection; rolling runtime identity is supplied by W4."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["strategy_package_advisory_input_projection_v2"] = (
+        "strategy_package_advisory_input_projection_v2"
+    )
+    projection_source: Literal[PROJECTION_SOURCE] = PROJECTION_SOURCE
+    package_id: str = Field(min_length=1, max_length=160)
+    manifest_sha256: str = Field(min_length=64, max_length=64)
+    alpha_mode: AlphaMode
+    canonical_pit_binding: StrategyPackageCanonicalPitBindingV2
+    selection_query_contract_id: Literal[CANONICAL_SELECTION_QUERY_CONTRACT_ID] = (
+        CANONICAL_SELECTION_QUERY_CONTRACT_ID
+    )
+    selection_query_contract_version: Literal[CANONICAL_SELECTION_QUERY_CONTRACT_VERSION] = (
+        CANONICAL_SELECTION_QUERY_CONTRACT_VERSION
+    )
+    selection_query_contract_hash: Literal[CANONICAL_SELECTION_QUERY_CONTRACT_HASH] = (
+        CANONICAL_SELECTION_QUERY_CONTRACT_HASH
+    )
+    legs: tuple[StrategyPackageAdvisoryInputLegV1, ...] = Field(min_length=1)
+    projection_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("manifest_sha256", "projection_hash")
+    @classmethod
+    def _hash(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not _is_sha256(normalized):
+            raise ValueError("canonical projection identity fields must be lowercase sha256")
+        return normalized
+
+    @model_validator(mode="after")
+    def _closed(self) -> "StrategyPackageAdvisoryInputProjectionV2":
+        component_ids = tuple(item.alpha_component_id for item in self.legs)
+        if len(component_ids) != len(set(component_ids)):
+            raise ValueError("projection must contain one leg per alpha component")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"projection_hash"}))
+        if self.projection_hash is not None and self.projection_hash != digest:
+            raise ValueError("projection_hash does not match canonical projection")
+        object.__setattr__(self, "projection_hash", digest)
+        return self
+
+
+class StrategyPackageHistoricalRangeInputProjectionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[HISTORICAL_RANGE_PROJECTION_SCHEMA_VERSION] = (
+        HISTORICAL_RANGE_PROJECTION_SCHEMA_VERSION
+    )
+    projection_source: Literal[PROJECTION_SOURCE] = PROJECTION_SOURCE
+    package_id: str = Field(min_length=1, max_length=160)
+    manifest_sha256: str = Field(min_length=64, max_length=64)
+    alpha_mode: AlphaMode
+    query_contract_id: Literal[HISTORICAL_RANGE_QUERY_CONTRACT_ID] = HISTORICAL_RANGE_QUERY_CONTRACT_ID
+    query_contract_version: Literal[HISTORICAL_RANGE_QUERY_CONTRACT_VERSION] = (
+        HISTORICAL_RANGE_QUERY_CONTRACT_VERSION
+    )
+    query_contract_hash: Literal[HISTORICAL_RANGE_QUERY_CONTRACT_HASH] = HISTORICAL_RANGE_QUERY_CONTRACT_HASH
+    pit_universe_key: Literal[SELECTION_PIT_UNIVERSE_KEY] = SELECTION_PIT_UNIVERSE_KEY
+    pit_universe_policy: Literal["REQUIRE_EXISTING_READ_ONLY"] = "REQUIRE_EXISTING_READ_ONLY"
+    pit_universe_ensure: Literal[False] = False
+    legs: tuple[StrategyPackageAdvisoryInputLegV1, ...] = Field(min_length=1)
+    projection_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("manifest_sha256", "projection_hash")
+    @classmethod
+    def _hash(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not _is_sha256(normalized):
+            raise ValueError("historical projection identity fields must be lowercase sha256")
+        return normalized
+
+    @model_validator(mode="after")
+    def _closed(self) -> "StrategyPackageHistoricalRangeInputProjectionV1":
+        component_ids = tuple(item.alpha_component_id for item in self.legs)
+        if len(component_ids) != len(set(component_ids)):
+            raise ValueError("historical projection must contain one leg per alpha component")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"projection_hash"}))
+        if self.projection_hash is not None and self.projection_hash != digest:
+            raise ValueError("historical projection_hash does not match canonical projection")
+        object.__setattr__(self, "projection_hash", digest)
+        return self
+
+
+class StrategyPackageHistoricalRangeInputProjectionV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["strategy_package_historical_range_input_projection_v2"] = (
+        "strategy_package_historical_range_input_projection_v2"
+    )
+    projection_source: Literal[PROJECTION_SOURCE] = PROJECTION_SOURCE
+    package_id: str = Field(min_length=1, max_length=160)
+    manifest_sha256: str = Field(min_length=64, max_length=64)
+    alpha_mode: AlphaMode
+    canonical_pit_binding: StrategyPackageCanonicalPitBindingV2
+    query_contract_id: Literal[CANONICAL_HISTORICAL_QUERY_CONTRACT_ID] = (
+        CANONICAL_HISTORICAL_QUERY_CONTRACT_ID
+    )
+    query_contract_version: Literal[CANONICAL_HISTORICAL_QUERY_CONTRACT_VERSION] = (
+        CANONICAL_HISTORICAL_QUERY_CONTRACT_VERSION
+    )
+    query_contract_hash: Literal[CANONICAL_HISTORICAL_QUERY_CONTRACT_HASH] = (
+        CANONICAL_HISTORICAL_QUERY_CONTRACT_HASH
+    )
+    pit_universe_key: str = Field(min_length=1, max_length=240)
+    pit_universe_policy: Literal["REQUIRE_FROZEN_READ_ONLY"] = "REQUIRE_FROZEN_READ_ONLY"
+    pit_universe_ensure: Literal[False] = False
+    legs: tuple[StrategyPackageAdvisoryInputLegV1, ...] = Field(min_length=1)
+    projection_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("manifest_sha256", "projection_hash")
+    @classmethod
+    def _hash(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not _is_sha256(normalized):
+            raise ValueError("historical projection identity fields must be lowercase sha256")
+        return normalized
+
+    @model_validator(mode="after")
+    def _closed(self) -> "StrategyPackageHistoricalRangeInputProjectionV2":
+        if self.pit_universe_key != self.canonical_pit_binding.frozen_universe_key:
+            raise ValueError("historical projection universe key differs from frozen package binding")
+        component_ids = tuple(item.alpha_component_id for item in self.legs)
+        if len(component_ids) != len(set(component_ids)):
+            raise ValueError("historical projection must contain one leg per alpha component")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"projection_hash"}))
+        if self.projection_hash is not None and self.projection_hash != digest:
+            raise ValueError("historical projection_hash does not match canonical projection")
+        object.__setattr__(self, "projection_hash", digest)
+        return self
+
+
+StrategyPackageHistoricalRangeInputProjection: TypeAlias = (
+    StrategyPackageHistoricalRangeInputProjectionV1 | StrategyPackageHistoricalRangeInputProjectionV2
+)
+
+
 def project_advisory_inputs(
     manifest: StrategyPackageManifest,
 ) -> StrategyPackageAdvisoryInputProjectionV1:
@@ -152,19 +386,64 @@ def project_advisory_inputs(
     if not _is_sha256(manifest_sha256):
         _unavailable(manifest, "admitted manifest does not carry its frozen manifest_sha256")
 
-    if manifest.alpha_mode is AlphaMode.SINGLE_ALPHA:
-        legs = (_single_leg(manifest),)
-    elif manifest.alpha_mode is AlphaMode.MULTI_ALPHA:
-        legs = _multi_legs(manifest)
-    else:
-        _unavailable(manifest, f"unsupported alpha mode: {manifest.alpha_mode}")
-
     return StrategyPackageAdvisoryInputProjectionV1(
         package_id=manifest.package_id,
         manifest_sha256=manifest_sha256,
         alpha_mode=manifest.alpha_mode,
-        legs=legs,
+        legs=_project_legs(manifest),
     )
+
+
+def project_canonical_advisory_inputs(
+    manifest: StrategyPackageManifest,
+) -> StrategyPackageAdvisoryInputProjectionV2:
+    """Project a canonical package without inventing a rolling runtime lease."""
+
+    manifest_sha256 = str(manifest.manifest_sha256 or "").strip().lower()
+    if not _is_sha256(manifest_sha256):
+        _unavailable(manifest, "admitted manifest does not carry its frozen manifest_sha256")
+    binding = require_canonical_pit_strategy_package(manifest, operation="advisory_prediction")
+    return StrategyPackageAdvisoryInputProjectionV2(
+        package_id=manifest.package_id,
+        manifest_sha256=manifest_sha256,
+        alpha_mode=manifest.alpha_mode,
+        canonical_pit_binding=binding,
+        legs=_project_legs(manifest),
+    )
+
+
+def project_historical_range_inputs(
+    manifest: StrategyPackageManifest,
+) -> StrategyPackageHistoricalRangeInputProjection:
+    """Project the admitted package with an explicit read-only PIT query contract."""
+
+    manifest_sha256 = str(manifest.manifest_sha256 or "").strip().lower()
+    if not _is_sha256(manifest_sha256):
+        _unavailable(manifest, "admitted manifest does not carry its frozen manifest_sha256")
+    if manifest.is_canonical_pit_v2_manifest:
+        binding = require_canonical_pit_strategy_package(manifest, operation="historical_reproduction")
+        return StrategyPackageHistoricalRangeInputProjectionV2(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest_sha256,
+            alpha_mode=manifest.alpha_mode,
+            canonical_pit_binding=binding,
+            pit_universe_key=binding.frozen_universe_key,
+            legs=_project_legs(manifest),
+        )
+    return StrategyPackageHistoricalRangeInputProjectionV1(
+        package_id=manifest.package_id,
+        manifest_sha256=manifest_sha256,
+        alpha_mode=manifest.alpha_mode,
+        legs=_project_legs(manifest),
+    )
+
+
+def _project_legs(manifest: StrategyPackageManifest) -> tuple[StrategyPackageAdvisoryInputLegV1, ...]:
+    if manifest.alpha_mode is AlphaMode.SINGLE_ALPHA:
+        return (_single_leg(manifest),)
+    if manifest.alpha_mode is AlphaMode.MULTI_ALPHA:
+        return _multi_legs(manifest)
+    _unavailable(manifest, f"unsupported alpha mode: {manifest.alpha_mode}")
 
 
 def _single_leg(manifest: StrategyPackageManifest) -> StrategyPackageAdvisoryInputLegV1:
@@ -262,7 +541,7 @@ def _runtime_aliases(
 def _factor_index(manifest: StrategyPackageManifest) -> dict[str, tuple[FactorAsset, ...]]:
     index: dict[str, list[FactorAsset]] = {}
     for factor in manifest.factor_set:
-        for identity in (factor.factor_id, factor.factor_name):
+        for identity in dict.fromkeys((factor.factor_id, factor.factor_name)):
             index.setdefault(identity, []).append(factor)
     return {identity: tuple(items) for identity, items in index.items()}
 

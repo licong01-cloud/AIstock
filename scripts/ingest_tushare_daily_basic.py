@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import uuid
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 import psycopg2
@@ -184,7 +185,7 @@ def _parse_ymd(val) -> dt.date | None:
         if len(s) == 8:
             return dt.date(int(s[:4]), int(s[4:6]), int(s[6:]))
         return dt.date.fromisoformat(s)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -227,16 +228,46 @@ def _fetch_daily_basic_for_date(pro, trade_date: dt.date) -> List[Dict[str, Any]
     return rows
 
 
+def _finite_numeric_or_none(value: Any) -> Any:
+    """Normalize provider numeric values before PostgreSQL adaptation.
+
+    PostgreSQL ``numeric`` accepts NaN and infinity as special values, so the
+    database driver cannot be relied on to reject them.  Tushare numeric
+    columns use missing/non-finite values to represent unavailable data; store
+    those as SQL NULL and keep only finite numeric values.
+    """
+
+    if value is None:
+        return None
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if not number.is_finite():
+        return None
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
 def _upsert_daily_basic(conn, rows: List[Dict[str, Any]]) -> int:
     if not rows:
         return 0
     sql = (
-        "INSERT INTO market.daily_basic (trade_date, ts_code, close, turnover_rate, turnover_rate_f, volume_ratio, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share, free_share, total_mv, circ_mv) "
+        "INSERT INTO market.daily_basic AS target (trade_date, ts_code, close, turnover_rate, turnover_rate_f, volume_ratio, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share, free_share, total_mv, circ_mv) "
         "VALUES %s ON CONFLICT (trade_date, ts_code) DO UPDATE SET "
-        "close=EXCLUDED.close, turnover_rate=EXCLUDED.turnover_rate, turnover_rate_f=EXCLUDED.turnover_rate_f, "
-        "volume_ratio=EXCLUDED.volume_ratio, pe=EXCLUDED.pe, pe_ttm=EXCLUDED.pe_ttm, pb=EXCLUDED.pb, ps=EXCLUDED.ps, ps_ttm=EXCLUDED.ps_ttm, "
-        "dv_ratio=EXCLUDED.dv_ratio, dv_ttm=EXCLUDED.dv_ttm, total_share=EXCLUDED.total_share, float_share=EXCLUDED.float_share, "
-        "free_share=EXCLUDED.free_share, total_mv=EXCLUDED.total_mv, circ_mv=EXCLUDED.circ_mv"
+        "close=COALESCE(EXCLUDED.close, target.close), "
+        "turnover_rate=COALESCE(EXCLUDED.turnover_rate, target.turnover_rate), "
+        "turnover_rate_f=COALESCE(EXCLUDED.turnover_rate_f, target.turnover_rate_f), "
+        "volume_ratio=COALESCE(EXCLUDED.volume_ratio, target.volume_ratio), "
+        "pe=COALESCE(EXCLUDED.pe, target.pe), pe_ttm=COALESCE(EXCLUDED.pe_ttm, target.pe_ttm), "
+        "pb=COALESCE(EXCLUDED.pb, target.pb), ps=COALESCE(EXCLUDED.ps, target.ps), "
+        "ps_ttm=COALESCE(EXCLUDED.ps_ttm, target.ps_ttm), "
+        "dv_ratio=COALESCE(EXCLUDED.dv_ratio, target.dv_ratio), dv_ttm=COALESCE(EXCLUDED.dv_ttm, target.dv_ttm), "
+        "total_share=COALESCE(EXCLUDED.total_share, target.total_share), "
+        "float_share=COALESCE(EXCLUDED.float_share, target.float_share), "
+        "free_share=COALESCE(EXCLUDED.free_share, target.free_share), "
+        "total_mv=COALESCE(EXCLUDED.total_mv, target.total_mv), circ_mv=COALESCE(EXCLUDED.circ_mv, target.circ_mv)"
     )
     values = []
     for r in rows:
@@ -248,22 +279,24 @@ def _upsert_daily_basic(conn, rows: List[Dict[str, Any]]) -> int:
             (
                 trade_date,
                 ts_code,
-                r.get("close"),
-                r.get("turnover_rate"),
-                r.get("turnover_rate_f"),
-                r.get("volume_ratio"),
-                r.get("pe"),
-                r.get("pe_ttm"),
-                r.get("pb"),
-                r.get("ps"),
-                r.get("ps_ttm"),
-                r.get("dv_ratio"),
-                r.get("dv_ttm"),
-                r.get("total_share"),
-                r.get("float_share"),
-                r.get("free_share"),
-                r.get("total_mv"),
-                r.get("circ_mv"),
+                *(_finite_numeric_or_none(r.get(column)) for column in (
+                    "close",
+                    "turnover_rate",
+                    "turnover_rate_f",
+                    "volume_ratio",
+                    "pe",
+                    "pe_ttm",
+                    "pb",
+                    "ps",
+                    "ps_ttm",
+                    "dv_ratio",
+                    "dv_ttm",
+                    "total_share",
+                    "float_share",
+                    "free_share",
+                    "total_mv",
+                    "circ_mv",
+                )),
             )
         )
     if not values:
@@ -274,7 +307,15 @@ def _upsert_daily_basic(conn, rows: List[Dict[str, Any]]) -> int:
 
 
 def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, job_id: uuid.UUID, batch_sleep: float) -> Dict[str, Any]:
-    stats = {"total_days": 0, "success_days": 0, "failed_days": 0, "inserted_rows": 0}
+    stats = {
+        "total_days": 0,
+        "success_days": 0,
+        "failed_days": 0,
+        "inserted_rows": 0,
+        "progress_update_failures": 0,
+        "progress_rollback_failures": 0,
+        "progress_log_failures": 0,
+    }
     days = _date_range(start_date, end_date)
     stats["total_days"] = len(days)
     for d in days:
@@ -292,16 +333,22 @@ def run_ingestion(conn, pro, mode: str, start_date: dt.date, end_date: dt.date, 
             _update_job_progress(conn, job_id, stats)
             conn.commit()
         except Exception as exc:  # noqa: BLE001
+            stats["progress_update_failures"] += 1
+            stats["last_progress_error"] = str(exc)
             try:
                 conn.rollback()
-            except Exception:
-                pass
+            except Exception as rollback_exc:  # noqa: BLE001
+                stats["progress_rollback_failures"] += 1
+                stats["last_progress_rollback_error"] = str(rollback_exc)
+                print(f"[ERROR] failed to rollback job progress transaction: {rollback_exc}")
             msg = f"failed to update job progress: {exc}"
             print(f"[WARN] {msg}")
             try:
                 _log(conn, job_id, "warn", msg)
-            except Exception:
-                pass
+            except Exception as log_exc:  # noqa: BLE001
+                stats["progress_log_failures"] += 1
+                stats["last_progress_log_error"] = str(log_exc)
+                print(f"[ERROR] failed to persist job progress warning: {log_exc}")
         if batch_sleep > 0:
             time.sleep(batch_sleep)
     return stats

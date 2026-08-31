@@ -59,9 +59,14 @@ backend/services/hmm_data_source/
    已存在但损坏时 fail loud，不允许以 fallback 掩盖完整性错误。
 5. workspace fallback 从 `qe_current_recorder.json`，必要时
    `qe_extracted_recorder.json` 解析 `experiment_id/recorder_id`。
-6. 在下载 pickle 前读取远端 sidecar / HMM manifest / QE completion payload；manifest
+6. 对 sidecar 产生前的历史 workspace，仅允许读取有界 `run.log` 作为 metadata：唯一
+   `FINISHED Latest recorder` 必须被 recorder-start 事件、complete catalog 的 pred/label pair
+   与 repo 不可变 legacy manifest 三重确认；禁止按 mtime/目录序/大小或近似指标猜选。
+7. 在下载 pickle 前读取远端 sidecar / HMM manifest / QE completion payload；manifest
    必须给出 artifact 名、schema version、SHA256、size、row count、`quality_status=ok`。
-7. 只调用仓库已有的 `download_workspace_file_bytes()` 下载白名单内容；下载 bytes 与
+   历史远端 manifest 缺失时，只能使用已提交的 immutable legacy manifest，且实际下载
+   bytes 的 SHA/size/row count 必须全部相等，否则失败并清理 cache entry。
+8. 只调用仓库已有的 `download_workspace_file_bytes()` 下载白名单内容；下载 bytes 与
    远端 SHA/size 不一致时拒绝缓存，反序列化后 row count 不一致时清除 entry 并失败。
 
 白名单固定为 `pred.pkl`、`label.pkl`。读取 manifest 是信任验证，不授权下载配置文件。

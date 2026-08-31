@@ -23,7 +23,7 @@ from backend.services.simulation_runtime.models import (
     canonical_json_sha256,
 )
 from backend.services.simulation_runtime.lifecycle import SimulationLifecycleOrchestrator
-from backend.services.simulation_runtime.models import SimulationBrokerBackend
+from backend.services.simulation_data.daily_context import SimulationBrokerBackend
 from backend.services.trading_core.models import OrderSide
 from backend.services.trading_core.tca_sidecar import merge_parent_first_write, new_run_tca_sidecar
 
@@ -147,6 +147,67 @@ def test_quote_capture_rejects_conflicting_time_aliases() -> None:
 
     assert exc_info.value.reason_code == "ADAPTIVE_IS_TCA_QUOTE_TIME_ALIAS_CONFLICT"
     assert exc_info.value.context["field"] == "quote_market_time"
+
+
+@pytest.mark.parametrize("unit", ["seconds", "milliseconds"])
+def test_quote_capture_parses_numeric_epoch_by_exact_length(unit: str) -> None:
+    expected = datetime(2026, 7, 20, 1, 30, 31, tzinfo=UTC)
+    raw_timestamp = int(expected.timestamp())
+    if unit == "milliseconds":
+        raw_timestamp *= 1000
+
+    capture = _decision_capture(
+        {
+            "bid_price_1": 10.0,
+            "ask_price_1": 10.02,
+            "quote_timestamp": raw_timestamp,
+            "received_at": expected.isoformat(),
+        }
+    )
+
+    assert capture.quote_market_time == expected
+
+
+def test_quote_capture_keeps_exact_compact_calendar_timestamp() -> None:
+    capture = _decision_capture(
+        {
+            "bid_price_1": 10.0,
+            "ask_price_1": 10.02,
+            "quote_timestamp": "20260720093031",
+            "received_at": "2026-07-20T09:30:31+00:00",
+        }
+    )
+
+    assert capture.quote_market_time == datetime(2026, 7, 20, 1, 30, 31, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("raw_time", ["093031", "09:30:31"])
+def test_quote_capture_interprets_time_only_as_exchange_local_time(raw_time: str) -> None:
+    capture = _decision_capture(
+        {
+            "bid_price_1": 10.0,
+            "ask_price_1": 10.02,
+            "quote_timestamp": raw_time,
+            "received_at": "2026-07-16T01:30:31+00:00",
+        }
+    )
+
+    assert capture.quote_market_time == datetime(2026, 7, 16, 1, 30, 31, tzinfo=UTC)
+
+
+def test_quote_capture_rejects_ambiguous_numeric_timestamp_length() -> None:
+    with pytest.raises(TcaCaptureDataError) as exc_info:
+        _decision_capture(
+            {
+                "bid_price_1": 10.0,
+                "ask_price_1": 10.02,
+                "quote_timestamp": "178451103100",
+                "received_at": "2026-07-20T09:30:31+00:00",
+            }
+        )
+
+    assert exc_info.value.reason_code == "ADAPTIVE_IS_TCA_QUOTE_TIME_INVALID"
+    assert exc_info.value.context["field"] == "quote_market_time.quote_timestamp"
 
 
 def test_absent_quote_fields_remain_explicit_missing_observation() -> None:
@@ -377,24 +438,33 @@ def test_run_sidecar_parent_entry_is_first_write_only() -> None:
     first = {"capture_sha256": "a" * 64, "value": 1}
     second = {"capture_sha256": "b" * 64, "value": 2}
 
-    assert merge_parent_first_write(
-        sidecar,
-        section="decision_capture_by_parent",
-        parent_intent_id="parent",
-        value=first,
-    ) == CaptureMergeOutcome.CREATED
-    assert merge_parent_first_write(
-        sidecar,
-        section="decision_capture_by_parent",
-        parent_intent_id="parent",
-        value=first,
-    ) == CaptureMergeOutcome.IDEMPOTENT
-    assert merge_parent_first_write(
-        sidecar,
-        section="decision_capture_by_parent",
-        parent_intent_id="parent",
-        value=second,
-    ) == CaptureMergeOutcome.CONFLICT
+    assert (
+        merge_parent_first_write(
+            sidecar,
+            section="decision_capture_by_parent",
+            parent_intent_id="parent",
+            value=first,
+        )
+        == CaptureMergeOutcome.CREATED
+    )
+    assert (
+        merge_parent_first_write(
+            sidecar,
+            section="decision_capture_by_parent",
+            parent_intent_id="parent",
+            value=first,
+        )
+        == CaptureMergeOutcome.IDEMPOTENT
+    )
+    assert (
+        merge_parent_first_write(
+            sidecar,
+            section="decision_capture_by_parent",
+            parent_intent_id="parent",
+            value=second,
+        )
+        == CaptureMergeOutcome.CONFLICT
+    )
     assert sidecar["decision_capture_by_parent"]["parent"] == first
 
 

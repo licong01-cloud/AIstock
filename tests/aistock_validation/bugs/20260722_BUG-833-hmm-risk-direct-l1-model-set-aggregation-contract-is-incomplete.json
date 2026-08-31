@@ -1,0 +1,217 @@
+{
+  "actual": "Approved Phase 2 design requires direct L1 HMM observations built from PIT L2 daily data for both legacy 7-feature and autocycle 20-feature families, but it does not define per-feature L2-to-L1 aggregation or recomputation formulas, weights, missing-data behavior, or causal constituent changes. Existing trainer only implements a different 2-state 4-feature subset with fallback/skip behavior, so implementation cannot preserve approved semantics without an explicit contract. Fix must define exact versioned aggregation for all 20 fields, PIT weighting and missingness, then add distinguishing tests; no legacy fallback or posterior aggregation.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260722_BUG-833-hmm-risk-direct-l1-model-set-aggregation-contract-is-incomplete.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-833",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-22T18:35:05.957865Z",
+  "description": "Approved Phase 2 design requires direct L1 HMM observations built from PIT L2 daily data for both legacy 7-feature and autocycle 20-feature families, but it does not define per-feature L2-to-L1 aggregation or recomputation formulas, weights, missing-data behavior, or causal constituent changes. Existing trainer only implements a different 2-state 4-feature subset with fallback/skip behavior, so implementation cannot preserve approved semantics without an explicit contract. Fix must define exact versioned aggregation for all 20 fields, PIT weighting and missingness, then add distinguishing tests; no legacy fallback or posterior aggregation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260722-ee2084ccb3e0",
+      "timestamp": "2026-07-22T18:35:05.957858Z"
+    },
+    {
+      "action": "approve_design_decision",
+      "actor": "user",
+      "note": "User approved recommended C-007-A stock-fact-first and authorized implementation; PR merge remains separately user-confirmed.",
+      "timestamp": "2026-07-23T02:50:37.0461503+08:00"
+    },
+    {
+      "action": "approve_design_decision",
+      "actor": "user",
+      "note": "User approved C-008-D1 design evidence repair and C-008-B1 diagnostic-only evidence expansion; B2/B3, seed selection, READY artifact generation, and PR merge remain unapproved.",
+      "timestamp": "2026-07-23T05:40:30.0506446Z"
+    },
+    {
+      "action": "approve_design_decision",
+      "actor": "user",
+      "note": "User approved C-008-B3-DESIGN direction only: preserve hard semantic authority, use train-only family-global restart selection, require both families, and prohibit validation-driven or per-sector seed selection. The later-authored exact parameters, thresholds, validation split, and holdout were not separately confirmed. B3 implementation, artifact generation, runtime, and database changes remain unapproved.",
+      "timestamp": "2026-07-23T07:49:59.8554450Z"
+    },
+    {
+      "action": "approve_design_audit_repair_and_merge",
+      "actor": "user",
+      "note": "User authorized correcting the audited detailed-design errors, committing the document update, and merging PR #2642 after required validation. The repair must remove false approval of unvalidated B3 parameters, thresholds, validation split, and holdout; preserve the approved single hard-semantic validation behavior; keep exact B3 contracts and implementation pending; and leave BUG-833/GitHub Issue #2641 open.",
+      "timestamp": "2026-07-23T08:32:51.9593613Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/2641#issuecomment-5055860257"
+  ],
+  "expected": "The approved C-007-A stock-fact-first contract defines both 7-feature and 20-feature direct L1 families without fallback. C-008-B3-DESIGN preserves hard semantic authority, the approved single validation window, train-only family-global restart selection, and fail-closed two-family completeness, while explicitly blocking implementation until full KMeans/HMM parameters, restart schedule, likelihood/covariance/occupancy/semantic thresholds, selection score/tie-break, reproducibility environment, and dependency declaration are separately evidenced and user-confirmed.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+      ],
+      "impacted_modules": [
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        "docs_architecture"
+      ],
+      "risk_levels": [
+        "low"
+      ],
+      "suggested_scope": [
+        "docs.architecture"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ]
+  },
+  "first_seen_at": "2026-07-22T18:35:05.957865Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2641,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2641",
+  "last_seen_at": "2026-07-22T18:35:05.957865Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM Risk direct L1 model-set aggregation contract is incomplete",
+  "trigger_condition": {
+    "fingerprint": "ee2084ccb3e045ee1b159d60",
+    "source_event_id": "FE-20260722-ee2084ccb3e0"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "validation_receipts": [
+    "validation-receipt: id=e57e3311333070bb commit=39c10479b951581d7f4653401f5edc9e58b7b13b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md tests/aistock_validation/bugs/20260722_BUG-833-hmm-risk-direct-l1-model-set-aggregation-contract-is-incomplete.json` result=`passed`",
+    "validation-receipt: id=19db91d7276a3d68 commit=39c10479b951581d7f4653401f5edc9e58b7b13b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=8f103988480d80b9 commit=39c10479b951581d7f4653401f5edc9e58b7b13b kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2` result=`passed: 3 design items, 8 acceptance rows, 0 warnings`",
+    "validation-receipt: id=1396ef4a31b2bd8d commit=39c10479b951581d7f4653401f5edc9e58b7b13b kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "validation-receipt: id=d10dd57b4bd42b56 commit=ade632a17e6b1c0717be8ef46ad659d42dc630ca kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md tests/aistock_validation/bugs/20260722_BUG-833-hmm-risk-direct-l1-model-set-aggregation-contract-is-incomplete.json` result=`passed`",
+    "validation-receipt: id=6d6e67db4773fc9d commit=ade632a17e6b1c0717be8ef46ad659d42dc630ca kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=1a63c166e2393bde commit=ade632a17e6b1c0717be8ef46ad659d42dc630ca kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2` result=`passed: 3 design items, 8 acceptance rows, 0 warnings`",
+    "validation-receipt: id=e6287159c9e31daf commit=ade632a17e6b1c0717be8ef46ad659d42dc630ca kind=diff_check plan=direct status=passed command=`git diff --check HEAD^` result=`passed`"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "fix_ready"
+}

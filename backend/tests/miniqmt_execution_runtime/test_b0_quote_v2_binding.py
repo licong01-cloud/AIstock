@@ -14,7 +14,7 @@ from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
     QuoteControlBindingV1,
 )
 from backend.services.qmt_strategy_ledger.tca_models import canonical_json_sha256
-from backend.services.simulation_runtime.models import SimulationBrokerBackend
+from backend.services.simulation_data.daily_context import SimulationBrokerBackend
 from backend.tests.simulation_runtime.test_target_rebalance_shared import _compiled_plan_for_bridge
 
 
@@ -169,9 +169,7 @@ def test_compiled_miniqmt_plan_preserves_exact_b0_quote_control_identity() -> No
         "control_revision": ControlRevision.B0_QUOTE_V2.value,
     }
     assert quote_control["binding"] == binding.binding_config_json[QUOTE_CONTROL_BINDING_KEY]
-    assignments_by_parent = {
-        assignment["parent_intent_id"]: assignment for assignment in quote_control["assignments"]
-    }
+    assignments_by_parent = {assignment["parent_intent_id"]: assignment for assignment in quote_control["assignments"]}
     assert set(assignments_by_parent) == {intent.intent_id for intent in plan.intents}
     assert all(
         intent.metadata["quote_control_assignment"] == assignments_by_parent[intent.intent_id]

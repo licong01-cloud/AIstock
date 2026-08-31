@@ -6,14 +6,16 @@ import hashlib
 import json
 import logging
 import math
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Callable, Mapping
 
 from backend.execution_algos.board_lot import board_lot_rule
 from backend.execution_algos.vnpy_style import is_vnpy_style_algo
-from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandleStatus
+from backend.services.simulation_execution.broker import BrokerBackend, OrderHandleStatus
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
     IntentPreflightStatus,
@@ -111,6 +113,7 @@ class MiniQMTRuntimeEvidence:
     child_order_ids: tuple[str, ...]
     submitted_child_count: int
     rejected_child_count: int
+    trade_event_count: int
     source: str
     active_algo_count: int = 0
     completed_algo_count: int = 0
@@ -127,6 +130,7 @@ class MiniQMTRuntimeEvidence:
             "child_order_ids": list(self.child_order_ids),
             "submitted_child_count": self.submitted_child_count,
             "rejected_child_count": self.rejected_child_count,
+            "trade_event_count": self.trade_event_count,
             "active_algo_count": self.active_algo_count,
             "completed_algo_count": self.completed_algo_count,
             "pending_algo_count": self.pending_algo_count,
@@ -192,8 +196,12 @@ class MiniQMTRuntimeManagedBatchSubmitResult:
             "succeeded": self.succeeded,
             "failed": self.failed,
             "pending": pending,
-            "triggered_child_order_count": self.succeeded,
+            "triggered_child_order_count": (
+                self.runtime_evidence.submitted_child_count if self.runtime_evidence is not None else self.succeeded
+            ),
+            "triggered_parent_intent_count": self.succeeded,
             "pending_child_trigger_count": pending,
+            "pending_parent_intent_count": pending,
             "results": [result.to_dict() for result in self.results],
             "compensation_required": self.compensation_required,
             "compensation_hint": self.compensation_hint,
@@ -685,6 +693,16 @@ class MiniQMTExecutionRuntimeClient:
         )
         runtime.start()
         runtime.recover()
+        recovered_children = tuple(self.repository.list_child_orders(runtime.config.runtime_id, active_only=False))
+        if recovered_children:
+            self._sync_event_loop_triggered_children_to_batches(
+                runtime_id=runtime.config.runtime_id,
+                trade_date=trade_date,
+                new_children=recovered_children,
+                managed_request_factory=managed_request_factory,
+                managed_order_service=managed_order_service,
+                source=f"{source}:recovery_projection",
+            )
         controller: B0QuoteV2Controller | None = None
         if quote_revision is not None:
             assert self.b0_quote_v2_controller_factory is not None
@@ -695,8 +713,7 @@ class MiniQMTExecutionRuntimeClient:
                     for parent_id, assignment in controller.assignments.items()
                 }
                 incoming_assignments = {
-                    parent_id: assignment.canonical_payload()
-                    for parent_id, assignment in quote_assignments.items()
+                    parent_id: assignment.canonical_payload() for parent_id, assignment in quote_assignments.items()
                 }
                 if existing_assignments != incoming_assignments:
                     active_algos = self.repository.list_algo_instances(
@@ -747,16 +764,17 @@ class MiniQMTExecutionRuntimeClient:
             child_context_factory=child_context_factory,
             managed_request_factory=managed_request_factory,
             managed_order_service=managed_order_service,
+            b0_quote_v2_active=controller is not None,
             source=source,
         )
         batch_id = preflight_result.batch_id
         request_by_parent_intent_id.update(preflight_result.request_by_parent_intent_id)
         submitted_parent_ids = set(preflight_result.submit_parent_intent_ids)
-        results_by_parent_id = {
-            parent_id: result
-            for request, result in zip(preflight_result.requests, preflight_result.results, strict=False)
-            if (parent_id := _parent_id_from_request(request))
-        }
+        results_by_parent_id = _event_loop_result_objects_by_parent(
+            preflight_result.results,
+            batch_id=batch_id,
+            stage="MINIQMT_EVENT_LOOP_ORDER_INTENT_PERSIST",
+        )
         for index, intent in enumerate(parent_intents, start=1):
             if intent.intent_id not in submitted_parent_ids:
                 continue
@@ -780,23 +798,23 @@ class MiniQMTExecutionRuntimeClient:
                 preflight=result.preflight,
                 source=source,
             )
-            tick_payload = (
-                _required_event_loop_tick_payload(
-                    intent=intent,
-                    quote_provider=quote_provider,
-                    qmt_client=qmt_client,
-                    source=source,
-                )
-                if controller is None
-                else {}
-            )
+            tick_payload = _event_loop_tick_payload_from_request(request) if controller is None else None
             child_context = (
                 child_context_factory(intent, index)
                 if child_context_factory is not None
                 else _event_loop_child_metadata(intent=intent, trade_date=trade_date, source=source, index=index)
             )
+            child_context = _event_loop_child_context_with_preflight(
+                intent=intent,
+                child_context=child_context,
+                preflight=result.preflight,
+            )
             child_context = {**dict(child_context), "qmt_batch_id": batch_id}
-            runtime.create_vnpy_algo_instance(
+            min_volume, volume_increment = _event_loop_vnpy_volume_override(
+                intent=intent,
+                preflight=result.preflight,
+            )
+            algo_instance = runtime.create_vnpy_algo_instance(
                 parent_intent_id=intent.intent_id,
                 strategy_slot_id=strategy_slot_id,
                 symbol=intent.symbol,
@@ -806,15 +824,15 @@ class MiniQMTExecutionRuntimeClient:
                 limit_price=(
                     _limit_price_for_event_loop(
                         intent=intent,
-                        tick_payload=tick_payload,
+                        tick_payload=tick_payload or {},
                         algo_config=dict(policy_json.get("algo_config") or {}),
                     )
-                    if controller is None
+                    if controller is None and tick_payload is not None
                     else _b0_quote_v2_initial_limit_price(intent)
                 ),
                 algo_config=dict(policy_json.get("algo_config") or {}),
-                min_volume=1 if intent.side == OrderSide.SELL else None,
-                volume_increment=1 if intent.side == OrderSide.SELL else None,
+                min_volume=min_volume,
+                volume_increment=volume_increment,
                 metadata={
                     "source": source,
                     "runtime_child_context": child_context,
@@ -824,19 +842,29 @@ class MiniQMTExecutionRuntimeClient:
                     "qmt_batch_id": batch_id,
                     "quote_source": (
                         tick_payload.get("source") or tick_payload.get("quote_source")
-                        if controller is None
+                        if controller is None and tick_payload is not None
                         else "B0_QUOTE_V2_NORMALIZED"
+                        if controller is not None
+                        else MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE
                     ),
                     "marketable_limit_reference_price": (
                         _execution_reference_price(intent=intent, tick_payload=tick_payload)
-                        if controller is None
+                        if controller is None and tick_payload is not None
                         else _b0_quote_v2_initial_limit_price(intent)
                     ),
+                    "quote_wait": dict(request.metadata.get("event_loop_quote_wait") or {}),
                     "marketable_limit_policy": dict(policy_json.get("algo_config") or {}),
                 },
             )
-            if controller is None:
+            if controller is None and tick_payload is not None:
                 gateway.on_tick(tick_payload)
+            elif controller is None:
+                _persist_event_loop_quote_waiting(
+                    runtime=runtime,
+                    instance=algo_instance,
+                    request=request,
+                    source=source,
+                )
         if controller is not None:
             controller.lifecycle_tick()
         runtime_evidence = self._evidence(runtime, source=source)
@@ -1174,15 +1202,39 @@ class MiniQMTExecutionRuntimeClient:
     ) -> dict[str, dict[str, Any]]:
         if not new_children:
             return {}
+        get_batch = getattr(self.strategy_ledger_repository, "get_order_batch", None)
+        if not callable(get_batch):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop tick driver requires get_order_batch for batch sync",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_REPOSITORY_MISSING",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+                    "runtime_id": runtime_id,
+                },
+            )
         results_by_batch_parent: dict[str, dict[str, ManagedOrderSubmitResult]] = {}
         for index, child in enumerate(new_children, start=1):
             request_index = _event_loop_child_request_index(child, fallback=index)
-            request = (
-                managed_request_factory(child, request_index)
-                if managed_request_factory is not None
-                else _managed_request_from_event_loop_child(child, index=request_index, trade_date=trade_date)
-            )
-            batch_id = str(child.metadata.get("qmt_batch_id") or request.metadata.get("qmt_batch_id") or "").strip()
+            batch_id = str(child.metadata.get("qmt_batch_id") or "").strip()
+            request: ManagedOrderRequest | None = None
+            if batch_id:
+                stored_batch = get_batch(batch_id)
+                if stored_batch is not None:
+                    request = next(
+                        (
+                            item
+                            for item in _event_loop_requests_from_batch(stored_batch)
+                            if _parent_id_from_request(item) == child.parent_intent_id
+                        ),
+                        None,
+                    )
+            if request is None:
+                request = (
+                    managed_request_factory(child, request_index)
+                    if managed_request_factory is not None
+                    else _managed_request_from_event_loop_child(child, index=request_index, trade_date=trade_date)
+                )
+            batch_id = str(batch_id or request.metadata.get("qmt_batch_id") or "").strip()
             if not batch_id:
                 raise BrokerSubmitError(
                     "MiniQMT event_loop tick driver cannot sync child without qmt_batch_id",
@@ -1211,19 +1263,20 @@ class MiniQMTExecutionRuntimeClient:
                 repository=self.strategy_ledger_repository,
                 source=source,
             )
-            results_by_batch_parent.setdefault(batch_id, {})[child.parent_intent_id] = result
+            parent_results = results_by_batch_parent.setdefault(batch_id, {})
+            existing_result = parent_results.get(child.parent_intent_id)
+            parent_results[child.parent_intent_id] = (
+                _merge_event_loop_parent_submit_result(
+                    existing=existing_result,
+                    incoming=result,
+                    parent_intent_id=child.parent_intent_id,
+                    batch_id=batch_id,
+                )
+                if existing_result is not None
+                else result
+            )
 
         updated: dict[str, dict[str, Any]] = {}
-        get_batch = getattr(self.strategy_ledger_repository, "get_order_batch", None)
-        if not callable(get_batch):
-            raise BrokerSubmitError(
-                "MiniQMT event_loop tick driver requires get_order_batch for batch sync",
-                context={
-                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_REPOSITORY_MISSING",
-                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
-                    "runtime_id": runtime_id,
-                },
-            )
         for batch_id, parent_results in results_by_batch_parent.items():
             batch = get_batch(batch_id)
             if batch is None:
@@ -1238,12 +1291,23 @@ class MiniQMTExecutionRuntimeClient:
                 )
             requests = tuple(_event_loop_requests_from_batch(batch))
             stored_results = _event_loop_results_from_batch(batch, requests=requests)
-            results_by_parent = {
-                parent_id: result
-                for request, result in zip(requests, stored_results, strict=True)
-                if (parent_id := _parent_id_from_request(request))
-            }
-            results_by_parent.update(parent_results)
+            results_by_parent = _event_loop_result_objects_by_parent(
+                stored_results,
+                batch_id=batch_id,
+                stage="MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+            )
+            for parent_id, result in parent_results.items():
+                existing_result = results_by_parent.get(parent_id)
+                results_by_parent[parent_id] = (
+                    _merge_event_loop_parent_submit_result(
+                        existing=existing_result,
+                        incoming=result,
+                        parent_intent_id=parent_id,
+                        batch_id=batch_id,
+                    )
+                    if existing_result is not None
+                    else result
+                )
             ordered_results = tuple(
                 results_by_parent.get(_parent_id_from_request(request))
                 or ManagedOrderSubmitResult(
@@ -1309,10 +1373,12 @@ class MiniQMTExecutionRuntimeClient:
             return None
         requests = tuple(_event_loop_requests_from_batch(batch))
         stored_results = _event_loop_results_from_batch(batch, requests=requests)
-        for request, result in zip(requests, stored_results, strict=True):
-            if _parent_id_from_request(request) == parent_intent_id:
-                return result.preflight
-        return None
+        result = _event_loop_result_objects_by_parent(
+            stored_results,
+            batch_id=batch_id,
+            stage="MINIQMT_EVENT_LOOP_STORED_PREFLIGHT",
+        ).get(parent_intent_id)
+        return result.preflight if result is not None else None
 
     def _event_loop_preflight_parent_intents(
         self,
@@ -1327,6 +1393,7 @@ class MiniQMTExecutionRuntimeClient:
         child_context_factory: Callable[[OrderIntent, int], dict[str, Any]] | None,
         managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest] | None,
         managed_order_service: QmtManagedOrderService | None,
+        b0_quote_v2_active: bool,
         source: str,
     ) -> MiniQMTEventLoopPreflightResult:
         parent_by_id = {intent.intent_id: intent for intent in parent_intents}
@@ -1353,6 +1420,7 @@ class MiniQMTExecutionRuntimeClient:
                         )
                     ),
                     managed_request_factory=managed_request_factory,
+                    b0_quote_v2_active=b0_quote_v2_active,
                     source=source,
                     index=index,
                     arrival_capture_context_by_parent=arrival_capture_context_by_parent,
@@ -1394,8 +1462,15 @@ class MiniQMTExecutionRuntimeClient:
         )
         if hard_failed:
             results = tuple(
-                ManagedOrderSubmitResult(False, None, None, "event_loop preflight failed", preflight, False)
-                for preflight in preflights
+                ManagedOrderSubmitResult(
+                    False,
+                    _parent_id_from_request(request) or None,
+                    None,
+                    "event_loop preflight failed",
+                    preflight,
+                    False,
+                )
+                for request, preflight in zip(requests_with_batch, preflights, strict=True)
             )
             self._upsert_event_loop_batch_record(
                 batch_id=batch_id,
@@ -1429,7 +1504,7 @@ class MiniQMTExecutionRuntimeClient:
                 results_list.append(
                     ManagedOrderSubmitResult(
                         False,
-                        None,
+                        parent_id,
                         None,
                         "dependent buy deferred until same-batch sell proceeds are reconciled",
                         preflight,
@@ -1441,9 +1516,21 @@ class MiniQMTExecutionRuntimeClient:
                 results_list.append(
                     ManagedOrderSubmitResult(
                         False,
-                        None,
+                        parent_id,
                         None,
                         "buy skipped by funds-only capacity allocator",
+                        preflight,
+                        False,
+                    )
+                )
+                continue
+            if not preflight.allowed:
+                results_list.append(
+                    ManagedOrderSubmitResult(
+                        False,
+                        parent_id or None,
+                        None,
+                        "event_loop parent preflight failed",
                         preflight,
                         False,
                     )
@@ -1499,27 +1586,47 @@ class MiniQMTExecutionRuntimeClient:
         qmt_client: Any,
         child_context: dict[str, Any],
         managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest] | None,
+        b0_quote_v2_active: bool,
         source: str,
         index: int,
         arrival_capture_context_by_parent: dict[str, dict[str, Any]],
     ) -> ManagedOrderRequest:
         arrival_time = datetime.now(UTC)
-        tick_payload = _required_event_loop_tick_payload(
-            intent=intent,
-            quote_provider=quote_provider,
-            qmt_client=qmt_client,
-            source=source,
-        )
-        arrival_capture_context_by_parent[intent.intent_id] = {
-            "arrival_time": arrival_time,
-            "arrival_quote_received_at": datetime.now(UTC),
-            "tick_payload": dict(tick_payload),
-        }
+        tick_payload: dict[str, Any] | None = None
+        quote_wait: dict[str, Any] | None = None
+        if not b0_quote_v2_active:
+            try:
+                tick_payload = _required_event_loop_tick_payload(
+                    intent=intent,
+                    quote_provider=quote_provider,
+                    qmt_client=qmt_client,
+                    source=source,
+                )
+            except BrokerSubmitError as exc:
+                if not _is_event_loop_symbol_quote_wait_error(exc):
+                    raise
+                quote_wait = _event_loop_quote_wait_payload(intent=intent, error=exc, source=source)
+        if tick_payload is not None:
+            arrival_capture_context_by_parent[intent.intent_id] = {
+                "arrival_time": arrival_time,
+                "arrival_quote_received_at": datetime.now(UTC),
+                "tick_payload": dict(tick_payload),
+            }
+        elif quote_wait is not None:
+            arrival_capture_context_by_parent[intent.intent_id] = {
+                "arrival_time": arrival_time,
+                "arrival_quote_received_at": None,
+                "quote_wait": dict(quote_wait),
+            }
         policy_json = policy_context.get("policy_json") if isinstance(policy_context, dict) else None
-        price = _limit_price_for_event_loop(
-            intent=intent,
-            tick_payload=tick_payload,
-            algo_config=dict(policy_json.get("algo_config") or {}) if isinstance(policy_json, dict) else {},
+        price = (
+            _limit_price_for_event_loop(
+                intent=intent,
+                tick_payload=tick_payload,
+                algo_config=dict(policy_json.get("algo_config") or {}) if isinstance(policy_json, dict) else {},
+            )
+            if tick_payload is not None
+            else _b0_quote_v2_initial_limit_price(intent)
         )
         child_metadata = {
             **dict(child_context),
@@ -1531,7 +1638,24 @@ class MiniQMTExecutionRuntimeClient:
             "execution_policy_id": policy_context.get("validated_execution_policy_id"),
             "execution_policy_sha256": policy_context.get("policy_sha256"),
             "event_loop_preflight": True,
-            "broker_quote_source": tick_payload.get("source") or tick_payload.get("quote_source"),
+            "broker_quote_source": (
+                tick_payload.get("source") or tick_payload.get("quote_source")
+                if tick_payload is not None
+                else MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE
+            ),
+            "event_loop_preflight_price_source": (
+                "broker_quote" if tick_payload is not None else "immutable_parent_limit_reference"
+            ),
+            **(
+                {
+                    "event_loop_tick_payload": _event_loop_tick_snapshot(tick_payload),
+                    "event_loop_tick_payload_sha256": _short_hash(_event_loop_tick_snapshot(tick_payload)),
+                }
+                if tick_payload is not None
+                else {}
+            ),
+            **({"event_loop_quote_wait": quote_wait} if quote_wait is not None else {}),
+            **({"event_loop_quote_control": "B0_QUOTE_V2"} if b0_quote_v2_active else {}),
         }
         synthetic_child = MiniQMTChildOrder(
             runtime_id=runtime.config.runtime_id,
@@ -1615,11 +1739,13 @@ class MiniQMTExecutionRuntimeClient:
         list_intents = getattr(repository, "list_order_intents_by_batch", None)
         if not callable(get_batch) or not callable(list_intents):
             return None
+        found_by_remark = False
         batch = get_batch(batch_id)
         if batch is None:
             batch = self._event_loop_find_dependent_buy_batch_by_logical_key(requests)
         if batch is None:
             batch = self._event_loop_find_owned_failed_batch_by_remarks(requests)
+            found_by_remark = batch is not None
         if batch is None:
             return None
         stored_requests = _event_loop_requests_from_batch(batch)
@@ -1635,6 +1761,22 @@ class MiniQMTExecutionRuntimeClient:
                     "durable_request_count": len(stored_requests),
                 },
             )
+        if found_by_remark:
+            mismatches = _event_loop_owned_retry_request_mismatches(
+                requests=requests,
+                stored_requests=stored_requests,
+            )
+            if mismatches:
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop order remarks resolve to a different durable business request",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_OWNED_RETRY_REQUEST_MISMATCH",
+                        "stage": "MINIQMT_EVENT_LOOP_EXISTING_BATCH_REPLAY",
+                        "qmt_batch_id": batch.batch_id,
+                        "mismatches": mismatches,
+                        "broker_called": any(result.broker_called for result in stored_results),
+                    },
+                )
         if not isinstance(batch.metadata, dict):
             raise BrokerSubmitError(
                 "MiniQMT event_loop durable batch metadata must be a mapping",
@@ -1734,10 +1876,7 @@ class MiniQMTExecutionRuntimeClient:
                     "broker_called": False,
                 },
             )
-        runtime_ids = {
-            str(request.metadata.get("runtime_id") or "").strip()
-            for request in stored_requests
-        }
+        runtime_ids = {str(request.metadata.get("runtime_id") or "").strip() for request in stored_requests}
         if len(runtime_ids) != 1 or not next(iter(runtime_ids)):
             raise BrokerSubmitError(
                 "MiniQMT event_loop owned retry requires one exact runtime identity",
@@ -1848,9 +1987,7 @@ class MiniQMTExecutionRuntimeClient:
             retry_of_batch_id=batch_id,
             requests=tuple(stored_requests),
             results=tuple(results),
-            request_by_parent_intent_id={
-                _parent_id_from_request(request): request for request in stored_requests
-            },
+            request_by_parent_intent_id={_parent_id_from_request(request): request for request in stored_requests},
             submit_parent_intent_ids=frozenset(submit_parent_ids),
         )
 
@@ -1875,7 +2012,7 @@ class MiniQMTExecutionRuntimeClient:
         if len(batch_ids) != 1:
             return None
         batch = get_batch(next(iter(batch_ids)))
-        return batch if batch is not None and batch.batch_status == OrderBatchStatus.PREFLIGHT_FAILED else None
+        return batch
 
     def _event_loop_find_dependent_buy_batch_by_logical_key(
         self,
@@ -1917,7 +2054,13 @@ class MiniQMTExecutionRuntimeClient:
         results = list(stored_results)
         retry_indexes = [
             index
-            for index, (request, result) in enumerate(zip(requests, stored_results, strict=True))
+            for index, (request, result) in enumerate(
+                _event_loop_request_result_pairs(
+                    requests=requests,
+                    results=stored_results,
+                    stage="MINIQMT_EVENT_LOOP_DEPENDENT_BUY_RETRY",
+                )
+            )
             if _is_dependent_buy_proceeds_deferred(request, result.preflight)
         ]
         submit_parent_ids: set[str] = set()
@@ -1945,7 +2088,7 @@ class MiniQMTExecutionRuntimeClient:
                     continue
                 results[index] = ManagedOrderSubmitResult(
                     False,
-                    None,
+                    parent_id,
                     None,
                     (
                         "dependent buy still waiting for reconciled sell proceeds"
@@ -1970,13 +2113,28 @@ class MiniQMTExecutionRuntimeClient:
         requests: tuple[ManagedOrderRequest, ...],
         results: tuple[ManagedOrderSubmitResult, ...],
     ) -> tuple[ManagedOrderSubmitResult, ...]:
-        if len(results) == len(requests):
-            return results
-        results_by_parent = {
-            parent_id: result
-            for request, result in zip(requests, results, strict=False)
-            if (parent_id := _parent_id_from_request(request))
-        }
+        results_by_parent = _event_loop_result_objects_by_parent(
+            results,
+            batch_id=str(requests[0].metadata.get("qmt_batch_id") or "") if requests else "",
+            stage="MINIQMT_EVENT_LOOP_RESULT_PROJECTION",
+        )
+        request_parent_ids = {_parent_id_from_request(request) for request in requests}
+        extra_parent_ids = sorted(set(results_by_parent) - request_parent_ids)
+        if extra_parent_ids:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop results contain parents outside the canonical request set",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": "MINIQMT_EVENT_LOOP_RESULT_PROJECTION",
+                    "qmt_batch_id": str(requests[0].metadata.get("qmt_batch_id") or "") if requests else None,
+                    "request_identities": [_parent_id_from_request(request) for request in requests],
+                    "result_identities": list(results_by_parent),
+                    "duplicate_request_identities": [],
+                    "duplicate_result_identities": [],
+                    "missing_result_identities": [],
+                    "extra_result_identities": extra_parent_ids,
+                },
+            )
         ordered: list[ManagedOrderSubmitResult] = []
         for request in requests:
             parent_id = _parent_id_from_request(request)
@@ -1988,7 +2146,7 @@ class MiniQMTExecutionRuntimeClient:
             ordered.append(
                 ManagedOrderSubmitResult(
                     False,
-                    None,
+                    parent_id,
                     None,
                     "event_loop residual intent was not submitted to broker",
                     preflight,
@@ -2020,6 +2178,12 @@ class MiniQMTExecutionRuntimeClient:
         now = datetime.now(UTC)
         existing = getattr(repository, "get_order_batch", lambda _batch_id: None)(batch_id)
         created_at = existing.created_at if existing is not None else now
+        results = _canonical_event_loop_result_objects(
+            requests=requests,
+            results=results,
+            batch_id=batch_id,
+            stage="MINIQMT_EVENT_LOOP_BATCH_PERSIST",
+        )
         status = _event_loop_batch_status(requests, results)
         metadata = _event_loop_batch_metadata(
             requests=requests,
@@ -2033,38 +2197,39 @@ class MiniQMTExecutionRuntimeClient:
             and existing.metadata.get("dependent_buy_deferred")
         ):
             metadata["dependent_buy_retry"] = True
-        upsert(
-            OrderBatchRecord(
-                batch_id=batch_id,
-                strategy_id=_single_strategy_id(results),
-                account_id=requests[0].account_id if requests else "",
-                mode=requests[0].mode if requests else "SIM",
-                batch_status=status,
-                request_json={"orders": [_request_signature(request) for request in requests]},
-                result_json={
-                    "results": [result.to_dict() for result in results],
-                    "compensation_actions": [],
-                    "compensation_hint": (
-                        "partial event_loop broker submission; inspect accepted qmt_order_id values"
-                        if _event_loop_compensation_required(status, requests, results)
-                        else None
-                    ),
-                    "runtime_evidence": runtime_evidence.to_dict(),
-                },
-                metadata=metadata,
-                created_at=created_at,
-                submitted_at=now
-                if status
-                in {
-                    OrderBatchStatus.SUBMITTING,
-                    OrderBatchStatus.SUCCEEDED,
-                    OrderBatchStatus.PARTIAL,
-                    OrderBatchStatus.FAILED,
-                }
-                else None,
-                completed_at=now,
-            )
+        candidate = OrderBatchRecord(
+            batch_id=batch_id,
+            strategy_id=_single_strategy_id(results),
+            account_id=requests[0].account_id if requests else "",
+            mode=requests[0].mode if requests else "SIM",
+            batch_status=status,
+            request_json={"orders": [_request_signature(request) for request in requests]},
+            result_json={
+                "results": [_event_loop_durable_result_payload(result) for result in results],
+                "compensation_actions": [],
+                "compensation_hint": (
+                    "partial event_loop broker submission; inspect accepted qmt_order_id values"
+                    if _event_loop_compensation_required(status, requests, results)
+                    else None
+                ),
+                "runtime_evidence": runtime_evidence.to_dict(),
+            },
+            metadata=metadata,
+            created_at=created_at,
+            submitted_at=now
+            if status
+            in {
+                OrderBatchStatus.SUBMITTING,
+                OrderBatchStatus.SUCCEEDED,
+                OrderBatchStatus.PARTIAL,
+                OrderBatchStatus.FAILED,
+            }
+            else None,
+            completed_at=now,
         )
+        candidate_requests = tuple(_event_loop_requests_from_batch(candidate))
+        _event_loop_results_from_batch(candidate, requests=candidate_requests)
+        upsert(candidate)
 
     def execute_paper_vnpy_intent(
         self,
@@ -2143,16 +2308,18 @@ class MiniQMTExecutionRuntimeClient:
             raise BrokerSubmitError("MiniQMT runtime evidence is missing", context={"runtime_id": runtime_id})
         child_orders = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
         algo_instances = tuple(self.repository.list_algo_instances(runtime_id, active_only=False))
+        events = tuple(self.repository.list_events(runtime_id, include_archived=True))
         return MiniQMTRuntimeEvidence(
             runtime_id=runtime_id,
             runtime_owner=RUNTIME_OWNER,
             account_group_id=runtime_record.account_group_id,
             trade_date=runtime_record.trade_date,
-            event_count=len(self.repository.list_events(runtime_id)),
+            event_count=len(events),
             algo_instance_ids=tuple(item.algo_instance_id for item in algo_instances),
             child_order_ids=tuple(item.child_order_id for item in child_orders),
             submitted_child_count=_submitted_child_count(child_orders),
             rejected_child_count=sum(1 for item in child_orders if item.status == MiniQMTChildOrderStatus.REJECTED),
+            trade_event_count=sum(1 for item in events if item.event_type == MiniQMTExecutionEventType.TRADE_EVENT),
             active_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.ACTIVE),
             completed_algo_count=sum(
                 1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED
@@ -2196,16 +2363,18 @@ class MiniQMTExecutionRuntimeClient:
         runtime_id = runtime.config.runtime_id
         child_orders = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
         algo_instances = tuple(self.repository.list_algo_instances(runtime_id, active_only=False))
+        events = tuple(self.repository.list_events(runtime_id, include_archived=True))
         return MiniQMTRuntimeEvidence(
             runtime_id=runtime_id,
             runtime_owner=RUNTIME_OWNER,
             account_group_id=runtime.config.account_group_id,
             trade_date=runtime.config.trade_date,
-            event_count=len(self.repository.list_events(runtime_id)),
+            event_count=len(events),
             algo_instance_ids=tuple(item.algo_instance_id for item in algo_instances),
             child_order_ids=tuple(item.child_order_id for item in child_orders),
             submitted_child_count=_submitted_child_count(child_orders),
             rejected_child_count=sum(1 for item in child_orders if item.status == MiniQMTChildOrderStatus.REJECTED),
+            trade_event_count=sum(1 for item in events if item.event_type == MiniQMTExecutionEventType.TRADE_EVENT),
             active_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.ACTIVE),
             completed_algo_count=sum(
                 1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED
@@ -2300,7 +2469,12 @@ class _PreviewOnlyRuntimeGateway:
         return []
 
     def submit_child_order(self, order: MiniQMTChildOrder) -> MiniQMTGatewayOrderAck:  # noqa: ARG002
-        return MiniQMTGatewayOrderAck(False, None, "preview gateway cannot submit child orders")
+        return MiniQMTGatewayOrderAck(
+            False,
+            None,
+            "preview gateway cannot submit child orders",
+            {"gateway": "preview_only_runtime_gateway", "broker_called": False},
+        )
 
     def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:  # noqa: ARG002
         return MiniQMTGatewayCancelAck(False, order.broker_order_id, "preview gateway cannot cancel child orders")
@@ -2408,6 +2582,237 @@ def _event_loop_child_metadata(*, intent: OrderIntent, trade_date: date, source:
         "parent_intent_metadata": dict(intent.metadata or {}),
         "event_loop_submit": True,
     }
+
+
+def _event_loop_child_context_with_preflight(
+    *,
+    intent: OrderIntent,
+    child_context: dict[str, Any],
+    preflight: OrderPreflightResult,
+) -> dict[str, Any]:
+    context = dict(child_context or {})
+    parent_metadata = dict(context.get("parent_intent_metadata") or intent.metadata or {})
+    if intent.side == OrderSide.SELL and preflight.strategy_available_sell_quantity is not None:
+        raw_planned_available = parent_metadata.get("current_available_quantity")
+        if raw_planned_available is not None:
+            parent_metadata["planned_current_available_quantity"] = raw_planned_available
+        parent_metadata["current_available_quantity"] = int(preflight.strategy_available_sell_quantity)
+        parent_metadata["current_available_quantity_source"] = "qmt_strategy_ledger_preflight"
+    context["parent_intent_metadata"] = parent_metadata
+    return context
+
+
+def _event_loop_vnpy_volume_override(
+    *,
+    intent: OrderIntent,
+    preflight: OrderPreflightResult,
+) -> tuple[int | None, int | None]:
+    if intent.side != OrderSide.SELL:
+        return None, None
+    available_quantity = preflight.strategy_available_sell_quantity
+    if available_quantity is None or int(available_quantity) != int(intent.quantity):
+        return None, None
+    min_volume, volume_increment = _board_lot_for_runtime(intent.symbol)
+    quantity = int(intent.quantity)
+    if quantity >= min_volume and quantity % volume_increment == 0:
+        return None, None
+    # The complete effective position, including its odd-lot tail, must be sent
+    # as one child.  The runtime's final child validator independently checks
+    # the same authoritative available quantity before the gateway is called.
+    return 1, 1
+
+
+_EVENT_LOOP_SYMBOL_QUOTE_WAIT_REASONS = frozenset(
+    {
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_FETCH_FAILED",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_MISSING",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_PRICE_INVALID",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_MISSING",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_EMPTY",
+        "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_INVALID",
+    }
+)
+
+
+def _is_event_loop_symbol_quote_wait_error(error: BrokerSubmitError) -> bool:
+    reason_code = str((getattr(error, "context", None) or {}).get("reason_code") or "").strip()
+    return reason_code in _EVENT_LOOP_SYMBOL_QUOTE_WAIT_REASONS
+
+
+def _event_loop_quote_wait_payload(
+    *,
+    intent: OrderIntent,
+    error: BrokerSubmitError,
+    source: str,
+) -> dict[str, Any]:
+    context = _event_loop_json_value(
+        dict(getattr(error, "context", None) or {}),
+        field_path="error_context",
+    )
+    payload = {
+        "schema_version": "miniqmt_event_loop_quote_wait_v1",
+        "intent_id": intent.intent_id,
+        "symbol": intent.symbol,
+        "side": intent.side.value,
+        "reason_code": context.get("reason_code"),
+        "stage": "MINIQMT_EVENT_LOOP_QUOTE_WAIT",
+        "message": str(error),
+        "error_context": context,
+        "source": source,
+        "retryable": True,
+        "broker_called": False,
+        "quote_synthesized": False,
+    }
+    return {**payload, "wait_fingerprint": _short_hash(payload)}
+
+
+def _event_loop_tick_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    snapshot = _event_loop_json_value(dict(payload), field_path="quote")
+    if not isinstance(snapshot, dict):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop quote snapshot is not a JSON object",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+                "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+                "broker_called": False,
+            },
+        )
+    return snapshot
+
+
+def _event_loop_json_value(value: Any, *, field_path: str) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop quote evidence contains a non-finite number",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+                    "field_path": field_path,
+                    "value": str(value),
+                    "broker_called": False,
+                },
+            )
+        return value
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise BrokerSubmitError(
+                "MiniQMT event_loop quote evidence contains a non-finite decimal",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+                    "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+                    "field_path": field_path,
+                    "value": str(value),
+                    "broker_called": False,
+                },
+            )
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return _event_loop_json_value(value.value, field_path=field_path)
+    if isinstance(value, Mapping):
+        normalized: dict[str, Any] = {}
+        for key, item in sorted(value.items(), key=lambda row: str(row[0])):
+            if not isinstance(key, str) or not key.strip():
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop quote evidence contains an invalid object key",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+                        "field_path": field_path,
+                        "key": str(key),
+                        "broker_called": False,
+                    },
+                )
+            normalized[key] = _event_loop_json_value(item, field_path=f"{field_path}.{key}")
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [_event_loop_json_value(item, field_path=f"{field_path}[{index}]") for index, item in enumerate(value)]
+    raise BrokerSubmitError(
+        "MiniQMT event_loop quote evidence contains an unsupported value type",
+        context={
+            "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_INVALID",
+            "stage": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_CAPTURE",
+            "field_path": field_path,
+            "value_type": type(value).__name__,
+            "broker_called": False,
+        },
+    )
+
+
+def _event_loop_tick_payload_from_request(request: ManagedOrderRequest) -> dict[str, Any] | None:
+    metadata = dict(request.metadata or {})
+    quote_wait = metadata.get("event_loop_quote_wait")
+    if isinstance(quote_wait, dict):
+        return None
+    payload = metadata.get("event_loop_tick_payload")
+    declared_hash = str(metadata.get("event_loop_tick_payload_sha256") or "").strip()
+    if not isinstance(payload, dict) or not declared_hash:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop request lost its validated preflight quote snapshot",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_MISSING",
+                "stage": "MINIQMT_EVENT_LOOP_SUBMIT_QUOTE_READBACK",
+                "parent_intent_id": _parent_id_from_request(request),
+                "symbol": request.symbol,
+                "broker_called": False,
+            },
+        )
+    snapshot = _event_loop_tick_snapshot(payload)
+    computed_hash = _short_hash(snapshot)
+    if computed_hash != declared_hash:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop validated preflight quote snapshot hash conflicts with durable request",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_PREFLIGHT_QUOTE_SNAPSHOT_CONFLICT",
+                "stage": "MINIQMT_EVENT_LOOP_SUBMIT_QUOTE_READBACK",
+                "parent_intent_id": _parent_id_from_request(request),
+                "symbol": request.symbol,
+                "declared_sha256": declared_hash,
+                "computed_sha256": computed_hash,
+                "broker_called": False,
+            },
+        )
+    return snapshot
+
+
+def _persist_event_loop_quote_waiting(
+    *,
+    runtime: MiniQMTExecutionRuntime,
+    instance: MiniQMTExecutionAlgoInstance,
+    request: ManagedOrderRequest,
+    source: str,
+) -> None:
+    wait = request.metadata.get("event_loop_quote_wait")
+    if not isinstance(wait, dict):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop pending quote algo is missing its durable wait reason",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_QUOTE_WAIT_EVIDENCE_MISSING",
+                "stage": "MINIQMT_EVENT_LOOP_QUOTE_WAIT_PERSIST",
+                "runtime_id": runtime.config.runtime_id,
+                "parent_intent_id": instance.parent_intent_id,
+                "algo_instance_id": instance.algo_instance_id,
+                "broker_called": False,
+            },
+        )
+    runtime.events.append(
+        runtime_id=runtime.config.runtime_id,
+        event_type=MiniQMTExecutionEventType.TIMER,
+        source="quote_ingress",
+        payload={
+            **_json_safe(wait),
+            "runtime_id": runtime.config.runtime_id,
+            "parent_intent_id": instance.parent_intent_id,
+            "algo_instance_id": instance.algo_instance_id,
+            "qmt_batch_id": request.metadata.get("qmt_batch_id"),
+            "source": source,
+            "broker_called": False,
+        },
+    )
 
 
 def _managed_request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
@@ -2976,8 +3381,11 @@ def _required_event_loop_tick_payload(
         payload["bid_volume_1"] = bid_volume
     payload["price"] = price
     try:
-        if float(payload["price"]) <= 0:
-            raise ValueError("non-positive")
+        if isinstance(payload["price"], bool):
+            raise ValueError("boolean is not a quote price")
+        parsed_quote_price = float(payload["price"])
+        if parsed_quote_price <= 0 or not math.isfinite(parsed_quote_price):
+            raise ValueError("quote price is not positive and finite")
     except (TypeError, ValueError) as exc:
         raise BrokerSubmitError(
             "MiniQMT event_loop broker quote has invalid price",
@@ -3013,10 +3421,40 @@ def _required_event_loop_tick_payload(
             },
         )
     try:
-        if float(depth_price) <= 0:
+        if isinstance(depth_price, bool) or isinstance(depth_volume, bool):
+            raise ValueError("boolean is not valid L1 depth")
+        parsed_depth_price = float(depth_price)
+        if not math.isfinite(parsed_depth_price):
+            raise ValueError(f"{price_field} non-finite")
+        parsed_depth_volume_decimal = Decimal(str(depth_volume))
+        if (
+            not parsed_depth_volume_decimal.is_finite()
+            or parsed_depth_volume_decimal != parsed_depth_volume_decimal.to_integral_value()
+        ):
+            raise ValueError(f"{volume_field} is not a finite integer")
+        parsed_depth_volume = int(parsed_depth_volume_decimal)
+        if parsed_depth_volume == 0 and parsed_depth_price >= 0:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop broker quote has an empty opposite-side L1 book",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_EMPTY",
+                    "source": source,
+                    "intent_id": intent.intent_id,
+                    "symbol": intent.symbol,
+                    "side": intent.side.value,
+                    price_field: depth_price,
+                    volume_field: depth_volume,
+                    "quote_source": payload.get("quote_source"),
+                    "retryable": True,
+                    "broker_called": False,
+                },
+            )
+        if parsed_depth_price <= 0:
             raise ValueError(f"{price_field} non-positive")
-        if int(depth_volume) < 0:
+        if parsed_depth_volume < 0:
             raise ValueError(f"{volume_field} negative")
+    except BrokerSubmitError:
+        raise
     except (TypeError, ValueError) as exc:
         raise BrokerSubmitError(
             "MiniQMT event_loop broker quote has invalid L1 depth for runtime tick",
@@ -3026,12 +3464,27 @@ def _required_event_loop_tick_payload(
                 "intent_id": intent.intent_id,
                 "symbol": intent.symbol,
                 "side": intent.side.value,
-                price_field: depth_price,
-                volume_field: depth_volume,
+                price_field: _event_loop_quote_error_value(depth_price, field_path=price_field),
+                volume_field: _event_loop_quote_error_value(depth_volume, field_path=volume_field),
                 "quote_source": payload.get("quote_source"),
             },
         ) from exc
     return payload
+
+
+def _event_loop_quote_error_value(value: Any, *, field_path: str) -> Any:
+    try:
+        return _event_loop_json_value(value, field_path=f"quote_error.{field_path}")
+    except BrokerSubmitError as exc:
+        return {
+            "schema_version": "miniqmt_event_loop_invalid_quote_value_v1",
+            "reason_code": str(
+                (getattr(exc, "context", None) or {}).get("reason_code") or "MINIQMT_EVENT_LOOP_QUOTE_VALUE_INVALID"
+            ),
+            "field_path": field_path,
+            "value_type": type(value).__name__,
+            "value_repr": str(value)[:256],
+        }
 
 
 def _tick_payload_for_runtime(
@@ -3128,9 +3581,335 @@ def _request_by_parent(
 
 
 def _parent_id_from_request(request: ManagedOrderRequest) -> str:
-    return str(
-        request.metadata.get("runtime_parent_intent_id") or request.metadata.get("execution_plan_intent_id") or ""
-    ).strip()
+    metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+    for field_name in ("runtime_parent_intent_id", "execution_plan_intent_id"):
+        value = metadata.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _normalized_parent_identity(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _event_loop_duplicate_string_identities(values: list[Any]) -> list[str]:
+    normalized = [identity for value in values if (identity := _normalized_parent_identity(value)) is not None]
+    return sorted(identity for identity, count in Counter(normalized).items() if count > 1)
+
+
+def _event_loop_json_safe_diagnostic_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else {"python_type": "float", "repr": repr(value)}
+    if isinstance(value, (list, tuple)):
+        return [_event_loop_json_safe_diagnostic_value(item) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            key
+            if isinstance(key, str)
+            else f"<{type(key).__name__}:{_event_loop_json_safe_diagnostic_value(key)!r}>": (
+                _event_loop_json_safe_diagnostic_value(item)
+            )
+            for key, item in value.items()
+        }
+    return {"python_type": type(value).__name__, "repr": repr(value)}
+
+
+def _event_loop_durable_preflight_payload(preflight: OrderPreflightResult) -> dict[str, Any]:
+    primary_error = preflight.primary_error
+    return {
+        "allowed": preflight.allowed,
+        "primary_error": primary_error.to_dict() if primary_error is not None else None,
+        "primary_error_code": primary_error.code if primary_error is not None else None,
+        "errors": [error.to_dict() for error in preflight.errors],
+        "strategy_id": preflight.strategy_id,
+        "estimated_notional": float(preflight.estimated_notional),
+        "estimated_fee": float(preflight.estimated_fee),
+        "freeze_amount": float(preflight.freeze_amount),
+        "available_cash": float(preflight.available_cash) if preflight.available_cash is not None else None,
+        "strategy_available_sell_quantity": preflight.strategy_available_sell_quantity,
+        "pending_sell_quantity": preflight.pending_sell_quantity,
+        "broker_can_sell": preflight.broker_can_sell,
+    }
+
+
+def _event_loop_durable_result_payload(result: ManagedOrderSubmitResult) -> dict[str, Any]:
+    return {
+        "success": result.success,
+        "intent_id": result.intent_id,
+        "qmt_order_id": result.qmt_order_id,
+        "broker_message": result.broker_message,
+        "preflight": _event_loop_durable_preflight_payload(result.preflight),
+        "broker_called": result.broker_called,
+    }
+
+
+def _event_loop_request_identity_diagnostics(
+    requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
+) -> list[Any]:
+    diagnostics: list[Any] = []
+    for request in requests:
+        metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+        value = (
+            metadata.get("runtime_parent_intent_id")
+            if "runtime_parent_intent_id" in metadata
+            else metadata.get("execution_plan_intent_id")
+        )
+        diagnostics.append(_event_loop_json_safe_diagnostic_value(value))
+    return diagnostics
+
+
+def _canonical_event_loop_request_identities(
+    *,
+    requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
+    results: tuple[ManagedOrderSubmitResult, ...] | list[ManagedOrderSubmitResult],
+    batch_id: str,
+    stage: str,
+) -> list[str]:
+    request_identity_diagnostics = _event_loop_request_identity_diagnostics(requests)
+    result_identity_diagnostics = [_event_loop_json_safe_diagnostic_value(result.intent_id) for result in results]
+    request_identities: list[str] = []
+    for index, request in enumerate(requests):
+        metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+        aliases = {
+            field_name: metadata[field_name]
+            for field_name in ("runtime_parent_intent_id", "execution_plan_intent_id")
+            if field_name in metadata
+        }
+        normalized_aliases = {field_name: _normalized_parent_identity(value) for field_name, value in aliases.items()}
+        if not aliases or any(identity is None for identity in normalized_aliases.values()):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop request requires non-empty string parent identity aliases before persistence",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": stage,
+                    "qmt_batch_id": batch_id or None,
+                    "conflict_field": "request.metadata.parent_intent_id",
+                    "request_index": index,
+                    "request_identity_aliases": _event_loop_json_safe_diagnostic_value(aliases),
+                    "request_identities": request_identity_diagnostics,
+                    "result_identities": result_identity_diagnostics,
+                    "duplicate_request_identities": _event_loop_duplicate_string_identities(
+                        request_identity_diagnostics
+                    ),
+                    "duplicate_result_identities": _event_loop_duplicate_string_identities(
+                        [result.intent_id for result in results]
+                    ),
+                    "missing_result_identities": [],
+                    "extra_result_identities": [],
+                },
+            )
+        distinct_aliases = set(normalized_aliases.values())
+        if len(distinct_aliases) != 1:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop request parent identity aliases conflict before persistence",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": stage,
+                    "qmt_batch_id": batch_id or None,
+                    "conflict_field": "request.metadata.parent_intent_id",
+                    "request_index": index,
+                    "request_identity_aliases": _event_loop_json_safe_diagnostic_value(aliases),
+                    "request_identities": request_identity_diagnostics,
+                    "result_identities": result_identity_diagnostics,
+                    "duplicate_request_identities": _event_loop_duplicate_string_identities(
+                        request_identity_diagnostics
+                    ),
+                    "duplicate_result_identities": _event_loop_duplicate_string_identities(
+                        [result.intent_id for result in results]
+                    ),
+                    "missing_result_identities": [],
+                    "extra_result_identities": [],
+                },
+            )
+        request_identities.append(next(iter(distinct_aliases)))
+    return request_identities
+
+
+def _event_loop_result_objects_by_parent(
+    results: tuple[ManagedOrderSubmitResult, ...] | list[ManagedOrderSubmitResult],
+    *,
+    batch_id: str,
+    stage: str,
+    request_identities: list[str] | None = None,
+) -> dict[str, ManagedOrderSubmitResult]:
+    result_by_parent: dict[str, ManagedOrderSubmitResult] = {}
+    raw_result_identities = [result.intent_id for result in results]
+    result_identity_diagnostics = [
+        _event_loop_json_safe_diagnostic_value(identity) for identity in raw_result_identities
+    ]
+    duplicate_result_identities = _event_loop_duplicate_string_identities(raw_result_identities)
+    for result in results:
+        parent_id = _normalized_parent_identity(result.intent_id)
+        if parent_id is None:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop result requires an exact non-empty string parent intent identity",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": stage,
+                    "qmt_batch_id": batch_id or None,
+                    "conflict_field": "result.intent_id",
+                    "request_identities": list(request_identities or []),
+                    "result_identities": result_identity_diagnostics,
+                    "duplicate_request_identities": _event_loop_duplicate_string_identities(
+                        list(request_identities or [])
+                    ),
+                    "duplicate_result_identities": duplicate_result_identities,
+                    "missing_result_identities": [],
+                    "extra_result_identities": [],
+                    "actual_identity": _event_loop_json_safe_diagnostic_value(result.intent_id),
+                },
+            )
+        if parent_id in result_by_parent:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop result parent intent identity is duplicated",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                    "stage": stage,
+                    "qmt_batch_id": batch_id or None,
+                    "conflict_field": "result.intent_id",
+                    "request_identities": list(request_identities or []),
+                    "result_identities": result_identity_diagnostics,
+                    "duplicate_request_identities": _event_loop_duplicate_string_identities(
+                        list(request_identities or [])
+                    ),
+                    "duplicate_result_identities": duplicate_result_identities,
+                    "missing_result_identities": [],
+                    "extra_result_identities": [],
+                    "actual_identity": parent_id,
+                },
+            )
+        result_by_parent[parent_id] = result
+    return result_by_parent
+
+
+def _canonical_event_loop_result_objects(
+    *,
+    requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
+    results: tuple[ManagedOrderSubmitResult, ...] | list[ManagedOrderSubmitResult],
+    batch_id: str,
+    stage: str,
+) -> tuple[ManagedOrderSubmitResult, ...]:
+    request_identities = _canonical_event_loop_request_identities(
+        requests=requests,
+        results=results,
+        batch_id=batch_id,
+        stage=stage,
+    )
+    duplicate_request_identities = sorted(
+        identity for identity, count in Counter(request_identities).items() if identity and count > 1
+    )
+    result_by_parent = _event_loop_result_objects_by_parent(
+        results,
+        batch_id=batch_id,
+        stage=stage,
+        request_identities=request_identities,
+    )
+    result_identities = list(result_by_parent)
+    invalid_carriers = [
+        {
+            "parent_intent_id": parent_id,
+            "success": result.success,
+            "broker_called": result.broker_called,
+            "qmt_order_id": result.qmt_order_id,
+        }
+        for parent_id, result in result_by_parent.items()
+        if not isinstance(result.success, bool)
+        or not isinstance(result.broker_called, bool)
+        or not isinstance(result.broker_message, str)
+        or (
+            result.qmt_order_id is not None
+            and (not isinstance(result.qmt_order_id, str) or not result.qmt_order_id.strip())
+        )
+        or (
+            result.success
+            and (
+                result.broker_called is not True
+                or not isinstance(result.qmt_order_id, str)
+                or not result.qmt_order_id.strip()
+            )
+        )
+        or (result.success is False and result.qmt_order_id is not None)
+    ]
+    missing = sorted(set(request_identities) - set(result_identities))
+    extra = sorted(set(result_identities) - set(request_identities))
+    identity_set_conflict = (
+        not all(request_identities) or duplicate_request_identities or len(results) != len(requests) or missing or extra
+    )
+    if identity_set_conflict or invalid_carriers:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop request/result identity or carrier contract does not close",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                "stage": stage,
+                "qmt_batch_id": batch_id or None,
+                "conflict_field": ("request/result parent identity set" if identity_set_conflict else "result carrier"),
+                "request_identities": request_identities,
+                "result_identities": result_identities,
+                "request_count": len(requests),
+                "result_count": len(results),
+                "duplicate_request_identities": duplicate_request_identities,
+                "duplicate_result_identities": [],
+                "missing_result_identities": missing,
+                "extra_result_identities": extra,
+                "invalid_result_carriers": invalid_carriers,
+            },
+        )
+    return tuple(result_by_parent[parent_id] for parent_id in request_identities)
+
+
+def _event_loop_request_result_pairs(
+    *,
+    requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
+    results: tuple[ManagedOrderSubmitResult, ...] | list[ManagedOrderSubmitResult],
+    stage: str,
+) -> tuple[tuple[ManagedOrderRequest, ManagedOrderSubmitResult], ...]:
+    batch_id = str(requests[0].metadata.get("qmt_batch_id") or "") if requests else ""
+    canonical_results = _canonical_event_loop_result_objects(
+        requests=requests,
+        results=results,
+        batch_id=batch_id,
+        stage=stage,
+    )
+    result_by_parent = _event_loop_result_objects_by_parent(canonical_results, batch_id=batch_id, stage=stage)
+    return tuple((request, result_by_parent[_parent_id_from_request(request)]) for request in requests)
+
+
+def _merge_event_loop_parent_submit_result(
+    *,
+    existing: ManagedOrderSubmitResult,
+    incoming: ManagedOrderSubmitResult,
+    parent_intent_id: str,
+    batch_id: str,
+) -> ManagedOrderSubmitResult:
+    raw_identities = [existing.intent_id, incoming.intent_id]
+    identities = [_normalized_parent_identity(identity) for identity in raw_identities]
+    if any(identity is None for identity in identities) or set(identities) != {parent_intent_id}:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop child results cannot be merged across parent identities",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+                "qmt_batch_id": batch_id,
+                "conflict_field": "child result parent identity",
+                "expected_identity": parent_intent_id,
+                "request_identities": [parent_intent_id],
+                "result_identities": [_event_loop_json_safe_diagnostic_value(identity) for identity in raw_identities],
+                "duplicate_request_identities": [],
+                "duplicate_result_identities": _event_loop_duplicate_string_identities(raw_identities),
+                "missing_result_identities": [],
+                "extra_result_identities": [],
+            },
+        )
+    if existing.success:
+        return existing
+    if incoming.success:
+        return incoming
+    if existing.broker_called:
+        return existing
+    return incoming
 
 
 def _event_loop_requests_from_batch(batch: OrderBatchRecord) -> list[ManagedOrderRequest]:
@@ -3307,7 +4086,7 @@ def _validate_event_loop_durable_request_row(
     parent_aliases = {
         key: raw_metadata[key]
         for key in ("runtime_parent_intent_id", "execution_plan_intent_id")
-        if key in raw_metadata and raw_metadata[key] is not None
+        if key in raw_metadata
     }
     if not parent_aliases or any(not isinstance(value, str) or not value.strip() for value in parent_aliases.values()):
         raise _event_loop_durable_batch_error(
@@ -3359,8 +4138,9 @@ def _event_loop_results_from_batch(
             value=len(raw_results),
             expected=len(requests),
         )
-    parsed: list[ManagedOrderSubmitResult] = []
-    for index, (request, raw_result) in enumerate(zip(requests, raw_results, strict=True)):
+    raw_results_by_parent: dict[str, tuple[int, dict[str, Any]]] = {}
+    duplicate_result_identities: list[str] = []
+    for index, raw_result in enumerate(raw_results):
         if not isinstance(raw_result, dict):
             raise _event_loop_durable_batch_error(
                 batch=batch,
@@ -3369,14 +4149,95 @@ def _event_loop_results_from_batch(
                 field_path=f"result_json.results[{index}]",
                 value=raw_result,
             )
+        parent_id = _event_loop_durable_result_parent_id(batch=batch, raw_result=raw_result, index=index)
+        if parent_id in raw_results_by_parent:
+            duplicate_result_identities.append(parent_id)
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                message="MiniQMT event_loop durable result parent identity is duplicated",
+                field_path=f"result_json.results[{index}].intent_id",
+                value=parent_id,
+                duplicate_result_identities=duplicate_result_identities,
+            )
+        raw_results_by_parent[parent_id] = (index, raw_result)
+
+    request_identities = [_parent_id_from_request(request) for request in requests]
+    result_identities = list(raw_results_by_parent)
+    missing_result_identities = sorted(set(request_identities) - set(result_identities))
+    extra_result_identities = sorted(set(result_identities) - set(request_identities))
+    if missing_result_identities or extra_result_identities:
+        conflict_identity = extra_result_identities[0] if extra_result_identities else None
+        conflict_index = raw_results_by_parent[conflict_identity][0] if conflict_identity is not None else None
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop durable request/result parent identity sets conflict",
+            field_path=(
+                f"result_json.results[{conflict_index}].intent_id"
+                if conflict_index is not None
+                else "result_json.results"
+            ),
+            value=conflict_identity,
+            expected=missing_result_identities[0] if missing_result_identities else None,
+            missing_result_identities=missing_result_identities,
+            extra_result_identities=extra_result_identities,
+        )
+
+    parsed: list[ManagedOrderSubmitResult] = []
+    for request in requests:
+        expected_parent_id = _parent_id_from_request(request)
+        index, raw_result = raw_results_by_parent[expected_parent_id]
         _validate_event_loop_durable_result_row(
             batch=batch,
             request=request,
             raw_result=raw_result,
             index=index,
+            result_parent_id=expected_parent_id,
         )
         parsed.append(_result_from_dict(raw_result))
     return tuple(parsed)
+
+
+def _event_loop_durable_result_parent_id(
+    *,
+    batch: OrderBatchRecord,
+    raw_result: dict[str, Any],
+    index: int,
+) -> str:
+    prefix = f"result_json.results[{index}]"
+    aliases = {
+        field_name: raw_result[field_name]
+        for field_name in ("intent_id", "parent_intent_id", "runtime_parent_intent_id")
+        if field_name in raw_result
+    }
+    if "intent_id" not in aliases:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop durable result requires a unique non-empty parent identity",
+            field_path=f"{prefix}.intent_id",
+            value=None,
+        )
+    for field_name, value in aliases.items():
+        if not isinstance(value, str) or not value.strip():
+            raise _event_loop_durable_batch_error(
+                batch=batch,
+                reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+                message="MiniQMT event_loop durable result requires exact non-empty string identity aliases",
+                field_path=f"{prefix}.{field_name}",
+                value=value,
+            )
+    normalized = {value.strip() for value in aliases.values()}
+    if len(normalized) != 1:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop durable result parent identity aliases conflict",
+            field_path=prefix,
+            value=aliases,
+        )
+    return next(iter(normalized))
 
 
 def _validate_event_loop_durable_result_row(
@@ -3385,6 +4246,7 @@ def _validate_event_loop_durable_result_row(
     request: ManagedOrderRequest,
     raw_result: dict[str, Any],
     index: int,
+    result_parent_id: str,
 ) -> None:
     prefix = f"result_json.results[{index}]"
     for field_name in ("success", "broker_called"):
@@ -3396,7 +4258,7 @@ def _validate_event_loop_durable_result_row(
                 field_path=f"{prefix}.{field_name}",
                 value=raw_result.get(field_name),
             )
-    for field_name in ("intent_id", "qmt_order_id"):
+    for field_name in ("qmt_order_id",):
         value = raw_result.get(field_name)
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise _event_loop_durable_batch_error(
@@ -3407,8 +4269,8 @@ def _validate_event_loop_durable_result_row(
                 value=value,
             )
     expected_parent_id = _parent_id_from_request(request)
-    intent_id = raw_result.get("intent_id")
-    if intent_id is not None and intent_id != expected_parent_id:
+    intent_id = result_parent_id
+    if intent_id != expected_parent_id:
         raise _event_loop_durable_batch_error(
             batch=batch,
             reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
@@ -3438,6 +4300,14 @@ def _validate_event_loop_durable_result_row(
             batch=batch,
             reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
             message="MiniQMT event_loop no-broker durable result cannot carry qmt_order_id",
+            field_path=f"{prefix}.qmt_order_id",
+            value=raw_result.get("qmt_order_id"),
+        )
+    if raw_result["success"] is False and raw_result.get("qmt_order_id") is not None:
+        raise _event_loop_durable_batch_error(
+            batch=batch,
+            reason_code="MINIQMT_EVENT_LOOP_DURABLE_BATCH_IDENTITY_CONFLICT",
+            message="MiniQMT event_loop rejected durable result cannot carry an accepted qmt_order_id",
             field_path=f"{prefix}.qmt_order_id",
             value=raw_result.get("qmt_order_id"),
         )
@@ -3542,19 +4412,102 @@ def _event_loop_durable_batch_error(
     field_path: str,
     value: Any,
     expected: Any | None = None,
+    duplicate_result_identities: list[str] | None = None,
+    missing_result_identities: list[str] | None = None,
+    extra_result_identities: list[str] | None = None,
 ) -> BrokerSubmitError:
+    identity_context = _event_loop_durable_identity_context(batch)
+    if duplicate_result_identities is not None:
+        identity_context["duplicate_result_identities"] = duplicate_result_identities
+    if missing_result_identities is not None:
+        identity_context["missing_result_identities"] = missing_result_identities
+    if extra_result_identities is not None:
+        identity_context["extra_result_identities"] = extra_result_identities
     context = {
         "reason_code": reason_code,
         "stage": "MINIQMT_EVENT_LOOP_DURABLE_BATCH_REPLAY",
         "qmt_batch_id": batch.batch_id,
         "field_path": field_path,
+        "conflict_field": field_path,
         "value_type": type(value).__name__,
+        **identity_context,
     }
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        context["value"] = value
+    context["value"] = _event_loop_json_safe_diagnostic_value(value)
     if expected is not None:
-        context["expected"] = expected
+        context["expected"] = _event_loop_json_safe_diagnostic_value(expected)
+        if isinstance(expected, str):
+            context["expected_identity"] = expected
+    if "identity" in field_path or field_path.endswith(".intent_id"):
+        context["actual_identity"] = _event_loop_json_safe_diagnostic_value(value)
     return BrokerSubmitError(message, context=context)
+
+
+def _event_loop_durable_identity_context(batch: OrderBatchRecord) -> dict[str, Any]:
+    raw_orders = batch.request_json.get("orders") if isinstance(batch.request_json, dict) else None
+    raw_results = batch.result_json.get("results") if isinstance(batch.result_json, dict) else None
+    request_identities: list[Any] = []
+    binding_id: str | None = None
+    run_id: str | None = None
+    if isinstance(raw_orders, list):
+        for raw_order in raw_orders:
+            metadata = raw_order.get("metadata") if isinstance(raw_order, dict) else None
+            metadata = metadata if isinstance(metadata, dict) else {}
+            identity = (
+                metadata.get("runtime_parent_intent_id")
+                if "runtime_parent_intent_id" in metadata
+                else metadata.get("execution_plan_intent_id")
+            )
+            request_identities.append(_event_loop_json_safe_diagnostic_value(identity))
+            binding_id = binding_id or _first_non_empty_string(
+                metadata.get("binding_id"),
+                metadata.get("simulation_binding_id"),
+                metadata.get("release_binding_id"),
+            )
+            run_id = run_id or _first_non_empty_string(metadata.get("run_id"), metadata.get("simulation_run_id"))
+    result_identities: list[Any] = (
+        [
+            _event_loop_json_safe_diagnostic_value(
+                raw_result.get("intent_id") if isinstance(raw_result, dict) else None
+            )
+            for raw_result in raw_results or []
+        ]
+        if isinstance(raw_results, list)
+        else []
+    )
+    duplicate_request_identities = _event_loop_duplicate_string_identities(request_identities)
+    duplicate_result_identities = _event_loop_duplicate_string_identities(result_identities)
+    request_set = {
+        identity for value in request_identities if (identity := _normalized_parent_identity(value)) is not None
+    }
+    result_set = {
+        identity for value in result_identities if (identity := _normalized_parent_identity(value)) is not None
+    }
+    runtime_evidence = None
+    if isinstance(batch.result_json, dict) and isinstance(batch.result_json.get("runtime_evidence"), dict):
+        runtime_evidence = batch.result_json["runtime_evidence"]
+    elif isinstance(batch.metadata, dict) and isinstance(batch.metadata.get("runtime_evidence"), dict):
+        runtime_evidence = batch.metadata["runtime_evidence"]
+    runtime_id = _first_non_empty_string((runtime_evidence or {}).get("runtime_id"))
+    return {
+        "request_identities": request_identities,
+        "result_identities": result_identities,
+        "request_count": len(raw_orders) if isinstance(raw_orders, list) else None,
+        "result_count": len(raw_results) if isinstance(raw_results, list) else None,
+        "duplicate_request_identities": duplicate_request_identities,
+        "duplicate_result_identities": duplicate_result_identities,
+        "missing_result_identities": sorted(request_set - result_set),
+        "extra_result_identities": sorted(result_set - request_set),
+        "runtime_id": runtime_id,
+        "binding_id": binding_id,
+        "run_id": run_id,
+    }
+
+
+def _first_non_empty_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _logical_batch_id_for_event_loop_batch(batch: OrderBatchRecord) -> str | None:
@@ -3662,10 +4615,7 @@ def _event_loop_owned_parent_intent_mismatches(
         "preflight_status": IntentPreflightStatus.PASSED,
         "submit_status": IntentSubmitStatus.SUBMITTED,
     }
-    actual = {
-        key: getattr(intent, key, None)
-        for key in expected
-    }
+    actual = {key: getattr(intent, key, None) for key in expected}
     mismatches = {
         key: {"expected": _diagnostic_value(value), "actual": _diagnostic_value(actual[key])}
         for key, value in expected.items()
@@ -3734,7 +4684,6 @@ def _event_loop_owned_retry_request_mismatches(
             "event_loop_submit",
             "runtime_owner",
             "source",
-            "runtime_child_order_id",
             "runtime_algo_instance_id",
             "execution_policy_id",
             "execution_policy_sha256",
@@ -3896,6 +4845,11 @@ def _event_loop_batch_status(
     requests: tuple[ManagedOrderRequest, ...] | list[ManagedOrderRequest],
     results: tuple[ManagedOrderSubmitResult, ...],
 ) -> OrderBatchStatus:
+    pairs = _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_BATCH_STATUS",
+    )
     succeeded = sum(1 for result in results if result.success)
     pending = sum(1 for result in results if _is_event_loop_pending_result(result))
     failed = len(results) - succeeded - pending
@@ -3907,10 +4861,7 @@ def _event_loop_batch_status(
         return OrderBatchStatus.PARTIAL
     if any(result.broker_called for result in results):
         return OrderBatchStatus.FAILED
-    if results and any(
-        _is_non_compensating_batch_residual(request, result.preflight)
-        for request, result in zip(list(requests), results, strict=False)
-    ):
+    if results and any(_is_non_compensating_batch_residual(request, result.preflight) for request, result in pairs):
         return OrderBatchStatus.FAILED
     return OrderBatchStatus.PREFLIGHT_FAILED
 
@@ -3935,9 +4886,14 @@ def _event_loop_preflight_passed(
     requests: tuple[ManagedOrderRequest, ...],
     results: tuple[ManagedOrderSubmitResult, ...],
 ) -> bool:
+    pairs = _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_PREFLIGHT_STATUS",
+    )
     residual_failed = sum(
         1
-        for request, result in zip(requests, results, strict=False)
+        for request, result in pairs
         if not result.success
         and not _is_event_loop_pending_result(result)
         and _is_non_compensating_batch_residual(request, result.preflight)
@@ -3955,9 +4911,14 @@ def _event_loop_compensation_required(
         return False
     failed = sum(1 for result in results if not result.success)
     pending = sum(1 for result in results if _is_event_loop_pending_result(result))
+    pairs = _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_COMPENSATION_STATUS",
+    )
     residual_failed = sum(
         1
-        for request, result in zip(list(requests), results, strict=False)
+        for request, result in pairs
         if not result.success
         and not _is_event_loop_pending_result(result)
         and _is_non_compensating_batch_residual(request, result.preflight)
@@ -4045,7 +5006,11 @@ def _persist_event_loop_tca_batch_observations(
         )
         return
 
-    for request, result in zip(requests, results, strict=False):
+    for request, result in _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_TCA_CAPTURE",
+    ):
         parent_id = _parent_id_from_request(request)
         if not parent_id:
             LOGGER.error(
@@ -4176,14 +5141,19 @@ def _event_loop_batch_metadata(
     runtime_evidence: MiniQMTRuntimeEvidence,
     source: str,
 ) -> dict[str, Any]:
+    pairs = _event_loop_request_result_pairs(
+        requests=requests,
+        results=results,
+        stage="MINIQMT_EVENT_LOOP_BATCH_METADATA",
+    )
     dependent_buy_count = sum(
         1
-        for request, result in zip(requests, results, strict=False)
+        for request, result in pairs
         if not result.success and _is_dependent_buy_proceeds_deferred(request, result.preflight)
     )
     capacity_residual_count = sum(
         1
-        for request, result in zip(requests, results, strict=False)
+        for request, result in pairs
         if not result.success and _is_capacity_residual_skipped(request, result.preflight)
     )
     status = _event_loop_batch_status(requests, results)
@@ -4200,7 +5170,9 @@ def _event_loop_batch_metadata(
         "capacity_residual_count": capacity_residual_count,
         "event_loop_pending": pending_count > 0,
         "event_loop_pending_count": pending_count,
-        "triggered_child_order_count": sum(1 for result in results if result.success),
+        "triggered_child_order_count": runtime_evidence.submitted_child_count,
+        "triggered_parent_intent_count": sum(1 for result in results if result.success),
+        "rejected_child_order_count": runtime_evidence.rejected_child_count,
         "compensation_required": _event_loop_compensation_required(status, requests, results),
         "compensation_actions": [],
         "broker_called": any(result.broker_called for result in results),
@@ -4371,6 +5343,7 @@ def _event_loop_upsert_order_intent(
     accepted: bool,
     source: str,
 ) -> Any | None:
+    broker_called = _event_loop_child_broker_called(child)
     getter = getattr(repository, "get_order_intent", None)
     creator = getattr(repository, "create_order_intent", None)
     setter = getattr(repository, "set_order_intent_submit_status", None)
@@ -4387,7 +5360,7 @@ def _event_loop_upsert_order_intent(
     existing = None
     try:
         existing = getter(child.parent_intent_id)
-    except Exception:  # noqa: BLE001 - repository miss types differ across test/prod implementations.
+    except DataUnavailableError:
         existing = None
     status = IntentSubmitStatus.ACCEPTED if accepted else IntentSubmitStatus.REJECTED
     if existing is not None:
@@ -4401,16 +5374,40 @@ def _event_loop_upsert_order_intent(
                     "parent_intent_id": child.parent_intent_id,
                     "existing_batch_id": getattr(existing, "batch_id", None),
                     "expected_batch_id": expected_batch_id,
-                    "broker_called": True,
+                    "broker_called": broker_called,
                     "qmt_order_id": child.broker_order_id,
                 },
             )
         if callable(setter):
+            existing_broker_called = existing.metadata.get("broker_called")
+            if existing_broker_called is not None and not isinstance(existing_broker_called, bool):
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop order intent has invalid broker_called history",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_BROKER_CALLED_FACT_INVALID",
+                        "stage": "MINIQMT_EVENT_LOOP_ORDER_INTENT_PERSIST",
+                        "parent_intent_id": child.parent_intent_id,
+                        "value_type": type(existing_broker_called).__name__,
+                    },
+                )
+            projected_broker_called = bool(existing_broker_called is True or broker_called)
+            effective_status = (
+                IntentSubmitStatus.ACCEPTED
+                if existing.submit_status == IntentSubmitStatus.ACCEPTED and status == IntentSubmitStatus.REJECTED
+                else status
+            )
             return setter(
                 child.parent_intent_id,
-                status,
+                effective_status,
                 submitted_at=child.submitted_at or datetime.now(UTC),
                 updated_at=datetime.now(UTC),
+                metadata_patch={
+                    "broker_called": projected_broker_called,
+                    "broker_call_pending": False,
+                    "qmt_order_id": child.broker_order_id or existing.metadata.get("qmt_order_id"),
+                    "runtime_child_order_id": child.child_order_id,
+                    "runtime_algo_instance_id": child.algo_instance_id,
+                },
             )
         return existing
     return creator(
@@ -4442,7 +5439,8 @@ def _event_loop_upsert_order_intent(
                 "runtime_algo_instance_id": child.algo_instance_id,
                 "runtime_parent_intent_id": child.parent_intent_id,
                 "event_loop_submit": True,
-                "broker_called": True,
+                "broker_called": broker_called,
+                "broker_call_pending": False,
                 "qmt_order_id": child.broker_order_id,
             },
             submitted_at=child.submitted_at or datetime.now(UTC),
@@ -4458,6 +5456,7 @@ def _event_loop_child_submit_result(
     repository: Any,
     source: str,
 ) -> ManagedOrderSubmitResult:
+    broker_called = _event_loop_child_broker_called(child)
     accepted = child.status != MiniQMTChildOrderStatus.REJECTED and bool(child.broker_order_id)
     if not accepted:
         error = OrderPreflightError(
@@ -4486,8 +5485,35 @@ def _event_loop_child_submit_result(
         qmt_order_id=child.broker_order_id,
         broker_message=str(child.metadata.get("gateway_message") or ("accepted" if accepted else "rejected")),
         preflight=preflight,
-        broker_called=True,
+        broker_called=broker_called,
     )
+
+
+def _event_loop_child_broker_called(child: MiniQMTChildOrder) -> bool:
+    gateway_ack = child.metadata.get("gateway_ack")
+    if not isinstance(gateway_ack, dict):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop child is missing gateway acknowledgement facts",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_GATEWAY_ACK_MISSING",
+                "stage": "MINIQMT_EVENT_LOOP_RESULT_PROJECT",
+                "runtime_id": child.runtime_id,
+                "child_order_id": child.child_order_id,
+            },
+        )
+    broker_called = gateway_ack.get("broker_called")
+    if not isinstance(broker_called, bool):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop gateway acknowledgement is missing exact broker_called truth",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_BROKER_CALLED_FACT_INVALID",
+                "stage": "MINIQMT_EVENT_LOOP_RESULT_PROJECT",
+                "runtime_id": child.runtime_id,
+                "child_order_id": child.child_order_id,
+                "value_type": type(broker_called).__name__,
+            },
+        )
+    return broker_called
 
 
 def _timer_iterations(algo_code: str, config: dict[str, Any]) -> int:

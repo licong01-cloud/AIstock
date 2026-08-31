@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
 import shlex
 from datetime import datetime
@@ -23,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from ...db.pg_pool import get_conn
 from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
+from ..trading_core.execution_algo_retirement import require_execution_algo_active
 from ..strategy_package.workspace_policy import (
     ensure_aistock_artifact_path,
     ensure_not_forbidden_worker_workspace_path,
@@ -33,13 +35,31 @@ from .qe_dataset_contract import (
     QE_DATASET_CONTRACT_ID,
     QE_DATASET_SIGNAL_END_DATE,
     QE_DATASET_START_DATE,
+    QE_FROZEN_BIN_SNAPSHOT_ID,
+    QE_FROZEN_BIN_UNIVERSE_KEY,
+    QE_FROZEN_CALENDAR_SHA256,
+    QE_FROZEN_INSTRUMENTS_SHA256,
+    QE_FROZEN_META_EXPORT_SHA256,
+    QE_FROZEN_SUSPEND_DATASET_ID,
+    QE_FROZEN_SUSPEND_MANIFEST_SHA256,
+    QE_FROZEN_SUSPEND_PARQUET_SHA256,
+    QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
+    QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256,
+    QE_FORMAL_DATASET_REQUEST_PARAM,
     QE_ST_PIT_UNIVERSE_KEY,
+    QEFormalDatasetBinding,
+    QEFormalDatasetRequest,
     require_qe_dataset_window,
+    require_qe_formal_dataset_binding_projection,
+    require_qe_formal_dataset_request,
+    require_qe_formal_dataset_window,
 )
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
+
+QE_FORMAL_DATASET_BINDING_FILE = "qe_canonical_pit_dataset_binding.json"
 
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -57,6 +77,13 @@ _REMOVED_GATS_RESOURCE_OPTIONS = {
 }
 _CUDA_EXPANDABLE_SEGMENTS_ENV = "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 _CPU_ONLY_QE_NODE_IDS = {"rdagent-node1"}
+_LOCAL_WSL_QE_NODE_IDS = {"wsl2-5080"}
+_LOCAL_WSL_THREAD_ENV = (
+    "export OMP_NUM_THREADS=4",
+    "export MKL_NUM_THREADS=4",
+    "export OPENBLAS_NUM_THREADS=4",
+    "export NUMEXPR_NUM_THREADS=4",
+)
 _GENERAL_PTNN_LTR_HP_KEYS = {
     "ltr_loss_mode",
     "topk_train_k",
@@ -81,6 +108,22 @@ def _bool_param(value: Any) -> bool:
     return bool(value)
 
 
+def _formal_dataset_binding(
+    custom_params: Optional[Dict[str, Any]],
+) -> QEFormalDatasetBinding | None:
+    request = _formal_dataset_request(custom_params)
+    return request.binding() if request is not None else None
+
+
+def _formal_dataset_request(
+    custom_params: Optional[Dict[str, Any]],
+) -> QEFormalDatasetRequest | None:
+    raw = (custom_params or {}).get(QE_FORMAL_DATASET_REQUEST_PARAM)
+    if raw is None:
+        return None
+    return require_qe_formal_dataset_request(raw)
+
+
 def _requires_qe_custom_loaders(
     *,
     has_custom_factors: bool,
@@ -95,6 +138,37 @@ def _requires_qe_custom_loaders(
 def _is_gpu_qe_node(node_id: Optional[str]) -> bool:
     normalized = str(node_id or "").strip().lower()
     return normalized not in _CPU_ONLY_QE_NODE_IDS
+
+
+def _is_local_wsl_qe_node(node_id: Optional[str]) -> bool:
+    """Treat the legacy/unspecified composer target as the local WSL node."""
+
+    normalized = str(node_id or "").strip().lower()
+    return not normalized or normalized in _LOCAL_WSL_QE_NODE_IDS
+
+
+def _quote_qe_shell_path(value: Any, *, field_name: str) -> str:
+    """Quote one Linux path and reject control characters before shell use."""
+
+    text = str(value or "")
+    if not text or any(char in text for char in ("\x00", "\r", "\n")):
+        raise ValueError(
+            "reason_code=qe_shell_path_invalid: "
+            f"{field_name} must be a non-empty single-line path"
+        )
+    return shlex.quote(text)
+
+
+def _qe_subprocess_credential_scrub_command() -> str:
+    """Load the shared scrub helper after ConfigComposer initialization.
+
+    ``multi_alpha.__init__`` imports ConfigComposer for compatibility exports,
+    so a module-level reverse import would create an initialization cycle.
+    """
+
+    from ..multi_alpha.qe_subprocess_env import qe_subprocess_credential_scrub_command
+
+    return qe_subprocess_credential_scrub_command()
 
 
 def _coerce_optional_json_object(value: Any, *, field_name: str, reason_code: str) -> Optional[Dict[str, Any]]:
@@ -422,24 +496,41 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
     "TWAP",
     "CLOSE_PRICE",
     "V24_PLAN",
-    "V25_TWO_STAGE",
-    "V25_1_SMALL_CAP",
 }
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
 RISK_POLICY_FILE = "qe_event_risk_policy.json"
+FROZEN_BUILD_SPEC_FILE = "qe_frozen_build_spec.json"
+SECTOR_RISK_OVERLAY_MANIFEST_FILE = "qe_sector_risk_overlay_manifest.json"
+SECTOR_RISK_OVERLAY_DATA_FILE = "qe_sector_risk_overlay.parquet"
+SECTOR_RISK_OVERLAY_ACTION_LOG = "qe_sector_risk_overlay_actions.jsonl"
+
+QE_STRATEGY_RUNTIME_HELPER_FILES = (
+    "qe_board_lot_exchange.py",
+    "qe_suspend_filter.py",
+    "qe_event_risk_policy.py",
+    "qe_build_frozen_risk_policy.py",
+    "qe_build_frozen_suspend_filter.py",
+    "qe_suspend_filter_strategy.py",
+    "qe_suspend_filter_score_weighted_strategy.py",
+    "score_weighted_strategy_v2.py",
+    "score_weighted_strategy_v2_capacity_v1.py",
+    "qe_sector_risk_overlay.py",
+    "qe_sector_risk_overlay_strategy.py",
+    "qe_sector_risk_overlay_artifacts.py",
+)
+
+QE_MINUTE_RUNTIME_HELPER_FILES = (
+    "close_execution_strategy.py",
+    *QE_STRATEGY_RUNTIME_HELPER_FILES,
+)
 PRECOMPUTED_HMM_COEFF_JSON_PARAM = "_precomputed_hmm_coefficients_json"
 QE_LOCAL_STRATEGY_ROOTS = [
     AISTOCK_PROJECT_ROOT / "backend" / "rebalance_strategies",
     AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_strategies",
     AISTOCK_PROJECT_ROOT / "scripts",
 ]
-AUTHORITATIVE_QE_HELPER_ASSETS = {
-    # V25 is a strategy/model asset. Keep the authority in the AIstock repo
-    # instead of probing an RDAgent/WSL workspace from Windows.
-    "tail_twap_v25_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_strategy.py",
-    "tail_twap_v25_1_strategy.py": AISTOCK_PROJECT_ROOT / "scripts" / "tail_twap_v25_1_strategy.py",
-}
+AUTHORITATIVE_QE_HELPER_ASSETS: dict[str, Path] = {}
 
 
 class ConfigComposer:
@@ -634,7 +725,7 @@ class ConfigComposer:
                 node_id=node_id,
             )
 
-        remote_node = bool(node_id and node_id != "wsl2-5080")
+        remote_node = not _is_local_wsl_qe_node(node_id)
         callback_base_configured = any(
             (os.getenv(name) or "").strip()
             for name in (
@@ -686,7 +777,11 @@ class ConfigComposer:
 
     @classmethod
     def _execution_algo_catalog_entry(cls, algo_code: str) -> Dict[str, Any]:
-        algo = str(algo_code).strip().upper()
+        algo = require_execution_algo_active(
+            algo_code,
+            operation="qe_execution_catalog_resolve",
+            semantic_path="qe_config.execution_algo",
+        )
         cached = cls._execution_algo_catalog_cache.get(algo)
         if cached is not None:
             return dict(cached)
@@ -833,6 +928,11 @@ class ConfigComposer:
         raw = (execution_algo or DEFAULT_QE_EXECUTION_ALGO).strip().upper()
         aliases = {"": DEFAULT_QE_EXECUTION_ALGO, "NONE": DEFAULT_QE_EXECUTION_ALGO, "DEFAULT": DEFAULT_QE_EXECUTION_ALGO}
         raw = aliases.get(raw, raw)
+        raw = require_execution_algo_active(
+            raw,
+            operation="qe_config_compose",
+            semantic_path="qe_config.execution_algo",
+        )
         if raw == "VWAP":
             raise ValueError(
                 "execution_algo='VWAP' is not implemented in QE minute execution. "
@@ -929,28 +1029,6 @@ class ConfigComposer:
                 "module_path": "tail_twap_v24_strategy",
                 "kwargs": params,
             }
-        if algo == "V25_TWO_STAGE":
-            catalog_defaults = cls._execution_algo_catalog_entry(algo)["default_config"]
-            for key, value in catalog_defaults.items():
-                params.setdefault(key, value)
-            return {
-                "requested_algo": execution_algo,
-                "effective_algo": algo,
-                "class": "TailTWAPWithV25TwoStageStrategy",
-                "module_path": "tail_twap_v25_strategy",
-                "kwargs": params,
-            }
-        if algo == "V25_1_SMALL_CAP":
-            catalog_defaults = cls._execution_algo_catalog_entry(algo)["default_config"]
-            for key, value in catalog_defaults.items():
-                params.setdefault(key, value)
-            return {
-                "requested_algo": execution_algo,
-                "effective_algo": algo,
-                "class": "TailTWAPWithV25_1SmallCapStrategy",
-                "module_path": "tail_twap_v25_1_strategy",
-                "kwargs": params,
-            }
         raise AssertionError(f"unreachable execution algo: {algo}")
 
     @classmethod
@@ -977,10 +1055,8 @@ class ConfigComposer:
 
     @classmethod
     def _is_v25_execution(cls, execution_algo: Optional[str]) -> bool:
-        return cls._normalize_execution_algo(execution_algo) in {
-            "V25_TWO_STAGE",
-            "V25_1_SMALL_CAP",
-        }
+        cls._normalize_execution_algo(execution_algo)
+        return False
 
     @staticmethod
     def _is_suspend_filter_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
@@ -995,84 +1071,6 @@ class ConfigComposer:
     def _parse_date(value: str):
         from datetime import date
         return date.fromisoformat(str(value)[:10])
-
-    def _build_suspend_filter_artifact(
-        self,
-        data_split: Dict[str, str],
-        *,
-        strict_audit: bool = True,
-    ) -> str:
-        """Export suspend_d rows to a local JSON artifact for Qlib runtime."""
-        backtest_start = self._parse_date(data_split["test_start"])
-        backtest_end = self._parse_date(data_split["backtest_end"])
-        if backtest_end < backtest_start:
-            raise ValueError("backtest_end is earlier than test_start; cannot build suspend filter")
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT cal_date
-                    FROM market.trading_calendar
-                    WHERE is_trading = TRUE
-                      AND cal_date BETWEEN %s AND %s
-                    ORDER BY cal_date
-                    """,
-                    (backtest_start, backtest_end),
-                )
-                trade_dates = [row[0] for row in cur.fetchall()]
-                if not trade_dates:
-                    raise RuntimeError(
-                        f"No trading dates found for suspend filter: {backtest_start}..{backtest_end}"
-                    )
-
-                if strict_audit:
-                    cur.execute(
-                        """
-                        SELECT trade_date, status
-                        FROM market.dataset_date_refresh_audit
-                        WHERE dataset = 'suspend_d'
-                          AND trade_date = ANY(%s)
-                        """,
-                        (trade_dates,),
-                    )
-                    audit_rows = {row[0]: row[1] for row in cur.fetchall()}
-                    missing = [d.isoformat() for d in trade_dates if audit_rows.get(d) != "success"]
-                    if missing:
-                        raise RuntimeError(
-                            "suspend_d refresh audit is incomplete; "
-                            f"missing_or_failed_dates={missing[:20]} total={len(missing)}. "
-                            "Refresh/seed market.dataset_date_refresh_audit before enabling filter_suspended_on_signal."
-                        )
-
-                cur.execute(
-                    """
-                    SELECT trade_date, ts_code
-                    FROM market.suspend_d
-                    WHERE suspend_type = 'S'
-                      AND trade_date BETWEEN %s AND %s
-                    ORDER BY trade_date, ts_code
-                    """,
-                    (backtest_start, backtest_end),
-                )
-                suspended_by_date: Dict[str, List[str]] = {d.isoformat(): [] for d in trade_dates}
-                for trade_date, ts_code in cur.fetchall():
-                    key = trade_date.isoformat()
-                    if key in suspended_by_date:
-                        suspended_by_date[key].append(str(ts_code))
-
-        payload = {
-            "enabled": True,
-            "source": "market.suspend_d",
-            "audit_dataset": "suspend_d",
-            "strict_audit": strict_audit,
-            "start_date": backtest_start.isoformat(),
-            "end_date": backtest_end.isoformat(),
-            "trade_date_count": len(trade_dates),
-            "suspended_row_count": sum(len(v) for v in suspended_by_date.values()),
-            "suspended_by_date": suspended_by_date,
-        }
-        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
     def _get_strategy_class_name(self, strategy_info: Optional[Dict]) -> str:
         if not strategy_info:
@@ -1120,6 +1118,138 @@ class ConfigComposer:
                 "QE blocks this request instead of silently ignoring forced-exit semantics."
             )
 
+    @staticmethod
+    def _is_sector_risk_overlay_enabled(custom_params: Optional[Dict[str, Any]]) -> bool:
+        return bool((custom_params or {}).get("sector_risk_overlay_enabled", False))
+
+    @staticmethod
+    def _ensure_sector_risk_overlay_supported(strategy_class: str) -> None:
+        supported = {
+            "ScoreWeightedTopkStrategyV2",
+            "SuspendFilterScoreWeightedTopkStrategyV2",
+            "ScoreWeightedTopkStrategyV2CapacityV1",
+            "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
+        }
+        if strategy_class not in supported:
+            raise ValueError(
+                "sector_risk_overlay_enabled=True is not supported by strategy "
+                f"'{strategy_class}'. Supported strategies: {sorted(supported)}."
+            )
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _prepare_sector_risk_overlay_runtime(
+        self,
+        *,
+        custom_params: Optional[Dict[str, Any]],
+        data_split: Dict[str, str],
+        strategy_info: Optional[Dict],
+    ) -> tuple[Optional[Dict[str, Any]], Optional[str], Optional[bytes]]:
+        """Validate and package an immutable QE-only sector-risk runtime artifact."""
+
+        if not self._is_sector_risk_overlay_enabled(custom_params):
+            return custom_params, None, None
+        if custom_params is None:
+            custom_params = {}
+
+        mode = str(custom_params.get("sector_risk_overlay_mode") or "").strip()
+        supported_modes = {"none", "entry_gate", "bounded_de_risk", "exit_reentry"}
+        if mode not in supported_modes:
+            raise ValueError(
+                "sector_risk_overlay_mode must be one of "
+                f"{sorted(supported_modes)}; received={mode!r}"
+            )
+        if not bool(custom_params.get("sector_risk_overlay_strict", True)):
+            raise ValueError(
+                "enabled QE sector-risk overlay requires sector_risk_overlay_strict=True; "
+                "missing stock-date rows cannot be silently ignored"
+            )
+
+        strategy_class = self._get_strategy_class_name(strategy_info)
+        self._ensure_sector_risk_overlay_supported(strategy_class)
+        manifest_source = Path(
+            str(custom_params.get("sector_risk_overlay_manifest_source") or "")
+        ).expanduser()
+        data_source = Path(
+            str(custom_params.get("sector_risk_overlay_data_source") or "")
+        ).expanduser()
+        if not manifest_source.is_file() or not data_source.is_file():
+            raise FileNotFoundError(
+                "enabled QE sector-risk overlay requires existing explicit source files: "
+                f"manifest={manifest_source} data={data_source}"
+            )
+        manifest_source = manifest_source.resolve()
+        data_source = data_source.resolve()
+        manifest_text = manifest_source.read_text(encoding="utf-8")
+        manifest = json.loads(manifest_text)
+        if manifest.get("schema_version") != "qe_sector_risk_overlay_manifest_v1":
+            raise ValueError(
+                "invalid QE sector-risk manifest schema: "
+                f"{manifest.get('schema_version')!r}"
+            )
+        payload_hash = str(manifest.get("manifest_payload_sha256") or "")
+        payload_without_hash = dict(manifest)
+        payload_without_hash.pop("manifest_payload_sha256", None)
+        actual_payload_hash = hashlib.sha256(
+            json.dumps(
+                payload_without_hash,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if not payload_hash or payload_hash != actual_payload_hash:
+            raise ValueError(
+                "QE sector-risk manifest payload hash mismatch: "
+                f"expected={payload_hash!r} actual={actual_payload_hash}"
+            )
+        runtime_meta = (manifest.get("artifacts") or {}).get("runtime") or {}
+        expected_runtime_hash = str(runtime_meta.get("sha256") or "")
+        actual_runtime_hash = self._file_sha256(data_source)
+        if not expected_runtime_hash or expected_runtime_hash != actual_runtime_hash:
+            raise ValueError(
+                "QE sector-risk runtime hash mismatch: "
+                f"expected={expected_runtime_hash!r} actual={actual_runtime_hash}"
+            )
+        if not str(manifest.get("dataset_identity") or "").strip():
+            raise ValueError("QE sector-risk manifest is missing dataset_identity")
+
+        artifact_start = self._parse_date(str(manifest.get("output_start") or ""))
+        artifact_end = self._parse_date(str(manifest.get("output_end") or ""))
+        requested_start = self._parse_date(data_split["test_start"])
+        requested_end = self._parse_date(data_split["backtest_end"])
+        if artifact_start > requested_start or artifact_end < requested_end:
+            raise ValueError(
+                "QE sector-risk artifact does not cover the requested backtest window: "
+                f"artifact={artifact_start}..{artifact_end} "
+                f"requested={requested_start}..{requested_end}"
+            )
+
+        custom_params["sector_risk_overlay_mode"] = mode
+        custom_params["sector_risk_overlay_manifest_file"] = SECTOR_RISK_OVERLAY_MANIFEST_FILE
+        custom_params["sector_risk_overlay_data_file"] = SECTOR_RISK_OVERLAY_DATA_FILE
+        action_log = Path(
+            str(
+                custom_params.get("sector_risk_overlay_action_log")
+                or SECTOR_RISK_OVERLAY_ACTION_LOG
+            )
+        )
+        if action_log.is_absolute() or ".." in action_log.parts:
+            raise ValueError(
+                "sector_risk_overlay_action_log must be a workspace-relative path without '..'"
+            )
+        custom_params["sector_risk_overlay_action_log"] = action_log.as_posix()
+        custom_params["sector_risk_overlay_strict"] = True
+        custom_params.pop("sector_risk_overlay_manifest_source", None)
+        custom_params.pop("sector_risk_overlay_data_source", None)
+        return custom_params, manifest_text, data_source.read_bytes()
+
     def _prepare_suspend_filter_runtime(
         self,
         *,
@@ -1128,7 +1258,7 @@ class ConfigComposer:
         strategy_info: Optional[Dict],
         execution_algo: Optional[str],
     ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """Build the suspend artifact needed by signal filtering or V25 execution."""
+        """Wire the frozen-file suspend artifact for signal filtering or V25 execution."""
 
         # Mandatory event-risk policies can force exits or block buys before
         # ``filter_suspended_on_signal`` is explicitly set.  In that mode the
@@ -1148,17 +1278,19 @@ class ConfigComposer:
             strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
             self._ensure_suspend_filter_supported(strategy_class_for_suspend)
 
-        suspend_filter_json = self._build_suspend_filter_artifact(
-            data_split,
-            strict_audit=bool(custom_params.get("suspend_filter_strict", True)),
-        )
+        # BUG-989 zero-DB data plane: the suspend artifact is built on the
+        # compute node by qe_build_frozen_suspend_filter.py from the frozen
+        # suspend_d candidate dataset pinned in qe_frozen_build_spec.json
+        # (written by _prepare_risk_policy_runtime for every new QE
+        # workspace).  The composer only wires the runtime contract here: the
+        # strict QESuspendFilter reads qe_suspend_filter.json, whose keys must
+        # cover every trading day of the pinned frozen calendar inside the
+        # window.  Querying market.* tables is forbidden; any pin, identity,
+        # date-coverage or field mismatch fails closed on the compute node
+        # and there is no database fallback.
         custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
-        custom_params.setdefault("suspend_filter_strict", True)
-
-        if signal_filter_enabled:
-            custom_params["filter_suspended_on_signal"] = True
-
-        return custom_params, suspend_filter_json
+        custom_params["suspend_filter_strict"] = True
+        return custom_params, None
 
     @staticmethod
     def _risk_policy_profile(custom_params: Optional[Dict[str, Any]]):
@@ -1180,8 +1312,24 @@ class ConfigComposer:
     def _is_qe_risk_policy_enabled(cls, custom_params: Optional[Dict[str, Any]]) -> bool:
         return bool(cls._risk_policy_profile(custom_params).enabled)
 
-    def _build_qe_risk_policy_artifact(self, data_split: Dict[str, str], custom_params: Dict[str, Any]) -> str:
-        """Export ST PIT spans to a local JSON artifact for Qlib runtime."""
+    def _build_qe_frozen_risk_policy_spec(
+        self,
+        data_split: Dict[str, str],
+        custom_params: Dict[str, Any],
+        *,
+        qlib_data_path: Optional[str] = None,
+    ) -> str:
+        """Emit the frozen-dataset build spec for the ST PIT risk policy.
+
+        BUG-989 zero-DB data plane: the composer never queries market.* tables
+        to materialize backtest inputs.  It writes ``qe_frozen_build_spec.json``
+        (window, risk profile, dataset identity, sha256 pins) into the
+        workspace; ``qe_build_frozen_risk_policy.py`` runs on the compute node
+        before ``qrun`` and derives ``qe_event_risk_policy.json`` exclusively
+        from the frozen qlib bin files referenced by ``provider_uri.day``.
+        Any pin/identity mismatch or missing frozen file fails closed on the
+        compute node; there is no database fallback.
+        """
 
         profile = self._risk_policy_profile(custom_params)
         if not profile.enabled:
@@ -1199,97 +1347,104 @@ class ConfigComposer:
         backtest_end = self._parse_date(data_split["backtest_end"])
         if backtest_end < backtest_start:
             raise ValueError("backtest_end is earlier than test_start; cannot build QE risk policy")
-        require_qe_dataset_window(start_date=backtest_start, end_date=backtest_end)
+        formal_request = _formal_dataset_request(custom_params)
+        formal_binding = formal_request.binding() if formal_request is not None else None
+        if formal_binding is not None:
+            require_qe_formal_dataset_window(
+                formal_binding,
+                start_date=backtest_start,
+                end_date=backtest_end,
+            )
+        else:
+            require_qe_dataset_window(start_date=backtest_start, end_date=backtest_end)
 
-        from backend.services.stock_universe_pit_service import (
-            StockUniversePitService,
-        )
+        provider_uri_day = str(qlib_data_path or QLIB_DATA_PATH_WSL).strip()
+        if not provider_uri_day:
+            raise RuntimeError(
+                "reason_code=qe_frozen_build_spec_invalid: "
+                "qlib_data_path/QLIB_DATA_PATH_WSL is empty; "
+                "cannot pin the frozen risk policy source"
+            )
 
-        # QE consumes a dataset-versioned snapshot.  It never reads, marks dirty,
-        # extends, or rebuilds the rolling live-selection/Paper PIT universe.
-        StockUniversePitService().ensure_immutable_dataset_snapshot(
-            universe_key=QE_ST_PIT_UNIVERSE_KEY,
-            start_date=QE_DATASET_START_DATE,
-            end_date=QE_DATASET_SIGNAL_END_DATE,
-            bootstrap_if_missing=True,
-        )
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT cal_date
-                    FROM market.trading_calendar
-                    WHERE is_trading = TRUE
-                      AND cal_date BETWEEN %s AND %s
-                    ORDER BY cal_date
-                    """,
-                    (backtest_start, backtest_end),
-                )
-                trade_dates = [row[0] for row in cur.fetchall()]
-                if not trade_dates:
-                    raise RuntimeError(
-                        f"No trading dates found for QE risk policy: {backtest_start}..{backtest_end}"
-                    )
-                cur.execute(
-                    """
-                    SELECT ts_code, eligible_start, eligible_end, entry_reason,
-                           exit_reason, rule_version, metadata
-                    FROM market.stock_universe_pit_spans
-                    WHERE universe_key = %s
-                      AND eligible_start <= %s
-                      AND eligible_end >= %s
-                    ORDER BY ts_code, eligible_start, eligible_end
-                    """,
-                    (QE_ST_PIT_UNIVERSE_KEY, backtest_end, backtest_start),
-                )
-                spans = [
-                    {
-                        "ts_code": row[0],
-                        "eligible_start": row[1].isoformat(),
-                        "eligible_end": row[2].isoformat(),
-                        "entry_reason": row[3],
-                        "exit_reason": row[4],
-                        "rule_version": row[5],
-                        "metadata": row[6] or {},
-                    }
-                    for row in cur.fetchall()
-                ]
-                cur.execute(
-                    """
-                    SELECT universe_key, rule_version, scope, status, dirty,
-                           source_fingerprint_sha256, generated_at
-                    FROM market.stock_universe_pit_state
-                    WHERE universe_key = %s
-                    """,
-                    (QE_ST_PIT_UNIVERSE_KEY,),
-                )
-                state = cur.fetchone()
+        dataset_identity = {
+            "contract_id": QE_DATASET_CONTRACT_ID,
+            "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
+            "rule_version": "frozen_qlib_bin_universe_v1",
+        }
+        qlib_pins = {
+            "snapshot_id": QE_FROZEN_BIN_SNAPSHOT_ID,
+            "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
+            "instruments_sha256": QE_FROZEN_INSTRUMENTS_SHA256,
+            "calendar_sha256": QE_FROZEN_CALENDAR_SHA256,
+            "meta_export_sha256": QE_FROZEN_META_EXPORT_SHA256,
+        }
+        suspend_identity = {
+            "dataset_id": QE_FROZEN_SUSPEND_DATASET_ID,
+            "provider_uri": posixpath.join(
+                posixpath.dirname(provider_uri_day.rstrip("/")),
+                QE_FROZEN_SUSPEND_DATASET_ID,
+            ),
+            "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
+            "parquet_sha256": QE_FROZEN_SUSPEND_PARQUET_SHA256,
+            "manifest_sha256": QE_FROZEN_SUSPEND_MANIFEST_SHA256,
+            "source_contract": QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
+        }
+        if formal_request is not None and formal_binding is not None:
+            pins = formal_request.runtime_pins.validated()
+            dataset_identity = {
+                "contract_id": formal_binding.release_id,
+                "st_universe_key": formal_binding.qe_runtime_universe_key,
+                "canonical_frozen_universe_key": formal_binding.frozen_universe_key,
+                "authority_id": formal_binding.authority_id,
+                "rule_version": formal_binding.rule_version,
+                "rule_parameters_digest": formal_binding.rule_parameters_digest,
+                "release_manifest_digest": formal_binding.manifest_digest,
+                "frozen_snapshot_digest": formal_binding.frozen_snapshot_digest,
+            }
+            qlib_pins = {
+                "snapshot_id": pins.qlib_bin_snapshot_id,
+                # The physical candidate sidecars carry the immutable W2
+                # frozen key.  The QE-prefixed key is only a compatibility
+                # namespace for the existing Selection risk-profile type.
+                "universe_key": formal_binding.frozen_universe_key,
+                "instruments_sha256": pins.qlib_instruments_sha256,
+                "calendar_sha256": pins.qlib_calendar_sha256,
+                "meta_export_sha256": pins.qlib_meta_export_sha256,
+            }
+            suspend_identity = {
+                "dataset_id": pins.suspend_dataset_id,
+                "provider_uri": posixpath.join(
+                    posixpath.dirname(provider_uri_day.rstrip("/")),
+                    pins.suspend_dataset_id,
+                ),
+                "universe_key": formal_binding.frozen_universe_key,
+                "parquet_sha256": pins.suspend_parquet_sha256,
+                "manifest_sha256": pins.suspend_manifest_sha256,
+                "source_contract": pins.suspend_source_contract,
+            }
 
         payload = {
-            "enabled": True,
-            "contract": profile.policy_version,
-            "source": "market.stock_universe_pit_spans",
-            "providers": list(profile.providers),
-            "hard_actions": list(profile.hard_actions),
-            "visible_time_mode": profile.visible_time_mode,
-            "strict_data_ready": profile.strict_data_ready,
-            "dataset_contract_id": QE_DATASET_CONTRACT_ID,
-            "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
+            "schema_version": "qe_frozen_build_spec_v1",
+            "kind": "qe_event_risk_policy",
+            "provider_uri_day": provider_uri_day,
             "start_date": backtest_start.isoformat(),
             "end_date": backtest_end.isoformat(),
-            "trade_date_count": len(trade_dates),
-            "span_count": len(spans),
-            "active_spans": spans,
-            "state": {
-                "universe_key": state[0] if state else QE_ST_PIT_UNIVERSE_KEY,
-                "rule_version": state[1] if state else None,
-                "scope": state[2] if state else None,
-                "status": state[3] if state else "missing",
-                "dirty": bool(state[4]) if state else True,
-                "source_fingerprint_sha256": state[5] if state else None,
-                "generated_at": state[6].isoformat() if state and state[6] else None,
+            "profile": {
+                "contract": profile.policy_version,
+                "providers": list(profile.providers),
+                "hard_actions": list(profile.hard_actions),
+                "visible_time_mode": profile.visible_time_mode,
+                "strict_data_ready": profile.strict_data_ready,
             },
+            "dataset": dataset_identity,
+            "pins": qlib_pins,
+            # Frozen suspend_d candidate dataset pins (BUG-989 continuation):
+            # the suspend sidecar is a versioned sibling of the frozen bin
+            # directory on every compute node.  qe_build_frozen_suspend_filter.py
+            # rebuilds qe_suspend_filter.json from these pins before qrun;
+            # any pin/identity/coverage mismatch fails closed on the compute
+            # node and there is no database fallback.
+            "suspend": suspend_identity,
         }
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
 
@@ -1298,30 +1453,34 @@ class ConfigComposer:
         *,
         custom_params: Optional[Dict[str, Any]],
         data_split: Dict[str, str],
+        qlib_data_path: Optional[str] = None,
     ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
         custom_params = ensure_qe_risk_policy(
             custom_params,
             source="ConfigComposer._prepare_risk_policy_runtime",
         )
-        custom_params["risk_policy"]["st_universe_key"] = QE_ST_PIT_UNIVERSE_KEY
+        formal_binding = _formal_dataset_binding(custom_params)
+        custom_params["risk_policy"]["st_universe_key"] = (
+            formal_binding.qe_runtime_universe_key
+            if formal_binding is not None
+            else QE_ST_PIT_UNIVERSE_KEY
+        )
         if not self._is_qe_risk_policy_enabled(custom_params):
             return custom_params, None
-        risk_policy_json = self._build_qe_risk_policy_artifact(data_split, custom_params)
+        frozen_build_spec_json = self._build_qe_frozen_risk_policy_spec(
+            data_split,
+            custom_params,
+            qlib_data_path=qlib_data_path,
+        )
         profile = self._risk_policy_profile(custom_params)
         custom_params["risk_policy_file"] = RISK_POLICY_FILE
         custom_params["risk_policy_enabled"] = True
         custom_params["risk_policy_strict"] = profile.strict_data_ready
-        payload = json.loads(risk_policy_json)
-        quote_universe_codes = sorted(
-            {
-                str(span.get("ts_code") or "").strip().upper()
-                for span in payload.get("active_spans", [])
-                if str(span.get("ts_code") or "").strip()
-            }
-        )
-        if quote_universe_codes:
-            custom_params["quote_universe_codes"] = quote_universe_codes
-        return custom_params, risk_policy_json
+        # The quote/sell universe intentionally defaults to qlib's "all",
+        # which resolves to the frozen bin instruments universe; no
+        # quote_universe_codes list is derived from spans anymore.
+        custom_params.pop("quote_universe_codes", None)
+        return custom_params, frozen_build_spec_json
 
     @staticmethod
     def _validate_hmm_coefficients_json(content: str) -> None:
@@ -1485,6 +1644,7 @@ class ConfigComposer:
         self._validate_historical_stock_pool_window(custom_params, data_split)
         rdagent_cfg = self._fetch_workspace_config()
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
+        qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -1590,15 +1750,23 @@ class ConfigComposer:
                     f"支持的策略: {', '.join(sorted(_hmm_supported_classes))}"
                 )
 
-        custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
+        custom_params, frozen_build_spec_json = self._prepare_risk_policy_runtime(
             custom_params=custom_params,
             data_split=data_split,
+            qlib_data_path=qlib_data_path,
         )
         custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
             custom_params=custom_params,
             data_split=data_split,
             strategy_info=strategy_info,
             execution_algo=execution_algo,
+        )
+        custom_params, sector_risk_manifest_json, sector_risk_runtime_bytes = (
+            self._prepare_sector_risk_overlay_runtime(
+                custom_params=custom_params,
+                data_split=data_split,
+                strategy_info=strategy_info,
+            )
         )
 
         # 生成conf.yaml
@@ -1624,7 +1792,11 @@ class ConfigComposer:
         if has_custom_factors:
             factor_marker = self._compose_factor_file(factors_info)
             has_factor_files = factor_marker is not None
-            prepare_factors_py = self._compose_prepare_factors(factors_info, data_split=data_split)
+            prepare_factors_py = self._compose_prepare_factors(
+                factors_info,
+                data_split=data_split,
+                custom_params=custom_params,
+            )
 
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
@@ -1635,10 +1807,14 @@ class ConfigComposer:
             hmm_path = exp_dir / "hmm_sector_coefficients.json"
             hmm_path.write_text(hmm_json_content, encoding="utf-8")
 
-        if suspend_filter_json:
-            (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
-        if risk_policy_json:
-            (exp_dir / RISK_POLICY_FILE).write_text(risk_policy_json, encoding="utf-8")
+        if frozen_build_spec_json:
+            (exp_dir / FROZEN_BUILD_SPEC_FILE).write_text(frozen_build_spec_json, encoding="utf-8")
+        if sector_risk_manifest_json is not None and sector_risk_runtime_bytes is not None:
+            (exp_dir / SECTOR_RISK_OVERLAY_MANIFEST_FILE).write_text(
+                sector_risk_manifest_json,
+                encoding="utf-8",
+            )
+            (exp_dir / SECTOR_RISK_OVERLAY_DATA_FILE).write_bytes(sector_risk_runtime_bytes)
 
         # 写入因子原始代码到 factors/ 子目录（保持原始格式不变）
         if has_factor_files:
@@ -1675,7 +1851,7 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in QE_MINUTE_RUNTIME_HELPER_FILES:
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
@@ -1683,7 +1859,7 @@ class ConfigComposer:
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES:
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)
@@ -1790,6 +1966,7 @@ class ConfigComposer:
         resource_source_run_key: Optional[str] = None,
         resource_session_token: Optional[str] = None,
         phase_pipeline_enabled: bool = False,
+        long_trend_evaluation_descriptor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """组装实验配置到内存字典，不写入磁盘。
 
@@ -1819,6 +1996,13 @@ class ConfigComposer:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
+        formal_dataset_binding = _formal_dataset_binding(custom_params)
+        if formal_dataset_binding is not None:
+            require_qe_formal_dataset_window(
+                formal_dataset_binding,
+                start_date=self._parse_date(data_split["train_start"]),
+                end_date=self._parse_date(data_split["backtest_end"]),
+            )
         self._validate_historical_stock_pool_window(custom_params, data_split)
         rdagent_cfg = self._fetch_workspace_config()
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
@@ -1900,6 +2084,14 @@ class ConfigComposer:
 
         # ── 生成各文件内容到 dict ──
         experiment_files: Dict[str, str] = {}
+        if formal_dataset_binding is not None:
+            experiment_files[QE_FORMAL_DATASET_BINDING_FILE] = json.dumps(
+                formal_dataset_binding.as_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
 
         # 0) HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         # 与 compose_experiment() 一致，从 custom_params 检查 enable_sector_hmm
@@ -1953,20 +2145,33 @@ class ConfigComposer:
             custom_params["hmm_risk_gate_file"] = "hmm_risk_gate.json"
             custom_params["enable_hmm_risk_gate"] = True
 
-        custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
+        custom_params, frozen_build_spec_json = self._prepare_risk_policy_runtime(
             custom_params=custom_params,
             data_split=data_split,
+            qlib_data_path=qlib_data_path,
         )
-        if risk_policy_json:
-            experiment_files[RISK_POLICY_FILE] = risk_policy_json
+        if frozen_build_spec_json:
+            experiment_files[FROZEN_BUILD_SPEC_FILE] = frozen_build_spec_json
         custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
             custom_params=custom_params,
             data_split=data_split,
             strategy_info=strategy_info,
             execution_algo=execution_algo,
         )
-        if suspend_filter_json:
-            experiment_files[SUSPEND_FILTER_FILE] = suspend_filter_json
+        custom_params, sector_risk_manifest_json, sector_risk_runtime_bytes = (
+            self._prepare_sector_risk_overlay_runtime(
+                custom_params=custom_params,
+                data_split=data_split,
+                strategy_info=strategy_info,
+            )
+        )
+        if sector_risk_manifest_json is not None and sector_risk_runtime_bytes is not None:
+            import base64
+
+            experiment_files[SECTOR_RISK_OVERLAY_MANIFEST_FILE] = sector_risk_manifest_json
+            experiment_files[f"{SECTOR_RISK_OVERLAY_DATA_FILE}.b64"] = base64.b64encode(
+                sector_risk_runtime_bytes
+            ).decode("ascii")
 
         # 1) conf.yaml
         conf_yaml = self._compose_conf_yaml(
@@ -1985,6 +2190,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             execution_algo=execution_algo,
             execution_algo_params=execution_algo_params,
+            node_id=node_id,
             initial_cash=(strategy_params or {}).get("initial_cash"),
         )
         experiment_files["conf.yaml"] = conf_yaml
@@ -1997,7 +2203,12 @@ class ConfigComposer:
                 if code:
                     experiment_files[f"factors/{f['factor_name']}.py"] = code
 
-            prepare_factors_py = self._compose_prepare_factors(factors_info, factor_data_dir=factor_data_dir, data_split=data_split)
+            prepare_factors_py = self._compose_prepare_factors(
+                factors_info,
+                factor_data_dir=factor_data_dir,
+                data_split=data_split,
+                custom_params=custom_params,
+            )
             if prepare_factors_py:
                 experiment_files["prepare_factors.py"] = prepare_factors_py
 
@@ -2014,6 +2225,33 @@ class ConfigComposer:
 
         # 4) read_exp_res.py
         experiment_files["read_exp_res.py"] = self._get_read_exp_res_content()
+        normalized_long_trend_descriptor: Dict[str, Any] | None = None
+        if long_trend_evaluation_descriptor is not None:
+            descriptor = dict(long_trend_evaluation_descriptor)
+            if descriptor.get("schema_version") != "qe_long_trend_postprocess_descriptor_v1":
+                raise ValueError("invalid QE long-trend postprocess descriptor schema")
+            recorder_backtest_freq = "1day" if backtest_freq == "day" else str(backtest_freq)
+            requested_freq = descriptor.get("backtest_freq")
+            if requested_freq not in (None, "", recorder_backtest_freq):
+                raise ValueError(
+                    "QE long-trend requested backtest_freq conflicts with the composed Qlib Recorder frequency"
+                )
+            descriptor["backtest_freq"] = recorder_backtest_freq
+            nested_long_trend = dict(descriptor.get("long_trend_evaluation") or {})
+            nested_long_trend["backtest_freq"] = recorder_backtest_freq
+            descriptor["long_trend_evaluation"] = nested_long_trend
+            normalized_long_trend_descriptor = descriptor
+            adapter_path = Path(__file__).parent / "templates" / "long_trend_postprocess_adapter.py"
+            if not adapter_path.is_file():
+                raise FileNotFoundError(f"QE long-trend postprocess adapter is missing: {adapter_path}")
+            experiment_files["qe_long_trend_postprocess_descriptor.json"] = json.dumps(
+                descriptor,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            experiment_files["long_trend_postprocess_adapter.py"] = adapter_path.read_text(encoding="utf-8")
 
         # 4b) qrun_limit runner（分钟线/日线双模板）
         scripts_dir = Path(__file__).parent.parent.parent.parent / "scripts"
@@ -2047,7 +2285,7 @@ class ConfigComposer:
             v24_path = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_path.exists():
                 experiment_files["tail_twap_v24_strategy.py"] = v24_path.read_text(encoding="utf-8")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in QE_MINUTE_RUNTIME_HELPER_FILES:
                 helper_path = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_path.exists():
                     experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -2058,7 +2296,7 @@ class ConfigComposer:
                 experiment_files["benchmark_sh000300.parquet.b64"] = base64.b64encode(
                     bench_path.read_bytes()
                 ).decode("ascii")
-        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES:
             helper_path = scripts_dir / helper_name
             if helper_path.exists():
                 experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -2101,6 +2339,7 @@ class ConfigComposer:
             resource_source_run_key=resource_source_run_key,
             resource_session_token=resource_session_token,
             phase_pipeline_enabled=phase_pipeline_enabled,
+            long_trend_postprocess_enabled=long_trend_evaluation_descriptor is not None,
         )
         needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
@@ -2123,6 +2362,7 @@ class ConfigComposer:
             resource_source_run_key=resource_source_run_key,
             resource_session_token=resource_session_token,
             phase_pipeline_enabled=phase_pipeline_enabled,
+            long_trend_postprocess_enabled=long_trend_evaluation_descriptor is not None,
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -2140,7 +2380,7 @@ class ConfigComposer:
                 llm_hypothesis=llm_hypothesis,
             )
 
-        return {
+        result = {
             "experiment_files": experiment_files,
             "wsl_command": wsl_command,
             "wsl_command_core": " && ".join(auto_core_parts),
@@ -2149,7 +2389,11 @@ class ConfigComposer:
             "experiment_id": experiment_id,
             "factor_count": len(factor_names),
             "has_custom_factors": has_custom_factors,
+            "long_trend_evaluation_descriptor": normalized_long_trend_descriptor,
         }
+        if formal_dataset_binding is not None:
+            result["canonical_pit_dataset_binding"] = formal_dataset_binding.as_dict()
+        return result
 
     # ── 内存生成辅助方法 ──
 
@@ -2199,7 +2443,7 @@ class ConfigComposer:
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
         deps_dict: Dict[str, str] = {}
 
         def _resolve_deps(code: str, collected: set) -> str:
@@ -2618,6 +2862,7 @@ class ConfigComposer:
         self._validate_historical_stock_pool_window(custom_params, data_split)
         rdagent_cfg = self._fetch_workspace_config()
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
+        qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names)
@@ -2669,15 +2914,23 @@ class ConfigComposer:
             execution_algo_params["unfilled_trigger_minute"] = _cp["unfilled_trigger_minute"]
         if _cp.get("unfilled_backup_depth"):
             execution_algo_params["unfilled_backup_depth"] = _cp["unfilled_backup_depth"]
-        custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
+        custom_params, frozen_build_spec_json = self._prepare_risk_policy_runtime(
             custom_params=custom_params,
             data_split=data_split,
+            qlib_data_path=qlib_data_path,
         )
         custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
             custom_params=custom_params,
             data_split=data_split,
             strategy_info=strategy_info,
             execution_algo=execution_algo,
+        )
+        custom_params, sector_risk_manifest_json, sector_risk_runtime_bytes = (
+            self._prepare_sector_risk_overlay_runtime(
+                custom_params=custom_params,
+                data_split=data_split,
+                strategy_info=strategy_info,
+            )
         )
 
         # 生成conf.yaml
@@ -2703,15 +2956,23 @@ class ConfigComposer:
         if has_custom_factors:
             factor_marker = self._compose_factor_file(factors_info)
             has_factor_files = factor_marker is not None
-            prepare_factors_py = self._compose_prepare_factors(factors_info, data_split=data_split)
+            prepare_factors_py = self._compose_prepare_factors(
+                factors_info,
+                data_split=data_split,
+                custom_params=custom_params,
+            )
 
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
         conf_path.write_text(conf_yaml, encoding="utf-8")
-        if suspend_filter_json:
-            (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
-        if risk_policy_json:
-            (exp_dir / RISK_POLICY_FILE).write_text(risk_policy_json, encoding="utf-8")
+        if frozen_build_spec_json:
+            (exp_dir / FROZEN_BUILD_SPEC_FILE).write_text(frozen_build_spec_json, encoding="utf-8")
+        if sector_risk_manifest_json is not None and sector_risk_runtime_bytes is not None:
+            (exp_dir / SECTOR_RISK_OVERLAY_MANIFEST_FILE).write_text(
+                sector_risk_manifest_json,
+                encoding="utf-8",
+            )
+            (exp_dir / SECTOR_RISK_OVERLAY_DATA_FILE).write_bytes(sector_risk_runtime_bytes)
 
         if has_factor_files:
             self._write_factor_files(exp_dir, factors_info)
@@ -2746,14 +3007,14 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+            for helper_name in QE_MINUTE_RUNTIME_HELPER_FILES:
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py"):
+        for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES:
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)
@@ -2844,6 +3105,7 @@ class ConfigComposer:
         execution_algo: Optional[str] = None,  # None/"TWAP" → TailTWAPWithLimitStrategy | "CLOSE_PRICE" → CloseExecutionStrategy
         execution_algo_params: Optional[Dict[str, Any]] = None,
         initial_cash: Optional[int] = None,  # 初始资金，None → 100000000
+        node_id: Optional[str] = None,
     ) -> str:
         """生成QLib conf.yaml内容。
 
@@ -2862,6 +3124,7 @@ class ConfigComposer:
         model_type_tag = None  # "TimeSeries" | "Tabular" | None
         model_dataset_cls = "DatasetH"
         model_step_len: Optional[int] = None
+        local_wsl_host_safe = _is_local_wsl_qe_node(node_id)
 
         if model_info:
             model_type = (model_info.get("model_type") or "").upper()
@@ -2900,15 +3163,21 @@ class ConfigComposer:
                     "weight_decay": float(thp.get("weight_decay", 1e-4)) if isinstance(thp.get("weight_decay", 1e-4), str) else thp.get("weight_decay", 1e-4),
                     "metric": "loss",
                     "loss": "mse",
-                    "n_jobs": 2,
+                    "n_jobs": 0 if local_wsl_host_safe else 2,
                     "GPU": 0,
                     "use_amp": False,
                     "gradient_accumulation_steps": 1,
-                    "pin_memory": True,
-                    "prefetch_factor": 2,
+                    "pin_memory": not local_wsl_host_safe,
                     "persistent_workers": False,
                     "pt_model_uri": "model.model_cls",
                 }
+                if not local_wsl_host_safe:
+                    model_kwargs["prefetch_factor"] = 2
+                for loader_key in ("n_jobs", "pin_memory", "prefetch_factor", "persistent_workers"):
+                    if loader_key in thp:
+                        # Preserve the request long enough for the authoritative
+                        # local-WSL contract below to accept it or fail closed.
+                        model_kwargs[loader_key] = thp[loader_key]
                 if str(thp.get("ltr_loss_mode", "mse")) != "mse" or thp.get("loss") == "approx_ndcg_at_k":
                     model_kwargs.update(
                         {
@@ -3094,9 +3363,16 @@ class ConfigComposer:
                     "weight_decay": 1e-4,
                     "metric": "loss",
                     "loss": "mse",
-                    "n_jobs": 2,
+                    "n_jobs": 0 if local_wsl_host_safe else 2,
                     "GPU": 0,
                 }
+                if local_wsl_host_safe:
+                    model_kwargs.update(
+                        {
+                            "pin_memory": False,
+                            "persistent_workers": False,
+                        }
+                    )
 
                 training_hp = model_info.get("model_training_hyperparameters")
                 if training_hp:
@@ -3333,6 +3609,7 @@ class ConfigComposer:
             "archive_policy",        # QE Archive policy metadata, not a strategy kwarg
             "archive_reason",
             "archive_allow_override",
+            "observation_panel",     # Matched-factor data-loader contract, not a strategy kwarg
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
             "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）
@@ -3347,7 +3624,10 @@ class ConfigComposer:
             "risk_policy_enabled",
             "risk_policy_file",
             "risk_policy_strict",
+            "sector_risk_overlay_manifest_source",
+            "sector_risk_overlay_data_source",
             "_seed_ensemble_config",
+            QE_FORMAL_DATASET_REQUEST_PARAM,
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -3427,6 +3707,34 @@ class ConfigComposer:
                 logger.info(f"策略参数过滤: 移除非策略参数 {set(custom_params.keys()) - set(filtered_params.keys())}")
             strategy_kwargs.update(filtered_params)
 
+        if model_class in _GENERAL_PTNN_MODEL_CLASSES and local_wsl_host_safe:
+            try:
+                normalized_n_jobs = int(model_kwargs.get("n_jobs", 0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "reason_code=qe_wsl_host_resource_override_unsafe: GeneralPTNN n_jobs must be 0 on local WSL"
+                ) from exc
+            unsafe_loader_options = {
+                "n_jobs": model_kwargs.get("n_jobs") if normalized_n_jobs != 0 else None,
+                "pin_memory": model_kwargs.get("pin_memory") if _bool_param(model_kwargs.get("pin_memory", False)) else None,
+                "persistent_workers": (
+                    model_kwargs.get("persistent_workers")
+                    if _bool_param(model_kwargs.get("persistent_workers", False))
+                    else None
+                ),
+                "prefetch_factor": model_kwargs.get("prefetch_factor"),
+            }
+            unsafe_loader_options = {key: value for key, value in unsafe_loader_options.items() if value is not None}
+            if unsafe_loader_options:
+                raise ValueError(
+                    "reason_code=qe_wsl_host_resource_override_unsafe: "
+                    f"unsupported_options={sorted(unsafe_loader_options)}"
+                )
+            model_kwargs["n_jobs"] = 0
+            model_kwargs["pin_memory"] = False
+            model_kwargs["persistent_workers"] = False
+            model_kwargs.pop("prefetch_factor", None)
+
         model_name_for_ltr = str((model_info or {}).get("model_name") or (model_info or {}).get("model_id") or model_class)
         model_class, model_module, model_kwargs = _finalize_general_ptnn_ltr_routing(
             model_class=model_class,
@@ -3493,6 +3801,22 @@ class ConfigComposer:
                 strategy_class = "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1"
                 strategy_module = "qe_suspend_filter_score_weighted_strategy"
 
+        sector_risk_overlay_enabled = self._is_sector_risk_overlay_enabled(custom_params)
+        if sector_risk_overlay_enabled:
+            self._ensure_sector_risk_overlay_supported(strategy_class)
+            if strategy_class in {
+                "ScoreWeightedTopkStrategyV2",
+                "SuspendFilterScoreWeightedTopkStrategyV2",
+            }:
+                strategy_class = "QESectorRiskOverlayScoreWeightedTopkStrategyV2"
+                strategy_module = "qe_sector_risk_overlay_strategy"
+            elif strategy_class in {
+                "ScoreWeightedTopkStrategyV2CapacityV1",
+                "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
+            }:
+                strategy_class = "QESectorRiskOverlayScoreWeightedTopkStrategyV2CapacityV1"
+                strategy_module = "qe_sector_risk_overlay_strategy"
+
         # 安全过滤：只保留策略支持的参数
         # 避免不支持的参数通过 **kwargs 传递到 BaseStrategy 导致 TypeError
         _HMM_KEYS = {
@@ -3508,6 +3832,17 @@ class ConfigComposer:
         }
         _RISK_POLICY_KEYS = {
             "risk_policy_enabled", "risk_policy_file", "risk_policy_strict",
+        }
+        _SECTOR_RISK_OVERLAY_KEYS = {
+            "sector_risk_overlay_enabled",
+            "sector_risk_overlay_mode",
+            "sector_risk_overlay_manifest_file",
+            "sector_risk_overlay_data_file",
+            "sector_risk_overlay_strict",
+            "sector_risk_overlay_override_hold_thresh",
+            "sector_risk_overlay_reentry_confirm_days",
+            "sector_risk_overlay_state_multipliers",
+            "sector_risk_overlay_action_log",
         }
         _TOPK_DROPOUT_ALLOWED_KEYS = {
             "signal", "topk", "n_drop", "method_sell", "method_buy",
@@ -3535,7 +3870,7 @@ class ConfigComposer:
             "threshold_method", "min_improvement", "adaptive_multiplier",
             "threshold_floor", "min_trade_price", "max_trade_price",
             "max_single_order_value", "lot_size",
-        } | _UNFILLED_KEYS | _HMM_KEYS | _SUSPEND_FILTER_KEYS | _RISK_POLICY_KEYS
+        } | _UNFILLED_KEYS | _HMM_KEYS | _SUSPEND_FILTER_KEYS | _RISK_POLICY_KEYS | _SECTOR_RISK_OVERLAY_KEYS
 
         if strategy_class in {"TopkDropoutStrategy", "SuspendFilterTopkDropoutStrategy"}:
             _removed = {k for k in strategy_kwargs if k not in _TOPK_DROPOUT_ALLOWED_KEYS}
@@ -3577,6 +3912,8 @@ class ConfigComposer:
             "SuspendFilterScoreWeightedTopkStrategyV2",
             "ScoreWeightedTopkStrategyV2CapacityV1",
             "SuspendFilterScoreWeightedTopkStrategyV2CapacityV1",
+            "QESectorRiskOverlayScoreWeightedTopkStrategyV2",
+            "QESectorRiskOverlayScoreWeightedTopkStrategyV2CapacityV1",
         }:
             # V2 and the capacity variant share parameters; only defaults differ.
             _removed = {k for k in strategy_kwargs if k not in _SCORE_WEIGHTED_TOPK_ALLOWED_KEYS}
@@ -3871,13 +4208,7 @@ class ConfigComposer:
         lines.append("            open_cost: 0.000095")
         lines.append("            close_cost: 0.000595")
         lines.append("            min_cost: 5")
-        if backtest_freq != "day" and algo_cfg["effective_algo"] == "V25_1_SMALL_CAP":
-            lines.append("            # V25.1 legalizes child orders with stock-aware board-lot rules.")
-            lines.append("            # Disable Qlib's global 100-share rounding so STAR 200+1 orders survive.")
-            lines.append("            trade_unit: ~")
-            lines.append("            board_lot_trade_unit: true")
-        else:
-            lines.append("            trade_unit: 100")
+        lines.append("            trade_unit: 100")
         quote_universe_codes = (custom_params or {}).get("quote_universe_codes")
         if quote_universe_codes:
             if isinstance(quote_universe_codes, str):
@@ -4038,8 +4369,18 @@ class ConfigComposer:
         *,
         start_date: str,
         end_date: str,
+        formal_dataset_binding: QEFormalDatasetBinding | None = None,
     ) -> Dict[str, Any]:
-        """Return official ST PIT metadata that generated factor caches must match."""
+        """Return frozen ST PIT metadata that generated factor caches must match.
+
+        BUG-989 zero-DB data plane: the universe fingerprint stamped onto QE
+        factor caches is the sha256 of the frozen qlib bin ``instruments/all.txt``
+        span file (pinned in ``qe_dataset_contract`` at dataset deploy time), not
+        any ``market.stock_universe_pit_state`` row.  The composer bakes this
+        metadata into both the cache writer and the cache reader of the same
+        workspace, so the pair stays self-consistent without touching the
+        database.
+        """
 
         from .factor_universe_mask_service import (
             OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
@@ -4047,34 +4388,126 @@ class ConfigComposer:
             OFFICIAL_FACTOR_UNIVERSE_KEY,
             OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
             QE_BACKTEST_FRESHNESS_PROFILE,
-            FactorUniverseMaskService,
         )
 
-        fallback = {
+        _ = (start_date, end_date)  # window is validated against the dataset contract upstream
+        if formal_dataset_binding is not None:
+            formal = require_qe_formal_dataset_binding_projection(
+                formal_dataset_binding
+            )
+            return {
+                "data_freshness_profile": QE_BACKTEST_FRESHNESS_PROFILE,
+                "universe_key": formal.frozen_universe_key,
+                "universe_rule_version": formal.rule_version,
+                "universe_fingerprint_sha256": formal.frozen_snapshot_digest,
+                "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
+                "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+                "authority_id": formal.authority_id,
+                "rule_parameters_digest": formal.rule_parameters_digest,
+                "release_id": formal.release_id,
+                "release_cutoff": formal.cutoff.isoformat(),
+                "release_manifest_digest": formal.manifest_digest,
+                "formal_usage_mode": formal.usage_mode,
+            }
+        return {
             "data_freshness_profile": QE_BACKTEST_FRESHNESS_PROFILE,
             "universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY,
             "universe_rule_version": OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
-            "universe_fingerprint_sha256": "",
+            "universe_fingerprint_sha256": QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256,
             "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
             "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
         }
-        metadata = FactorUniverseMaskService().metadata(
-            start_date=start_date,
-            end_date=end_date,
-            refresh_policy="coverage",
-        )
-        if not metadata.get("universe_fingerprint_sha256"):
-            raise RuntimeError(
-                "QE immutable ST PIT snapshot has no fingerprint; refusing to compose a cache writer"
+
+    @staticmethod
+    def _normalize_observation_panel_contract(
+        custom_params: Optional[Dict[str, Any]],
+        factor_names: List[str],
+    ) -> Dict[str, Any]:
+        """Validate the opt-in matched-experiment observation panel contract.
+
+        The contract is deliberately limited to custom-factor-only experiments.
+        Alpha158 uses a separate loader/index and therefore cannot make the same
+        reference-factor intersection guarantee.
+        """
+
+        if custom_params is None or "observation_panel" not in custom_params:
+            return {}
+
+        raw_contract = custom_params.get("observation_panel")
+        if not isinstance(raw_contract, dict):
+            raise ValueError(
+                "qe_observation_panel_contract_invalid: observation_panel must be an object"
             )
 
-        return {key: metadata.get(key) if metadata.get(key) is not None else fallback[key] for key in fallback}
+        allowed_keys = {
+            "schema_version",
+            "panel_id",
+            "mode",
+            "reference_factor_names",
+        }
+        unknown_keys = sorted(set(raw_contract) - allowed_keys)
+        if unknown_keys:
+            raise ValueError(
+                "qe_observation_panel_unknown_keys: " + ",".join(unknown_keys)
+            )
+
+        if raw_contract.get("schema_version") != "qe_observation_panel_v1":
+            raise ValueError(
+                "qe_observation_panel_schema_invalid: expected qe_observation_panel_v1"
+            )
+        if raw_contract.get("mode") != "reference_factor_intersection":
+            raise ValueError(
+                "qe_observation_panel_mode_invalid: expected reference_factor_intersection"
+            )
+
+        panel_id = raw_contract.get("panel_id")
+        if not isinstance(panel_id, str) or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", panel_id
+        ) is None:
+            raise ValueError(
+                "qe_observation_panel_id_invalid: panel_id must be a stable identifier"
+            )
+
+        reference_factor_names = raw_contract.get("reference_factor_names")
+        if (
+            not isinstance(reference_factor_names, list)
+            or not reference_factor_names
+            or any(not isinstance(name, str) or not name for name in reference_factor_names)
+        ):
+            raise ValueError(
+                "qe_observation_panel_reference_factors_invalid: "
+                "reference_factor_names must be a non-empty string list"
+            )
+        if len(set(reference_factor_names)) != len(reference_factor_names):
+            raise ValueError(
+                "qe_observation_panel_reference_factors_duplicate: "
+                "reference_factor_names must be unique"
+            )
+
+        missing_factor_names = sorted(set(reference_factor_names) - set(factor_names))
+        if missing_factor_names:
+            raise ValueError(
+                "qe_observation_panel_reference_factor_not_configured: "
+                + ",".join(missing_factor_names)
+            )
+        if custom_params.get("disable_alpha158") is not True:
+            raise ValueError(
+                "qe_observation_panel_alpha158_not_supported: disable_alpha158 must be true"
+            )
+
+        return {
+            "schema_version": "qe_observation_panel_v1",
+            "panel_id": panel_id,
+            "mode": "reference_factor_intersection",
+            "reference_factor_names": list(reference_factor_names),
+        }
 
     def _compose_prepare_factors(
         self,
         factors_info: List[Dict],
         factor_data_dir: Optional[str] = None,
         data_split: Optional[Dict[str, str]] = None,
+        custom_params: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """生成 prepare_factors.py 预处理脚本（含因子值缓存集成）。
 
@@ -4095,9 +4528,19 @@ class ConfigComposer:
             return None
 
         factor_names = [f["factor_name"] for f in custom_factors]
+        observation_panel_contract = self._normalize_observation_panel_contract(
+            custom_params,
+            factor_names,
+        )
+        formal_dataset_binding = _formal_dataset_binding(custom_params)
+        metadata_kwargs: Dict[str, Any] = {
+            "start_date": train_start,
+            "end_date": test_end,
+        }
+        if formal_dataset_binding is not None:
+            metadata_kwargs["formal_dataset_binding"] = formal_dataset_binding
         factor_cache_universe_metadata = self._resolve_factor_cache_universe_metadata(
-            start_date=train_start,
-            end_date=test_end,
+            **metadata_kwargs
         )
 
         lines: list[str] = []
@@ -4123,15 +4566,21 @@ class ConfigComposer:
         lines.append("logger = logging.getLogger('prepare_factors')")
         lines.append("")
         lines.append(f"FACTOR_DATA_DIR = os.environ.get('RDAGENT_FACTOR_DATA_DIR', {repr(factor_data_dir or RDAGENT_FACTOR_DATA_WSL)})")
+        expected_dataset_meta: Dict[str, Any] = {
+            "snapshot_id": QE_DATASET_CONTRACT_ID,
+            "start": QE_DATASET_START_DATE.isoformat(),
+            "end": QE_DATASET_SIGNAL_END_DATE.isoformat(),
+        }
+        if formal_dataset_binding is not None:
+            expected_dataset_meta = {
+                "snapshot_id": formal_dataset_binding.release_id,
+                "start": QE_DATASET_START_DATE.isoformat(),
+                "end": formal_dataset_binding.cutoff.isoformat(),
+                "canonical_pit_dataset_binding": formal_dataset_binding.as_dict(),
+            }
+        lines.append("QE_DATASET_EXPECTED_META = " + repr(expected_dataset_meta))
         lines.append(
-            "QE_DATASET_EXPECTED_META = "
-            + repr(
-                {
-                    "snapshot_id": QE_DATASET_CONTRACT_ID,
-                    "start": QE_DATASET_START_DATE.isoformat(),
-                    "end": QE_DATASET_SIGNAL_END_DATE.isoformat(),
-                }
-            )
+            "QE_OBSERVATION_PANEL_CONTRACT = " + repr(observation_panel_contract)
         )
         lines.append("")
         lines.append("")
@@ -4144,7 +4593,7 @@ class ConfigComposer:
         lines.append("    mismatches = {")
         lines.append("        key: {'expected': expected, 'actual': actual.get(key)}")
         lines.append("        for key, expected in QE_DATASET_EXPECTED_META.items()")
-        lines.append("        if str(actual.get(key) or '') != str(expected)")
+        lines.append("        if actual.get(key) != expected")
         lines.append("    }")
         lines.append("    if mismatches:")
         lines.append("        raise RuntimeError('QE factor_data dataset contract mismatch: ' + _json.dumps(mismatches, ensure_ascii=False, sort_keys=True))")
@@ -4187,6 +4636,12 @@ class ConfigComposer:
                         "universe_fingerprint_sha256",
                         "index_policy",
                         "coverage_semantics",
+                        "authority_id",
+                        "rule_parameters_digest",
+                        "release_id",
+                        "release_cutoff",
+                        "release_manifest_digest",
+                        "formal_usage_mode",
                     )
                 }
             )
@@ -4303,13 +4758,12 @@ class ConfigComposer:
         lines.append("")
         lines.append("")
         lines.append("def _cache_universe_mismatch(entry, expected):")
-        lines.append("    required_keys = ('universe_key', 'index_policy')")
+        lines.append("    required_keys = ('universe_key', 'index_policy', 'universe_fingerprint_sha256')")
+        lines.append("    if expected.get('release_id'):")
+        lines.append("        required_keys += ('data_freshness_profile', 'coverage_semantics', 'authority_id', 'universe_rule_version', 'rule_parameters_digest', 'release_id', 'release_cutoff', 'release_manifest_digest', 'formal_usage_mode')")
         lines.append("    for key in required_keys:")
         lines.append("        if expected.get(key) and entry.get(key) != expected.get(key):")
         lines.append("            return key")
-        lines.append("    expected_fp = expected.get('universe_fingerprint_sha256')")
-        lines.append("    if expected_fp and entry.get('universe_fingerprint_sha256') != expected_fp:")
-        lines.append("        return 'universe_fingerprint_sha256'")
         lines.append("    return ''")
         lines.append("")
         lines.append("")
@@ -4599,6 +5053,72 @@ class ConfigComposer:
         lines.append("        return _execute_factor_locked(factor_name, factor_code, work_dir)")
         lines.append("")
         lines.append("")
+        lines.append("def _require_factor_results(factor_names, factor_results):")
+        lines.append("    missing_results = [")
+        lines.append("        name for name in factor_names if factor_results.get(name) is None")
+        lines.append("    ]")
+        lines.append("    if missing_results:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_factor_result_incomplete: ' + ','.join(missing_results)")
+        lines.append("        )")
+        lines.append("    missing_columns = [")
+        lines.append("        name")
+        lines.append("        for name in factor_names")
+        lines.append("        if name not in factor_results[name].columns")
+        lines.append("    ]")
+        lines.append("    if missing_columns:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_factor_result_column_missing: ' + ','.join(missing_columns)")
+        lines.append("        )")
+        lines.append("")
+        lines.append("")
+        lines.append("def _select_factor_results(factor_names, factor_results):")
+        lines.append("    if QE_OBSERVATION_PANEL_CONTRACT:")
+        lines.append("        _require_factor_results(factor_names, factor_results)")
+        lines.append("        return [factor_results[name] for name in factor_names]")
+        lines.append("    # Preserve the historical no-contract behavior: a failed custom factor is")
+        lines.append("    # omitted while the remaining successful factors still form the outer union.")
+        lines.append("    return [")
+        lines.append("        factor_results[name]")
+        lines.append("        for name in factor_names")
+        lines.append("        if factor_results.get(name) is not None")
+        lines.append("    ]")
+        lines.append("")
+        lines.append("")
+        lines.append("def _apply_observation_panel(combined):")
+        lines.append("    contract = QE_OBSERVATION_PANEL_CONTRACT")
+        lines.append("    if not contract:")
+        lines.append("        return combined")
+        lines.append("    reference_factor_names = list(contract['reference_factor_names'])")
+        lines.append("    missing_references = [")
+        lines.append("        name for name in reference_factor_names if name not in combined.columns")
+        lines.append("    ]")
+        lines.append("    if missing_references:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_observation_panel_reference_factor_missing: '")
+        lines.append("            + ','.join(missing_references)")
+        lines.append("        )")
+        lines.append("    rows_before = len(combined)")
+        lines.append("    reference_mask = combined.loc[:, reference_factor_names].notna().all(axis=1)")
+        lines.append("    filtered = combined.loc[reference_mask].copy()")
+        lines.append("    if filtered.empty:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_observation_panel_empty: '")
+        lines.append("            + str(contract['panel_id'])")
+        lines.append("        )")
+        lines.append("    logger.info(")
+        lines.append("        'QE observation panel applied: panel_id=%s mode=%s references=%s '")
+        lines.append("        'rows_before=%d rows_after=%d rows_dropped=%d',")
+        lines.append("        contract['panel_id'],")
+        lines.append("        contract['mode'],")
+        lines.append("        reference_factor_names,")
+        lines.append("        rows_before,")
+        lines.append("        len(filtered),")
+        lines.append("        rows_before - len(filtered),")
+        lines.append("    )")
+        lines.append("    return filtered")
+        lines.append("")
+        lines.append("")
         lines.append("def main():")
         lines.append("    script_dir = os.path.dirname(os.path.abspath(__file__))")
         lines.append("    os.chdir(script_dir)")
@@ -4620,20 +5140,23 @@ class ConfigComposer:
 
         lines.append("")
         lines.append("    # 逐个执行因子")
-        lines.append("    factor_results = []")
+        lines.append("    factor_results = {}")
         lines.append("    for factor_name, factor_code in factor_codes.items():")
         lines.append("        logger.info(f'Executing factor: {factor_name}...')")
         lines.append("        result = execute_factor(factor_name, factor_code, script_dir)")
-        lines.append("        if result is not None:")
-        lines.append("            factor_results.append(result)")
+        lines.append("        factor_results[factor_name] = result")
         lines.append("")
         lines.append("    # 合并为 combined_factors_df.parquet")
-        lines.append("    if not factor_results:")
+        lines.append("    selected_factor_results = _select_factor_results(")
+        lines.append("        list(factor_codes), factor_results")
+        lines.append("    )")
+        lines.append("    if not selected_factor_results:")
         lines.append("        logger.error('No factors computed successfully!')")
         lines.append("        sys.exit(1)")
-        lines.append("")
-        lines.append("    logger.info(f'Combining {len(factor_results)} factor results...')")
-        lines.append("    combined = pd.concat(factor_results, axis=1)")
+        lines.append("    logger.info(f'Combining {len(selected_factor_results)} factor results...')")
+        lines.append("    combined = pd.concat(")
+        lines.append("        selected_factor_results, axis=1")
+        lines.append("    )")
         lines.append("    combined = combined.sort_index()")
         lines.append("    combined = combined.loc[:, ~combined.columns.duplicated(keep='last')]")
         lines.append("")
@@ -4656,6 +5179,8 @@ class ConfigComposer:
         lines.append("            logger.info('Swapping index levels to (datetime, instrument)...')")
         lines.append("            combined = combined.swaplevel('datetime', 'instrument')")
         lines.append("        combined = combined.sort_index()")
+        lines.append("")
+        lines.append("    combined = _apply_observation_panel(combined)")
         lines.append("")
         lines.append("    # 添加 'feature' 多级列索引（与 RDAgent factor_runner.py 一致）")
         lines.append("    new_columns = pd.MultiIndex.from_product([['feature'], combined.columns])")
@@ -5027,6 +5552,7 @@ class ConfigComposer:
         resource_source_run_key: Optional[str] = None,
         resource_session_token: Optional[str] = None,
         phase_pipeline_enabled: bool = False,
+        long_trend_postprocess_enabled: bool = False,
     ) -> tuple[list[str], list[str]]:
         """构造 auto 模式命令片段。
 
@@ -5038,7 +5564,10 @@ class ConfigComposer:
         # Every generated workspace may contain QE-owned runtime modules such as
         # the long-horizon label maturity processor.  Keep the workspace import
         # path explicit instead of relying on the launcher's current directory.
-        env_lines.append(f'export PYTHONPATH="{wsl_path}:${{QLIB_RDAGENT_ROOT_WSL:-.}}:$PYTHONPATH"')
+        quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
+        env_lines.append(
+            f'export PYTHONPATH={quoted_wsl_path}:"${{QLIB_RDAGENT_ROOT_WSL:-.}}:${{PYTHONPATH:-}}"'
+        )
 
         if use_custom_model and model_type_tag:
             if model_type_tag == "TimeSeries":
@@ -5095,13 +5624,17 @@ class ConfigComposer:
                     "QE backtest factor_cache_dir must point to official factor_values cache root or its single subdirectory"
                 )
             # 远端节点：直接使用配置的绝对路径
-            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_dir}"')
+            env_lines.append(
+                f"export FACTOR_CACHE_DIR={_quote_qe_shell_path(factor_cache_dir, field_name='factor_cache_dir')}"
+            )
         else:
             # 本地节点：强制使用 Windows 路径转换后的 QE 回测缓存，覆盖任何继承环境变量。
             factor_cache_wsl = self._windows_to_wsl_path(str(FACTOR_CACHE_ROOT_WIN))
             if not _is_official_factor_cache_path_shape(factor_cache_wsl):
                 raise RuntimeError("QE backtest FACTOR_CACHE_ROOT_WIN must resolve to official factor_values cache root")
-            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_wsl}"')
+            env_lines.append(
+                f"export FACTOR_CACHE_DIR={_quote_qe_shell_path(factor_cache_wsl, field_name='factor_cache_dir')}"
+            )
         env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 
         link_data_cmd = (
@@ -5112,11 +5645,16 @@ class ConfigComposer:
 
         runner = "qrun_limit_minute.py" if seed_ensemble_enabled or backtest_freq != "day" else "qrun_limit.py"
 
+        scrub_credentials = _qe_subprocess_credential_scrub_command()
         core_parts = [
+            scrub_credentials,
             self._build_conda_activate_chain(),
+            scrub_credentials,
             "export MALLOC_ARENA_MAX=4",
             "export PYTHONUNBUFFERED=1",
         ]
+        if _is_local_wsl_qe_node(node_id):
+            core_parts.extend(_LOCAL_WSL_THREAD_ENV)
         if _is_gpu_qe_node(node_id):
             core_parts.append(_CUDA_EXPANDABLE_SEGMENTS_ENV)
         if train_only:
@@ -5126,12 +5664,19 @@ class ConfigComposer:
             core_parts.append("chmod 600 qe_resource_session_secret.json")
         core_parts.append(link_data_cmd)
         if has_custom_factors:
+            core_parts.append(scrub_credentials)
             core_parts.append("python prepare_factors.py")
             core_parts.append(". ./.factor_env")
+            core_parts.append(scrub_credentials)
         runner_cmd = f"python {runner} conf.yaml"
         if train_only:
             runner_cmd += " --train-only"
+        core_parts.append(scrub_credentials)
         core_parts.append(runner_cmd)
+        if long_trend_postprocess_enabled:
+            core_parts.append(scrub_credentials)
+            core_parts.append("python long_trend_postprocess_adapter.py")
+        core_parts.append(scrub_credentials)
         core_parts.append("QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py")
         return env_lines, core_parts
 
@@ -5153,7 +5698,8 @@ class ConfigComposer:
                               resource_session_id: Optional[str] = None,
                               resource_source_run_key: Optional[str] = None,
                               resource_session_token: Optional[str] = None,
-                              phase_pipeline_enabled: bool = False) -> str:
+                              phase_pipeline_enabled: bool = False,
+                              long_trend_postprocess_enabled: bool = False) -> str:
         """生成WSL执行命令。
 
         Args:
@@ -5181,12 +5727,25 @@ class ConfigComposer:
             resource_source_run_key=resource_source_run_key,
             resource_session_token=resource_session_token,
             phase_pipeline_enabled=phase_pipeline_enabled,
+            long_trend_postprocess_enabled=long_trend_postprocess_enabled,
         )
         env_block = "\n".join(env_lines)
+        scrub_credentials = _qe_subprocess_credential_scrub_command()
+        quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
+        manual_conda_chain = self._build_conda_activate_chain()
+        manual_runtime_guard_lines = ["set -euo pipefail", scrub_credentials]
+        if _is_local_wsl_qe_node(node_id):
+            manual_runtime_guard_lines.extend(_LOCAL_WSL_THREAD_ENV)
+        manual_runtime_guard_block = "\n".join(manual_runtime_guard_lines)
+        manual_factor_data_default = _quote_qe_shell_path(
+            str(factor_data_dir or RDAGENT_FACTOR_DATA_WSL or "."),
+            field_name="factor_data_dir",
+        )
 
         # 手动模式的数据链接步骤（可读格式）
         _link_data_manual = f"""# 链接策略所需数据文件到实验目录（幂等）
-_FDD="${{RDAGENT_FACTOR_DATA_WSL:-{RDAGENT_FACTOR_DATA_WSL}}}"
+_FDD="${{RDAGENT_FACTOR_DATA_WSL:-}}"
+[ -n "$_FDD" ] || _FDD={manual_factor_data_default}
 for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do
   [ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .
 done"""
@@ -5196,7 +5755,7 @@ done"""
 
         # ── auto 模式：纯净命令链，供子进程直接执行 ──
         if mode == "auto":
-            return " && ".join([f"cd {wsl_path}", *core_parts])
+            return " && ".join([f"cd -- {quoted_wsl_path}", *core_parts])
 
         # ── manual 模式：面向用户手动复制执行 ──
         train_only_flag = " --train-only" if train_only else ""
@@ -5204,32 +5763,42 @@ done"""
             return f"""# QuantEvolver 实验执行命令（含自定义因子预处理）
 # 请在WSL终端中执行以下命令：
 
-cd {wsl_path}
-conda activate rdagent-gpu
+(
+cd -- {quoted_wsl_path}
+{manual_runtime_guard_block}
+{manual_conda_chain}
+{scrub_credentials}
 
 {_link_data_manual}
 
 # 步骤1: 预计算因子 -> 生成 combined_factors_df.parquet
+{scrub_credentials}
 python prepare_factors.py
 
 # 步骤2: 设置环境变量
 {env_block}
 # 加载因子预处理输出的 num_features（由 prepare_factors.py 自动计算）
 . .factor_env
+{scrub_credentials}
 
 # 步骤3: 运行QLib回测
 python {runner} conf.yaml{train_only_flag}
 
 # 步骤4: 读取结果
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
+)
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
         elif use_custom_model:
             return f"""# QuantEvolver 实验执行命令（含自定义模型）
 # 请在WSL终端中执行以下命令：
 
-cd {wsl_path}
-conda activate rdagent-gpu
+(
+cd -- {quoted_wsl_path}
+{manual_runtime_guard_block}
+{manual_conda_chain}
+{scrub_credentials}
 
 # 设置环境变量
 {env_block}
@@ -5237,26 +5806,35 @@ conda activate rdagent-gpu
 {_link_data_manual}
 
 # 运行QLib回测
+{scrub_credentials}
 python {runner} conf.yaml{train_only_flag}
 
 # 读取结果
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
+)
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
         else:
             return f"""# QuantEvolver 实验执行命令
 # 请在WSL终端中执行以下命令：
 
-cd {wsl_path}
-conda activate rdagent-gpu
+(
+cd -- {quoted_wsl_path}
+{manual_runtime_guard_block}
+{manual_conda_chain}
+{scrub_credentials}
 
 # 设置环境变量
 {env_block}
 
 {_link_data_manual}
 
+{scrub_credentials}
 python {runner} conf.yaml{train_only_flag}
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
+)
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
 
@@ -5543,7 +6121,7 @@ model_cls = {nn_class_name}
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
         _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
-                                   "tail_twap_strategy", "tail_twap_v24_strategy", "tail_twap_v25_strategy", "tail_twap_v25_1_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy"}
+                                   "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
             """递归处理相对导入：转换为本地导入并复制依赖文件."""

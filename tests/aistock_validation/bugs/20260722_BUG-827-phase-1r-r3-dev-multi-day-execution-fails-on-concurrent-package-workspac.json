@@ -1,0 +1,338 @@
+{
+  "actual": "Both first days became RETRYABLE_FAILED; batch reconciliation violated advisory_historical_range_batch_check21; retryable operation failed typed readback because fencing_token remained; package-owned factor assets raced during concurrent materialization. After the initial fixes, resuming the preserved 13-day DEV batch still failed because claim_next_day changed a RETRYABLE_FAILED day to RUNNING without refreshing the run child aggregate in the same transaction, causing ADVISORY_HISTORICAL_RANGE_RUN_CHILD_AGGREGATE_INVALID. After that constraint failure was repaired, HistoricalRangeSourceInputUnavailable was still persisted as ADVISORY_HR_DAY_UNCLASSIFIED_FAILURE/RETRYABLE_FAILED instead of preserving its source reason as WAITING_INPUT.",
+  "allowed_write_scope": [
+    "backend/services/advisory_historical_range/repository.py",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/services/strategy_package/selection_artifact.py",
+    "backend/services/strategy_package/multi_alpha_live.py",
+    "backend/tests/advisory_historical_range/test_repository.py",
+    "backend/tests/strategy_package/test_selection_signal_preparation.py",
+    "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py",
+    "backend/services/advisory_historical_range/executor.py",
+    "backend/services/advisory_historical_range/models.py",
+    "backend/services/advisory_historical_range/decision_mark_provider.py",
+    "backend/tests/advisory_historical_range/test_r3_executor.py",
+    "backend/tests/advisory_historical_range/test_r3_repository.py",
+    "backend/tests/advisory_historical_range/test_r3_decision_mark_provider.py",
+    "backend/tests/strategy_package/test_live_inference.py",
+    "tests/aistock_validation/bugs/20260722_BUG-827-phase-1r-r3-dev-multi-day-execution-fails-on-concurrent-package-workspac.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-827",
+  "closed_at": "2026-07-23T06:20:14Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-22T07:48:44.001551Z",
+  "description": "The real multi-day DEV flow exposed package workspace races, invalid terminal state persistence, and a retry-resume aggregate mismatch. The preserved 13-day batch reproduced the remaining mismatch when claim_next_day transitioned a retryable day without synchronizing the parent run aggregate before commit.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260722-f9e58df04c4d",
+      "timestamp": "2026-07-22T07:48:44.001542Z"
+    },
+    {
+      "action": "reproduce_remaining_retry_resume_failure",
+      "actor": "codex",
+      "note": "Formal resume of ahrb_f925f1b84ee19aa8e3f0bc67afd9d568 failed at claim_next_day with ADVISORY_HISTORICAL_RANGE_RUN_CHILD_AGGREGATE_INVALID; repository did not refresh the run aggregate after changing the retryable day state.",
+      "timestamp": "2026-07-22T16:04:19.2132541Z"
+    },
+    {
+      "action": "verify_retry_resume_and_visible_source_wait",
+      "actor": "codex",
+      "note": "After the repository and classifier fixes, formal resume reached WAITING_INPUT for both Programs with ADVISORY_HR_SOURCE_REVISION_MISMATCH; current DEV PIT spans do not cover the frozen 2026-06-16 to 2026-07-03 range.",
+      "timestamp": "2026-07-22T16:10:47.8086780Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock_artifacts\\advisory_phase1r_dev_validation_20260722\\r3-multiday-v1",
+    "F:\\Dev\\AIstock_artifacts\\advisory_phase1r_dev_validation_20260722\\r3-multiday-v6"
+  ],
+  "expected": "A sealed historical batch can prefetch and execute multiple days per Program without package workspace races; retryable/waiting states persist valid batch, run, day and operation aggregates; formal resume can reclaim a retryable day without violating child aggregate constraints; domain error reason/context remains visible.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/tests/advisory_historical_range/test_repository.py",
+      "backend/tests/strategy_package/test_selection_signal_preparation.py",
+      "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_historical_range/repository.py",
+        "backend/services/strategy_package/live_inference.py",
+        "backend/services/strategy_package/selection_artifact.py",
+        "backend/services/strategy_package/multi_alpha_live.py",
+        "backend/tests/advisory_historical_range/test_repository.py",
+        "backend/tests/strategy_package/test_selection_signal_preparation.py",
+        "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py"
+      ],
+      "impacted_modules": [
+        "advisory.historical_range",
+        "tests.backend",
+        "strategy_package",
+        "paper_v2",
+        "selection_center",
+        "qe.single_experiment",
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_historical_range/repository.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/strategy_package/live_inference.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/selection_artifact.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/multi_alpha_live.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_repository.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_selection_signal_preparation.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_historical_range/repository.py",
+        "backend/services/strategy_package/live_inference.py",
+        "backend/services/strategy_package/selection_artifact.py",
+        "backend/services/strategy_package/multi_alpha_live.py",
+        "backend/tests/advisory_historical_range/test_repository.py",
+        "backend/tests/strategy_package/test_selection_signal_preparation.py",
+        "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/tests/advisory_historical_range/test_repository.py",
+      "backend/tests/strategy_package/test_selection_signal_preparation.py",
+      "backend/tests/strategy_package/test_multi_alpha_signal_preparation.py"
+    ]
+  },
+  "first_seen_at": "2026-07-22T07:48:44.001551Z",
+  "fix_branch": null,
+  "fix_commit": "9b9b97c2fea4fcb8c23f296f00e419a1aee8f7fe",
+  "fixed_at": "2026-07-23T06:28:11.299302Z",
+  "github_issue_number": 2621,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2621",
+  "last_seen_at": "2026-07-22T16:10:47.8086780Z",
+  "module": "advisory_historical_range",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2633",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "applied_and_verified",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_repository.py backend/tests/strategy_package/test_selection_signal_preparation.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend",
+    "paper_v2_backend",
+    "qe_read_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory_historical_range"
+  ],
+  "title": "Phase 1R R3 DEV multi-day execution fails on concurrent package workspace and terminal state contracts",
+  "trigger_condition": {
+    "fingerprint": "f9e58df04c4ddb5b097dd954",
+    "source_event_id": "FE-20260722-f9e58df04c4d"
+  },
+  "validation_evidence": [
+    "F:\\Dev\\AIstock\\docs\\architecture\\advisory_phase1r_r3_source_delivery_acceptance_20260722.md"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_historical_range",
+        "paper_v2",
+        "qe_read"
+      ],
+      "plans": [
+        "advisory_historical_range_backend",
+        "paper_v2_backend",
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_historical_range",
+          "paper_v2",
+          "qe_read"
+        ],
+        "plans": [
+          "advisory_historical_range_backend",
+          "paper_v2_backend",
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

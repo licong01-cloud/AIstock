@@ -10,12 +10,28 @@ from backend.services.advisory_dev_input_onboarding.contracts import (
     STRATEGY_PACKAGE_SELECTION_QUERY_CONTRACT_HASH,
 )
 from backend.services.strategy_package.advisory_input_projection import (
+    CANONICAL_HISTORICAL_QUERY_CONTRACT_HASH,
+    CANONICAL_HISTORICAL_QUERY_CONTRACT_PAYLOAD,
+    CANONICAL_SELECTION_QUERY_CONTRACT_HASH,
+    CANONICAL_SELECTION_QUERY_CONTRACT_PAYLOAD,
+    HISTORICAL_RANGE_QUERY_CONTRACT_HASH,
     REASON_INPUT_PROJECTION_CONFLICT,
     REASON_INPUT_PROJECTION_UNAVAILABLE,
+    SELECTION_QUERY_CONTRACT_HASH,
     AdvisoryInputProjectionError,
     StrategyPackageAdvisoryInputProjectionV1,
+    StrategyPackageAdvisoryInputProjectionV2,
     project_advisory_inputs,
+    project_canonical_advisory_inputs,
+    project_historical_range_inputs,
 )
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    canonical_rule_parameters_digest,
+)
+from backend.services.strategy_package.canonical_pit_compatibility import build_canonical_pit_v2_manifest
+from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import (
     Alpha158SchemaAsset,
     AlphaCombinationPolicy,
@@ -33,6 +49,11 @@ from backend.services.strategy_package.models import (
 
 
 HASH = "a" * 64
+
+
+def test_query_contract_hashes_remain_stable_after_projection_dependency_isolation() -> None:
+    assert SELECTION_QUERY_CONTRACT_HASH == "2f6bcc0df667586129c40069ea133f5f5316c525ad019f1e953840251ace2f16"
+    assert HISTORICAL_RANGE_QUERY_CONTRACT_HASH == "24d9739380376179884da57716bf52c0ac2082cd39e51429894a458b47d706ce"
 
 
 def _component(alpha_id: str, refs: list[str]) -> AlphaComponent:
@@ -114,6 +135,48 @@ def test_single_alpha_projection_preserves_manifest_factor_order_without_mutatio
     )
     assert advisory_projection.model_dump(mode="json") == projection.model_dump(mode="json")
     assert advisory_projection.selection_query_contract_hash == STRATEGY_PACKAGE_SELECTION_QUERY_CONTRACT_HASH
+
+
+def test_canonical_v2_projection_carries_training_identity_and_frozen_historical_universe() -> None:
+    source = _manifest(
+        alpha_mode=AlphaMode.SINGLE_ALPHA,
+        components=[_component("single", ["factor_a"])],
+        factors=[FactorAsset(factor_id="factor_a", factor_name="Momentum_120D")],
+        runtime_assets=_runtime("ROC60"),
+    )
+    source = freeze_manifest(source.model_copy(update={"manifest_sha256": None}))
+    manifest = build_canonical_pit_v2_manifest(
+        source,
+        package_id="pkg_projection_unit_pitv2",
+        package_version="2.0.0",
+        dataset_binding={
+            "schema_version": "qe_formal_canonical_pit_dataset_binding_v1",
+            "usage_mode": "formal_training",
+            "authority_id": CANONICAL_PIT_AUTHORITY_ID,
+            "rule_version": CANONICAL_PIT_RULE_VERSION,
+            "rule_parameters_digest": canonical_rule_parameters_digest(),
+            "release_id": "qe_hmm_full_v2_20260731",
+            "cutoff": "2026-07-31",
+            "frozen_snapshot_digest": "b" * 64,
+            "manifest_digest": "c" * 64,
+        },
+        qualification_method="RETRAINED",
+        qualification_evidence_digest="d" * 64,
+    )
+
+    live_projection = project_canonical_advisory_inputs(manifest)
+    historical_projection = project_historical_range_inputs(manifest)
+
+    assert isinstance(live_projection, StrategyPackageAdvisoryInputProjectionV2)
+    assert live_projection.selection_query_contract_hash == CANONICAL_SELECTION_QUERY_CONTRACT_HASH
+    assert CANONICAL_SELECTION_QUERY_CONTRACT_PAYLOAD["logical_inputs"][0]["source_role"] == "pit_universe"
+    assert live_projection.canonical_pit_binding.release_id == "qe_hmm_full_v2_20260731"
+    assert historical_projection.query_contract_hash == CANONICAL_HISTORICAL_QUERY_CONTRACT_HASH
+    assert CANONICAL_HISTORICAL_QUERY_CONTRACT_PAYLOAD["logical_inputs"][0]["source_role"] == "pit_universe"
+    assert historical_projection.pit_universe_key == (
+        "aistock_equity_pit_snapshot_qe_hmm_full_v2_20260731"
+    )
+    assert historical_projection.pit_universe_ensure is False
 
 
 def test_native_multi_projection_preserves_component_order_and_independent_windows() -> None:
@@ -216,6 +279,7 @@ def test_projection_module_has_no_runtime_validation_or_shared_consumer_imports(
         if isinstance(node, ast.ImportFrom)
     )
     forbidden_fragments = {
+        "advisory_phase0a",
         "repository",
         "asset_store",
         "validator",

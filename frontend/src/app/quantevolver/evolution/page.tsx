@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Play, Terminal, GitMerge, FileCode2,
   Activity, ArrowRight, DownloadCloud, CheckCircle2,
@@ -8,6 +8,7 @@ import {
   Square, RotateCcw, Pause, XCircle, RefreshCw, Trash2, Copy
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 
 import LogsPanel from "./components/LogsPanel";
 import LogTerminal from "../components/LogTerminal";
@@ -15,6 +16,8 @@ import ParamSchemaForm from "./components/ParamSchemaForm";
 import SectorBlacklistPanel from "../components/SectorBlacklistPanel";
 import TopologyPanel from "./components/TopologyPanel";
 import LoopDetailPanel, { getTaskStatusInfo } from "./components/LoopDetailPanel";
+import EvolutionWorkspaceShell from "./components/EvolutionWorkspaceShell";
+import MultiAlphaEvolutionWorkspace from "./components/MultiAlphaEvolutionWorkspace";
 import type { Loop } from "./components/TopologyPanel";
 import { qeArchiveApi, type ArchiveSourceStatus, type ArchiveTaskStatus, type BackfillReport } from "@/lib/qe-archive/api";
 import {
@@ -94,6 +97,8 @@ const emptyNewTaskState = () => ({
   random_seed: DEFAULT_QE_RANDOM_SEED,
   filter_suspended_on_signal: false,
   suspend_filter_strict: true,
+  long_trend_enabled: false,
+  long_trend_profile_id: "qe_long_trend_v1" as const,
 });
 
 const emptyForkFormState = () => ({
@@ -110,6 +115,8 @@ const emptyForkFormState = () => ({
   random_seed: DEFAULT_QE_RANDOM_SEED,
   filter_suspended_on_signal: false,
   suspend_filter_strict: true,
+  long_trend_enabled: false,
+  long_trend_profile_id: "qe_long_trend_v1" as const,
 });
 
 function archiveStatusLabel(status?: string): string {
@@ -268,7 +275,7 @@ function normalizeSummaryLoop(loop: Loop): Loop {
   };
 }
 
-export default function EvolutionDashboard() {
+function SingleAlphaEvolutionDashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [archiveStatus, setArchiveStatus] = useState<ArchiveSourceStatus | null>(null);
   const [archiveStatusLoading, setArchiveStatusLoading] = useState(false);
@@ -853,6 +860,7 @@ export default function EvolutionDashboard() {
     "[System] 等待连接至 AIstock 演进调度引擎..."
   ]);
   const [logsCollapsed, setLogsCollapsed] = useState(true);
+  const [pageVisible, setPageVisible] = useState(true);
 
   // 后端日志面板
   const [backendLogsOpen, setBackendLogsOpen] = useState(false);
@@ -868,6 +876,7 @@ export default function EvolutionDashboard() {
   const [resolving, setResolving] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const lastLogCursorRef = useRef<string | null>(null);
   const autoSelectLoopRef = useRef(true); // 是否需要自动选中 loop
 
   // ── 性能优化: SSE 日志节流 ──
@@ -957,16 +966,23 @@ export default function EvolutionDashboard() {
   }, [tasks]);
 
   useEffect(() => {
+    const updateVisibility = () => setPageVisible(document.visibilityState === "visible");
+    updateVisibility();
+    document.addEventListener("visibilitychange", updateVisibility);
+    return () => document.removeEventListener("visibilitychange", updateVisibility);
+  }, []);
+
+  useEffect(() => {
     fetchTasks();
   }, [fetchTasks]);
 
   useEffect(() => {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     pollIntervalRef.current = null;
-    if (!hasRunningTask) return;
+    if (!pageVisible || !hasRunningTask) return;
     pollIntervalRef.current = setInterval(fetchTasks, 10_000);
     return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
-  }, [hasRunningTask, fetchTasks]);
+  }, [pageVisible, hasRunningTask, fetchTasks]);
 
   useEffect(() => {
     fetch(`${API}/quantevolver/strategies?limit=100`)
@@ -1101,17 +1117,18 @@ export default function EvolutionDashboard() {
     if (taskChanged) {
       autoSelectLoopRef.current = true;
       setActiveLoopIndex(null);
+      lastLogCursorRef.current = null;
     }
     fetchTaskDetail(activeTaskId);
   }, [activeTaskId, fetchTaskDetail]);
 
   useEffect(() => {
-    if (!activeTaskId || !selectedTaskStatus || !ACTIVE_POLL_STATUSES.has(selectedTaskStatus)) {
+    if (!pageVisible || !activeTaskId || !selectedTaskStatus || !ACTIVE_POLL_STATUSES.has(selectedTaskStatus)) {
       return;
     }
     const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), 15000);
     return () => clearInterval(detailInterval);
-  }, [activeTaskId, selectedTaskStatus, fetchTaskDetail]);
+  }, [pageVisible, activeTaskId, selectedTaskStatus, fetchTaskDetail]);
 
   // Log files are touched only after the operator expands the log panel.
   useEffect(() => {
@@ -1126,6 +1143,10 @@ export default function EvolutionDashboard() {
     closeCurrentLogStream();
 
     if (!activeTaskId || logsCollapsed) {
+      if (logsCollapsed) lastLogCursorRef.current = null;
+      return closeCurrentLogStream;
+    }
+    if (!pageVisible) {
       return closeCurrentLogStream;
     }
 
@@ -1166,13 +1187,19 @@ export default function EvolutionDashboard() {
     const boundTaskId = activeTaskId;
 
     function createSSE(taskId: string) {
-      const sse = new EventSource(`${API}/quantevolver/evolution/tasks/${taskId}/logs`);
+      const resumeCursor = lastLogCursorRef.current;
+      const cursorQuery = resumeCursor ? `?after_cursor=${encodeURIComponent(resumeCursor)}` : "";
+      const sse = new EventSource(`${API}/quantevolver/evolution/tasks/${taskId}/logs${cursorQuery}`);
       sse.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          if (event.lastEventId) lastLogCursorRef.current = event.lastEventId;
           const terminalLogEvent =
             data.status === "deleted" ||
             data.status === "missing" ||
+            data.status === "completed" ||
+            data.status === "failed" ||
+            data.status === "cancelled" ||
             data.event === "task_deleted" ||
             data.event === "task_log_workspace_missing" ||
             data.event === "task_log_terminal";
@@ -1222,6 +1249,11 @@ export default function EvolutionDashboard() {
       sse.onerror = async () => {
         sse.close();
         if (activeTaskIdRef.current !== boundTaskId) return;
+        if (resumeCursor) {
+          appendLogs(["[Error] 日志游标续传失败或已过期；已停止自动回放。请折叠后重新展开日志面板以显式读取新的有界尾部。"]);
+          if (eventSourceRef.current === sse) eventSourceRef.current = null;
+          return;
+        }
         try {
           const taskRes = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}`);
           if (taskRes.status === 404 || taskRes.status === 204) {
@@ -1258,7 +1290,7 @@ export default function EvolutionDashboard() {
       closeCurrentLogStream();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTaskId, selectedTaskStatus, logsCollapsed]);
+  }, [activeTaskId, selectedTaskStatus, logsCollapsed, pageVisible]);
 
   // 获取可用的 RDAgent source tasks
   const fetchSourceTasks = useCallback(async () => {
@@ -1436,6 +1468,7 @@ export default function EvolutionDashboard() {
             additional_factor_keys: additionalFactorKeys.size > 0 ? Array.from(additionalFactorKeys) : undefined,
             label_horizon: newTask.label_horizon,
             random_seed: newTask.random_seed,
+            long_trend_profile_id: newTask.long_trend_enabled ? newTask.long_trend_profile_id : undefined,
           }),
         });
         if (!res.ok) {
@@ -1534,6 +1567,10 @@ export default function EvolutionDashboard() {
           engine_mode: "unified",
           clone_from_task_id: customEvoFormMode === "clone" ? (customEvoCloneSourceTaskId || undefined) : undefined,
           auto_start: customEvoFormMode === "create" || customEvoFormMode === "clone" ? false : undefined,
+          long_trend_profile_id:
+            customEvoFormMode === "create" || customEvoFormMode === "clone"
+              ? (newTask.long_trend_enabled ? newTask.long_trend_profile_id : undefined)
+              : undefined,
         };
         if (customEvoFormMode === "rerun") {
           endpoint = `${API}/quantevolver/evolution/tasks/${customEvoTargetTaskId}/loops/${customEvoTargetLoopIndex}/rerun`;
@@ -1633,6 +1670,8 @@ export default function EvolutionDashboard() {
 
       const submitData = {
         ...newTask,
+        long_trend_enabled: undefined,
+        long_trend_profile_id: newTask.long_trend_enabled ? newTask.long_trend_profile_id : undefined,
         node_id: newTask.node_id || undefined,
         selected_model_id: selectedModelForEvo || undefined,
         selected_factor_keys: factorKeys,
@@ -1902,6 +1941,7 @@ export default function EvolutionDashboard() {
           task_name: forkForm.task_name || undefined,
           loops: strategyEvoLoops,
           inherit_history: forkForm.inherit_history,
+          long_trend_profile_id: forkForm.long_trend_enabled ? forkForm.long_trend_profile_id : undefined,
         }),
       });
       const data = await res.json();
@@ -1955,6 +1995,7 @@ export default function EvolutionDashboard() {
           suspend_filter_strict: forkForm.suspend_filter_strict !== false,
           label_horizon: forkForm.label_horizon,
           random_seed: forkForm.random_seed,
+          long_trend_profile_id: forkForm.long_trend_enabled ? forkForm.long_trend_profile_id : undefined,
         }),
       });
       const data = await res.json();
@@ -2035,7 +2076,7 @@ export default function EvolutionDashboard() {
 
   // 后端日志轮询（仅面板展开时运行）
   useEffect(() => {
-    if (!backendLogsOpen) return;
+    if (!backendLogsOpen || !pageVisible) return;
     const fetchLogs = async () => {
       try {
         const res = await fetch(`${API}/quantevolver/evolution/system/logs?tail=150&level=${backendLogLevel}`);
@@ -2049,7 +2090,7 @@ export default function EvolutionDashboard() {
     fetchLogs();
     const timer = setInterval(fetchLogs, 5000);
     return () => clearInterval(timer);
-  }, [backendLogsOpen, backendLogLevel]);
+  }, [backendLogsOpen, backendLogLevel, pageVisible]);
 
   const configDiffLines = useMemo(() => {
     if (!activeLoopData?.config_json || !prevLoopData?.config_json) return [] as string[];
@@ -2394,6 +2435,7 @@ export default function EvolutionDashboard() {
               演进控制中心
             </h2>
             <button
+              data-testid="qe-create-task-open"
               onClick={() => { resetCustomEvoFormState("create"); setShowCreateTask(true); fetchSourceExperiments(); fetchSourceTasks(); }}
               style={{
                 padding: "8px 14px",
@@ -2842,6 +2884,7 @@ export default function EvolutionDashboard() {
               <div>
                 <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>任务名称</label>
                 <input
+                  data-testid="qe-create-task-name"
                   type="text"
                   value={newTask.task_name}
                   onChange={e => setNewTask({...newTask, task_name: e.target.value})}
@@ -2905,10 +2948,29 @@ export default function EvolutionDashboard() {
               </div>
               </>)}
 
+              {(newTask.source_type !== "custom_evo" || customEvoFormMode === "create" || customEvoFormMode === "clone") && (
+                <div data-testid="qe-long-trend-task-profile" style={{ padding: "12px 14px", borderRadius: "8px", border: "1px solid #bfdbfe", backgroundColor: "#eff6ff" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "9px", color: "#1e3a8a", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      data-testid="qe-long-trend-task-profile-toggle"
+                      checked={newTask.long_trend_enabled}
+                      onChange={event => setNewTask(prev => ({ ...prev, long_trend_enabled: event.target.checked }))}
+                    />
+                    启用长期趋势评价 profile
+                  </label>
+                  <div style={{ marginTop: "7px", color: "#475569", fontSize: "12px", lineHeight: 1.65 }}>
+                    <strong style={{ fontFamily: "monospace" }}>qe_long_trend_v1</strong> 在任务创建后不可变；冻结 20/40/60/120/180D、30%/50%/70% 与全期/126D/252D 切片，页面不提供参数覆盖。
+                    默认关闭；开启只影响本次新建 QE task 的 Loop 后处理，不改变训练或回测结果，也不是科研许可。
+                  </div>
+                </div>
+              )}
+
               {newTask.source_type !== "custom_evo" && (<>{newTask.source_type === "qe_experiment" ? (
                 <div>
                   <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>选择基础实验</label>
                   <select
+                    data-testid="qe-create-task-base-experiment"
                     value={newTask.base_experiment_id}
                     onChange={e => setNewTask({...newTask, base_experiment_id: e.target.value})}
                     style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "14px", boxSizing: "border-box" }}
@@ -3449,6 +3511,7 @@ export default function EvolutionDashboard() {
               <div>
                 <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>演进目标描述 (给 Agent 的指引)</label>
                 <textarea
+                  data-testid="qe-create-task-target"
                   value={newTask.target_desc}
                   onChange={e => setNewTask({...newTask, target_desc: e.target.value})}
                   placeholder="例如: 尝试提升 ICIR，降低多头波动率，重点探索树模型的深度参数..."
@@ -3703,6 +3766,7 @@ export default function EvolutionDashboard() {
                   演进指引 <span style={{ color: "#ef4444" }}>*</span>
                 </label>
                 <textarea
+                  data-testid="qe-create-task-guidance"
                   value={newTask.evolution_guidance}
                   onChange={e => setNewTask({ ...newTask, evolution_guidance: e.target.value })}
                   placeholder="描述你希望演进往什么方向探索。例如：优先尝试动量+波动率因子组合，避免过度依赖单一类别..."
@@ -4288,6 +4352,7 @@ export default function EvolutionDashboard() {
                 取消
               </button>
               <button
+                data-testid="qe-create-task-submit"
                 onClick={handleCreateTask}
                 disabled={isCreating}
                 style={{ padding: "8px 16px", backgroundColor: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", fontSize: "14px", fontWeight: 600, cursor: isCreating ? "not-allowed" : "pointer", opacity: isCreating ? 0.7 : 1 }}
@@ -4415,6 +4480,20 @@ export default function EvolutionDashboard() {
                 }}>
                 策略演进（跳过训练）
               </button>
+            </div>
+
+            <div data-testid="qe-long-trend-fork-profile" style={{ marginBottom: "14px", padding: "10px 12px", borderRadius: "8px", border: "1px solid #bfdbfe", backgroundColor: "#eff6ff" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", color: "#1e3a8a", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={forkForm.long_trend_enabled}
+                  onChange={event => setForkForm(prev => ({ ...prev, long_trend_enabled: event.target.checked }))}
+                />
+                新任务启用不可变 qe_long_trend_v1
+              </label>
+              <div style={{ marginTop: "5px", color: "#64748b", fontSize: "11px" }}>
+                默认关闭；仅对新 fork task 生效，不修改源 task，也不允许覆盖冻结期限、barrier 或切片。
+              </div>
             </div>
 
             {forkType === "evolution" ? (
@@ -4891,5 +4970,30 @@ export default function EvolutionDashboard() {
         </div>
       )}
     </div>
+  );
+}
+
+function EvolutionRouteContent() {
+  const searchParams = useSearchParams();
+  const taskType = searchParams.get("task_type");
+  if (taskType === "multi_alpha_combine") {
+    return (
+      <EvolutionWorkspaceShell taskType="multi_alpha_combine">
+        <MultiAlphaEvolutionWorkspace taskId={searchParams.get("task_id")} />
+      </EvolutionWorkspaceShell>
+    );
+  }
+  return (
+    <EvolutionWorkspaceShell taskType="single_alpha">
+      <SingleAlphaEvolutionDashboard />
+    </EvolutionWorkspaceShell>
+  );
+}
+
+export default function EvolutionDashboard() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "#475569" }}>Loading QE evolution workspace...</div>}>
+      <EvolutionRouteContent />
+    </Suspense>
   );
 }

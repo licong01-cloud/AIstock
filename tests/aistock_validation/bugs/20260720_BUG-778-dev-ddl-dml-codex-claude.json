@@ -1,0 +1,173 @@
+{
+  "actual": "当前 machine catalog 的 PROD-DDL-001 仍要求合入后立即执行生产 DDL，Claude 项目记忆保留大量历史流程与一次性 BUG/实验内容，官方 AGENTS 未明确单一权威入口。",
+  "allowed_write_scope": [
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "tests/aistock_validation/bugs/20260720_BUG-778-dev-ddl-dml-codex-claude.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-778",
+  "closed_at": "2026-07-20T01:10:10Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-19T19:01:47.070231Z",
+  "description": "当前 machine catalog 的 PROD-DDL-001 仍要求合入后立即执行生产 DDL，Claude 项目记忆保留大量历史流程与一次性 BUG/实验内容，官方 AGENTS 未明确单一权威入口。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260720-e82ac78a2799",
+      "timestamp": "2026-07-19T19:01:47.070228Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "DEV 验证、生产授权、迁移和回读状态分离；无 schema 变更记录 production_ddl_gate=noop；Codex 与 Claude 按仓库 v1.5 标准和 task-router 执行。",
+  "first_seen_at": "2026-07-19T19:01:47.070231Z",
+  "fix_branch": null,
+  "fix_commit": "474593a97a1ee64d3678e4179828e5637ace977a",
+  "fixed_at": "2026-07-20T01:10:38.181357Z",
+  "github_issue_number": 2485,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2485",
+  "last_seen_at": "2026-07-19T19:01:47.070231Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2486",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "统一 DEV 数据库 DDL/DML 验证规则并同步 Codex/Claude 权威入口",
+  "trigger_condition": {
+    "fingerprint": "e82ac78a2799389d8acb7fd1",
+    "source_event_id": "FE-20260720-e82ac78a2799"
+  },
+  "validation_evidence": [
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-778 --module validation -> passed",
+    "python -m nox -s validation_module_registry_l0 l0 -> passed",
+    "pytest backend/tests/test_aistock_guardrail_scan.py -q -p no:cacheprovider -> passed",
+    "git diff --check -> passed"
+  ],
+  "verification_budget": {
+    "budget": "deep",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "45-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "deep",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "45-60%"
+    }
+  }
+}

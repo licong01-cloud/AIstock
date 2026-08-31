@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import sys
 import threading
+from collections.abc import Mapping
 from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime
+from decimal import Decimal
+from enum import Enum
 from typing import Any, Callable, Iterator
 
 import psycopg2.extras
@@ -128,6 +132,98 @@ def _rollback_if_available(conn: Any) -> None:
 def _set_autocommit_if_available(conn: Any, value: bool) -> None:
     if hasattr(conn, "autocommit"):
         setattr(conn, "autocommit", value)
+
+
+def _durable_fact_json_value(
+    value: Any,
+    *,
+    fact_type: str,
+    fact_id: str,
+    field: str,
+    path: str = "$",
+) -> Any:
+    context = {
+        "fact_type": fact_type,
+        "fact_id": fact_id,
+        "field": field,
+        "path": path,
+    }
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise DataUnavailableError(
+                "Paper v2 durable fact contains a non-finite Decimal",
+                context={
+                    "reason_code": "PAPER_V2_DURABLE_FACT_JSON_NUMBER_INVALID",
+                    **context,
+                    "value": str(value),
+                },
+            )
+        return str(value)
+    if isinstance(value, Enum):
+        return _durable_fact_json_value(
+            value.value,
+            fact_type=fact_type,
+            fact_id=fact_id,
+            field=field,
+            path=path,
+        )
+    if isinstance(value, Mapping):
+        invalid_keys = [key for key in value if not isinstance(key, str)]
+        if invalid_keys:
+            invalid_key = invalid_keys[0]
+            raise DataUnavailableError(
+                "Paper v2 durable fact JSON object keys must be strings",
+                context={
+                    "reason_code": "PAPER_V2_DURABLE_FACT_JSON_KEY_INVALID",
+                    **context,
+                    "key_type": type(invalid_key).__name__,
+                    "key_repr": repr(invalid_key),
+                },
+            )
+        return {
+            key: _durable_fact_json_value(
+                item,
+                fact_type=fact_type,
+                fact_id=fact_id,
+                field=field,
+                path=f"{path}.{key}",
+            )
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _durable_fact_json_value(
+                item,
+                fact_type=fact_type,
+                fact_id=fact_id,
+                field=field,
+                path=f"{path}[{index}]",
+            )
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise DataUnavailableError(
+                "Paper v2 durable fact contains a non-finite float",
+                context={
+                    "reason_code": "PAPER_V2_DURABLE_FACT_JSON_NUMBER_INVALID",
+                    **context,
+                    "value": repr(value),
+                },
+            )
+        return value
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    raise DataUnavailableError(
+        "Paper v2 durable fact contains an unsupported JSON value",
+        context={
+            "reason_code": "PAPER_V2_DURABLE_FACT_JSON_TYPE_INVALID",
+            **context,
+            "value_type": type(value).__name__,
+        },
+    )
 
 
 def _run_status_transition_error(
@@ -2381,7 +2477,14 @@ class PaperTradingV2Repository:
                         order.status.value,
                         order.filled_quantity,
                         order.avg_fill_price,
-                        psycopg2.extras.Json(order.metadata),
+                        psycopg2.extras.Json(
+                            _durable_fact_json_value(
+                                order.metadata,
+                                fact_type="order",
+                                fact_id=order.order_id,
+                                field="metadata",
+                            )
+                        ),
                         order.created_at,
                         order.updated_at,
                     ),
@@ -2461,11 +2564,29 @@ class PaperTradingV2Repository:
                         fill.trade_time,
                         fill.bar_time,
                         fill.reason,
-                        psycopg2.extras.Json(fill.metadata),
+                        psycopg2.extras.Json(
+                            _durable_fact_json_value(
+                                fill.metadata,
+                                fact_type="fill",
+                                fact_id=fill.fill_id,
+                                field="metadata",
+                            )
+                        ),
                         now,
                         now,
                         intended_price,
-                        psycopg2.extras.Json(fill_market_context) if fill_market_context is not None else None,
+                        (
+                            psycopg2.extras.Json(
+                                _durable_fact_json_value(
+                                    fill_market_context,
+                                    fact_type="fill",
+                                    fact_id=fill.fill_id,
+                                    field="fill_market_context",
+                                )
+                            )
+                            if fill_market_context is not None
+                            else None
+                        ),
                     ),
                 )
 
@@ -2522,8 +2643,26 @@ class PaperTradingV2Repository:
                         event.event_type.value,
                         event.event_time,
                         event.reason,
-                        psycopg2.extras.Json(event.metadata),
-                        psycopg2.extras.Json(event.fill.model_dump(mode="json")) if event.fill else None,
+                        psycopg2.extras.Json(
+                            _durable_fact_json_value(
+                                event.metadata,
+                                fact_type="order_event",
+                                fact_id=event.event_id,
+                                field="metadata",
+                            )
+                        ),
+                        (
+                            psycopg2.extras.Json(
+                                _durable_fact_json_value(
+                                    event.fill.model_dump(mode="python"),
+                                    fact_type="order_event",
+                                    fact_id=event.event_id,
+                                    field="fill_json",
+                                )
+                            )
+                            if event.fill
+                            else None
+                        ),
                     ),
                 )
 
@@ -2639,7 +2778,19 @@ class PaperTradingV2Repository:
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO paper_v2.run_events (run_id, event_type, message, context) VALUES (%s, %s, %s, %s)",
-                    (run_id, event_type, message, psycopg2.extras.Json(context or {})),
+                    (
+                        run_id,
+                        event_type,
+                        message,
+                        psycopg2.extras.Json(
+                            _durable_fact_json_value(
+                                context or {},
+                                fact_type="run_event",
+                                fact_id=f"{run_id}:{event_type}",
+                                field="context",
+                            )
+                        ),
+                    ),
                 )
 
     def readback_local_sim_economic_facts(self, *, run_id: str, order_ids: set[str], fill_ids: set[str], order_event_ids: set[str], cash_fill_ids: set[str]) -> dict[str, int]:
@@ -2819,13 +2970,35 @@ class PaperTradingV2Repository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT DISTINCT ON (symbol) portfolio_id, symbol, quantity,
-                           available_quantity, avg_cost, trade_date
-                    FROM paper_v2.positions
-                    WHERE portfolio_id = %s AND trade_date <= %s
-                    ORDER BY symbol, trade_date DESC, position_id DESC
+                    WITH latest_snapshot AS (
+                        SELECT run_id
+                        FROM paper_v2.daily_snapshots
+                        WHERE portfolio_id = %s AND trade_date <= %s
+                        ORDER BY trade_date DESC, updated_at DESC, snapshot_id DESC
+                        LIMIT 1
+                    ),
+                    latest_legacy_position_run AS (
+                        SELECT run_id
+                        FROM paper_v2.positions
+                        WHERE portfolio_id = %s AND trade_date <= %s
+                        GROUP BY run_id
+                        ORDER BY MAX(trade_date) DESC, MAX(updated_at) DESC, run_id DESC
+                        LIMIT 1
+                    ),
+                    position_authority AS (
+                        SELECT run_id FROM latest_snapshot
+                        UNION ALL
+                        SELECT run_id FROM latest_legacy_position_run
+                        WHERE NOT EXISTS (SELECT 1 FROM latest_snapshot)
+                        LIMIT 1
+                    )
+                    SELECT p.portfolio_id, p.symbol, p.quantity,
+                           p.available_quantity, p.avg_cost, p.trade_date
+                    FROM paper_v2.positions p
+                    JOIN position_authority a ON a.run_id = p.run_id
+                    ORDER BY p.symbol
                     """,
-                    (portfolio_id, before_or_on),
+                    (portfolio_id, before_or_on, portfolio_id, before_or_on),
                 )
                 rows = cur.fetchall()
         return {
@@ -4308,17 +4481,33 @@ class InMemoryPaperTradingV2Repository:
         return audit
 
     def load_latest_positions(self, portfolio_id: str, before_or_on: date) -> dict[str, PositionLot]:
-        candidates: list[PositionLot] = []
-        for positions in self.positions.values():
-            candidates.extend([pos for pos in positions if pos.portfolio_id == portfolio_id and pos.trade_date <= before_or_on])
-        by_symbol: dict[str, PositionLot] = {}
-        for pos in candidates:
-            if pos.quantity <= 0:
-                continue
-            existing = by_symbol.get(pos.symbol)
-            if existing is None or pos.trade_date >= existing.trade_date:
-                by_symbol[pos.symbol] = pos
-        return by_symbol
+        snapshot_candidates = [
+            (snapshot.snapshot_time, run_id)
+            for run_id, snapshot in self.snapshots.items()
+            if snapshot.portfolio_id == portfolio_id and snapshot.snapshot_time.date() <= before_or_on
+        ]
+        if snapshot_candidates:
+            authority_run_id = max(snapshot_candidates)[1]
+        else:
+            legacy_candidates = [
+                (max(position.trade_date for position in positions), run_id)
+                for run_id, positions in self.positions.items()
+                if positions
+                and any(
+                    position.portfolio_id == portfolio_id and position.trade_date <= before_or_on
+                    for position in positions
+                )
+            ]
+            if not legacy_candidates:
+                return {}
+            authority_run_id = max(legacy_candidates)[1]
+        return {
+            position.symbol: position
+            for position in self.positions.get(authority_run_id, [])
+            if position.portfolio_id == portfolio_id
+            and position.trade_date <= before_or_on
+            and position.quantity > 0
+        }
 
     def load_latest_cash(self, portfolio: PaperPortfolio, before_or_on: date) -> float:
         latest_cash_entry: tuple[date, datetime, float] | None = None

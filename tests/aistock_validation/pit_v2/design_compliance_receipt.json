@@ -1,0 +1,110 @@
+{
+  "schema_version": "pit_v2_design_compliance_receipt_v2",
+  "observed_at": "2026-08-21T14:30:45.6673383Z",
+  "design": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+  "design_tier": "F2",
+  "design_validation": {
+    "status": "PASS",
+    "design_items": 30,
+    "matrix_rows": 30,
+    "warnings": 0
+  },
+  "source_identity": {
+    "w6_source_base_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "observed_origin_main": "1ea9f26777d849c8f4a6492939c7dc7b47ab50b4",
+    "observed_origin_main_descends_w6": true,
+    "worker_dependency_tree_digest_unchanged": true,
+    "w6_pr": "https://github.com/licong01-cloud/AIstock/pull/3622",
+    "w6_merge_commit": "509e12c2aeed0f34612d2cad78f4fecb7b691618",
+    "implementation_source_commit": "ddcf89a56d61f63d6eb96650de615c9fe5795976",
+    "source_freeze_receipt": "tests/aistock_validation/pit_v2/source_freeze_receipt.json"
+  },
+  "stage_acceptance": [
+    {
+      "stage": "W0",
+      "requirement": "inventory and retained-history boundaries",
+      "evidence": "tests/aistock_validation/pit_v2/retention_inventory.json",
+      "status": "PASS"
+    },
+    {
+      "stage": "W1_W2",
+      "requirement": "canonical PIT authority and candidate-only monthly workflow source",
+      "evidence": "current origin/main plus W6 final integration matrix",
+      "status": "PASS_SOURCE_MERGED"
+    },
+    {
+      "stage": "W3_D",
+      "requirement": "QE/HMM unified identity and no online fallback for frozen consumers",
+      "evidence": "39 passed on final W6 branch before merge",
+      "status": "PASS"
+    },
+    {
+      "stage": "W4_W5",
+      "requirement": "Selection/Paper/Simulation and StrategyPackage/Advisory integration",
+      "evidence": "91 adjacent tests plus 378 advisory historical tests, 5 skipped",
+      "status": "PASS_SOURCE_MERGED"
+    },
+    {
+      "stage": "W6",
+      "requirement": "consumer inventory, inference boundary, candidate/W8/W9 envelope contracts and final source receipt",
+      "evidence": "PR #3622; 20 direct tests; 53 final inference-adjacent tests; CI failures=0",
+      "status": "PASS_SOURCE_MERGED"
+    },
+    {
+      "stage": "W7",
+      "requirement": "real sample then full candidate-only initial migration",
+      "evidence": "registered Worker code_sha=4d3d6e5f946a48320de693c5f30bc14786007e76 differs from source freeze 509e12c2aeed0f34612d2cad78f4fecb7b691618",
+      "status": "BLOCKED_STALE_REGISTERED_WORKER"
+    },
+    {
+      "stage": "W8",
+      "requirement": "independent read-only candidate validation",
+      "evidence": "cannot start before W7 terminal immutable candidate",
+      "status": "NOT_STARTED"
+    },
+    {
+      "stage": "W9",
+      "requirement": "separately authorized distribution, authority CAS, activation and aftercare",
+      "evidence": "production_activation_performed=false; activation blockers=16",
+      "status": "NOT_AUTHORIZED_NOT_STARTED"
+    }
+  ],
+  "design_compliance_001": {
+    "complete_design_scope": {
+      "status": "PASS_W6",
+      "evidence": "W6 source contracts and all planned integration files are merged; real W7/W8/W9 results are explicitly not claimed"
+    },
+    "no_simplified_subset_or_poc_claim": {
+      "status": "PASS",
+      "evidence": "fixture evidence remains fixture-only and runtime_real_data_evidence is not_run_not_authorized"
+    },
+    "no_silent_fallback_or_latest_guessing": {
+      "status": "PASS",
+      "evidence": "singleton authority pointer only during migration; detached reproduction requires immutable identity, exact as-of date and codes"
+    },
+    "no_unapproved_gate_or_runtime_action": {
+      "status": "PASS",
+      "evidence": "no DB write, dataset mutation, activation, restart, scheduler action, process control or cleanup was performed"
+    }
+  },
+  "production_gates": {
+    "production_ddl_gate": "noop",
+    "production_dml_gate": "noop",
+    "production_activation": "not_requested",
+    "backend_restart": "pending_user",
+    "dataset_worker_restart": "required_user_action_before_W7",
+    "dataset_candidate_write": "not_performed",
+    "cleanup": "not_requested"
+  },
+  "blocking_findings": [
+    {
+      "id": "BLOCKED_STALE_REGISTERED_WORKER",
+      "severity": "P1_ENTRY_GATE",
+      "expected": "Worker code_sha equals current origin/main at execution; W6 merge is an ancestor; dependency digest=786f8e1036a8425abb295f9b30fa9e776374853514d314a9b877b875e2337b7a",
+      "observed": "4d3d6e5f946a48320de693c5f30bc14786007e76",
+      "owner": "user",
+      "safe_next_action": "restart or replace the dataset release Worker from current origin/main, then rerun status/preflight and verify ancestry plus dependency digest"
+    }
+  ],
+  "overall": "PASS_W6_SOURCE_READY_W7_BLOCKED_STALE_WORKER"
+}

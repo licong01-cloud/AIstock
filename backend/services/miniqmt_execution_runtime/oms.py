@@ -157,7 +157,9 @@ class MiniQMTOmsLedger:
             intent_id=child_order.parent_intent_id,
             strategy_id=_strategy_id(child_order),
             qmt_order_id=qmt_order_id,
-            qmt_order_sysid=_optional_text((payload or {}).get("qmt_order_sysid") or (payload or {}).get("order_sysid")),
+            qmt_order_sysid=_optional_text(
+                (payload or {}).get("qmt_order_sysid") or (payload or {}).get("order_sysid")
+            ),
             symbol=child_order.symbol,
             side=child_order.side.value,
             price=normalized_price,
@@ -177,7 +179,9 @@ class MiniQMTOmsLedger:
                 "runtime_algo_instance_id": child_order.algo_instance_id,
                 "runtime_parent_intent_id": child_order.parent_intent_id,
             },
-            first_ingest_source="BROKER_CALLBACK",
+            first_ingest_source=(
+                "BROKER_SNAPSHOT_SYNC" if _optional_text((payload or {}).get("recovery_source")) else "BROKER_CALLBACK"
+            ),
             first_ingested_at=datetime.now(UTC),
             canonical_trade_fact_sha256=canonical_trade_fact_sha256(
                 account_id=self._account_id or "",
@@ -226,7 +230,9 @@ class MiniQMTOmsLedger:
             "apply_sell_trade_fill_once",
             "list_position_lots",
         )
-        missing = [name for name in required_methods if not callable(getattr(self._strategy_ledger_repository, name, None))]
+        missing = [
+            name for name in required_methods if not callable(getattr(self._strategy_ledger_repository, name, None))
+        ]
         if missing:
             raise RuntimeError(
                 "MiniQMT event-loop SELL proceeds settlement requires qmt_strategy cash/lot repository methods; "
@@ -237,11 +243,13 @@ class MiniQMTOmsLedger:
         if existing is not None:
             account = self._get_virtual_account_for_sell_settlement(trade.strategy_id)
             try:
-                _trade, _trade_inserted, _entry, cash_inserted = self._strategy_ledger_repository.apply_sell_trade_fill_once(
-                    trade,
-                    existing,
-                    account,
-                    [],
+                _trade, _trade_inserted, _entry, cash_inserted = (
+                    self._strategy_ledger_repository.apply_sell_trade_fill_once(
+                        trade,
+                        existing,
+                        account,
+                        [],
+                    )
                 )
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(
@@ -286,11 +294,13 @@ class MiniQMTOmsLedger:
             },
         )
         try:
-            _trade, _trade_inserted, stored_entry, cash_inserted = self._strategy_ledger_repository.apply_sell_trade_fill_once(
-                trade,
-                entry,
-                updated_account,
-                updated_lots,
+            _trade, _trade_inserted, stored_entry, cash_inserted = (
+                self._strategy_ledger_repository.apply_sell_trade_fill_once(
+                    trade,
+                    entry,
+                    updated_account,
+                    updated_lots,
+                )
             )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
@@ -300,6 +310,132 @@ class MiniQMTOmsLedger:
                 f"error={type(exc).__name__}: {exc}"
             ) from exc
         return stored_entry, bool(cash_inserted)
+
+    def settle_buy_trade_cash_lot_once(
+        self,
+        trade: TradeLedgerRecord,
+    ) -> tuple[CashLedgerEntry, bool, bool]:
+        """Settle one broker BUY trade into cash and a T+1 lot exactly once."""
+
+        if self._strategy_ledger_repository is None:
+            raise RuntimeError(
+                "MiniQMT event-loop BUY settlement requires qmt_strategy ledger authority; "
+                "reason_code=MINIQMT_RUNTIME_TRADE_LEDGER_AUTHORITY_MISSING"
+            )
+        self._require_qmt_strategy_context()
+        if str(trade.side or "").strip().upper() != OrderSide.BUY.value:
+            raise RuntimeError(
+                "MiniQMT event-loop BUY settlement received a non-BUY trade; "
+                f"reason_code=MINIQMT_RUNTIME_BUY_SETTLEMENT_SIDE_INVALID, trade_id={trade.trade_id}, "
+                f"side={trade.side!r}"
+            )
+        required_methods = (
+            "get_virtual_account",
+            "get_order_ledger",
+            "get_cash_entry",
+            "list_cash_entries",
+            "apply_buy_trade_fill_once",
+        )
+        missing = [
+            name for name in required_methods if not callable(getattr(self._strategy_ledger_repository, name, None))
+        ]
+        if missing:
+            raise RuntimeError(
+                "MiniQMT event-loop BUY settlement requires cash/lot repository methods; "
+                f"reason_code=MINIQMT_RUNTIME_TRADE_LEDGER_AUTHORITY_MISSING, missing_methods={missing}"
+            )
+
+        account = self._get_virtual_account_for_sell_settlement(trade.strategy_id)
+        order = self._strategy_ledger_repository.get_order_ledger(
+            self._account_id or "",
+            trade.qmt_order_id,
+        )
+        if order is None:
+            raise RuntimeError(
+                "MiniQMT event-loop BUY settlement cannot reconstruct its reserved order price; "
+                f"reason_code=MINIQMT_RUNTIME_BUY_SETTLEMENT_ORDER_MISSING, trade_id={trade.trade_id}, "
+                f"qmt_order_id={trade.qmt_order_id}, account_id={self._account_id!r}"
+            )
+        cash_id = _cash_event_id(self._account_id or "", self._trade_date, "buy_fill", trade.trade_id)
+        fill_amount = _money(trade.amount)
+        fee_amount = _money(trade.commission)
+        remaining_frozen = max(
+            _money(
+                sum(
+                    (
+                        entry.frozen_delta
+                        for entry in self._strategy_ledger_repository.list_cash_entries(trade.strategy_id)
+                        if entry.intent_id == trade.intent_id
+                    ),
+                    Decimal("0"),
+                )
+            ),
+            Decimal("0"),
+        )
+        reserve_price = order.price if order.price > Decimal("0") else trade.price
+        reserved_fill_amount = _money(reserve_price * Decimal(trade.quantity))
+        frozen_release = min(reserved_fill_amount, account.frozen_cash, remaining_frozen)
+        cash_delta = frozen_release - fill_amount - fee_amount
+        updated_account = replace(
+            account,
+            cash=account.cash + cash_delta,
+            frozen_cash=account.frozen_cash - frozen_release,
+            updated_at=datetime.now(UTC),
+        )
+        entry = CashLedgerEntry(
+            cash_id=cash_id,
+            strategy_id=trade.strategy_id,
+            entry_type=CashEntryType.BUY_FILL,
+            cash_delta=cash_delta,
+            cash_after=updated_account.cash,
+            frozen_delta=-frozen_release,
+            frozen_after=updated_account.frozen_cash,
+            account_id=self._account_id or "",
+            trade_date=self._trade_date,
+            intent_id=trade.intent_id,
+            trade_id=trade.trade_id,
+            symbol=trade.symbol,
+            reason=CashEntryType.BUY_FILL.value,
+            metadata={
+                "source": "miniqmt_event_loop_runtime_oms",
+                "fill_amount": str(fill_amount),
+                "commission": str(fee_amount),
+                "frozen_release": str(frozen_release),
+                "reserved_fill_amount": str(reserved_fill_amount),
+                "qmt_order_id": trade.qmt_order_id,
+            },
+        )
+        lot = PositionLotRecord(
+            lot_id=f"lot_{self._account_id or ''}_{self._trade_date.isoformat() if self._trade_date else 'unknown_trade_date'}_{trade.trade_id}",
+            strategy_id=trade.strategy_id,
+            symbol=trade.symbol,
+            open_trade_id=trade.trade_id,
+            open_date=self._trade_date,
+            quantity=trade.quantity,
+            available_quantity=0,
+            remaining_quantity=trade.quantity,
+            avg_cost=trade.price,
+            cost_amount=trade.amount,
+            account_id=self._account_id or "",
+            open_time=trade.trade_time,
+            metadata={"source": "miniqmt_event_loop_runtime_oms"},
+        )
+        try:
+            _trade, _trade_inserted, lot_created, stored_entry, cash_inserted = (
+                self._strategy_ledger_repository.apply_buy_trade_fill_once(
+                    trade,
+                    lot,
+                    entry,
+                    updated_account,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "MiniQMT event-loop BUY settlement failed while applying qmt_strategy cash/lot facts; "
+                f"reason_code=MINIQMT_RUNTIME_BUY_SETTLEMENT_FAILED, strategy_id={trade.strategy_id}, "
+                f"trade_id={trade.trade_id}, cash_id={cash_id}, error={type(exc).__name__}: {exc}"
+            ) from exc
+        return stored_entry, bool(cash_inserted), bool(lot_created)
 
     def _get_virtual_account_for_sell_settlement(self, strategy_id: str) -> Any:
         try:
@@ -424,7 +560,9 @@ class MiniQMTOmsLedger:
                 strategy_id=_strategy_id(order),
                 strategy_name=_strategy_name(order),
                 qmt_order_id=qmt_order_id,
-                qmt_order_sysid=_optional_text(order.metadata.get("qmt_order_sysid") or order.metadata.get("order_sysid")),
+                qmt_order_sysid=_optional_text(
+                    order.metadata.get("qmt_order_sysid") or order.metadata.get("order_sysid")
+                ),
                 symbol=order.symbol,
                 order_type=BUY_ORDER_TYPE if order.side == OrderSide.BUY else SELL_ORDER_TYPE,
                 order_volume=int(order.quantity),
@@ -539,11 +677,14 @@ def _order_remark(order: MiniQMTChildOrder) -> str:
 
 
 def _status_msg(order: MiniQMTChildOrder) -> str:
-    return _optional_text(
-        order.metadata.get("status_msg")
-        or order.metadata.get("gateway_message")
-        or order.metadata.get("broker_status_msg")
-    ) or order.status.value
+    return (
+        _optional_text(
+            order.metadata.get("status_msg")
+            or order.metadata.get("gateway_message")
+            or order.metadata.get("broker_status_msg")
+        )
+        or order.status.value
+    )
 
 
 def _qmt_order_id_for_ledger(order: MiniQMTChildOrder) -> str | None:

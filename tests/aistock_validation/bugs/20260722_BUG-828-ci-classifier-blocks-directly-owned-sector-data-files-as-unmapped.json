@@ -1,0 +1,221 @@
+{
+  "actual": "CI run 29901657593 classified three owned files as unmapped_code_blocked and skipped the downstream local_data/static gates; CodeQL, Semgrep, and PR Quality failed from the same classifier result.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/bugs/20260722_BUG-828-ci-classifier-blocks-directly-owned-sector-data-files-as-unmapped.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-828",
+  "closed_at": "2026-07-22T08:24:16Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-22T07:56:07.365123Z",
+  "description": "CI run 29901657593 classified three owned files as unmapped_code_blocked and skipped the downstream local_data/static gates; CodeQL, Semgrep, and PR Quality failed from the same classifier result.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260722-02130ebfcc36",
+      "timestamp": "2026-07-22T07:56:07.365116Z"
+    },
+    {
+      "action": "fix_in_progress",
+      "actor": "codex-app",
+      "note": "Adds direct local_data ownership for the sector_data builder, schema, PIT migration, and direct test, with classifier regression coverage proving the focused plan and no unmapped files.",
+      "timestamp": "2026-07-22T07:59:08.417552Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/29901657593/job/88863542781",
+    "https://github.com/licong01-cloud/AIstock/pull/2622"
+  ],
+  "expected": "Changed files must route from file_ownership.yaml primary ownership to module_registry.yaml and test_plans.yaml; task-specific sector_data schema, migration, and direct test paths must select the local_data plan without impact-module inference or a full-repo fallback.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
+      ],
+      "impacted_modules": [
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ]
+  },
+  "first_seen_at": "2026-07-22T07:56:07.365123Z",
+  "fix_branch": "bug/BUG-828-ci-classifier-blocks-directly-owned-sector-data-20260722",
+  "fix_commit": "3ea267e74e6e521839b3f5bb24d38ed552a48a1c",
+  "fixed_at": "2026-07-22T08:26:55.738610Z",
+  "github_issue_number": 2623,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2623",
+  "last_seen_at": "2026-07-22T07:59:08.417552Z",
+  "module": "validation.module_quality",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2624",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/ci_change_classifier.py --changed-files-file <file-list-containing-sector-data-builder-schema-migration-test>",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation.module_quality"
+  ],
+  "title": "CI classifier blocks directly owned sector_data files as unmapped",
+  "trigger_condition": {
+    "fingerprint": "02130ebfcc36cbaf782c4720",
+    "source_event_id": "FE-20260722-02130ebfcc36"
+  },
+  "validation_evidence": [
+    "PR #2624 CI verdict -> passed"
+  ],
+  "verification_budget": {
+    "budget": "deep",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "45-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "deep",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "45-60%"
+    }
+  }
+}

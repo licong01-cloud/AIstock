@@ -1,0 +1,177 @@
+{
+  "actual": "sw_index_member 同步(tushare index_member_all, BY_CODE)只 upsert 新映射, 从不对已结束映射写 out_date 下架。000406/000817/000956 等股票存在同一交易日多条 active 映射(双重映射), sector_data preflight 的 ambiguous_latest_mappings 依赖 mapping_summary 检出, 但 PIT 池/因子层按 in_date 取 latest 时可能选到已失效的行业归属, 造成 PIT 污染。修复方向: 同步层与上游现役集合对账, 对上游已不存在(或已带 out_date)的本地 active 映射补齐 out_date; 同时评估对账口径(BY_CODE 拉取返回集 vs 全量刷新)与下架生效后的 sector_data/因子重建范围。",
+  "allowed_write_scope": [
+    "backend/services/tushare_dataset_specs.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260730_BUG-930-sw-index-member-upsert-pit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-930",
+  "closed_at": "2026-07-30T15:14:26Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-30T08:50:46.585023Z",
+  "description": "sw_index_member 同步(tushare index_member_all, BY_CODE)只 upsert 新映射, 从不对已结束映射写 out_date 下架。000406/000817/000956 等股票存在同一交易日多条 active 映射(双重映射), sector_data preflight 的 ambiguous_latest_mappings 依赖 mapping_summary 检出, 但 PIT 池/因子层按 in_date 取 latest 时可能选到已失效的行业归属, 造成 PIT 污染。修复方向: 同步层与上游现役集合对账, 对上游已不存在(或已带 out_date)的本地 active 映射补齐 out_date; 同时评估对账口径(BY_CODE 拉取返回集 vs 全量刷新)与下架生效后的 sector_data/因子重建范围。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260730-160489dba1d9",
+      "timestamp": "2026-07-30T08:50:46.585018Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "sw_index_member 同步与上游逐代码全量镜像一致: DatasetSpec 新增 replace_by_code 标志并对 SW_INDEX_MEMBER 启用; BY_CODE 循环对每个 l2_code 在单事务内 DELETE 该代码本地全部行后重插上游完整载荷(上游 index_member_all 返回含 out_date 的全量成员视图), 上游已不返回的旧映射(如 000406/000817/000956 在 801767.SI 下的残留)随下次同步物理下架, 双重 active 映射消除; 上游返回空载荷时拒绝镜像删除并计为失败批次(防瞬时上游缺口清空本地)。DEV 实测: 上游 801961.SI 仍返回3只股票 active, 801767.SI 已不再返回——证实污染来自本同步层只增不删。部署需重启后端服务使调度器加载新代码(生产服务重启需另行授权)。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-07-30T08:50:46.585023Z",
+  "fix_branch": null,
+  "fix_commit": "451eb1b4c4b6b8edb5cd76b7025ce8bf575c2953",
+  "fixed_at": "2026-07-30T15:18:19.162646Z",
+  "github_issue_number": 2951,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2951",
+  "last_seen_at": "2026-07-30T08:50:46.585023Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2952",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "sw_index_member同步只upsert不下架,已结束映射残留造成双重映射PIT污染",
+  "trigger_condition": {
+    "fingerprint": "160489dba1d907641e7561be",
+    "source_event_id": "FE-20260730-160489dba1d9"
+  },
+  "validation_evidence": [
+    "pytest backend/tests/test_tushare_sync_engine.py -q -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s data_sync_autonomy_backend -> passed"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

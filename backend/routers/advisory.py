@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Any
+from datetime import date, datetime
+import logging
+from typing import Any, Callable
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from backend.services.advisory_phase0a.historical_research import (
@@ -27,9 +29,31 @@ from backend.services.advisory_program import (
     program_to_dict,
     review_result_to_dict,
 )
+from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
+from backend.services.advisory_forward.scheduler import advisory_forward_scheduler
+from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
+from backend.services.advisory_historical_range.api_models import (
+    HistoricalRangeBuildBridgeRequest,
+    HistoricalRangeCommandRequest,
+    HistoricalRangeCreateRequest,
+    HistoricalRangeRefreshOutcomesRequest,
+)
+from backend.services.advisory_historical_range.composition import (
+    build_environment_historical_range_r5_application_service,
+)
+from backend.services.advisory_historical_range.models import HistoricalRangeContractError
+from backend.services.advisory_historical_range.query_repository import (
+    HistoricalRangeNotFoundError,
+    HistoricalRangeQueryError,
+)
+from backend.services.advisory_historical_range.service import (
+    HistoricalRangeApplicationService,
+    HistoricalRangeServiceError,
+)
 
 router = APIRouter(prefix="/advisory", tags=["advisory"])
+LOGGER = logging.getLogger(__name__)
 
 
 class AdvisoryProgramCreateRequest(BaseModel):
@@ -132,6 +156,14 @@ def get_advisory_program_service() -> AdvisoryProgramService:
     return AdvisoryProgramService()
 
 
+def get_advisory_model_shadow_service() -> AdvisoryModelShadowService:
+    return AdvisoryModelShadowService()
+
+
+def get_advisory_forward_service() -> AdvisoryForwardService:
+    return AdvisoryForwardService()
+
+
 def get_historical_research_runner() -> HistoricalAdvisoryResearchRunner:
     return HistoricalAdvisoryResearchRunner(
         repository=PostgresHistoricalResearchRepository(),
@@ -139,6 +171,13 @@ def get_historical_research_runner() -> HistoricalAdvisoryResearchRunner:
         program_resolver=PostgresHistoricalResearchProgramResolver(),
         evidence_adapter=PersistedHistoricalSelectionEvidenceAdapter(),
     )
+
+
+def get_historical_range_application_service() -> HistoricalRangeApplicationService:
+    try:
+        return build_environment_historical_range_r5_application_service()
+    except Exception as exc:
+        _raise_historical_range_http(exc)
 
 
 def _raise_http(exc: TradingCoreError) -> None:
@@ -155,6 +194,75 @@ def _raise_historical_research_http(exc: TradingCoreError) -> None:
     if isinstance(exc, DataUnavailableError):
         status_code = 404
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
+
+
+def _raise_historical_range_http(exc: Exception) -> None:
+    correlation_id = f"ahr-corr-{uuid4().hex}"
+    status_code = 500
+    reason_code = "ADVISORY_HR_INTERNAL_ERROR"
+    retryable = False
+    context: dict[str, Any] = {}
+    if isinstance(exc, HistoricalRangeServiceError):
+        status_code = exc.http_status
+        reason_code = exc.reason_code
+        retryable = exc.retryable
+        context = exc.context
+    elif isinstance(exc, HistoricalRangeNotFoundError):
+        status_code = 404
+        reason_code = exc.reason_code
+        context = exc.context
+    elif isinstance(exc, HistoricalRangeQueryError):
+        status_code = 422
+        reason_code = exc.reason_code
+        context = exc.context
+    elif isinstance(exc, HistoricalRangeContractError):
+        reason_code = exc.reason_code
+        context = exc.context
+        status_code = 409 if "CONFLICT" in reason_code or "MISMATCH" in reason_code else 422
+        retryable = status_code == 409
+    elif isinstance(exc, TradingCoreError):
+        payload = exc.to_dict()
+        reason_code = str(payload.get("reason_code") or "ADVISORY_HR_DOMAIN_ERROR")
+        context = dict(payload.get("context") or {})
+        status_code = 409 if "CONFLICT" in reason_code or "MISMATCH" in reason_code else 422
+    elif isinstance(exc, ValueError):
+        status_code = 422
+        reason_code = "ADVISORY_HR_REQUEST_INVALID"
+    unexpected = status_code == 500
+    if unexpected:
+        LOGGER.exception(
+            "unexpected historical-range HTTP failure correlation_id=%s error_type=%s",
+            correlation_id,
+            type(exc).__name__,
+            exc_info=exc,
+        )
+    detail = {
+        "error_code": "ADVISORY_HISTORICAL_RANGE_ERROR",
+        "reason_code": reason_code,
+        "message": "Unexpected historical-range service error" if unexpected else str(exc),
+        "retryable": retryable,
+        "context": {} if unexpected else context,
+        "correlation_id": correlation_id,
+    }
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+def _historical_range_call(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    try:
+        return call()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_historical_range_http(exc)
+
+
+def _page_envelope(resource: str, result: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "data": {resource: result["items"]}, "page": result["page"]}
+
+
+def _set_mutation_status(response: Response, payload: dict[str, Any]) -> None:
+    operation = payload["data"]["operation"]
+    response.status_code = 200 if operation.get("status") in {"COMPLETED", "FAILED"} else 202
 
 
 @router.post("/research-batches")
@@ -219,6 +327,262 @@ def get_historical_research_program(
         _raise_historical_research_http(exc)
 
 
+@router.get("/historical-range-options")
+def historical_range_options(
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    return _historical_range_call(service.list_batch_options)
+
+
+@router.get("/historical-range-batches")
+def list_historical_range_batches(
+    status: list[str] = Query(default=[]),
+    program_id: str | None = None,
+    created_before: datetime | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.list_batches(
+            statuses=status,
+            program_id=program_id,
+            created_before=created_before,
+            cursor=cursor,
+            limit=limit,
+        )
+    )
+    return _page_envelope("batches", result)
+
+
+@router.post("/historical-range-batches", status_code=202)
+def create_historical_range_batch(
+    req: HistoricalRangeCreateRequest,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.create_batch(
+            req,
+            idempotency_key=idempotency_key,
+            background_tasks=background_tasks,
+        )
+    )
+    _set_mutation_status(response, result)
+    return result
+
+
+@router.get("/historical-range-batches/{batch_id}")
+def get_historical_range_batch(
+    batch_id: str,
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    batch = _historical_range_call(lambda: service.get_batch(batch_id))
+    return {"ok": True, "data": {"batch": batch}}
+
+
+@router.get("/historical-range-batches/{batch_id}/runs")
+def list_historical_range_runs(
+    batch_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(lambda: service.list_runs(batch_id, cursor=cursor, limit=limit))
+    return _page_envelope("runs", result)
+
+
+@router.get("/historical-range-batches/{batch_id}/operations")
+def list_historical_range_operations(
+    batch_id: str,
+    operation_type: list[str] = Query(default=[]),
+    status: list[str] = Query(default=[]),
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.list_operations(
+            batch_id,
+            operation_types=operation_type,
+            statuses=status,
+            cursor=cursor,
+            limit=limit,
+        )
+    )
+    return _page_envelope("operations", result)
+
+
+@router.post("/historical-range-batches/{batch_id}/resume", status_code=202)
+def resume_historical_range_batch(
+    batch_id: str,
+    req: HistoricalRangeCommandRequest,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.resume_batch(batch_id, req, background_tasks=background_tasks)
+    )
+    _set_mutation_status(response, result)
+    return result
+
+
+@router.post("/historical-range-batches/{batch_id}/cancel", status_code=202)
+def cancel_historical_range_batch(
+    batch_id: str,
+    req: HistoricalRangeCommandRequest,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.cancel_batch(batch_id, req, background_tasks=background_tasks)
+    )
+    _set_mutation_status(response, result)
+    return result
+
+
+@router.post("/historical-range-batches/{batch_id}/refresh-outcomes", status_code=202)
+def refresh_historical_range_outcomes(
+    batch_id: str,
+    req: HistoricalRangeRefreshOutcomesRequest,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.refresh_outcomes(batch_id, req, background_tasks=background_tasks)
+    )
+    _set_mutation_status(response, result)
+    return result
+
+
+@router.post("/historical-range-batches/{batch_id}/build-dataset-bridge", status_code=202)
+def build_historical_range_dataset_bridge(
+    batch_id: str,
+    req: HistoricalRangeBuildBridgeRequest,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.build_dataset_bridge(batch_id, req, background_tasks=background_tasks)
+    )
+    _set_mutation_status(response, result)
+    return result
+
+
+@router.get("/historical-range-operations/{operation_id}")
+def get_historical_range_operation(
+    operation_id: str,
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    operation = _historical_range_call(lambda: service.get_operation(operation_id))
+    return {"ok": True, "data": {"operation": operation}}
+
+
+@router.get("/historical-range-runs/{range_run_id}")
+def get_historical_range_run(
+    range_run_id: str,
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    run = _historical_range_call(lambda: service.get_run(range_run_id))
+    return {"ok": True, "data": {"run": run}}
+
+
+@router.get("/historical-range-runs/{range_run_id}/days")
+def list_historical_range_days(
+    range_run_id: str,
+    status: list[str] = Query(default=[]),
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.list_days(range_run_id, statuses=status, cursor=cursor, limit=limit)
+    )
+    return _page_envelope("days", result)
+
+
+@router.get("/historical-range-runs/{range_run_id}/days/{trade_date}")
+def get_historical_range_day(
+    range_run_id: str,
+    trade_date: date,
+    candidate_cursor: str | None = None,
+    candidate_limit: int = Query(default=50, ge=1, le=500),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.get_day(
+            range_run_id,
+            trade_date=trade_date,
+            candidate_cursor=candidate_cursor,
+            candidate_limit=candidate_limit,
+        )
+    )
+    return {"ok": True, "data": {"day": result["day"], "candidates": result["candidates"]}, "page": result["candidate_page"]}
+
+
+@router.get("/historical-range-runs/{range_run_id}/lists/{trade_date}")
+def get_historical_range_list(
+    range_run_id: str,
+    trade_date: date,
+    item_cursor: str | None = None,
+    item_limit: int = Query(default=50, ge=1, le=500),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.get_list(
+            range_run_id,
+            trade_date=trade_date,
+            item_cursor=item_cursor,
+            item_limit=item_limit,
+        )
+    )
+    return {"ok": True, "data": {"list": result["list"], "items": result["items"]}, "page": result["item_page"]}
+
+
+@router.get("/historical-range-runs/{range_run_id}/outcomes")
+def list_historical_range_outcomes(
+    range_run_id: str,
+    subject_type: str | None = None,
+    projection: str | None = None,
+    maturity_status: str | None = None,
+    horizon: int | None = Query(default=None, ge=1),
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.list_outcomes(
+            range_run_id,
+            subject_type=subject_type,
+            projection=projection,
+            maturity_status=maturity_status,
+            horizon=horizon,
+            cursor=cursor,
+            limit=limit,
+        )
+    )
+    return _page_envelope("outcomes", result)
+
+
+@router.get("/historical-range-runs/{range_run_id}/summaries")
+def list_historical_range_summaries(
+    range_run_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    result = _historical_range_call(
+        lambda: service.list_summaries(range_run_id, cursor=cursor, limit=limit)
+    )
+    return _page_envelope("summaries", result)
+
+
 @router.get("/programs")
 def list_programs(
     include_archived: bool = False,
@@ -226,6 +590,63 @@ def list_programs(
 ) -> dict[str, Any]:
     try:
         return {"ok": True, "programs": [program_to_dict(row) for row in service.list_programs(include_archived=include_archived)]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/forward/status")
+def forward_status(
+    service: AdvisoryForwardService = Depends(get_advisory_forward_service),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "scheduler": advisory_forward_scheduler.status(),
+            "service": service.status(),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/forward/run-once")
+def run_forward_once(
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **advisory_forward_scheduler.run_once()}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/forward-runs/{forward_run_id}")
+def forward_run_detail(
+    forward_run_id: str,
+    service: AdvisoryForwardService = Depends(get_advisory_forward_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.detail(forward_run_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/programs/{program_id}/forward-runs")
+def program_forward_runs(
+    program_id: str,
+    limit: int = Query(default=100, gt=0, le=500),
+    service: AdvisoryForwardService = Depends(get_advisory_forward_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "forward_runs": service.list_runs(program_id=program_id, limit=limit)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/programs/{program_id}/forward-model-metrics")
+def program_forward_model_metrics(
+    program_id: str,
+    service: AdvisoryForwardService = Depends(get_advisory_forward_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.model_metrics(program_id)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -438,6 +859,15 @@ def list_versions(
         _raise_http(exc)
 
 
+@router.get("/programs/{program_id}/model-shadow")
+def model_shadow(
+    program_id: str,
+    target_trade_date: date = Query(...),
+    service: AdvisoryModelShadowService = Depends(get_advisory_model_shadow_service),
+) -> dict[str, Any]:
+    return {"ok": True, **service.model_shadow(program_id=program_id, target_trade_date=target_trade_date)}
+
+
 @router.get("/list-versions/{list_version_id}")
 def list_version_detail(
     list_version_id: str,
@@ -506,6 +936,9 @@ def run_replay(
                 compare_to_binding_version_id=req.compare_to_binding_version_id,
                 include_daily_items=req.include_daily_items,
             ),
+            "deprecated": True,
+            "replacement": "/api/v1/advisory/historical-range-batches",
+            "sunset_policy": "compatibility_read_and_api_retained_no_phase1r_fallback",
         }
     except TradingCoreError as exc:
         _raise_http(exc)

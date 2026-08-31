@@ -631,7 +631,7 @@ function RecommendationCard({ item }: { item: BatchItem }) {
             {item.candidate_display_name}
           </Link>
           <div className={styles.candidateMeta}>
-            证据置信度 {formatPercent(item.evidence_confidence)} · {item.evidence_quality || "未标记"}
+            指标可用比例 {formatPercent(item.metric_availability_ratio)} · {item.evidence_quality || "未标记"}
           </div>
         </div>
         <div className={styles.recommendScore}>{formatNumber(item.recommendation_score, 1)}</div>
@@ -654,6 +654,7 @@ function CurrentBatchPanel({
   onRetry: () => void;
 }) {
   const terminal = batch ? TERMINAL_BATCH_STATUSES.has(batch.status) : false;
+  const preparing = batch ? ["preparation_queued", "preparing"].includes(batch.status) : false;
   return (
     <section className={styles.panel}>
       <div className={styles.panelHeader}>
@@ -665,8 +666,8 @@ function CurrentBatchPanel({
       </div>
       <div className={styles.panelBody}>
         <div className={styles.steps}>
-          <Step index="01" name="输入校验" state={batch ? "done" : "idle"} />
-          <Step index="02" name="评估计算" state={batch?.running_count ? "active" : progress > 0 ? "done" : "idle"} />
+          <Step index="01" name="输入冻结" state={preparing ? "active" : batch ? "done" : "idle"} />
+          <Step index="02" name="评估计算" state={preparing ? "idle" : batch?.running_count ? "active" : progress > 0 ? "done" : "idle"} />
           <Step index="03" name="证据归集" state={terminal ? "done" : progress > 0 ? "active" : "idle"} />
           <Step index="04" name="研究推荐" state={batch?.status === "completed" || batch?.status === "partial_failed" ? "done" : "idle"} />
         </div>
@@ -837,19 +838,19 @@ function buildEvaluationSpec(form: EvaluationForm): EvaluationSpecPayload {
   if (!Number.isInteger(topk) || topk < 1) throw new Error("TopK 必须是正整数。 ");
   if (form.asOfPolicy === "explicit" && !form.requestedDate) throw new Error("显式 as-of policy 必须选择日期。 ");
   return {
-    schema_version: "hmm_evaluation_spec_v1",
+    schema_version: "hmm_evaluation_spec_v2",
     base_loop_ref: form.baseLoopRef.trim(),
     window_start: form.windowStart,
     window_end: form.windowEnd,
     as_of: { policy: form.asOfPolicy, requested_date: form.asOfPolicy === "explicit" ? form.requestedDate : null },
     label_horizon_days: labelHorizonDays,
-    universe: { type: "prediction_artifact_all" },
+    universe: { type: "source_loop_stock_pool_st_pit" },
     topk,
     date_coverage_policy: "batch_common_intersection_with_evidence",
     missing_sector_policy: "neutral_with_evidence",
     market_forward_return: { mode: form.marketMode, horizon_trading_days: 10 },
     sort_policy: "score_desc_symbol_asc_v1",
-    metric_version: "hmm_replacement_metrics_v1",
+    metric_version: "hmm_replacement_metrics_v2",
     recommendation_version: "hmm_recommendation_v1",
   };
 }

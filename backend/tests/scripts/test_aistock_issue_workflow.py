@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +12,13 @@ import pytest
 import yaml
 
 import scripts.aistock_issue_workflow as workflow
+
+
+def _green_merge_quality_checks() -> list[dict[str, str]]:
+    return [
+        {"name": name, "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock quality"}
+        for name in workflow.MERGE_QUALITY_CHECK_CONTEXTS
+    ]
 
 
 def _fake_code_intelligence_summary(**overrides: Any) -> dict[str, Any]:
@@ -75,6 +86,159 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def _write_runtime_catalog(root: Path) -> Path:
+    for script_name in (
+        "scripts/backfill_tushare_daily_basic_fields.py",
+        "scripts/ingest_tushare_daily_basic.py",
+        "scripts/qlib_authoritative_bin_export.py",
+        "scripts/seed_dataset_refresh_audit.py",
+    ):
+        script_path = root / script_name
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text("# one-shot operator fixture\n", encoding="utf-8")
+    path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "aistock_runtime_target_catalog_v1",
+                "non_runtime_source_paths": [
+                    "scripts/backfill_tushare_daily_basic_fields.py",
+                    "scripts/ingest_tushare_daily_basic.py",
+                    "scripts/qlib_authoritative_bin_export.py",
+                    "scripts/seed_dataset_refresh_audit.py",
+                ],
+                "targets": {
+                    "backend-main": {
+                        "runtime_kind": "backend",
+                        "source_globs": [
+                            "backend/**/*.py",
+                            "scripts/score_weighted_strategy.py",
+                            "scripts/score_weighted_strategy_v2.py",
+                            "scripts/qe_sector_risk_overlay_artifacts.py",
+                            "requirements*.txt",
+                        ],
+                        "production_port": 8001,
+                        "isolated_validation_ports": [8011, 8012],
+                        "probe_origins": ["http://127.0.0.1:8001"],
+                        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+                        "expected_identity_ref": "merged_commit",
+                        "probes": {
+                            "health_ref": "bug_record.runtime_contract.health_ref",
+                            "identity_ref": "bug_record.runtime_contract.identity_ref",
+                            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+                            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+                        },
+                    },
+                    "worker-scheduler": {
+                        "runtime_kind": "worker_scheduler",
+                        "source_globs": [
+                            "scripts/dataset_release_worker.py",
+                            "scripts/dataset_release_source_stage.py",
+                        ],
+                        "probe_origins": ["http://127.0.0.1:8001"],
+                        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+                        "expected_identity_ref": "merged_commit",
+                        "probes": {
+                            "health_ref": "bug_record.runtime_contract.health_ref",
+                            "identity_ref": "bug_record.runtime_contract.identity_ref",
+                            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+                            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+                        },
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _runtime_bug(root: Path, **overrides: Any) -> dict[str, Any]:
+    runbook = root / "docs" / "operations" / "example_backend_restart.md"
+    runbook.parent.mkdir(parents=True, exist_ok=True)
+    runbook.write_text("# User-owned backend restart\n", encoding="utf-8")
+    payload = _bug(
+        allowed_write_scope=["backend/services/example.py"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "backend",
+            "target_id": "backend-main",
+            "target_ids": ["backend-main"],
+            "persistence_basis": "git_tracked_source",
+            "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
+            "operator_runbook_ref": "docs/operations/example_backend_restart.md",
+            "health_ref": "http://127.0.0.1:8001/api/v1/health",
+            "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+            "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+            "database_readback_ref": "not_required",
+        },
+    )
+    payload.update(overrides)
+    return payload
+
+
+def _passed_runtime_receipt(root: Path, record: dict[str, Any], *, expected_identity: str) -> dict[str, Any]:
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=record["allowed_write_scope"],
+        root=root,
+    )
+    probes = []
+    for name in ("health_ref", "identity_ref", "business_smoke_ref"):
+        probe: dict[str, Any] = {
+            "name": name,
+            "url": contract["target"]["probes"][name],
+            "status": "passed",
+            "status_code": 200,
+            "transport": {"status_code": 200, "ok": True, "error": None},
+            "payload_schema": {"json": True, "kind": "object"},
+            "response_sha256": f"sha-{name}",
+            "response_bytes": 20,
+        }
+        if name == "business_smoke_ref":
+            probe["semantic"] = {
+                "schema_version": workflow.BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": "health_ok",
+                "verdict": "passed",
+                "reason": None,
+                "facts": {"status": "ok"},
+                "response_sha256": "sha-business_smoke_ref",
+            }
+        probes.append(probe)
+    identity_proof = {
+        "schema_version": "aistock_runtime_identity_proof_v1",
+        "mode": "exact",
+        "expected_identity": expected_identity,
+        "observed_identity": expected_identity,
+        "origin_main_identity": None,
+        "expected_is_ancestor": True,
+        "observed_in_origin_main": True,
+    }
+    return {
+        "schema_version": workflow.RUNTIME_VERIFY_RECEIPT_SCHEMA,
+        "bug_id": record["bug_id"],
+        "target_id": contract["target_id"],
+        "expected_identity": expected_identity,
+        "observed_identity": expected_identity,
+        "runtime_identity_proof": identity_proof,
+        "runtime_identity_proof_digest": workflow._runtime_identity_proof_digest(identity_proof),
+        "mode": "read_only",
+        "tracked_files_written": False,
+        "contract_digest": workflow._runtime_contract_digest(contract),
+        "catalog_sha256": workflow._runtime_catalog_sha256(root=root),
+        "required_probe_names": ["health_ref", "identity_ref", "business_smoke_ref"],
+        "post_restart_effective_gate": "passed",
+        "runtime_identity_match": True,
+        "process_control_performed": False,
+        "blocking": [],
+        "business_smoke_semantic": next(probe["semantic"] for probe in probes if probe["name"] == "business_smoke_ref"),
+        "probes": probes,
+        "probe_evidence_digest": workflow._probe_evidence_digest(probes),
+    }
+
+
 def _write_repo_client_entrypoints(root: Path) -> None:
     for _key, skill_name in workflow.CLIENT_CODEX_SKILLS:
         (root / ".codex" / "skills" / skill_name).mkdir(parents=True)
@@ -109,6 +273,49 @@ def test_subprocess_env_ignores_non_git_commands(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("SHELL", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
 
     assert workflow._subprocess_env(["python", "--version"]) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["python", "scripts/_restart_backend.py"],
+        ["python", "-m", "uvicorn", "backend.main:app", "--port", str(8000 + 1)],
+        ["taskkill", "/F", "/PID", "123"],
+        ["sc.exe", "stop", "backend-api"],
+        ["docker", "compose", "restart", "backend"],
+    ],
+)
+def test_workflow_command_runner_refuses_user_backend_process_control(
+    command: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("blocked process-control command must not reach subprocess"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="process control is forbidden"):
+        workflow._run_command(command)
+
+
+def test_git_decodes_output_as_utf8_with_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(args: list[str], **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return workflow.subprocess.CompletedProcess(
+            args,
+            0,
+            stdout="准备 worktree — 完成\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(workflow.subprocess, "run", fake_run)
+
+    assert workflow._git(["worktree", "list"]) == "准备 worktree — 完成"
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
 
 
 def _fetched_origin_payload() -> dict[str, Any]:
@@ -422,7 +629,59 @@ def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("AISTOCK_CANONICAL_ROOT", str(tmp_path))
     monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
+    monkeypatch.setenv("AISTOCK_BUG_ID_STATE_PATH", str(tmp_path / "bug-id-state.json"))
+    monkeypatch.setattr(
+        workflow,
+        "_client_source_authority",
+        lambda: {
+            "ready": True,
+            "source": "canonical_main",
+            "root": str(tmp_path),
+            "commit": "a" * 40,
+            "origin_main_commit": "a" * 40,
+            "blocking_reason": None,
+        },
+    )
+    monkeypatch.setattr(workflow, "_client_checkout_relation", lambda _authority: "matches_authority")
+    monkeypatch.setattr(workflow, "_client_checkout_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        workflow,
+        "_publish_changed_clients_after_merge",
+        lambda **_kwargs: {
+            "schema_version": "aistock_merge_aftercare_client_publish_v1",
+            "workflow_gate": "not_required",
+            "selected_lanes": [],
+            "blocking": [],
+        },
+    )
     monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
+    monkeypatch.setattr(workflow, "_github_bug_issue_by_number", lambda _issue_number, **_kwargs: (None, []))
+
+    def isolated_read_command(args: list[str], cwd: Path | None = None, timeout: int = 30, attempts: int = 3) -> dict[str, Any]:
+        if args[:2] == ["git", "fetch"]:
+            return {**workflow._run_command(args, cwd=cwd, timeout=timeout), "attempts": 1}
+        if args and args[0] == "git":
+            try:
+                stdout = workflow._git(args[1:], cwd=cwd, check=False)
+                return {"ok": True, "returncode": 0, "stdout": stdout, "stderr": "", "attempts": 1}
+            except Exception as exc:
+                return {"ok": False, "returncode": 1, "stdout": "", "stderr": str(exc), "attempts": 1}
+        return {**workflow._run_command(args, cwd=cwd, timeout=timeout), "attempts": 1}
+
+    monkeypatch.setattr(workflow, "_run_read_command_with_retry", isolated_read_command)
+    submit_scope_root = tmp_path / "submit-scope"
+    monkeypatch.setattr(workflow, "_submit_bug_file_root", lambda: submit_scope_root)
+    for relative_path in (
+        "scripts/aistock_issue_workflow.py",
+        ".claude/commands/fix-aistock-issue.md",
+        "frontend/src/app/paper-v2/page.tsx",
+        "frontend/src/app/paper-v2/advisory/page.tsx",
+        "backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py",
+    ):
+        path = submit_scope_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# existing workflow test fixture\n", encoding="utf-8")
     return tmp_path
 
 
@@ -478,7 +737,7 @@ def test_start_dry_run_returns_worktree_context_and_scope(isolated_workflow_root
     assert payload["worktree_plan"]["dry_run"] is True
     assert payload["worktree_plan"]["branch"].endswith(f"-{workflow._today_compact()}")
     assert payload["allowed_write_scope"] == ["scripts/aistock_issue_workflow.py"]
-    assert "l0" in payload["required_verification"]
+    assert payload["required_verification"] == ["guardrail_changed_files"]
     assert payload["next_agent_steps"][0] == "switch_to_worktree_if_created"
 
 
@@ -595,21 +854,42 @@ def test_start_validation_budget_defers_broad_required_plans(
 
     assert payload["required_verification"] == [
         "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
-        "l0",
+        "miniqmt_execution_runtime_l2",
     ]
     assert payload["deferred_nightly_plans"] == [
         "paper_v2_backend",
         "simulation_core_l2",
         "miniqmt_sim_stub_l3",
-        "miniqmt_execution_runtime_l2",
     ]
     task_card_text = (isolated_workflow_root / payload["task_card_md"]).read_text(encoding="utf-8")
     assert (
-        "deferred_nightly_plans: `paper_v2_backend, simulation_core_l2, miniqmt_sim_stub_l3, "
-        "miniqmt_execution_runtime_l2`"
+        "deferred_nightly_plans: `paper_v2_backend, simulation_core_l2, miniqmt_sim_stub_l3`"
     ) in task_card_text
     state = json.loads((isolated_workflow_root / payload["state_path"]).read_text(encoding="utf-8"))
     assert state["task_card_availability"]["available"] is True
+
+
+def test_validation_budget_keeps_changed_file_primary_module_plan_and_drops_fixed_l0() -> None:
+    budgeted = workflow._apply_validation_budget(
+        record={"required_verification": ["l0", "hmm_risk_backend"]},
+        validation={
+            "required_plans": ["l0", "hmm_risk_backend"],
+            "recommended_plans": [],
+        },
+    )
+
+    assert budgeted["required_plans"] == ["hmm_risk_backend"]
+    assert budgeted["recommended_plans"] == []
+    assert budgeted["deferred_nightly_plans"] == []
+    assert budgeted["validation_budget_gate"]["premerge_required"] == ["hmm_risk_backend"]
+    record_budget = workflow._verification_budget_for_record(
+        {"module": "hmm.risk", "required_verification": ["hmm_risk_backend"]},
+        validation_budget=budgeted,
+    )
+    assert record_budget["premerge_required_plans"] == ["hmm_risk_backend"]
+    assert record_budget["deferred_nightly_verification"]["plans"] == []
+
+
 def test_start_code_intelligence_uses_allowed_scope_when_no_changed_files(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -703,19 +983,68 @@ def test_finish_plan_selects_validation_and_requires_evidence(
         "--changed-file",
         "scripts/aistock_issue_workflow.py",
         "--validation-evidence",
-        "python -m nox -s l0 -> passed",
+        "python -m nox -s guardrail_changed_files -> passed",
     ]) == 0
     ready = json.loads(capsys.readouterr().out)
     assert ready["workflow_gate"] == "ready_for_pr"
-    assert "l0" in ready["required_verification"]
+    assert ready["required_verification"] == ["guardrail_changed_files"]
     assert ready["validation_receipts"][0]["schema_version"] == "aistock_validation_receipt_v1"
     assert ready["validation_receipts"][0]["evidence_kind"] == "nox"
-    assert ready["validation_receipts"][0]["plan"] == "l0"
+    assert ready["validation_receipts"][0]["plan"] == "guardrail_changed_files"
     assert len(ready["validation_receipts"][0]["receipt_id"]) == 16
     assert "artifact_metrics" not in ready
     assert ready["artifact_policy"] == "compact_success_no_finish_plan_json"
     assert (isolated_workflow_root / ready["pr_body_path"]).exists()
     assert not (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
+
+
+def test_finish_blocks_partial_required_plan_receipts(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(
+        isolated_workflow_root / "bug.json",
+        _bug(required_verification=["l0", "guardrail_changed_files"]),
+    )
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["closure_ready"] is False
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["validation_receipt_plan_coverage"]["missing_required_plans"] == [
+        "guardrail_changed_files"
+    ]
+    assert "missing required validation plan receipts" in payload["error"]
+    assert payload["pre_pr_gate"]["workflow_gate"] == "blocked"
+    assert "finish plan is not closure-ready" in payload["pre_pr_gate"]["blocking"]
+
+    allowed_payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        plan_only=False,
+        allow_missing_evidence=True,
+    )
+
+    assert allowed_payload["closure_ready"] is False
+    assert allowed_payload["draft_ready"] is False
+    assert allowed_payload["workflow_gate"] == "blocked"
+    assert allowed_payload["validation_receipt_plan_coverage"]["missing_required_plans"] == [
+        "guardrail_changed_files"
+    ]
 
 
 def test_finish_rejects_unstructured_or_failed_validation_evidence(
@@ -746,6 +1075,37 @@ def test_finish_rejects_unstructured_or_failed_validation_evidence(
         assert payload["validation_evidence_errors"]
 
 
+def test_finish_blocks_duplicate_required_plan_receipts(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(
+        isolated_workflow_root / "bug.json",
+        _bug(required_verification=["l0", "guardrail_changed_files"]),
+    )
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s guardrail_changed_files -> passed",
+        ],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["closure_ready"] is False
+    assert payload["workflow_gate"] == "blocked"
+    assert list(payload["validation_receipt_plan_coverage"]["duplicate_plan_receipts"]) == ["l0"]
+    assert "duplicate validation plan receipts are not allowed" in payload["error"]
+
+
 def test_validation_receipt_binds_allowlisted_command_to_current_commit(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -768,6 +1128,4661 @@ def test_validation_receipt_binds_allowlisted_command_to_current_commit(
     assert receipt["evidence_kind"] == "pytest"
     assert receipt["plan"] is None
     assert len(receipt["receipt_id"]) == 16
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected_kind", "expected_plan"),
+    [
+        ("python -m nox -s guardrail_changed_files -> passed", "nox", "guardrail_changed_files"),
+        (
+            "rtk pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 44 passed",
+            "pytest",
+            None,
+        ),
+    ],
+)
+def test_validation_receipt_accepts_rtk_wrapped_commands(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    evidence: str,
+    expected_kind: str,
+    expected_plan: str | None,
+) -> None:
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "abcdef1234567890abcdef1234567890abcdef12")
+
+    receipts, errors = workflow._build_validation_receipts([evidence], root=isolated_workflow_root)
+
+    assert errors == []
+    assert receipts[0]["evidence_kind"] == expected_kind
+    assert receipts[0]["plan"] == expected_plan
+
+
+def test_finish_changed_files_combines_branch_and_worktree_paths(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow.flow,
+        "changed_files_from_git",
+        lambda base, head: ["scripts/aistock_issue_workflow.py", "AGENTS.md", ".claude/commands/fix-aistock-issue.md"],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_dirty_files",
+        lambda root: ["AGENTS.md", "docs/standards/README.md", "new-untracked.md"],
+    )
+
+    assert workflow._finish_changed_files("origin/main", "HEAD", root=isolated_workflow_root) == [
+        "scripts/aistock_issue_workflow.py",
+        "AGENTS.md",
+        ".claude/commands/fix-aistock-issue.md",
+        "docs/standards/README.md",
+        "new-untracked.md",
+    ]
+
+
+def test_normalize_changed_files_removes_only_explicit_relative_prefix() -> None:
+    assert workflow._normalize_changed_files(
+        ["./scripts/tool.py", ".claude/commands/tool.md", ".codex/skills/tool/SKILL.md", ".github/workflows/test.yml"]
+    ) == [
+        "scripts/tool.py",
+        ".claude/commands/tool.md",
+        ".codex/skills/tool/SKILL.md",
+        ".github/workflows/test.yml",
+    ]
+
+
+def test_validation_receipt_reuse_key_changes_with_identity_inputs(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "abcdef1234567890abcdef1234567890abcdef12")
+    evidence = ["python -m nox -s l0 -> passed"]
+
+    first, first_errors = workflow._build_validation_receipts(
+        evidence,
+        root=isolated_workflow_root,
+        changed_files=["scripts/aistock_issue_workflow.py"],
+    )
+    reused, reused_errors = workflow._build_validation_receipts(
+        evidence,
+        root=isolated_workflow_root,
+        changed_files=["scripts/aistock_issue_workflow.py"],
+    )
+    changed, changed_errors = workflow._build_validation_receipts(
+        evidence,
+        root=isolated_workflow_root,
+        changed_files=["scripts/issue_flow.py"],
+    )
+
+    assert first_errors == reused_errors == changed_errors == []
+    assert first[0]["reuse_key"] == reused[0]["reuse_key"]
+    assert first[0]["reuse_key"] != changed[0]["reuse_key"]
+
+
+def test_runtime_contract_is_lazy_fail_closed_and_restart_plan_never_controls_process(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    runtime_record = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", runtime_record)
+    monkeypatch.setattr(
+        workflow.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("restart-plan must not invoke process control or subprocesses"),
+    )
+
+    plan = workflow.build_restart_plan(bug_id=None, issue_json=str(issue))
+
+    assert plan["workflow_gate"] == "operator_action_required"
+    assert plan["backend_restart_owner"] == "user"
+    assert plan["process_control_performed"] is False
+    assert plan["target_id"] == "backend-main"
+    assert plan["operator_runbook_ref"] == "docs/operations/example_backend_restart.md"
+
+    missing_runbook = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=["backend/services/example.py"],
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "backend",
+                "target_id": "backend-main",
+                "persistence_basis": "git_tracked_source",
+                "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
+                "health_ref": "http://127.0.0.1:8001/health",
+                "identity_ref": "http://127.0.0.1:8001/runtime-identity",
+                "business_smoke_ref": "http://127.0.0.1:8001/api/example/smoke",
+            },
+        ),
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+    assert "runtime target backend-main operator runbook ref is incomplete" in missing_runbook["blocking"]
+
+    legacy = workflow.build_runtime_contract(
+        record=_bug(allowed_write_scope=["backend/services/example.py"]),
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+    assert legacy["runtime_impact"] == "backend"
+    assert legacy["pre_pr_ready"] is False
+    assert "legacy or runtime BUG requires an explicit runtime_contract schema upgrade" in legacy["blocking"]
+
+    unknown = workflow.build_runtime_contract(
+        record=_bug(allowed_write_scope=["tools/unknown.bin"]),
+        changed_files=["tools/unknown.bin"],
+        root=isolated_workflow_root,
+    )
+    assert unknown["runtime_impact"] == "unknown"
+    assert unknown["pre_pr_ready"] is False
+
+
+def test_runtime_contract_cannot_downgrade_changed_files_or_hide_multiple_targets(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["targets"]["tdx-go-backend"] = {
+        "runtime_kind": "backend",
+        "source_globs": ["tdx-api-main/**/*.go"],
+        "production_port": 19080,
+        "isolated_validation_ports": [19081],
+        "probe_origins": ["http://127.0.0.1:19080"],
+        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+        "expected_identity_ref": "merged_commit",
+        "probes": {
+            "health_ref": "bug_record.runtime_contract.health_ref",
+            "identity_ref": "bug_record.runtime_contract.identity_ref",
+            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+        },
+    }
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    downgraded = workflow.build_runtime_contract(
+        record=_bug(runtime_contract={"schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "none"}),
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+    assert downgraded["runtime_impact"] == "backend"
+    assert downgraded["backend_restart_required"] is True
+    assert downgraded["pre_pr_ready"] is False
+    assert any("cannot downgrade" in item for item in downgraded["blocking"])
+
+    multi_target_record = _runtime_bug(isolated_workflow_root)
+    multiple = workflow.build_runtime_contract(
+        record=multi_target_record,
+        changed_files=["backend/services/example.py", "tdx-api-main/web/server.go"],
+        root=isolated_workflow_root,
+    )
+    assert multiple["target_ids"] == ["backend-main", "tdx-go-backend"]
+    assert multiple["target_id"] is None
+    assert multiple["pre_pr_ready"] is False
+    assert any("multiple runtime targets" in item for item in multiple["blocking"])
+
+
+def _provisional_backend_and_worker_record(root: Path) -> dict[str, Any]:
+    planned_files = ["backend/services/example.py", "scripts/dataset_release_worker.py"]
+    record = _runtime_bug(root)
+    record["file_scope_contract"] = {
+        "schema_version": "aistock_submit_bug_file_scope_v1",
+        "changed_files": planned_files,
+        "planned_files": planned_files,
+        "changed_files_source": workflow.FILE_SCOPE_SOURCE_PLANNED_INTAKE,
+        "added_files": [],
+        "scope_files": planned_files,
+        "ownership": {},
+    }
+    record["runtime_contract"].update(
+        {
+            "inference_basis": workflow.RUNTIME_INFERENCE_PLANNED_SCOPE,
+            "provisional": True,
+            "runtime_impact": "worker_scheduler",
+            "target_id": None,
+            "target_ids": ["backend-main", "worker-scheduler"],
+        }
+    )
+    return record
+
+
+@pytest.mark.parametrize("legacy_registration", [False, True])
+def test_runtime_contract_safely_narrows_provisional_target_superset(
+    isolated_workflow_root: Path,
+    legacy_registration: bool,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _provisional_backend_and_worker_record(isolated_workflow_root)
+    if legacy_registration:
+        record["runtime_contract"].pop("inference_basis")
+        record["runtime_contract"].pop("provisional")
+        record["file_scope_contract"].pop("changed_files_source")
+        record["file_scope_contract"].pop("planned_files")
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+        fresh_process_evidence=["fresh worker import passed"],
+    )
+
+    assert contract["runtime_contract_source"] == workflow.RUNTIME_INFERENCE_ACTUAL_CHANGED_FILES
+    assert contract["runtime_impact"] == "worker_scheduler"
+    assert contract["target_id"] == "worker-scheduler"
+    assert contract["target_ids"] == ["worker-scheduler"]
+    assert contract["backend_restart_required"] is True
+    assert contract["activation_states"]["backend_restart"] == "pending_user_action"
+    assert contract["provisional_reconciliation"] == {
+        "applied": True,
+        "status": "narrowed",
+        "planned_target_ids": ["backend-main", "worker-scheduler"],
+        "actual_target_ids": ["worker-scheduler"],
+    }
+    assert contract["blocking"] == []
+
+
+def test_runtime_contract_does_not_expand_provisional_worker_target(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _provisional_backend_and_worker_record(isolated_workflow_root)
+    record["runtime_contract"].update(
+        {
+            "target_id": "worker-scheduler",
+            "target_ids": ["worker-scheduler"],
+        }
+    )
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py", "scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+        fresh_process_evidence=["fresh worker import passed"],
+    )
+
+    assert contract["provisional_reconciliation"]["applied"] is False
+    assert contract["target_ids"] == ["worker-scheduler", "backend-main"]
+    assert contract["pre_pr_ready"] is False
+    assert any("target set conflicts" in item for item in contract["blocking"])
+    assert any("multiple runtime targets" in item for item in contract["blocking"])
+
+
+def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+
+    dependency = workflow._classify_runtime_impact(["requirements-dev.txt"], root=isolated_workflow_root)
+    client = workflow._classify_runtime_impact([".codex/skills/fix-aistock-issue/SKILL.md"], root=isolated_workflow_root)
+    mcp_client = workflow._classify_runtime_impact(["scripts/aistock_mcp_server.py"], root=isolated_workflow_root)
+    allocator_tool = workflow._classify_runtime_impact(["scripts/aistock_bug_id_allocator.py"], root=isolated_workflow_root)
+    bug_registry_metadata_tool = workflow._classify_runtime_impact(
+        ["scripts/bug_registry_metadata_check.py"],
+        root=isolated_workflow_root,
+    )
+    backend_test = workflow._classify_runtime_impact(
+        ["backend/tests/scripts/test_aistock_issue_workflow.py"],
+        root=isolated_workflow_root,
+    )
+    score_weighted_asset = workflow._classify_runtime_impact(
+        ["scripts/score_weighted_strategy.py"],
+        root=isolated_workflow_root,
+    )
+    score_weighted_v2_asset = workflow._classify_runtime_impact(
+        ["scripts/score_weighted_strategy_v2.py"],
+        root=isolated_workflow_root,
+    )
+    sector_risk_artifact = workflow._classify_runtime_impact(
+        ["scripts/qe_sector_risk_overlay_artifacts.py"],
+        root=isolated_workflow_root,
+    )
+    offline_hmm_preparation = workflow._classify_runtime_impact(
+        ["scripts/hmm_risk/prepare_state_model_set.py"],
+        root=isolated_workflow_root,
+    )
+    offline_hmm_d1 = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/b3_d1_inactive_dimension.py"],
+        root=isolated_workflow_root,
+    )
+    offline_hmm_mixed_dimension = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/b3_mixed_dimension.py"],
+        root=isolated_workflow_root,
+    )
+    offline_hmm_training = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/b3_training.py"],
+        root=isolated_workflow_root,
+    )
+    offline_hmm_state_model_set = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/state_model_set.py"],
+        root=isolated_workflow_root,
+    )
+    offline_advisory_phase0b = workflow._classify_runtime_impact(
+        ["backend/services/advisory_phase0b/audit_service.py"],
+        root=isolated_workflow_root,
+    )
+    offline_advisory_batch_b = workflow._classify_runtime_impact(
+        ["scripts/advisory_short_rebound_batch_b.py"],
+        root=isolated_workflow_root,
+    )
+    dataset_offline_tools = workflow._classify_runtime_impact(
+        [
+            "scripts/build_stock_universe_pit_spans.py",
+            "scripts/dataset_release_control_store.py",
+            "scripts/seed_dataset_refresh_audit.py",
+            "scripts/update_backtest_dataset_monthly.py",
+        ],
+        root=isolated_workflow_root,
+    )
+    qlib_authoritative_export = workflow._classify_runtime_impact(
+        ["scripts/qlib_authoritative_bin_export.py"],
+        root=isolated_workflow_root,
+    )
+    qlib_authoritative_mixed = workflow._classify_runtime_impact(
+        [
+            "backend/qlib_exporter/authoritative_bin_exporter.py",
+            "scripts/qlib_authoritative_bin_export.py",
+        ],
+        root=isolated_workflow_root,
+    )
+    dataset_audit_neighbor = workflow._classify_runtime_impact(
+        ["scripts/seed_other_dataset_refresh_audit.py"],
+        root=isolated_workflow_root,
+    )
+    dataset_worker = workflow._classify_runtime_impact(
+        ["scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+    )
+    dataset_source_stage = workflow._classify_runtime_impact(
+        ["scripts/dataset_release_source_stage.py"],
+        root=isolated_workflow_root,
+    )
+    mixed_advisory_and_backend = workflow._classify_runtime_impact(
+        [
+            "backend/services/advisory_phase0b/audit_service.py",
+            "backend/services/example.py",
+        ],
+        root=isolated_workflow_root,
+    )
+    unmapped_script = workflow._classify_runtime_impact(
+        ["scripts/hmm_risk/unmapped_runtime_candidate.py"],
+        root=isolated_workflow_root,
+    )
+    nightly_intake = workflow._classify_runtime_impact(
+        [
+            ".github/workflows/nightly.yml",
+            "scripts/ci_failure_issue_summary.py",
+            "scripts/llm_provider_adapter.py",
+            "scripts/nightly_adaptive_scheduler.py",
+            "scripts/nightly_session_runner.py",
+        ],
+        root=isolated_workflow_root,
+    )
+    ci_policy_tool = workflow._classify_runtime_impact(
+        ["scripts/ci_workflow_policy_scan.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert dependency["runtime_impact"] == "backend"
+    assert dependency["target_ids"] == ["backend-main"]
+    assert client["runtime_impact"] == "client"
+    assert mcp_client["runtime_impact"] == "client"
+    assert allocator_tool["runtime_impact"] == "none"
+    assert bug_registry_metadata_tool["runtime_impact"] == "none"
+    assert bug_registry_metadata_tool["runtime_files"] == []
+    assert backend_test["runtime_impact"] == "none"
+    assert score_weighted_asset["runtime_impact"] == "backend"
+    assert score_weighted_asset["target_ids"] == ["backend-main"]
+    assert score_weighted_asset["runtime_files"] == ["scripts/score_weighted_strategy.py"]
+    assert score_weighted_v2_asset["runtime_impact"] == "backend"
+    assert score_weighted_v2_asset["target_ids"] == ["backend-main"]
+    assert score_weighted_v2_asset["runtime_files"] == ["scripts/score_weighted_strategy_v2.py"]
+    assert sector_risk_artifact["runtime_impact"] == "backend"
+    assert sector_risk_artifact["target_ids"] == ["backend-main"]
+    assert offline_hmm_preparation["runtime_impact"] == "none"
+    assert offline_hmm_preparation["runtime_files"] == []
+    assert offline_hmm_d1["runtime_impact"] == "none"
+    assert offline_hmm_d1["runtime_files"] == []
+    assert offline_hmm_mixed_dimension["runtime_impact"] == "none"
+    assert offline_hmm_mixed_dimension["runtime_files"] == []
+    assert offline_hmm_training["runtime_impact"] == "none"
+    assert offline_hmm_training["runtime_files"] == []
+    assert offline_hmm_state_model_set["runtime_impact"] == "none"
+    assert offline_hmm_state_model_set["runtime_files"] == []
+    assert offline_advisory_phase0b["runtime_impact"] == "none"
+    assert offline_advisory_phase0b["runtime_files"] == []
+    assert offline_advisory_batch_b["runtime_impact"] == "none"
+    assert offline_advisory_batch_b["runtime_files"] == []
+    assert dataset_offline_tools["runtime_impact"] == "none"
+    assert dataset_offline_tools["runtime_files"] == []
+    assert qlib_authoritative_export["runtime_impact"] == "none"
+    assert qlib_authoritative_export["runtime_files"] == []
+    assert qlib_authoritative_mixed["runtime_impact"] == "backend"
+    assert qlib_authoritative_mixed["runtime_files"] == [
+        "backend/qlib_exporter/authoritative_bin_exporter.py"
+    ]
+    assert qlib_authoritative_mixed["target_ids"] == ["backend-main"]
+    assert dataset_audit_neighbor["runtime_impact"] == "unknown"
+    assert dataset_audit_neighbor["runtime_files"] == []
+    assert dataset_worker["runtime_impact"] == "worker_scheduler"
+    assert dataset_worker["target_ids"] == ["worker-scheduler"]
+    assert dataset_source_stage["runtime_impact"] == "worker_scheduler"
+    assert dataset_source_stage["target_ids"] == ["worker-scheduler"]
+    assert mixed_advisory_and_backend["runtime_impact"] == "backend"
+    assert mixed_advisory_and_backend["runtime_files"] == ["backend/services/example.py"]
+    assert mixed_advisory_and_backend["target_ids"] == ["backend-main"]
+    assert unmapped_script["runtime_impact"] == "unknown"
+    assert nightly_intake["runtime_impact"] == "none"
+    assert nightly_intake["runtime_files"] == []
+    assert ci_policy_tool["runtime_impact"] == "none"
+    assert ci_policy_tool["runtime_files"] == []
+
+    offline_contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=[
+                "backend/services/advisory_phase0b/audit_service.py",
+                "backend/services/advisory_phase0b/snapshot_reader.py",
+            ],
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=[
+            "backend/services/advisory_phase0b/audit_service.py",
+            "backend/services/advisory_phase0b/snapshot_reader.py",
+        ],
+        root=isolated_workflow_root,
+    )
+
+    assert offline_contract["runtime_impact"] == "none"
+    assert offline_contract["backend_restart_required"] is False
+    assert offline_contract["pre_pr_ready"] is True
+    assert offline_contract["blocking"] == []
+
+    stale_nightly_record = _bug(
+        allowed_write_scope=["scripts/nightly_adaptive_scheduler.py"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "worker_scheduler",
+            "target_id": "worker-scheduler",
+            "target_ids": ["worker-scheduler"],
+            "persistence_basis": "git_tracked_source",
+            "fresh_process_evidence": ["stale planned evidence"],
+            "post_restart_effective_gate": "pending_user_restart",
+            "runtime_identity_match": "pending",
+        },
+    )
+    stale_nightly_record["runtime_contract"].update(
+        {
+            "inference_basis": workflow.RUNTIME_INFERENCE_PLANNED_SCOPE,
+            "provisional": True,
+        }
+    )
+    stale_nightly_contract = workflow.build_runtime_contract(
+        record=stale_nightly_record,
+        changed_files=["scripts/nightly_adaptive_scheduler.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert stale_nightly_contract["runtime_impact"] == "none"
+    assert stale_nightly_contract["backend_restart_required"] is False
+    assert stale_nightly_contract["persistence_basis"] == "not_required"
+    assert stale_nightly_contract["fresh_process_evidence"] == []
+    assert stale_nightly_contract["post_restart_effective_gate"] == "not_required"
+    assert stale_nightly_contract["runtime_identity_match"] == "not_required"
+
+
+def test_repository_runtime_catalog_routes_index_contract_to_dataset_release_worker() -> None:
+    root = Path(__file__).resolve().parents[3]
+    changed_file = "backend/services/dataset_release/index_contract.py"
+
+    classification = workflow._classify_runtime_impact([changed_file], root=root)
+    catalog = workflow._load_runtime_target_catalog(root)
+    worker = catalog["targets"]["worker-scheduler"]
+    heartbeat_route = next(
+        route
+        for route in worker["probe_routes"]
+        if route["route_id"] == "dataset_release_worker_heartbeat"
+    )
+
+    assert classification["runtime_impact"] == "worker_scheduler"
+    assert classification["target_ids"] == ["worker-scheduler"]
+    assert classification["runtime_files"] == [changed_file]
+    assert changed_file in worker["source_globs"]
+    assert changed_file in heartbeat_route["source_globs"]
+
+
+def test_dataset_release_migration_profile_and_plan_are_exact_worker_sources() -> None:
+    changed_files = [
+        "backend/services/dataset_release/profile.py",
+        "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files, root=workflow.REPO_ROOT)
+
+    assert inference == {
+        "runtime_impact": "worker_scheduler",
+        "observed_impacts": ["worker_scheduler"],
+        "runtime_files": changed_files,
+        "target_ids": ["worker-scheduler"],
+    }
+
+
+def test_bug_1141_offline_hmm_stock_fact_repository_is_exact_and_neighbor_stays_backend(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "backend/services/hmm_risk/stock_fact_repository.py",
+        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+        "backend/tests/hmm_risk/test_stock_fact_repository.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+        "tests/aistock_validation/bugs/20260821_BUG-1140.json",
+    ]
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            }
+        ),
+        changed_files=changed_files,
+        root=isolated_workflow_root,
+    )
+    neighboring_backend = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/stock_fact_observation.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert inference["runtime_impact"] == "none"
+    assert inference["runtime_files"] == []
+    assert inference["target_ids"] == []
+    assert contract["runtime_impact"] == "none"
+    assert contract["target_ids"] == []
+    assert contract["backend_restart_required"] is False
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert neighboring_backend["runtime_impact"] == "backend"
+    assert neighboring_backend["runtime_files"] == ["backend/services/hmm_risk/stock_fact_observation.py"]
+    assert neighboring_backend["target_ids"] == ["backend-main"]
+
+
+def test_bug_1233_p0k_offline_pipeline_is_exact_and_neighbor_stays_backend(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "backend/services/advisory_model_first/selection_liability_gate_pipeline.py",
+        "backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py",
+        "docs/architecture/advisory_p0k_selection_preserving_liability_gate_f2_design_20260828.md",
+        "tests/aistock_validation/bugs/20260828_BUG-1232.json",
+    ]
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            }
+        ),
+        changed_files=changed_files,
+        root=isolated_workflow_root,
+    )
+    neighboring_backend = workflow._classify_runtime_impact(
+        ["backend/services/advisory_model_first/model_inference.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert inference["runtime_impact"] == "none"
+    assert inference["runtime_files"] == []
+    assert inference["target_ids"] == []
+    assert contract["runtime_impact"] == "none"
+    assert contract["target_ids"] == []
+    assert contract["backend_restart_required"] is False
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert neighboring_backend["runtime_impact"] == "backend"
+    assert neighboring_backend["runtime_files"] == [
+        "backend/services/advisory_model_first/model_inference.py"
+    ]
+    assert neighboring_backend["target_ids"] == ["backend-main"]
+
+
+def test_p0l_offline_training_source_is_non_runtime_and_neighbor_stays_backend(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_contracts.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_training.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_pipeline.py",
+        "backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_bundle.py",
+        "backend/services/advisory_model_first/turnover_constrained_utility_training.py",
+        "scripts/advisory_p0l_build_training_request.py",
+        "scripts/wsl/advisory_p0l_train.py",
+        "backend/tests/advisory_model_first/test_p0g_anchored_liability_local_reranker_pipeline.py",
+    ]
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            }
+        ),
+        changed_files=changed_files,
+        root=isolated_workflow_root,
+    )
+    neighboring_backend = workflow._classify_runtime_impact(
+        ["backend/services/advisory_model_first/model_inference.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert inference["runtime_impact"] == "none"
+    assert inference["runtime_files"] == []
+    assert inference["target_ids"] == []
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["pre_pr_ready"] is True
+    assert neighboring_backend["runtime_impact"] == "backend"
+
+
+def test_finish_accepts_catalogued_daily_basic_operator_scripts_without_runtime_activation(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "scripts/backfill_tushare_daily_basic_fields.py",
+        "scripts/ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
+        "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+        "tests/aistock_validation/bugs/BUG-1089.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ]
+    record = _bug(
+        bug_id="BUG-1089",
+        module="local_data",
+        allowed_write_scope=changed_files,
+        file_scope_contract=_file_scope_contract(changed_files),
+        required_verification=["validation_module_registry_l0"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+            "post_restart_effective_gate": "not_required",
+            "target_id": None,
+            "target_ids": [],
+        },
+    )
+    issue = _write_json(isolated_workflow_root / "bug-1089.json", record)
+
+    inference = workflow._classify_runtime_impact(changed_files, root=isolated_workflow_root)
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert workflow._classify_runtime_impact(
+        ["scripts/unlisted_operator.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "unknown"
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=changed_files,
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[
+            "python -m nox -s validation_module_registry_l0 -> passed",
+            "python -m nox -s data_sync_autonomy_backend -> passed",
+        ],
+        plan_only=True,
+        allow_missing_evidence=False,
+        code_intelligence_summary_override=_fake_code_intelligence_summary(),
+    )
+
+    assert payload["closure_ready"] is True
+    assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["runtime_contract"]["runtime_impact"] == "none"
+    assert payload["runtime_contract"]["blocking"] == []
+    assert payload["backend_restart"]["required"] is False
+
+
+def test_runtime_catalog_non_runtime_paths_are_exact_and_do_not_overlap_targets(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["non_runtime_source_paths"] = ["scripts/**/*.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="exact paths without wildcards"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    catalog["non_runtime_source_paths"] = ["backend/services/example.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="overlaps runtime targets"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+
+def test_runtime_catalog_non_runtime_paths_reject_future_alias_and_non_operator_entries(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+
+    invalid_entries = [
+        (["scripts\\backfill_tushare_daily_basic_fields.py"], "invalid relative path"),
+        (["scripts/FUTURE_OPERATOR.py"], "existing repository file"),
+        ([123], "entries must be strings"),
+    ]
+    for entries, expected_message in invalid_entries:
+        catalog["non_runtime_source_paths"] = entries
+        catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+        with pytest.raises(workflow.WorkflowError, match=expected_message):
+            workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    non_operator = isolated_workflow_root / "tools" / "offline.py"
+    non_operator.parent.mkdir(parents=True)
+    non_operator.write_text("# not an operator-script namespace\n", encoding="utf-8")
+    catalog["non_runtime_source_paths"] = ["tools/offline.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="Python or PowerShell operator scripts under scripts"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    powershell_operator = isolated_workflow_root / "scripts" / "configure_ci_runner.ps1"
+    powershell_operator.write_text("# offline runner provisioning\n", encoding="utf-8")
+    catalog["non_runtime_source_paths"] = ["scripts/configure_ci_runner.ps1"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    loaded = workflow._load_runtime_target_catalog(isolated_workflow_root)
+    assert loaded["non_runtime_source_paths"] == ["scripts/configure_ci_runner.ps1"]
+
+    catalog_path.write_text("- not-a-mapping\n", encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="must be a mapping"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+    assert workflow._classify_runtime_impact(
+        ["scripts/backfill_tushare_daily_basic_fields.py"],
+        root=isolated_workflow_root,
+    )["runtime_impact"] == "unknown"
+
+
+def test_runtime_catalog_non_runtime_paths_reject_case_alias_and_symlink(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["non_runtime_source_paths"] = ["scripts/BACKFILL_TUSHARE_DAILY_BASIC_FIELDS.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="existing repository file|canonical repository path casing"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+    alias = isolated_workflow_root / "scripts" / "daily_basic_alias.py"
+    alias.write_text("# symlink alias fixture\n", encoding="utf-8")
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda candidate: candidate == alias or original_is_symlink(candidate),
+    )
+    catalog["non_runtime_source_paths"] = ["scripts/daily_basic_alias.py"]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    with pytest.raises(workflow.WorkflowError, match="symbolic-link alias"):
+        workflow._load_runtime_target_catalog(isolated_workflow_root)
+
+
+def test_bug_1032_offline_hmm_state_model_set_preserves_real_backend_detection(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "backend/services/hmm_risk/state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+    ]
+
+    record = _bug(
+        allowed_write_scope=[*changed_files, "backend/services/example.py"],
+        file_scope_contract={"changed_files": changed_files},
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+        },
+    )
+    authoritative_files = workflow.resolve_record_runtime_changed_files(record)
+    inference = workflow._classify_runtime_impact(authoritative_files, root=isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=authoritative_files,
+        root=isolated_workflow_root,
+    )
+    mixed = workflow._classify_runtime_impact(
+        [*changed_files, "backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert authoritative_files == changed_files
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["runtime_files"] == ["backend/services/example.py"]
+    assert mixed["target_ids"] == ["backend-main"]
+
+
+def test_bug_1093_offline_hmm_jump_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/market_relative_jump_spike.py",
+        "backend/tests/hmm_risk/test_market_relative_jump_spike.py",
+        "scripts/hmm_risk/run_market_relative_jump_spike.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_unregistered = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_runtime_candidate.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_unregistered["runtime_impact"] == "backend"
+    assert nearby_unregistered["target_ids"] == ["backend-main"]
+
+
+def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> None:
+    changed_files = [
+        "backend/services/dataset_release/a_share_limit_rule.py",
+        "backend/services/dataset_release/artifact_ready_build_source.py",
+        "backend/services/dataset_release/artifact_ready_source.py",
+        "backend/services/dataset_release/build_processor.py",
+        "backend/services/dataset_release/canonical_stock_transformer.py",
+        "backend/services/dataset_release/component_artifact_manifest.py",
+        "backend/services/dataset_release/component_manifest_producer.py",
+        "backend/services/dataset_release/index_sources.py",
+        "backend/services/dataset_release/minute_overlay.py",
+        "backend/services/dataset_release/mixed_planner.py",
+        "backend/services/dataset_release/resolution_processor.py",
+        "backend/services/dataset_release/resource_budget.py",
+        "backend/services/dataset_release/resource_gate.py",
+        "backend/services/dataset_release/source_authority.py",
+        "backend/services/dataset_release/stk_limit_overlay.py",
+        "backend/services/dataset_release/worker.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+
+    assert inference == {
+        "runtime_impact": "worker_scheduler",
+        "observed_impacts": ["worker_scheduler"],
+        "runtime_files": changed_files,
+        "target_ids": ["worker-scheduler"],
+    }
+
+
+def test_bug_1107_offline_hmm_ridge_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/market_relative_ridge_candidate.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_candidate.py",
+        "scripts/hmm_risk/run_market_relative_ridge_candidate.py",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_unregistered = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_ridge_candidate.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_unregistered["runtime_impact"] == "backend"
+    assert nearby_unregistered["target_ids"] == ["backend-main"]
+
+
+def test_bug_1125_offline_hmm_holdout_runtime_contract_is_none_and_exact() -> None:
+    changed_files = [
+        "backend/services/hmm_risk/market_relative_ridge_holdout.py",
+        "backend/tests/hmm_risk/test_market_relative_ridge_holdout.py",
+        "scripts/hmm_risk/run_market_relative_ridge_holdout.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_unregistered = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/unregistered_holdout_runtime.py"]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_unregistered["runtime_impact"] == "backend"
+    assert nearby_unregistered["target_ids"] == ["backend-main"]
+
+
+def test_bug_1113_offline_subset_is_exact_and_global_service_is_backend() -> None:
+    changed_files = [
+        "backend/services/announcements/title_classifier.py",
+        "backend/services/event_signal/st_announcement_adapter.py",
+        "backend/tests/announcements/test_title_classifier.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/tests/scripts/test_sync_eastmoney_anns_metadata.py",
+        "backend/tests/test_stock_universe_pit_spans.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "scripts/classify_announcement_titles_v0.py",
+        "scripts/sync_eastmoney_anns_metadata.py",
+    ]
+
+    inference = workflow._classify_runtime_impact(changed_files)
+    contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=changed_files,
+            file_scope_contract={"changed_files": changed_files},
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=changed_files,
+    )
+    nearby_backend = workflow._classify_runtime_impact(
+        ["backend/services/event_signal/unregistered_runtime_candidate.py"]
+    )
+    nearby_script = workflow._classify_runtime_impact(
+        ["scripts/unregistered_announcement_operator.py"]
+    )
+    actual_runtime = workflow._classify_runtime_impact(
+        [
+            *changed_files,
+            "backend/services/canonical_equity_pit.py",
+            "backend/services/stock_universe_pit_service.py",
+        ]
+    )
+
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert nearby_backend["runtime_impact"] == "backend"
+    assert nearby_backend["target_ids"] == ["backend-main"]
+    assert nearby_script["runtime_impact"] == "unknown"
+    assert actual_runtime["runtime_impact"] == "backend"
+    assert actual_runtime["runtime_files"] == [
+        "backend/services/canonical_equity_pit.py",
+        "backend/services/stock_universe_pit_service.py",
+    ]
+    assert actual_runtime["target_ids"] == ["backend-main"]
+
+
+def test_bug_1114_repair_script_is_exact_non_runtime_but_adapter_change_is_backend() -> None:
+    repair = workflow._classify_runtime_impact(
+        ["scripts/repair_announcement_event_signal_issuer_binding.py"]
+    )
+    mixed = workflow._classify_runtime_impact(
+        [
+            "backend/services/event_signal/announcement_adapter.py",
+            "scripts/repair_announcement_event_signal_issuer_binding.py",
+        ]
+    )
+    nearby = workflow._classify_runtime_impact(
+        ["scripts/repair_other_event_signal_binding.py"]
+    )
+
+    assert repair == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["runtime_files"] == [
+        "backend/services/event_signal/announcement_adapter.py"
+    ]
+    assert mixed["target_ids"] == ["backend-main"]
+    assert nearby["runtime_impact"] == "unknown"
+    assert nearby["target_ids"] == []
+
+
+def test_bug_1120_namechange_sync_is_exact_non_runtime_but_service_change_is_backend() -> None:
+    sync = workflow._classify_runtime_impact(["scripts/sync_stock_namechange.py"])
+    mixed = workflow._classify_runtime_impact(
+        [
+            "backend/services/stock_universe_pit_service.py",
+            "scripts/sync_stock_namechange.py",
+        ]
+    )
+    nearby = workflow._classify_runtime_impact(["scripts/sync_other_stock_authority.py"])
+
+    assert sync == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["runtime_files"] == ["backend/services/stock_universe_pit_service.py"]
+    assert mixed["target_ids"] == ["backend-main"]
+    assert nearby["runtime_impact"] == "unknown"
+    assert nearby["target_ids"] == []
+
+
+def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"] = {
+        **record["runtime_contract"],
+        "schema_version": "legacy",
+        "operator_runbook_ref": "docs/operations/missing.md",
+        "persistence_basis": "magic",
+    }
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert contract["pre_pr_ready"] is False
+    assert any("schema_version" in item for item in contract["blocking"])
+    assert any("does not exist" in item for item in contract["blocking"])
+    assert any("persistence_basis is invalid" in item for item in contract["blocking"])
+
+
+def test_runtime_contract_rejects_non_executable_probe_refs_before_post_restart(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"] = {
+        **record["runtime_contract"],
+        "identity_ref": f"GET {record['runtime_contract']['identity_ref']} after restart",
+        "business_smoke_ref": "run the fresh-process smoke matrix",
+        "database_readback_ref": "pending separately authorized database readback",
+    }
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert contract["pre_pr_ready"] is False
+    assert contract["target"]["probes"]["health_ref"] == "http://127.0.0.1:8001/api/v1/health"
+    assert any("identity_ref must be an executable absolute endpoint" in item for item in contract["blocking"])
+    assert any("business_smoke_ref must be an executable absolute endpoint" in item for item in contract["blocking"])
+    assert any("database_readback_ref must be an executable absolute endpoint" in item for item in contract["blocking"])
+
+
+def test_runtime_contract_accepts_explicit_database_readback_not_required(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+
+    contract = workflow.build_runtime_contract(
+        record=_runtime_bug(isolated_workflow_root),
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert contract["pre_pr_ready"] is True
+    assert contract["target"]["probes"]["database_readback_ref"] == "not_required"
+
+
+def test_runtime_contract_rejects_unresolved_probe_url_template(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"]["business_smoke_ref"] = (
+        f"{record['runtime_contract']['business_smoke_ref']}/{{run_id}}"
+    )
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert contract["pre_pr_ready"] is False
+    assert any("business_smoke_ref must be an executable absolute endpoint" in item for item in contract["blocking"])
+
+
+def test_runtime_source_pr_uses_refs_until_post_restart_verification(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    body = workflow.render_pr_body(
+        "BUG-199",
+        record,
+        ["backend/services/example.py"],
+        {"required_plans": ["l0"], "production_gates": {}},
+        {"scope_check": {"status": "passed"}},
+        ["validation-receipt"],
+        True,
+        contract,
+    )
+
+    assert "Refs #199" in body
+    assert "Closes #199" not in body
+
+
+def test_finish_persists_fresh_process_evidence_in_bug_json_and_pr_body(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"]["fresh_process_evidence"] = []
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", record)
+    monkeypatch.setattr(
+        workflow,
+        "_build_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id="BUG-199"),
+    )
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["backend/services/example.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[],
+        plan_only=True,
+        allow_missing_evidence=False,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+
+    persisted = json.loads(issue.read_text(encoding="utf-8"))
+    assert persisted["runtime_contract"]["fresh_process_evidence"] == [
+        "isolated port 8012 import smoke passed"
+    ]
+    pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
+    assert "fresh_process_evidence: isolated port 8012 import smoke passed" in pr_body
+    assert "Refs #199" in pr_body
+
+
+def test_finish_persists_actual_scope_after_safe_provisional_narrowing(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _provisional_backend_and_worker_record(isolated_workflow_root)
+    record["runtime_contract"]["fresh_process_evidence"] = []
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", record)
+    monkeypatch.setattr(
+        workflow,
+        "_build_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id="BUG-199"),
+    )
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/dataset_release_worker.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[],
+        plan_only=True,
+        allow_missing_evidence=False,
+        fresh_process_evidence=["fresh worker import passed"],
+    )
+
+    persisted = json.loads(issue.read_text(encoding="utf-8"))
+    assert persisted["runtime_contract"]["inference_basis"] == workflow.RUNTIME_INFERENCE_ACTUAL_CHANGED_FILES
+    assert persisted["runtime_contract"]["provisional"] is False
+    assert persisted["runtime_contract"]["planned_target_ids"] == [
+        "backend-main",
+        "worker-scheduler",
+    ]
+    assert persisted["runtime_contract"]["target_id"] == "worker-scheduler"
+    assert persisted["runtime_contract"]["target_ids"] == ["worker-scheduler"]
+    assert persisted["runtime_contract"]["fresh_process_evidence"] == [
+        "fresh worker import passed"
+    ]
+    assert persisted["file_scope_contract"]["planned_files"] == [
+        "backend/services/example.py",
+        "scripts/dataset_release_worker.py",
+    ]
+    assert persisted["file_scope_contract"]["changed_files"] == [
+        "scripts/dataset_release_worker.py"
+    ]
+    assert persisted["file_scope_contract"]["actual_changed_files"] == [
+        "scripts/dataset_release_worker.py"
+    ]
+    assert (
+        persisted["file_scope_contract"]["changed_files_source"]
+        == workflow.FILE_SCOPE_SOURCE_GIT_FINISH
+    )
+    assert payload["runtime_contract"]["blocking"] == []
+    assert payload["runtime_contract"]["activation_states"]["backend_restart"] == "pending_user_action"
+
+
+def test_post_restart_verify_is_read_only_and_writes_only_ignored_receipt(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    before = issue.read_text(encoding="utf-8")
+
+    class _Response:
+        status = 200
+
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return self.body
+
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        assert request.method == "GET"
+        assert timeout == 3.0
+        body = b'{"commit":"merge-abc123"}' if "runtime-identity" in request.full_url else b'{"status":"ok"}'
+        return _Response(body)
+
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda request, timeout_seconds: fake_urlopen(request, timeout_seconds),
+    )
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["runtime_identity_match"] is True
+    assert payload["process_control_performed"] is False
+    assert payload["tracked_files_written"] is False
+    assert all("response_preview" not in probe for probe in payload["probes"])
+    assert all("_response_body" not in probe for probe in payload["probes"])
+    assert payload["probe_evidence_digest"]
+    assert issue.read_text(encoding="utf-8") == before
+    assert (isolated_workflow_root / payload["receipt_path"]).exists()
+
+
+def test_post_restart_verify_worker_scheduler_uses_local_heartbeat_not_fastapi_identity(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    worker_target = catalog["targets"]["worker-scheduler"]
+    worker_target.pop("probe_origins")
+    worker_target["probe_mode"] = "dataset_release_worker_heartbeat"
+    worker_target["local_probe"] = {
+        "profile_path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+        "max_files": 200,
+    }
+    worker_target["probes"] = {
+        "health_ref": "worker_heartbeat.health",
+        "identity_ref": "worker_heartbeat.identity",
+        "business_smoke_ref": "worker_heartbeat.business",
+        "database_readback_ref": "not_required",
+    }
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    profile_path = isolated_workflow_root / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml"
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text("profile: qe_hmm_full_v2\n", encoding="utf-8")
+    runbook = isolated_workflow_root / "docs" / "operations" / "dataset-release-worker.md"
+    runbook.parent.mkdir(parents=True, exist_ok=True)
+    runbook.write_text("# dataset release Worker\n", encoding="utf-8")
+    issue = _write_json(
+        isolated_workflow_root / "worker-runtime-bug.json",
+        _bug(
+            allowed_write_scope=["scripts/dataset_release_worker.py"],
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "worker_scheduler",
+                "target_id": "worker-scheduler",
+                "target_ids": ["worker-scheduler"],
+                "persistence_basis": "git_tracked_source",
+                "fresh_process_evidence": ["fresh worker import passed"],
+                "operator_runbook_ref": "docs/operations/dataset-release-worker.md",
+            },
+        ),
+    )
+    expected = "a" * 40
+    heartbeat_body = json.dumps(
+        {
+            "schema_version": "dataset_release_worker_heartbeat_v1",
+            "identity": {"code_sha": expected, "instance_id": "dsw_" + "1" * 32},
+            "status": "IDLE",
+            "stop_requested": False,
+            "claim_kind": None,
+            "claim_id": None,
+        },
+        sort_keys=True,
+    )
+    response_sha = hashlib.sha256(heartbeat_body.encode()).hexdigest()
+    semantic = {
+        "schema_version": workflow.BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+        "contract_id": "dataset_release_worker_heartbeat",
+        "verdict": "passed",
+        "reason": None,
+        "facts": {
+            "state": "healthy",
+            "worker_status": "IDLE",
+            "stop_requested": False,
+            "claim_present": False,
+        },
+        "expectation": None,
+        "expectation_digest": None,
+        "response_sha256": response_sha,
+    }
+    local_results = []
+    for name in ("health_ref", "identity_ref", "business_smoke_ref"):
+        result = {
+            "name": name,
+            "url": f"worker-heartbeat://worker-scheduler/{name}",
+            "status": "passed",
+            "status_code": None,
+            "transport": {"status_code": None, "ok": True, "error": None, "kind": "local_file"},
+            "payload_schema": {"json": True, "kind": "object"},
+            "response_sha256": response_sha,
+            "response_bytes": len(heartbeat_body.encode()),
+        }
+        if name == "identity_ref":
+            result["_response_body"] = json.dumps({"commit": expected}, sort_keys=True)
+        if name == "business_smoke_ref":
+            result["semantic"] = semantic
+        local_results.append(result)
+
+    monkeypatch.setattr(
+        workflow,
+        "_read_dataset_release_worker_heartbeat_probes",
+        lambda target, timeout_seconds: local_results,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker verification must not use HTTP")),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="worker-scheduler",
+        expected_identity=expected,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["runtime_identity_match"] is True
+    assert payload["observed_identity"] == expected
+    assert payload["business_smoke_semantic"] == semantic
+    assert payload["required_probe_names"] == ["health_ref", "identity_ref", "business_smoke_ref"]
+    assert all(probe["transport"]["kind"] == "local_file" for probe in payload["probes"])
+    assert all("_response_body" not in probe for probe in payload["probes"])
+
+
+def test_worker_scheduler_probe_route_is_exact_to_dataset_release_sources(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    worker_target = catalog["targets"]["worker-scheduler"]
+    worker_target["source_globs"].append("backend/services/**/*worker*.py")
+    worker_target["probe_mode"] = "http"
+    worker_target["probe_routes"] = [
+        {
+            "route_id": "dataset_release_worker_heartbeat",
+            "source_globs": ["scripts/dataset_release_worker.py"],
+            "probe_mode": "dataset_release_worker_heartbeat",
+            "local_probe": {
+                "profile_path": "configs/datasets/qe_backtest_monthly_v2.yaml",
+                "max_files": 200,
+            },
+            "probes": {
+                "health_ref": "worker_heartbeat.health",
+                "identity_ref": "worker_heartbeat.identity",
+                "business_smoke_ref": "worker_heartbeat.business",
+                "database_readback_ref": "not_required",
+            },
+        }
+    ]
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    profile_path = isolated_workflow_root / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml"
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text("profile: qe_hmm_full_v2\n", encoding="utf-8")
+    runbook = isolated_workflow_root / "docs" / "operations" / "worker.md"
+    runbook.parent.mkdir(parents=True, exist_ok=True)
+    runbook.write_text("# Worker\n", encoding="utf-8")
+    explicit = {
+        "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+        "runtime_impact": "worker_scheduler",
+        "target_id": "worker-scheduler",
+        "target_ids": ["worker-scheduler"],
+        "persistence_basis": "git_tracked_source",
+        "fresh_process_evidence": ["fresh import passed"],
+        "operator_runbook_ref": "docs/operations/worker.md",
+        "health_ref": "http://127.0.0.1:8001/api/v1/health",
+        "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+        "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+        "database_readback_ref": "not_required",
+    }
+
+    dataset_release = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=["scripts/dataset_release_worker.py"],
+            runtime_contract=explicit,
+        ),
+        changed_files=["scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+    )
+    generic_worker = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=["backend/services/example_worker.py"],
+            runtime_contract=explicit,
+        ),
+        changed_files=["backend/services/example_worker.py"],
+        root=isolated_workflow_root,
+    )
+    mixed_worker = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=[
+                "scripts/dataset_release_worker.py",
+                "backend/services/example_worker.py",
+            ],
+            runtime_contract=explicit,
+        ),
+        changed_files=[
+            "scripts/dataset_release_worker.py",
+            "backend/services/example_worker.py",
+        ],
+        root=isolated_workflow_root,
+    )
+
+    assert dataset_release["blocking"] == []
+    assert dataset_release["target"]["probe_route_id"] == "dataset_release_worker_heartbeat"
+    assert dataset_release["target"]["probe_mode"] == "dataset_release_worker_heartbeat"
+    assert generic_worker["blocking"] == []
+    assert generic_worker["target"].get("probe_route_id") is None
+    assert generic_worker["target"]["probe_mode"] == "http"
+    assert generic_worker["target"]["probes"]["identity_ref"].endswith("/runtime-identity")
+    assert any("mix routed and non-routed Worker sources" in item for item in mixed_worker["blocking"])
+
+
+@pytest.mark.parametrize(
+    ("health_state", "worker_status", "stop_requested", "claim_kind", "claim_id", "code_sha", "failed_names"),
+    [
+        ("stale", "IDLE", False, None, None, "a" * 40, {"health_ref", "business_smoke_ref"}),
+        ("healthy", "STOP_REQUESTED", True, None, None, "a" * 40, {"business_smoke_ref"}),
+        ("healthy", "IDLE", False, "build", None, "a" * 40, {"business_smoke_ref"}),
+        ("healthy", "IDLE", False, None, None, "not-a-commit", {"identity_ref", "business_smoke_ref"}),
+    ],
+)
+def test_dataset_release_worker_heartbeat_probes_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    health_state: str,
+    worker_status: str,
+    stop_requested: bool,
+    claim_kind: str | None,
+    claim_id: str | None,
+    code_sha: str,
+    failed_names: set[str],
+) -> None:
+    instance_id = "dsw_" + "2" * 32
+    last_poll_at = "2026-08-23T18:00:00+00:00"
+    capability_digest = "b" * 64
+    health = {
+        "state": health_state,
+        "reason": "worker_heartbeat_fresh" if health_state == "healthy" else "worker_stopped_or_heartbeat_expired",
+        "instance_id": instance_id,
+        "worker_status": worker_status,
+        "last_poll_at": last_poll_at,
+        "age_seconds": 1.0,
+        "capability_digest": capability_digest,
+        "files_scanned": 1,
+    }
+    payload = {
+        "schema_version": "dataset_release_worker_heartbeat_v1",
+        "identity": {
+            "schema_version": "dataset_release_worker_identity_v1",
+            "instance_id": instance_id,
+            "code_sha": code_sha,
+            "capability_digest": capability_digest,
+        },
+        "status": worker_status,
+        "last_poll_at": last_poll_at,
+        "counter": 1,
+        "claim_kind": claim_kind,
+        "claim_id": claim_id,
+        "stop_requested": stop_requested,
+    }
+    monkeypatch.setattr(
+        workflow,
+        "_load_dataset_release_worker_heartbeat_snapshot",
+        lambda _target: (health, payload),
+    )
+
+    results = workflow._read_dataset_release_worker_heartbeat_probes(
+        {"target_id": "worker-scheduler", "local_probe": {}},
+        3.0,
+    )
+
+    observed_failed = {result["name"] for result in results if result["status"] != "passed"}
+    assert observed_failed == failed_names
+    assert all(result["transport"]["kind"] == "local_file" for result in results)
+    assert next(result for result in results if result["name"] == "business_smoke_ref")["semantic"][
+        "verdict"
+    ] == ("failed" if "business_smoke_ref" in failed_names else "passed")
+
+
+def test_post_restart_verify_accepts_deployed_origin_main_descendant_with_strict_git_proof(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue = _write_json(
+        isolated_workflow_root / "runtime-bug.json",
+        _runtime_bug(isolated_workflow_root),
+    )
+    expected = "a" * 40
+    observed = "b" * 40
+    origin_main = "c" * 40
+
+    class _Response:
+        status = 200
+
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return self.body
+
+    def fake_open(request: Any, *, timeout_seconds: float) -> _Response:
+        assert timeout_seconds == 3.0
+        body = json.dumps({"merge_commit": observed}).encode() if "runtime-identity" in request.full_url else b'{"status":"ok"}'
+        return _Response(body)
+
+    def fake_run(args: list[str], *, cwd: Path, timeout: float = 120.0, env: dict[str, str] | None = None) -> dict[str, Any]:
+        del timeout, env
+        assert cwd == isolated_workflow_root
+        if args == ["git", "rev-parse", "--verify", "origin/main^{commit}"]:
+            return {"ok": True, "returncode": 0, "stdout": origin_main, "stderr": ""}
+        if tuple(args) in {
+            ("git", "merge-base", "--is-ancestor", expected, observed),
+            ("git", "merge-base", "--is-ancestor", observed, origin_main),
+            ("git", "merge-base", "--is-ancestor", origin_main, origin_main),
+        }:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(workflow, "_open_read_only_url", fake_open)
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=expected,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["runtime_identity_match"] is True
+    assert payload["observed_identity"] == observed
+    assert payload["runtime_identity_proof"] == {
+        "schema_version": "aistock_runtime_identity_proof_v1",
+        "mode": "origin_main_descendant",
+        "expected_identity": expected,
+        "observed_identity": observed,
+        "origin_main_identity": origin_main,
+        "expected_is_ancestor": True,
+        "observed_in_origin_main": True,
+    }
+    assert payload["runtime_identity_proof_digest"]
+
+    close_sync = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(isolated_workflow_root / payload["receipt_path"]),
+    )
+    assert close_sync["workflow_gate"] == "ready_for_apply"
+
+
+@pytest.mark.parametrize(
+    ("expected_is_ancestor", "observed_in_origin_main", "expected_error"),
+    [
+        (False, True, "not a deployed origin/main descendant"),
+        (True, False, "not contained in the verified origin/main lineage"),
+    ],
+)
+def test_post_restart_verify_rejects_unproven_deployed_commit(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expected_is_ancestor: bool,
+    observed_in_origin_main: bool,
+    expected_error: str,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue = _write_json(
+        isolated_workflow_root / "runtime-bug.json",
+        _runtime_bug(isolated_workflow_root),
+    )
+    expected = "a" * 40
+    observed = "b" * 40
+    origin_main = "c" * 40
+
+    class _Response:
+        status = 200
+
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return self.body
+
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda request, timeout_seconds: _Response(
+            json.dumps({"merge_commit": observed}).encode()
+            if "runtime-identity" in request.full_url
+            else b'{"status":"ok"}'
+        ),
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if args == ["git", "rev-parse", "--verify", "origin/main^{commit}"]:
+            return {"ok": True, "returncode": 0, "stdout": origin_main, "stderr": ""}
+        if args == ["git", "merge-base", "--is-ancestor", expected, observed]:
+            return {"ok": expected_is_ancestor, "returncode": 0 if expected_is_ancestor else 1, "stdout": "", "stderr": ""}
+        if args == ["git", "merge-base", "--is-ancestor", observed, origin_main]:
+            return {"ok": observed_in_origin_main, "returncode": 0 if observed_in_origin_main else 1, "stdout": "", "stderr": ""}
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=expected,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["runtime_identity_match"] is False
+    assert payload["observed_identity"] == observed
+    assert any(expected_error in item for item in payload["blocking"])
+
+
+_BUSINESS_SMOKE_RUN_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055"
+_BUSINESS_SMOKE_SCHEDULER_URL = "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
+_BUSINESS_SMOKE_SCOPED_SCHEDULER_URL = (
+    "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim"
+)
+_BUG992_RECORD_REF = (
+    "tests/aistock_validation/bugs/"
+    "20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json"
+)
+_BUG992_EXPECTED_IDENTITY = "ad24e15857fef09d70bf3125fbacc280ac1f44d6"
+
+
+class _StubProbeResponse:
+    status = 200
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self) -> "_StubProbeResponse":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def read(self, limit: int) -> bytes:
+        return self.body[:limit]
+
+
+def _install_stub_probes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    smoke_body: bytes,
+    identity_body: bytes = b'{"commit":"merge-abc123"}',
+    health_body: bytes = b'{"status":"ok"}',
+) -> None:
+    def fake_open(request: Any, *, timeout_seconds: float) -> _StubProbeResponse:
+        url = str(request.full_url)
+        if "runtime-identity" in url:
+            return _StubProbeResponse(identity_body)
+        if url.endswith("/api/v1/health"):
+            return _StubProbeResponse(health_body)
+        return _StubProbeResponse(smoke_body)
+
+    monkeypatch.setattr(workflow, "_open_read_only_url", fake_open)
+
+
+def _semantic_runtime_issue(root: Path, *, smoke_url: str) -> Path:
+    _write_runtime_catalog(root)
+    record = _runtime_bug(root)
+    record["runtime_contract"]["business_smoke_ref"] = smoke_url
+    return _write_json(root / "runtime-bug.json", record)
+
+
+def _smoke_probe(payload: dict[str, Any]) -> dict[str, Any]:
+    return next(probe for probe in payload["probes"] if probe["name"] == "business_smoke_ref")
+
+
+def test_post_restart_verify_blocks_failed_retryable_run_payload_on_http_200(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "FAILED_RETRYABLE"}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["post_restart_effective_gate"] == "failed"
+    assert payload["runtime_identity_match"] is True
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["transport"] == {"status_code": 200, "ok": True, "error": None}
+    assert smoke["payload_schema"] == {"json": True, "kind": "object"}
+    assert smoke["semantic"]["contract_id"] == "run_terminal_success"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED_RETRYABLE" in smoke["semantic"]["reason"]
+    assert any("business_smoke_ref" in item for item in payload["blocking"])
+
+
+def test_post_restart_verify_blocks_intraday_running_run_payload_on_http_200(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "INTRADAY_RUNNING"}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "closure" in smoke["semantic"]["reason"]
+    assert "INTRADAY_RUNNING" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_verifies_run_payload_reaching_terminal_success(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "SUCCEEDED"}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["blocking"] == []
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "run_terminal_success"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["reason"] is None
+    receipt = json.loads((isolated_workflow_root / payload["receipt_path"]).read_text(encoding="utf-8"))
+    assert receipt["business_smoke_semantic"]["verdict"] == "passed"
+    assert receipt["business_smoke_semantic"]["contract_id"] == "run_terminal_success"
+    assert receipt["business_smoke_semantic"]["response_sha256"] == smoke["response_sha256"]
+
+
+def test_post_restart_verify_blocks_scheduler_payload_with_active_blocker_on_http_200(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "last_result_errors": ["LOCALSIM_DURABLE_ORDER_PLAN_MISMATCH"],
+                    "last_blocking_result": {"reason": "LOCALSIM_DURABLE_ORDER_PLAN_MISMATCH"},
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["runtime_identity_match"] is True
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["transport"]["ok"] is True
+    assert smoke["semantic"]["contract_id"] == "scheduler_status"
+    assert smoke["semantic"]["verdict"] == "failed"
+
+
+def test_post_restart_verify_accepts_structured_clear_current_trade_date_blockers(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "scheduler_loop_health": {"status": "HEALTHY"},
+                    "current_trade_date_blockers": {
+                        "status": "CLEAR",
+                        "blocker_count": 0,
+                        "blockers": [],
+                        "observed_blocker_count": 0,
+                        "truncated": False,
+                        "execution_gate": False,
+                    },
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["blocking"] == []
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "scheduler_status"
+    assert smoke["semantic"]["verdict"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("blockers", "expected_gate"),
+    [
+        (
+            {
+                "status": "CLEAR",
+                "blocker_count": 0,
+                "blockers": [],
+                "observed_blocker_count": 0,
+                "truncated": False,
+                "execution_gate": False,
+            },
+            "verified",
+        ),
+        (
+            {
+                "status": "BLOCKED",
+                "blocker_count": 1,
+                "blockers": [
+                    {
+                        "run_id": "simrun_0123456789abcdef",
+                        "broker_backend": "local_sim",
+                        "status": "FAILED_RETRYABLE",
+                    }
+                ],
+                "observed_blocker_count": 1,
+                "truncated": False,
+                "execution_gate": False,
+            },
+            "blocked",
+        ),
+    ],
+)
+def test_post_restart_verify_applies_scheduler_semantics_to_scoped_status_endpoint(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    blockers: dict[str, object],
+    expected_gate: str,
+) -> None:
+    scope = {
+        "schema_version": "simulation_scheduler_verification_scope_v1",
+        "active": True,
+        "broker_backend": "local_sim",
+        "run_id": None,
+    }
+    blockers = {**blockers, "verification_scope": scope}
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_SCOPED_SCHEDULER_URL,
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "schema_version": "simulation_scheduler_verification_status_v1",
+                    "scheduler_loop_health": {"status": "HEALTHY"},
+                    "current_trade_date_blockers": blockers,
+                    "verification_scope": scope,
+                    "read_only": True,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    smoke = _smoke_probe(payload)
+    assert payload["workflow_gate"] == expected_gate
+    assert smoke["semantic"]["contract_id"] == "scheduler_verification_status"
+    assert smoke["semantic"]["verdict"] == ("passed" if expected_gate == "verified" else "failed")
+
+
+def test_post_restart_verify_rejects_scoped_scheduler_subject_response_mismatch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_SCOPED_SCHEDULER_URL,
+    )
+    scope = {
+        "schema_version": "simulation_scheduler_verification_scope_v1",
+        "active": True,
+        "broker_backend": "minqmt_sim",
+        "run_id": None,
+    }
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "schema_version": "simulation_scheduler_verification_status_v1",
+                    "scheduler_loop_health": {"status": "HEALTHY"},
+                    "current_trade_date_blockers": {
+                        "status": "CLEAR",
+                        "blocker_count": 0,
+                        "blockers": [],
+                        "observed_blocker_count": 0,
+                        "truncated": False,
+                        "execution_gate": False,
+                        "verification_scope": scope,
+                    },
+                    "verification_scope": scope,
+                    "read_only": True,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "scheduler_verification_status"
+    assert "does not match probe subject" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_accepts_run_scoped_scheduler_subject_with_resolved_broker(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "simrun_0123456789abcdef"
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=(
+            "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status"
+            f"?run_id={run_id}"
+        ),
+    )
+    scope = {
+        "schema_version": "simulation_scheduler_verification_scope_v1",
+        "active": True,
+        "broker_backend": "minqmt_sim",
+        "run_id": run_id,
+    }
+    blockers = {
+        "status": "CLEAR",
+        "blocker_count": 0,
+        "blockers": [],
+        "observed_blocker_count": 0,
+        "truncated": False,
+        "execution_gate": False,
+        "verification_scope": scope,
+    }
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "schema_version": "simulation_scheduler_verification_status_v1",
+                    "scheduler_loop_health": {"status": "HEALTHY"},
+                    "current_trade_date_blockers": blockers,
+                    "verification_scope": scope,
+                    "read_only": True,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert _smoke_probe(payload)["semantic"]["facts"]["verification_scope"] == {
+        "broker_backend": "minqmt_sim",
+        "run_id": run_id,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("blocker_count", 1),
+        ("observed_blocker_count", 1),
+        ("blockers", [{"reason": "ACTIVE_BLOCKER"}]),
+        ("execution_gate", True),
+        ("truncated", True),
+        ("status", "BLOCKED"),
+        ("blocker_count", None),
+    ],
+)
+def test_post_restart_verify_rejects_non_clear_structured_current_trade_date_blockers(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    blockers = {
+        "status": "CLEAR",
+        "blocker_count": 0,
+        "blockers": [],
+        "observed_blocker_count": 0,
+        "truncated": False,
+        "execution_gate": False,
+    }
+    blockers[field] = value
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "current_trade_date_blockers": blockers,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert (
+        "scheduler.current_trade_date_blockers"
+        in smoke["semantic"]["facts"]["markers"]
+    )
+
+
+@pytest.mark.parametrize("blockers", [None, {}, "CLEAR", 0, False])
+def test_post_restart_verify_rejects_malformed_current_trade_date_blockers(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    blockers: object,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_SCHEDULER_URL)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "scheduler": {
+                    "running": True,
+                    "current_trade_date_blockers": blockers,
+                },
+            }
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["semantic"]["facts"]["markers"] == [
+        "scheduler.current_trade_date_blockers"
+    ]
+
+
+def test_post_restart_verify_blocks_malformed_business_smoke_payload(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(monkeypatch, smoke_body=b"this is not json")
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["payload_schema"] == {"json": False, "kind": "none"}
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "parseable JSON" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_blocks_unknown_business_smoke_endpoint(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/api/v1/example/smoke",
+    )
+    _install_stub_probes(monkeypatch, smoke_body=b'{"status":"ok"}')
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "failed"
+    assert smoke["semantic"]["contract_id"] is None
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "no target-owned business-smoke semantic contract" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_blocks_business_success_when_identity_mismatches(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(isolated_workflow_root, smoke_url=_BUSINESS_SMOKE_RUN_URL)
+    _install_stub_probes(
+        monkeypatch,
+        identity_body=b'{"commit":"unexpected-identity"}',
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "SUCCEEDED"}}
+        ).encode(),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *args, **kwargs: {"ok": False, "returncode": 1, "stdout": "", "stderr": "no git"},
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["runtime_identity_match"] is False
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["verdict"] == "passed"
+
+
+def _write_bug992_runtime_catalog(root: Path) -> Path:
+    path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "aistock_runtime_target_catalog_v1",
+                "targets": {
+                    "backend-main": {
+                        "runtime_kind": "backend",
+                        "source_globs": ["backend/**/*.py"],
+                        "production_port": 8001,
+                        "isolated_validation_ports": [8011, 8012],
+                        "probe_origins": ["http://127.0.0.1:8001"],
+                        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+                        "expected_identity_ref": "merged_commit",
+                        "probes": {
+                            "health_ref": "http://127.0.0.1:8001/api/v1/health",
+                            "identity_ref": "bug_record.runtime_contract.identity_ref",
+                            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+                            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+                        },
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _prepare_bug992_original_scenario(root: Path, monkeypatch: pytest.MonkeyPatch, *, smoke_body: bytes) -> Path:
+    _write_bug992_runtime_catalog(root)
+    repo_root = Path(workflow.__file__).resolve().parent.parent
+    record = json.loads((repo_root / _BUG992_RECORD_REF).read_text(encoding="utf-8"))
+    runbook = root / "docs" / "operations" / "backend_main_runtime_restart_runbook.md"
+    runbook.parent.mkdir(parents=True, exist_ok=True)
+    runbook.write_text("# User-owned backend restart runbook\n", encoding="utf-8")
+    _install_stub_probes(
+        monkeypatch,
+        identity_body=json.dumps({"commit": _BUG992_EXPECTED_IDENTITY}).encode(),
+        smoke_body=smoke_body,
+    )
+    return _write_json(root / "bug-992.json", record)
+
+
+def _bug992_terminal_evidence_body(
+    *,
+    status: str = "FAILED_TERMINAL",
+    reason_code: str = "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+    previous_status: str = "FAILED_RETRYABLE",
+    terminal_status: str = "FAILED_TERMINAL",
+    carrier_schema: str = "localsim_historical_legacy_plan_terminalization_v1",
+    carriers: list[dict[str, Any]] | None = None,
+) -> bytes:
+    if carriers is None:
+        carriers = [
+            {
+                "schema_version": carrier_schema,
+                "reason_code": reason_code,
+                "run_id": "simrun_7bf1e0c1b6b7d055",
+                "previous_status": previous_status,
+                "terminal_status": terminal_status,
+                "authoritative_state_count": 492,
+            }
+        ]
+    return json.dumps(
+        {
+            "ok": True,
+            "schema_version": "simulation_run_terminal_evidence_v1",
+            "read_only": True,
+            "run": {
+                "run_id": "simrun_7bf1e0c1b6b7d055",
+                "status": status,
+                "terminal_evidence": carriers,
+            },
+        }
+    ).encode()
+
+
+def test_post_restart_verify_reproduces_bug992_pending_terminalization_as_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _prepare_bug992_original_scenario(
+        isolated_workflow_root,
+        monkeypatch,
+        smoke_body=_bug992_terminal_evidence_body(status="FAILED_RETRYABLE", carriers=[]),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=_BUG992_EXPECTED_IDENTITY,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["runtime_identity_match"] is True
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["post_restart_effective_gate"] == "failed"
+    smoke = _smoke_probe(payload)
+    assert smoke["url"].endswith("/runs/simrun_7bf1e0c1b6b7d055/terminal-evidence")
+    assert smoke["status"] == "failed"
+    assert smoke["transport"]["status_code"] == 200
+    assert smoke["semantic"]["contract_id"] == "run_terminal_evidence"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED_RETRYABLE" in smoke["semantic"]["reason"]
+    assert "expected terminal status" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_bug992_contract_verifies_declared_expected_terminal_failure(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _prepare_bug992_original_scenario(
+        isolated_workflow_root,
+        monkeypatch,
+        smoke_body=_bug992_terminal_evidence_body(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=_BUG992_EXPECTED_IDENTITY,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["runtime_identity_match"] is True
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["contract_id"] == "run_terminal_evidence"
+    assert smoke["semantic"]["verdict"] == "passed"
+    matched = smoke["semantic"]["facts"]["matched_evidence"]
+    assert matched == {
+        "schema_version": "localsim_historical_legacy_plan_terminalization_v1",
+        "reason_code": "LOCALSIM_HISTORICAL_FAILED_RUN_LEGACY_PLAN_RETIRED",
+        "previous_status": "FAILED_RETRYABLE",
+        "terminal_status": "FAILED_TERMINAL",
+    }
+    record = json.loads((Path(workflow.__file__).resolve().parent.parent / _BUG992_RECORD_REF).read_text(encoding="utf-8"))
+    declared = record["runtime_contract"]["expected_terminal_outcome"]
+    assert payload["expected_terminal_outcome"] == declared
+    assert payload["expected_terminal_outcome_digest"] == workflow._expectation_outcome_digest(declared)
+    assert smoke["semantic"]["expectation"] == declared
+    assert smoke["semantic"]["expectation_digest"] == payload["expected_terminal_outcome_digest"]
+    receipt = json.loads((isolated_workflow_root / payload["receipt_path"]).read_text(encoding="utf-8"))
+    assert receipt["expected_terminal_outcome"] == declared
+    assert receipt["expected_terminal_outcome_digest"] == payload["expected_terminal_outcome_digest"]
+
+
+def test_post_restart_verify_bug992_contract_blocks_terminal_status_mismatch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _prepare_bug992_original_scenario(
+        isolated_workflow_root,
+        monkeypatch,
+        smoke_body=_bug992_terminal_evidence_body(status="SUCCEEDED", carriers=[]),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=_BUG992_EXPECTED_IDENTITY,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "expected terminal status" in smoke["semantic"]["reason"]
+    assert "SUCCEEDED" in smoke["semantic"]["reason"]
+
+
+_TERMINAL_EVIDENCE_SMOKE_URL = (
+    "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_example/terminal-evidence"
+)
+
+
+def _example_expectation(**overrides: Any) -> dict[str, Any]:
+    expectation = {
+        "schema_version": "aistock_expected_terminal_outcome_v1",
+        "contract_id": "run_terminal_evidence",
+        "expected_status": "FAILED_TERMINAL",
+        "expected_previous_status": "FAILED_RETRYABLE",
+        "expected_reason_code": "EXAMPLE_TERMINAL_REASON",
+        "expected_evidence_schema": "example_terminalization_v1",
+        "expected_run_id": "simrun_example",
+    }
+    expectation.update(overrides)
+    return expectation
+
+
+def _expectation_runtime_issue(
+    root: Path,
+    *,
+    smoke_url: str = _TERMINAL_EVIDENCE_SMOKE_URL,
+    expectation: dict[str, Any] | None = None,
+) -> Path:
+    _write_runtime_catalog(root)
+    record = _runtime_bug(root)
+    record["runtime_contract"]["business_smoke_ref"] = smoke_url
+    if expectation is not None:
+        record["runtime_contract"]["expected_terminal_outcome"] = expectation
+    return _write_json(root / "runtime-bug.json", record)
+
+
+def _terminal_evidence_smoke_body(
+    *,
+    status: str,
+    reason_code: str = "EXAMPLE_TERMINAL_REASON",
+    previous_status: str = "FAILED_RETRYABLE",
+    terminal_status: str = "FAILED_TERMINAL",
+    carrier_schema: str = "example_terminalization_v1",
+    carriers: list[dict[str, Any]] | None = None,
+    schema_version: str = "simulation_run_terminal_evidence_v1",
+) -> bytes:
+    if carriers is None:
+        carriers = [
+            {
+                "schema_version": carrier_schema,
+                "reason_code": reason_code,
+                "run_id": "simrun_example",
+                "previous_status": previous_status,
+                "terminal_status": terminal_status,
+            }
+        ]
+    return json.dumps(
+        {
+            "ok": True,
+            "schema_version": schema_version,
+            "read_only": True,
+            "run": {
+                "run_id": "simrun_example",
+                "status": status,
+                "terminal_evidence": carriers,
+            },
+        }
+    ).encode()
+
+
+def _run_smoke_verify(issue: Path, *, expected_identity: str = "merge-abc123") -> dict[str, Any]:
+    return workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=expected_identity,
+        timeout_seconds=3.0,
+    )
+
+
+def test_post_restart_verify_terminal_evidence_default_failed_terminal_stays_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_TERMINAL"),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["expected_terminal_outcome"] is None
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "run_terminal_evidence"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "failure status" in smoke["semantic"]["reason"]
+    assert "FAILED_TERMINAL" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_terminal_evidence_default_failed_retryable_stays_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_RETRYABLE", carriers=[]),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED_RETRYABLE" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_terminal_evidence_default_success_verified(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="SUCCEEDED", carriers=[]),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "run_terminal_evidence"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["expectation"] is None
+    assert smoke["semantic"]["expectation_digest"] is None
+
+
+def test_post_restart_verify_terminal_evidence_default_scans_all_status_fields(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {
+                "ok": True,
+                "schema_version": "simulation_run_terminal_evidence_v1",
+                "read_only": True,
+                "run": {
+                    "run_id": "simrun_example",
+                    "status": "COMPLETED",
+                    "verdict": "FAILED",
+                    "terminal_evidence": [],
+                },
+            }
+        ).encode(),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "failure status" in smoke["semantic"]["reason"]
+    assert "run.verdict=FAILED" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expectation_blocks_run_id_mismatch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    smoke_body = json.loads(_terminal_evidence_smoke_body(status="FAILED_TERMINAL"))
+    smoke_body["run"]["run_id"] = "simrun_UNRELATED_OLD_RUN"
+    _install_stub_probes(monkeypatch, smoke_body=json.dumps(smoke_body).encode())
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "expected terminal outcome subject" in smoke["semantic"]["reason"]
+    assert "simrun_UNRELATED_OLD_RUN" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_full_match_verified(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    declared = _example_expectation()
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=declared)
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_TERMINAL"),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["blocking"] == []
+    assert payload["expected_terminal_outcome"] == declared
+    assert payload["expected_terminal_outcome_digest"] == workflow._expectation_outcome_digest(declared)
+    smoke = _smoke_probe(payload)
+    assert smoke["status"] == "passed"
+    assert smoke["semantic"]["verdict"] == "passed"
+    assert smoke["semantic"]["expectation"] == declared
+    assert smoke["semantic"]["expectation_digest"] == payload["expected_terminal_outcome_digest"]
+    assert smoke["semantic"]["facts"]["matched_evidence"]["reason_code"] == "EXAMPLE_TERMINAL_REASON"
+    receipt = json.loads((isolated_workflow_root / payload["receipt_path"]).read_text(encoding="utf-8"))
+    assert receipt["expected_terminal_outcome"] == declared
+    assert receipt["expected_terminal_outcome_digest"] == payload["expected_terminal_outcome_digest"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_status_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED", terminal_status="FAILED"),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "expected terminal status" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_does_not_exempt_failed_retryable(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_RETRYABLE", carriers=[]),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED_RETRYABLE" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_reason_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(
+            status="FAILED_TERMINAL",
+            reason_code="SOME_OTHER_REASON",
+        ),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "reason code" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_carrier_absent_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(status="FAILED_TERMINAL", carriers=[]),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "carrier is absent" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_carrier_schema_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(
+            status="FAILED_TERMINAL",
+            carrier_schema="some_other_terminalization_v1",
+        ),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "carrier is absent" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_previous_status_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(
+            status="FAILED_TERMINAL",
+            previous_status="SUCCEEDED",
+        ),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "previous status" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_carrier_terminal_status_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=_terminal_evidence_smoke_body(
+            status="FAILED_TERMINAL",
+            terminal_status="FAILED_RETRYABLE",
+        ),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "terminal status" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expected_terminal_outcome_payload_schema_mismatch_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(isolated_workflow_root, expectation=_example_expectation())
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_example", "status": "FAILED_TERMINAL"}}
+        ).encode(),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "schema mismatch" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_expectation_targeting_non_capable_contract_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _expectation_runtime_issue(
+        isolated_workflow_root,
+        smoke_url=_BUSINESS_SMOKE_RUN_URL,
+        expectation=_example_expectation(),
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "run": {"run_id": "simrun_7bf1e0c1b6b7d055", "status": "FAILED_TERMINAL"}}
+        ).encode(),
+    )
+
+    payload = _run_smoke_verify(issue)
+
+    assert payload["workflow_gate"] == "blocked"
+    assert any(
+        "does not match the business_smoke_ref probe contract" in item for item in payload["blocking"]
+    )
+
+
+def test_build_runtime_contract_rejects_invalid_expectation_declarations(
+    isolated_workflow_root: Path,
+) -> None:
+    cases = [
+        (
+            _example_expectation(expected_status="SUCCEEDED"),
+            "must be a declared failure-class",
+        ),
+        (
+            _example_expectation(expected_previous_status="INTRADAY_RUNNING"),
+            "expected_previous_status must be a known terminal",
+        ),
+        (
+            _example_expectation(contract_id="run_terminal_success"),
+            "not expectation-capable",
+        ),
+        (
+            _example_expectation(expected_reason_code="lower_case_reason"),
+            "upper snake-case",
+        ),
+        (
+            _example_expectation(expected_evidence_schema="UPPER_SCHEMA_V1"),
+            "lower snake-case",
+        ),
+        (
+            {**_example_expectation(), "unexpected_field": True},
+            "unknown fields",
+        ),
+        (
+            {**_example_expectation(), "schema_version": "some_other_schema_v1"},
+            "schema_version must be",
+        ),
+        (
+            "not-a-dict",
+            "must be an object",
+        ),
+        (
+            {key: value for key, value in _example_expectation().items() if key != "expected_run_id"},
+            "expected_run_id must be a non-empty run id",
+        ),
+        (
+            _example_expectation(expected_run_id="bad run id"),
+            "expected_run_id must be a non-empty run id",
+        ),
+    ]
+    for expectation, expected_error in cases:
+        _write_runtime_catalog(isolated_workflow_root)
+        record = _runtime_bug(isolated_workflow_root)
+        record["runtime_contract"]["business_smoke_ref"] = _TERMINAL_EVIDENCE_SMOKE_URL
+        record["runtime_contract"]["expected_terminal_outcome"] = expectation
+        contract = workflow.build_runtime_contract(
+            record=record,
+            changed_files=record["allowed_write_scope"],
+            root=isolated_workflow_root,
+        )
+        assert contract["pre_pr_ready"] is False
+        assert any(expected_error in item for item in contract["blocking"]), (
+            expected_error,
+            contract["blocking"],
+        )
+
+
+def test_build_runtime_contract_blocks_expectation_run_id_url_mismatch(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"]["business_smoke_ref"] = (
+        "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_other_run/terminal-evidence"
+    )
+    record["runtime_contract"]["expected_terminal_outcome"] = _example_expectation()
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=record["allowed_write_scope"],
+        root=isolated_workflow_root,
+    )
+    assert contract["pre_pr_ready"] is False
+    assert any(
+        "expected_run_id does not match the business_smoke_ref subject run" in item
+        for item in contract["blocking"]
+    ), contract["blocking"]
+
+
+def test_expectation_outcome_digest_is_anchored_to_canonical_serialization() -> None:
+    assert workflow._expectation_outcome_digest(_example_expectation()) == (
+        "03a641da9e029d31d68acfc0080808b3f8f8fc4c7d86b73e0fe207e9fa3c7bd5"
+    )
+    assert workflow._expectation_outcome_digest(None) is None
+
+
+def test_post_restart_verify_verifies_openapi_document_smoke(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/openapi.json",
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps({"openapi": "3.1.0", "info": {"title": "AIstock"}, "paths": {"/api/v1/health": {}}}).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "openapi_document"
+    assert smoke["semantic"]["verdict"] == "passed"
+
+
+def test_post_restart_verify_blocks_openapi_document_without_paths(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/openapi.json",
+    )
+    _install_stub_probes(monkeypatch, smoke_body=b'{"openapi":"3.1.0"}')
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "paths" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_blocks_failed_historical_range_operation(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/api/v1/advisory/historical-range-operations/ahrop_17dcb4ce0ba99506ebca2ad072b0ad23",
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps(
+            {"ok": True, "data": {"operation": {"operation_id": "ahrop_17dc", "status": "FAILED"}}}
+        ).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "run_terminal_success"
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "FAILED" in smoke["semantic"]["reason"]
+
+
+def test_post_restart_verify_verifies_idle_correlation_status(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps({"status": "idle", "refresh_errors": [], "db_correlation_count": 42}).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["contract_id"] == "correlation_status"
+    assert smoke["semantic"]["verdict"] == "passed"
+
+
+def test_post_restart_verify_blocks_correlation_status_with_refresh_errors(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _semantic_runtime_issue(
+        isolated_workflow_root,
+        smoke_url="http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
+    )
+    _install_stub_probes(
+        monkeypatch,
+        smoke_body=json.dumps({"status": "idle", "refresh_errors": ["db unavailable"]}).encode(),
+    )
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity="merge-abc123",
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    smoke = _smoke_probe(payload)
+    assert smoke["semantic"]["verdict"] == "failed"
+    assert "refresh errors" in smoke["semantic"]["reason"]
+
+
+_BUG_993_BUG989_CHANGED_FILES = [
+    "aistock_models/aistock_models/gats_industry_provider.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/qe_dataset_contract.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+    "backend/tests/unified_engine/test_qe_frozen_suspend_filter.py",
+    "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+    "docs/architecture/qe_efficient_gats_l2_industry_embedding_f1_design_20260710.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "scripts/export_suspend_d_candidate.py",
+    "scripts/qe_build_frozen_risk_policy.py",
+    "scripts/qe_build_frozen_suspend_filter.py",
+    "scripts/qrun_limit.py",
+    "scripts/qrun_limit_minute.py",
+    "tests/aistock_validation/bugs/20260806_BUG-989-qe-alpha-postgresql.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/history/qe/20260806_134857_l3_qe-read-only-workspace-access-regression.md",
+]
+
+
+def _write_bug993_runtime_catalog(root: Path) -> Path:
+    path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "aistock_runtime_target_catalog_v1",
+                "targets": {
+                    "backend-main": {
+                        "runtime_kind": "backend",
+                        "source_globs": [
+                            "backend/**/*.py",
+                            "scripts/qe_build_frozen_risk_policy.py",
+                            "scripts/qe_build_frozen_suspend_filter.py",
+                            "scripts/qrun_limit.py",
+                            "scripts/qrun_limit_minute.py",
+                            "aistock_models/**/*.py",
+                            "requirements*.txt",
+                        ],
+                        "production_port": 8001,
+                        "isolated_validation_ports": [8011, 8012],
+                        "probe_origins": ["http://127.0.0.1:8001"],
+                        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+                        "expected_identity_ref": "merged_commit",
+                        "probes": {
+                            "health_ref": "bug_record.runtime_contract.health_ref",
+                            "identity_ref": "bug_record.runtime_contract.identity_ref",
+                            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+                            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+                        },
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _file_scope_contract(changed_files: list[str]) -> dict[str, Any]:
+    return {
+        "schema_version": "aistock_submit_bug_file_scope_v1",
+        "changed_files": list(changed_files),
+        "added_files": [],
+        "scope_files": list(changed_files),
+        "ownership": {},
+    }
+
+
+def _bug993_bug989_record(root: Path) -> dict[str, Any]:
+    record = _runtime_bug(root)
+    record["bug_id"] = "BUG-989"
+    record["allowed_write_scope"] = [
+        *_BUG_993_BUG989_CHANGED_FILES,
+        "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ]
+    record["file_scope_contract"] = _file_scope_contract(_BUG_993_BUG989_CHANGED_FILES)
+    return record
+
+
+def test_post_restart_verify_bug989_record_infers_backend_main_from_actual_changed_files(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_bug993_runtime_catalog(isolated_workflow_root)
+    record = _bug993_bug989_record(isolated_workflow_root)
+
+    resolved = workflow.resolve_record_runtime_changed_files(record)
+    assert resolved == sorted(_BUG_993_BUG989_CHANGED_FILES)
+    inference = workflow._classify_runtime_impact(resolved, root=isolated_workflow_root)
+    assert inference["runtime_impact"] == "backend"
+    assert inference["target_ids"] == ["backend-main"]
+    assert "unknown" not in inference["observed_impacts"]
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=resolved,
+        root=isolated_workflow_root,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+    assert contract["runtime_impact"] == "backend"
+    assert contract["target_id"] == "backend-main"
+    assert contract["target_ids"] == ["backend-main"]
+    assert contract["backend_restart_required"] is True
+    assert contract["blocking"] == []
+
+
+def test_resolve_record_runtime_changed_files_prefers_actual_changed_files_over_allowed_scope(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["allowed_write_scope"] = [
+        "backend/services/example.py",
+        "docs/operations/example_backend_restart.md",
+        "scripts/unmodified_unknown_tool.py",
+    ]
+    record["file_scope_contract"] = _file_scope_contract(
+        ["backend/services/example.py", "docs/operations/example_backend_restart.md"]
+    )
+
+    resolved = workflow.resolve_record_runtime_changed_files(record)
+    assert resolved == ["backend/services/example.py", "docs/operations/example_backend_restart.md"]
+    assert "scripts/unmodified_unknown_tool.py" not in resolved
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=resolved,
+        root=isolated_workflow_root,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+    assert contract["runtime_impact"] == "backend"
+    assert contract["blocking"] == []
+
+
+@pytest.mark.parametrize(
+    "file_scope_contract",
+    [
+        None,
+        {"schema_version": "aistock_submit_bug_file_scope_v1", "changed_files": []},
+        {"schema_version": "aistock_submit_bug_file_scope_v1", "changed_files": ["", "  "]},
+        {"schema_version": "aistock_submit_bug_file_scope_v1", "changed_files": "not-a-list"},
+        "not-a-dict",
+    ],
+)
+def test_resolve_record_runtime_changed_files_legacy_fallback_stays_fail_closed(
+    isolated_workflow_root: Path,
+    file_scope_contract: Any,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["allowed_write_scope"] = [
+        "backend/services/example.py",
+        "scripts/unclassified_executable_tool.py",
+    ]
+    if file_scope_contract is not None:
+        record["file_scope_contract"] = file_scope_contract
+
+    resolved = workflow.resolve_record_runtime_changed_files(record)
+    assert resolved == ["backend/services/example.py", "scripts/unclassified_executable_tool.py"]
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=resolved,
+        root=isolated_workflow_root,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+    assert contract["runtime_impact"] == "unknown"
+    assert contract["pre_pr_ready"] is False
+    assert any("conflicts with changed-file inference" in item for item in contract["blocking"])
+
+
+def test_runtime_contract_keeps_unknown_executable_blocking_with_actual_changed_files(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["file_scope_contract"] = _file_scope_contract(
+        ["backend/services/example.py", "scripts/brand_new_unclassified.py"]
+    )
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=workflow.resolve_record_runtime_changed_files(record),
+        root=isolated_workflow_root,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+    assert contract["runtime_impact"] == "unknown"
+    assert contract["pre_pr_ready"] is False
+    assert any("conflicts with changed-file inference" in item for item in contract["blocking"])
+
+
+def test_export_suspend_d_candidate_classified_as_non_runtime_offline_tool(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    inference = workflow._classify_runtime_impact(
+        ["scripts/export_suspend_d_candidate.py"],
+        root=isolated_workflow_root,
+    )
+    assert inference["runtime_impact"] == "none"
+    assert inference["target_ids"] == []
+    assert inference["runtime_files"] == []
+
+    record = _bug(
+        allowed_write_scope=["scripts/export_suspend_d_candidate.py"],
+        file_scope_contract=_file_scope_contract(["scripts/export_suspend_d_candidate.py"]),
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+            "post_restart_effective_gate": "not_required",
+            "target_id": None,
+            "target_ids": [],
+        },
+    )
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=workflow.resolve_record_runtime_changed_files(record),
+        root=isolated_workflow_root,
+    )
+    assert contract["runtime_impact"] == "none"
+    assert contract["target_ids"] == []
+    assert contract["backend_restart_required"] is False
+
+
+def test_export_qe_qlib_candidate_classified_as_non_runtime_offline_tool(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    inference = workflow._classify_runtime_impact(
+        ["scripts/export_qe_qlib_candidate.py"],
+        root=isolated_workflow_root,
+    )
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+
+
+def test_mixed_backend_main_file_and_exporter_infers_backend_main_only(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    inference = workflow._classify_runtime_impact(
+        ["backend/services/example.py", "scripts/export_suspend_d_candidate.py"],
+        root=isolated_workflow_root,
+    )
+    assert inference["runtime_impact"] == "backend"
+    assert inference["target_ids"] == ["backend-main"]
+    assert inference["runtime_files"] == ["backend/services/example.py"]
+
+
+def test_post_restart_verify_executes_probes_for_bug989_contract(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_bug993_runtime_catalog(isolated_workflow_root)
+    record = _bug993_bug989_record(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", record)
+    expected = "2ff0e0aed0670b2611cb91b5dedd587659dea4ad"
+    requested_urls: list[str] = []
+
+    class _Response:
+        status = 200
+
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return self.body
+
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        assert request.method == "GET"
+        requested_urls.append(request.full_url)
+        if "runtime-identity" in request.full_url:
+            return _Response(json.dumps({"status": "ready", "merge_commit": expected}).encode())
+        return _Response(b'{"status":"ok"}')
+
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda request, timeout_seconds: fake_urlopen(request, timeout_seconds),
+    )
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=expected,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["blocking"] == []
+    assert payload["target_id"] == "backend-main"
+    assert len(requested_urls) == 3
+    assert [probe["name"] for probe in payload["probes"]] == ["health_ref", "identity_ref", "business_smoke_ref"]
+    assert all(probe["status"] == "passed" for probe in payload["probes"])
+    assert payload["observed_identity"] == expected
+    assert payload["runtime_identity_match"] is True
+    assert payload["process_control_performed"] is False
+    assert payload["tracked_files_written"] is False
+    assert payload["required_probe_names"] == ["health_ref", "identity_ref", "business_smoke_ref"]
+    assert payload["probe_evidence_digest"]
+    assert payload["contract_digest"]
+    assert payload["catalog_sha256"]
+    receipt = json.loads((isolated_workflow_root / payload["receipt_path"]).read_text(encoding="utf-8"))
+    assert receipt["runtime_identity_match"] is True
+    assert receipt["probe_evidence_digest"] == payload["probe_evidence_digest"]
+    assert receipt["process_control_performed"] is False
+    assert receipt["tracked_files_written"] is False
+
+
+def test_runtime_classification_matrix_unchanged_for_known_target_kinds(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["targets"]["worker-scheduler"] = {
+        "runtime_kind": "worker_scheduler",
+        "source_globs": ["backend/services/**/*worker*.py", "scripts/**/*scheduler*.py"],
+        "production_port": 8002,
+        "isolated_validation_ports": [8013],
+        "probe_origins": ["http://127.0.0.1:8002"],
+        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+        "expected_identity_ref": "merged_commit",
+        "probes": {
+            "health_ref": "bug_record.runtime_contract.health_ref",
+            "identity_ref": "bug_record.runtime_contract.identity_ref",
+            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+        },
+    }
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    cases = [
+        (["backend/services/example.py"], "backend", ["backend-main"]),
+        (["backend/services/worker_scheduler_runner.py"], "worker_scheduler", ["worker-scheduler"]),
+        (["tdx-api-main/web/server.go"], "backend", ["tdx-go-backend"]),
+        (["frontend/src/app/paper-v2/page.tsx"], "frontend", []),
+        (["migrations/20260807_example.sql"], "database", []),
+        (["backend/migrations/20260807_example.sql"], "database", []),
+        ([".claude/commands/fix-aistock-issue.md"], "client", []),
+        (["scripts/other_unclassified_export.py"], "unknown", []),
+    ]
+    for files, expected_impact, expected_targets in cases:
+        inference = workflow._classify_runtime_impact(files, root=isolated_workflow_root)
+        assert inference["runtime_impact"] == expected_impact, files
+        assert inference["target_ids"] == expected_targets, files
+
+    downgraded = workflow.build_runtime_contract(
+        record=_bug(runtime_contract={"schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "none"}),
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+    assert downgraded["runtime_impact"] == "backend"
+    assert any("cannot downgrade" in item for item in downgraded["blocking"])
+
+    multi_target_record = _runtime_bug(isolated_workflow_root)
+    multiple = workflow.build_runtime_contract(
+        record=multi_target_record,
+        changed_files=["backend/services/example.py", "backend/services/worker_scheduler_runner.py"],
+        root=isolated_workflow_root,
+    )
+    assert multiple["target_ids"] == ["backend-main", "worker-scheduler"]
+    assert any("multiple runtime targets" in item for item in multiple["blocking"])
+
+
+def test_close_sync_rejects_forged_runtime_identity_proof(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root,
+        issue_payload,
+        expected_identity="merge-abc123",
+    )
+    receipt_payload["runtime_identity_proof"]["observed_identity"] = "forged"
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "forged.json",
+        receipt_payload,
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any("identity proof digest mismatch" in item for item in payload["post_restart_receipt_errors"])
+    assert any("observed identity does not match identity proof" in item for item in payload["post_restart_receipt_errors"])
+
+
+def test_read_only_probe_rejects_non_catalog_origin_without_network_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *args, **kwargs: pytest.fail("disallowed probe origin must not perform network I/O"),
+    )
+
+    result = workflow._read_only_http_probe(
+        "health_ref",
+        "http://169.254.169.254/latest/meta-data",
+        allowed_origins=["http://127.0.0.1:8001"],
+    )
+
+    assert result["status"] == "blocked"
+    assert "not catalog-allowed" in result["error"]
+
+
+def test_read_only_probe_accepts_complete_json_larger_than_one_mib(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = json.dumps({"openapi": "3.1.0", "padding": "x" * (1024 * 1024)}).encode()
+    assert 1024 * 1024 < len(body) < workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES
+
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *args, **kwargs: _StubProbeResponse(body),
+    )
+
+    result = workflow._read_only_http_probe(
+        "business_smoke_ref",
+        "http://127.0.0.1:8001/openapi.json",
+        allowed_origins=["http://127.0.0.1:8001"],
+    )
+
+    assert result["status"] == "passed"
+    assert result["payload_schema"] == {"json": True, "kind": "object"}
+    assert result["response_bytes"] == len(body)
+    assert result["response_sha256"] == workflow.hashlib.sha256(body).hexdigest()
+    assert result["_response_body"] == body.decode()
+
+
+def test_read_only_probe_fails_loudly_when_response_exceeds_explicit_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = b"x" * (workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES + 1)
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *args, **kwargs: _StubProbeResponse(body),
+    )
+
+    result = workflow._read_only_http_probe(
+        "business_smoke_ref",
+        "http://127.0.0.1:8001/openapi.json",
+        allowed_origins=["http://127.0.0.1:8001"],
+    )
+
+    assert result["status"] == "failed"
+    assert result["transport"] == {"status_code": 200, "ok": True, "error": None}
+    assert result["payload_schema"] == {"json": False, "kind": "none"}
+    assert result["response_bytes"] == workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES + 1
+    assert result["response_limit_bytes"] == workflow._READ_ONLY_HTTP_PROBE_MAX_BYTES
+    assert "exceeds maximum allowed size" in result["error"]
+    assert "response_sha256" not in result
+    assert "_response_body" not in result
+
+
+def test_close_sync_runtime_bug_requires_passed_post_restart_receipt(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+
+    pending = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+    assert pending["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert pending["post_restart_effective_gate"] == "pending_user_restart"
+    assert pending["runtime_identity_match"] == "pending"
+
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "post-restart-verify.json",
+        _passed_runtime_receipt(isolated_workflow_root, issue_payload, expected_identity="merge-abc123"),
+    )
+    ready = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+    assert ready["workflow_gate"] == "ready_for_apply"
+    assert ready["post_restart_effective_gate"] == "passed"
+
+
+def test_close_sync_rejects_receipt_without_complete_probe_evidence(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    incomplete = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "incomplete.json",
+        {
+            "schema_version": workflow.RUNTIME_VERIFY_RECEIPT_SCHEMA,
+            "bug_id": "BUG-199",
+            "target_id": "backend-main",
+            "expected_identity": "merge-abc123",
+            "post_restart_effective_gate": "passed",
+            "runtime_identity_match": True,
+            "process_control_performed": False,
+        },
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(incomplete),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any("probe set mismatch" in item for item in payload["post_restart_receipt_errors"])
+    assert any("contract digest mismatch" in item for item in payload["post_restart_receipt_errors"])
+
+
+def test_close_sync_rejects_legacy_receipt_without_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    receipt_payload.pop("business_smoke_semantic", None)
+    for probe in receipt_payload["probes"]:
+        probe.pop("semantic", None)
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "legacy.json",
+        receipt_payload,
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "business-smoke semantic verdict is missing" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_failed_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"] = {
+                "schema_version": workflow.BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": "run_terminal_success",
+                "verdict": "failed",
+                "reason": "run payload reports failure status: run.status=FAILED_RETRYABLE",
+                "facts": {"statuses": {"run.status": "FAILED_RETRYABLE"}},
+                "response_sha256": "sha-business_smoke_ref",
+            }
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "failed-semantic.json",
+        receipt_payload,
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "business-smoke semantic verdict is not passed" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_tampered_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["verdict"] = "failed"
+            probe["semantic"]["reason"] = "tampered after digest"
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "tampered.json",
+        receipt_payload,
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "probe evidence digest mismatch" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def _expectation_runtime_bug(root: Path) -> dict[str, Any]:
+    record = _runtime_bug(root)
+    record["runtime_contract"]["business_smoke_ref"] = _TERMINAL_EVIDENCE_SMOKE_URL
+    record["runtime_contract"]["expected_terminal_outcome"] = _example_expectation()
+    return record
+
+
+def _passed_expectation_receipt(
+    root: Path,
+    record: dict[str, Any],
+    *,
+    expected_identity: str,
+) -> dict[str, Any]:
+    receipt = _passed_runtime_receipt(root, record, expected_identity=expected_identity)
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=record["allowed_write_scope"],
+        root=root,
+    )
+    expectation = contract["expected_terminal_outcome"]
+    expectation_digest = workflow._expectation_outcome_digest(expectation)
+    for probe in receipt["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"] = {
+                "schema_version": workflow.BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": "run_terminal_evidence",
+                "verdict": "passed",
+                "reason": None,
+                "facts": {
+                    "statuses": {"run.status": "FAILED_TERMINAL"},
+                    "matched_evidence": {
+                        "schema_version": "example_terminalization_v1",
+                        "reason_code": "EXAMPLE_TERMINAL_REASON",
+                        "previous_status": "FAILED_RETRYABLE",
+                        "terminal_status": "FAILED_TERMINAL",
+                    },
+                },
+                "response_sha256": "sha-business_smoke_ref",
+                "expectation": expectation,
+                "expectation_digest": expectation_digest,
+            }
+    receipt["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt["expected_terminal_outcome"] = expectation
+    receipt["expected_terminal_outcome_digest"] = expectation_digest
+    receipt["contract_digest"] = workflow._runtime_contract_digest(contract)
+    receipt["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt["probes"])
+    return receipt
+
+
+def _close_sync_plan_with_receipt(issue: Path, receipt: Path) -> dict[str, Any]:
+    return workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+
+def test_close_sync_accepts_receipt_with_matching_expected_terminal_outcome(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "post-restart-verify.json",
+        _passed_expectation_receipt(isolated_workflow_root, issue_payload, expected_identity="merge-abc123"),
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["post_restart_effective_gate"] == "passed"
+
+
+def test_close_sync_rejects_legacy_receipt_missing_expected_terminal_outcome(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    receipt_payload.pop("expected_terminal_outcome", None)
+    receipt_payload.pop("expected_terminal_outcome_digest", None)
+    for probe in receipt_payload["probes"]:
+        if isinstance(probe.get("semantic"), dict):
+            probe["semantic"].pop("expectation", None)
+            probe["semantic"].pop("expectation_digest", None)
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "legacy-expectation.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "expected terminal outcome does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+    assert any(
+        "expected terminal outcome digest mismatch" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+    assert any(
+        "semantic verdict expectation does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_expectation_when_contract_declares_none(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    stray = _example_expectation()
+    receipt_payload["expected_terminal_outcome"] = stray
+    receipt_payload["expected_terminal_outcome_digest"] = workflow._expectation_outcome_digest(stray)
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["expectation"] = stray
+            probe["semantic"]["expectation_digest"] = workflow._expectation_outcome_digest(stray)
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "stray-expectation.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "carries an expected terminal outcome but the current runtime contract declares none" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+    assert any(
+        "carries an expectation the current runtime contract does not declare" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_stray_top_level_expectation_digest_without_declaration(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    receipt_payload["expected_terminal_outcome_digest"] = "e" * 64
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "stray-top-level-digest.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "carries an expected terminal outcome digest but the current runtime contract declares none" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_mismatched_expected_terminal_outcome(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    drifted = _example_expectation(expected_reason_code="DRIFTED_REASON_CODE")
+    receipt_payload["expected_terminal_outcome"] = drifted
+    receipt_payload["expected_terminal_outcome_digest"] = workflow._expectation_outcome_digest(drifted)
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "mismatched-expectation.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "expected terminal outcome does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_tampered_expectation_digest(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    receipt_payload["expected_terminal_outcome_digest"] = "0" * 64
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "tampered-expectation-digest.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "expected terminal outcome digest mismatch" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_semantic_expectation_mismatch(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    drifted = _example_expectation(expected_status="FAILED")
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["expectation"] = drifted
+            probe["semantic"]["expectation_digest"] = workflow._expectation_outcome_digest(drifted)
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "semantic-expectation-mismatch.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "semantic verdict expectation does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_contract_digest_drift_after_expectation_change(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "post-restart-verify.json",
+        _passed_expectation_receipt(isolated_workflow_root, issue_payload, expected_identity="merge-abc123"),
+    )
+    issue_payload["runtime_contract"]["expected_terminal_outcome"] = _example_expectation(
+        expected_reason_code="RENAMED_REASON_CODE"
+    )
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "contract digest mismatch" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_tampered_top_level_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    tampered_semantic = dict(receipt_payload["business_smoke_semantic"])
+    tampered_semantic["expectation"] = _example_expectation(expected_reason_code="FORGED_REASON")
+    receipt_payload["business_smoke_semantic"] = tampered_semantic
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "tampered-top-level-semantic.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "top-level business-smoke semantic does not match probe evidence" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_passed_receipt_with_stripped_top_level_business_smoke_semantic(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    del receipt_payload["business_smoke_semantic"]
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "stripped-top-level-semantic.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "top-level business-smoke semantic does not match probe evidence" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_receipt_with_semantic_expectation_digest_mismatch(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _expectation_runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_expectation_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["expectation_digest"] = "0" * 64
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "semantic-expectation-digest.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "semantic verdict expectation digest does not match" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_close_sync_rejects_stray_semantic_expectation_digest_without_declaration(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root, issue_payload, expected_identity="merge-abc123"
+    )
+    for probe in receipt_payload["probes"]:
+        if probe["name"] == "business_smoke_ref":
+            probe["semantic"]["expectation_digest"] = "f" * 64
+    receipt_payload["business_smoke_semantic"] = next(
+        probe["semantic"] for probe in receipt_payload["probes"] if probe["name"] == "business_smoke_ref"
+    )
+    receipt_payload["probe_evidence_digest"] = workflow._probe_evidence_digest(receipt_payload["probes"])
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "stray-expectation-digest.json",
+        receipt_payload,
+    )
+
+    payload = _close_sync_plan_with_receipt(issue, receipt)
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any(
+        "carries an expectation digest the current runtime contract does not declare" in item
+        for item in payload["post_restart_receipt_errors"]
+    )
+
+
+def test_validate_run_terminal_evidence_rejects_success_class_expectation_defense_in_depth() -> None:
+    verdict, reason, _facts = workflow._validate_run_terminal_evidence(
+        {
+            "ok": True,
+            "schema_version": "simulation_run_terminal_evidence_v1",
+            "run": {"run_id": "simrun_example", "status": "SUCCEEDED", "terminal_evidence": []},
+        },
+        expectation=_example_expectation(expected_status="SUCCEEDED"),
+    )
+
+    assert verdict == "failed"
+    assert "not failure-class" in reason
+
+
+def test_close_sync_rejects_non_backend_runtime_contract_conflicts(
+    isolated_workflow_root: Path,
+) -> None:
+    issue_payload = _bug(
+        allowed_write_scope=[".codex/skills/fix-aistock-issue/SKILL.md"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+        },
+    )
+    issue = _write_json(isolated_workflow_root / "client-runtime-bug.json", issue_payload)
+
+    dry = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+
+    assert dry["workflow_gate"] == "blocked_runtime_contract"
+    assert any("cannot downgrade" in item for item in dry["runtime_contract_errors"])
+    with pytest.raises(workflow.WorkflowError, match="runtime contract blocks close-sync"):
+        workflow.build_close_sync_plan(
+            bug_id=None,
+            issue_json=str(issue),
+            pr_url="https://github.example/pull/199",
+            apply=True,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+            allow_current_worktree=True,
+        )
+
+
+def test_close_sync_uses_merged_commit_files_instead_of_unmodified_allowed_scope(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_commit = "a" * 40
+    issue = _write_json(
+        isolated_workflow_root / "offline-bug.json",
+        _bug(
+            allowed_write_scope=[
+                "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+                "backend/services/hmm_risk/stock_fact_repository.py",
+            ],
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+                "persistence_basis": "not_required",
+                "post_restart_effective_gate": "not_required",
+                "target_id": None,
+                "target_ids": [],
+            },
+        ),
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        assert args == ["git", "diff", "--name-only", f"{merge_commit}^1", merge_commit, "--"]
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "backend/services/hmm_risk/b3_d1_inactive_dimension.py\nscripts/hmm_risk/prepare_state_model_set.py\n",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s hmm_risk_backend -> passed"],
+        merge_commit=merge_commit,
+    )
+    assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["backend_restart"]["required"] is False
+    assert payload["runtime_changed_files_source"] == "merge_commit"
+    assert "backend/services/hmm_risk/stock_fact_repository.py" not in payload["runtime_changed_files"]
+
+
+def test_close_sync_rejects_declared_merge_commit_that_differs_from_verified_pr(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    declared = "a" * 40
+    verified = "b" * 40
+    issue = _write_json(isolated_workflow_root / "offline-bug.json", _bug())
+    monkeypatch.setattr(workflow, "_merged_commit_changed_files", lambda merge_commit: ["scripts/aistock_issue_workflow.py"])
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "pr": {"mergeCommit": {"oid": verified}, "mergedAt": "2026-08-05T00:00:00Z"},
+        },
+    )
+    with pytest.raises(workflow.WorkflowError, match="differs from the verified source PR"):
+        workflow.build_close_sync_plan(
+            bug_id=None,
+            issue_json=str(issue),
+            pr_url="https://github.example/pull/199",
+            apply=True,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s validation_module_registry_l0 -> passed"],
+            merge_commit=declared,
+            allow_current_worktree=True,
+        )
+
+
+def test_verify_pr_merged_uses_exact_rest_readback_after_graphql_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    merge_commit = "b" * 40
+    pr_url = f"https://github.com/{workflow.GITHUB_REPO}/pull/199"
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "Post https://api.github.com/graphql: EOF",
+            "attempts": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda _pr_url: {
+            "pr_number": 199,
+            "state": "CLOSED",
+            "merged": True,
+            "merged_at": "2026-08-28T07:00:00Z",
+            "merge_commit": merge_commit,
+            "head_sha": head_sha,
+            "head_ref": "bug/BUG-199-fix",
+            "base_ref": "main",
+            "url": pr_url,
+        },
+    )
+
+    verified = workflow._verify_pr_merged(pr_url)
+
+    assert verified["checked"] is True
+    assert verified["source"] == "github_rest"
+    assert verified["pr"]["headRefOid"] == head_sha
+    assert verified["pr"]["mergeCommit"]["oid"] == merge_commit
+    assert verified["pr"]["mergedAt"] == "2026-08-28T07:00:00Z"
+    assert verified["rest_fallback"]["reason"] == "graphql_transport_failure"
+    assert verified["rest_fallback"]["graphql_attempts"] == 1
+
+
+def test_verify_pr_merged_does_not_use_rest_for_non_transport_graphql_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pr_url = f"https://github.com/{workflow.GITHUB_REPO}/pull/199"
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "HTTP 403: forbidden",
+            "attempts": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda _pr_url: pytest.fail("non-transport failures must not use REST fallback"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="403"):
+        workflow._verify_pr_merged(pr_url)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_error"),
+    [
+        ({"merged": False}, "PR is not merged"),
+        ({"head_sha": "short"}, "full head SHA"),
+        ({"merge_commit": "short"}, "full merge commit SHA"),
+        ({"merged_at": None}, "missing merged_at"),
+        ({"url": "https://github.com/example/other/pull/199"}, "REST PR identity mismatch"),
+    ],
+)
+def test_verify_pr_merged_rest_mode_fails_closed_on_incomplete_or_wrong_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, Any],
+    expected_error: str,
+) -> None:
+    pr_url = f"https://github.com/{workflow.GITHUB_REPO}/pull/199"
+    readback = {
+        "pr_number": 199,
+        "state": "CLOSED",
+        "merged": True,
+        "merged_at": "2026-08-28T07:00:00Z",
+        "merge_commit": "b" * 40,
+        "head_sha": "a" * 40,
+        "head_ref": "bug/BUG-199-fix",
+        "base_ref": "main",
+        "url": pr_url,
+    }
+    readback.update(overrides)
+    monkeypatch.setattr(workflow, "_github_pull_rest_readback", lambda _pr_url: readback)
+
+    with pytest.raises(workflow.WorkflowError, match=expected_error):
+        workflow._verify_pr_merged(pr_url, skip_github_check=True)
+
+
+def test_skip_github_check_is_exact_rest_only_mode_not_an_unverified_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    merge_commit = "b" * 40
+    pr_url = f"https://github.com/{workflow.GITHUB_REPO}/pull/199"
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda *args, **kwargs: pytest.fail("explicit REST-only mode must not call GraphQL"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda _pr_url: {
+            "pr_number": 199,
+            "state": "CLOSED",
+            "merged": True,
+            "merged_at": "2026-08-28T07:00:00Z",
+            "merge_commit": merge_commit,
+            "head_sha": head_sha,
+            "head_ref": "bug/BUG-199-fix",
+            "base_ref": "main",
+            "url": pr_url,
+        },
+    )
+
+    verified = workflow._verify_pr_merged(pr_url, skip_github_check=True)
+
+    assert verified["checked"] is True
+    assert verified["rest_fallback"]["reason"] == "explicit_rest_only"
+    assert verified["rest_fallback"]["graphql_attempts"] == 0
+
+
+def test_verify_pr_merged_rest_mode_rejects_a_different_repository_before_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda _pr_url: pytest.fail("wrong-repository URLs must fail before REST readback"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="REST PR identity mismatch"):
+        workflow._verify_pr_merged(
+            "https://github.com/example/other/pull/199",
+            skip_github_check=True,
+        )
+
+
+def test_runtime_close_sync_preserves_source_fixed_time_and_uses_verification_close_time(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(
+        isolated_workflow_root,
+        fixed_at="2026-07-31T10:00:00Z",
+    )
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "passed.json",
+        _passed_runtime_receipt(isolated_workflow_root, issue_payload, expected_identity="merge-abc123"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "pr": {"mergeCommit": {"oid": "merge-abc123"}, "mergedAt": "2026-07-31T11:00:00Z"},
+        },
+    )
+    monkeypatch.setattr(workflow, "_utc_now", lambda: "2026-08-01T02:00:00Z")
+    monkeypatch.setattr(workflow, "_sync_github_issue_after_close", lambda *args, **kwargs: {"status": "synced"})
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=True,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        skip_github_check=True,
+        allow_current_worktree=True,
+        post_restart_receipt=str(receipt),
+    )
+
+    updated = json.loads(issue.read_text(encoding="utf-8"))
+    assert payload["workflow_gate"] == "close_synced"
+    assert updated["status"] == "verified"
+    assert updated["fixed_at"] == "2026-07-31T10:00:00Z"
+    assert updated["closed_at"] == "2026-08-01T02:00:00Z"
+    assert updated["runtime_contract"]["runtime_identity_match"] is True
+    summary = updated["runtime_contract"]["post_restart_receipt_summary"]
+    assert summary["schema_version"] == workflow.RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA
+    assert summary["receipt_sha256"]
+    assert summary["post_restart_effective_gate"] == "passed"
+    assert summary["response_content_persisted"] is False
+
+
+def test_runtime_pending_sync_reopens_issue_and_aligns_status_label(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "CLOSED", "labels": [{"name": "status:fixed"}]}),
+                "stderr": "",
+            }
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._sync_github_issue_runtime_pending(
+        _bug(status="fixed_source_pending_user_restart"),
+        {"merged_pr": "https://github.example/pull/199", "merge_commit": "merge-abc123"},
+        root=isolated_workflow_root,
+    )
+
+    assert result["status"] == "reopened_runtime_pending"
+    assert any(args[:3] == ["gh", "issue", "reopen"] for args in calls)
+    edit = next(args for args in calls if args[:3] == ["gh", "issue", "edit"])
+    assert ["--remove-label", "status:fixed"] == edit[6:8]
+    assert ["--add-label", "status:in_progress"] == edit[8:10]
+
+
+def test_close_sync_create_pr_persists_post_restart_state_in_one_command(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        workflow,
+        "build_close_sync_plan",
+        lambda **kwargs: {
+            "schema_version": "aistock_issue_workflow_close_sync_v1",
+            "bug_id": "BUG-199",
+            "workflow_gate": "close_synced",
+            "registry_root": "F:/tmp/BUG-199-close-sync",
+            "updated_bug_json": "tests/aistock_validation/bugs/BUG-199.json",
+        },
+    )
+
+    def fake_commit_and_pr(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"workflow_gate": "pr_opened", "pr_url": "https://github.example/pull/200"}
+
+    monkeypatch.setattr(workflow, "_maybe_commit_and_pr_close_sync", fake_commit_and_pr)
+
+    exit_code = workflow.main(
+        [
+            "close-sync",
+            "--bug-id",
+            "BUG-199",
+            "--pr-url",
+            "https://github.example/pull/199",
+            "--validation-evidence",
+            "nox -s l0 -> passed",
+            "--post-restart-receipt",
+            "tmp/issue_workflow/BUG-199/post-restart-verify.json",
+            "--apply",
+            "--create-pr",
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["close_sync_commit"]["workflow_gate"] == "pr_opened"
+    assert captured["bug_id"] == "BUG-199"
+    assert captured["validation_evidence"] == ["nox -s l0 -> passed"]
 
 
 def test_finish_plan_only_can_draft_pr_body_without_evidence(
@@ -795,8 +5810,10 @@ def test_finish_plan_only_can_draft_pr_body_without_evidence(
         allow_missing_evidence=False,
     )
 
-    assert payload["closure_ready"] is True
-    assert payload["artifact_policy"] == "compact_success_no_finish_plan_json"
+    assert payload["closure_ready"] is False
+    assert payload["draft_ready"] is True
+    assert payload["workflow_gate"] == "plan_ready"
+    assert payload["artifact_policy"] == "draft_finish_plan_persisted"
     assert payload["codegraph_suggested_tests"] == suggested_tests
     assert payload["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
     pr_body = isolated_workflow_root / payload["pr_body_path"]
@@ -807,7 +5824,32 @@ def test_finish_plan_only_can_draft_pr_body_without_evidence(
     assert suggested_tests[10] not in pr_body_text
     assert "CodeGraph suggested tests omitted: `2` more" in pr_body_text
     assert "missing - run required validation" in pr_body_text
-    assert not (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
+    assert (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
+
+
+def test_finish_draft_flags_exit_success_without_claiming_pr_readiness(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+
+    for flag, expected_gate in [
+        ("--plan-only", "plan_ready"),
+        ("--allow-missing-evidence", "validation_evidence_missing_allowed"),
+    ]:
+        assert workflow.main([
+            "finish",
+            "--issue-json",
+            str(issue),
+            "--changed-file",
+            "scripts/aistock_issue_workflow.py",
+            flag,
+        ]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["closure_ready"] is False
+        assert payload["draft_ready"] is True
+        assert payload["workflow_gate"] == expected_gate
+        assert payload["pre_pr_gate"]["workflow_gate"] == "blocked"
 
 
 def test_finish_failure_persists_diagnostic_json(
@@ -1046,7 +6088,11 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
         changed_files=["scripts/aistock_issue_workflow.py"],
         base="origin/main",
         head="HEAD",
-        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        validation_evidence=[
+            "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed",
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s guardrail_changed_files -> passed",
+        ],
         issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
         plan_only=False,
         allow_missing_evidence=False,
@@ -1068,6 +6114,108 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
     assert "CodeGraph suggested tests omitted: `1` more" in pr_body
 
 
+def test_finish_batch_blocks_runtime_bugs_and_never_closes_their_issues(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _runtime_bug(isolated_workflow_root))
+    _write_json(
+        bugs_root / "bug200.json",
+        _runtime_bug(
+            isolated_workflow_root,
+            bug_id="BUG-200",
+            github_issue_number=200,
+            github_issue_url="https://github.example/issues/200",
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_build_batch_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]),
+    )
+
+    payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["backend/services/example.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert "runtime BUGs require the single-issue" in "; ".join(payload["blocking"])
+    pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
+    assert "Refs #199" in pr_body
+    assert "Refs #200" in pr_body
+    assert "Closes #199" not in pr_body
+    assert "Closes #200" not in pr_body
+
+
+def test_finish_batch_blocks_when_one_selected_required_plan_has_no_receipt(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug())
+    _write_json(
+        bugs_root / "bug200.json",
+        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_build_batch_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]),
+    )
+    original_select_validation = workflow.flow.select_validation
+
+    def selected_validation(changed_files: list[str], module: str | None = None) -> dict[str, Any]:
+        payload = original_select_validation(changed_files, module=module)
+        payload["required_plans"] = ["l0", "validation_center_backend"]
+        return payload
+
+    monkeypatch.setattr(workflow.flow, "select_validation", selected_validation)
+
+    payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["closure_ready"] is False
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["validation_receipt_plan_coverage"]["missing_required_plans"] == [
+        "validation_center_backend"
+    ]
+
+    allowed_payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=True,
+    )
+
+    assert allowed_payload["closure_ready"] is False
+    assert allowed_payload["draft_ready"] is False
+    assert allowed_payload["workflow_gate"] == "blocked"
+
+
 def test_finish_batch_blocks_scope_expansion(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1086,7 +6234,12 @@ def test_finish_batch_blocks_scope_expansion(
         changed_files=["frontend/src/app/page.tsx"],
         base="origin/main",
         head="HEAD",
-        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        validation_evidence=[
+            "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed",
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s validation_module_registry_l0 -> passed",
+            "python -m nox -s guardrail_changed_files -> passed",
+        ],
         issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
         plan_only=False,
         allow_missing_evidence=False,
@@ -1123,7 +6276,12 @@ def test_finish_batch_scope_check_accepts_glob_scope(
         changed_files=["tests/aistock_validation/bugs/BUG-199.json"],
         base="origin/main",
         head="HEAD",
-        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        validation_evidence=[
+            "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed",
+            "python -m nox -s l0 -> passed",
+            "python -m nox -s validation_module_registry_l0 -> passed",
+            "python -m nox -s guardrail_changed_files -> passed",
+        ],
         issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
         plan_only=False,
         allow_missing_evidence=False,
@@ -1185,6 +6343,22 @@ def test_fast_path_classifies_workflow_script_as_t1(isolated_workflow_root: Path
     assert payload["code_intelligence_hint"]["consume_command"] == "python scripts/code_intelligence_adapter.py latest-freshness"
 
 
+def test_fast_path_keeps_dataset_release_plan_yaml_out_of_production_ddl(
+    isolated_workflow_root: Path,
+) -> None:
+    path = "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml"
+    payload = workflow.build_fast_path_plan(
+        bug_id=None,
+        issue_json=None,
+        changed_files=[path],
+        module="qlib_data",
+    )
+
+    assert payload["file_categories"][path] == "other"
+    assert payload["production_gates"]["ddl"] == "noop"
+    assert workflow._file_category("backend/migrations/example.sql") == "production_gate_sensitive"
+
+
 def test_start_and_finish_embed_fast_path(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1235,17 +6409,14 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["dry_run"] is True
     assert payload["synthetic_record"] is True
     assert payload["unexpected_dirty_paths"] == []
-    assert payload["client_manifest"]["codex_skill_status"] in {
-        "current",
-        "missing_repo_skill",
-        "missing_global",
-        "stale",
-    }
-    assert payload["h7_code_intelligence"]["workflow_gate"] in {"ready", "warning"}
+    assert payload["client_manifest"] is None
+    assert payload["h7_code_intelligence"] is None
     assert payload["fast_path"]["task_tier"] == "T1"
     assert payload["start"]["worktree_plan"]["dry_run"] is True
-    assert payload["finish"]["workflow_gate"] == "ready_for_pr"
-    assert payload["finish"]["artifact_policy"] == "compact_success_no_finish_plan_json"
+    assert payload["finish"]["workflow_gate"] == "plan_ready"
+    assert payload["finish"]["closure_ready"] is False
+    assert payload["finish"]["draft_ready"] is True
+    assert payload["finish"]["artifact_policy"] == "draft_finish_plan_persisted"
     assert payload["postmortem_preview"]["stale_pr_check"] == "skipped_in_smoke_to_avoid_external_github_reads"
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-000*.json"))
 
@@ -1640,11 +6811,21 @@ def test_doctor_warns_when_bug_allocator_lags_github(
     monkeypatch.setattr(workflow, "_run_command", lambda *_args, **_kwargs: {"ok": True, "stdout": "{}", "stderr": ""})
     monkeypatch.setattr(
         workflow,
-        "_scan_github_bug_ids",
-        lambda **_kwargs: (
-            [{"bug_id": "BUG-217", "number": 217, "kind": "github_issue", "source": "https://github.example/issues/588"}],
+        "_github_bug_issue_for_id",
+        lambda bug_id, **_kwargs: (
+            {
+                "bug_id": "BUG-217",
+                "number": 217,
+                "kind": "github_issue",
+                "source": "https://github.example/issues/588",
+                "github_issue_number": 588,
+                "github_state": "OPEN",
+                "title": "BUG-217 existing",
+            },
             [],
-        ),
+        )
+        if bug_id == "BUG-217"
+        else (None, []),
     )
     monkeypatch.setattr(
         workflow.code_intelligence,
@@ -1665,11 +6846,12 @@ def test_doctor_warns_when_bug_allocator_lags_github(
     assert payload["workflow_gate"] == "warning"
     assert payload["bug_id_allocation"]["next_number"] == 218
     assert payload["bug_id_allocation"]["github_max_number"] == 217
+    assert payload["bug_id_allocation"]["github_lookup_mode"] == "exact_candidate"
     assert any("bug id allocation" in warning for warning in payload["warnings"])
     assert compact["bug_id_allocation"]["next_number"] == 218
 
 
-def test_doctor_warns_for_invalid_unrelated_worktree_allocator(
+def test_doctor_ignores_invalid_unrelated_worktree_allocator(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1722,11 +6904,10 @@ def test_doctor_warns_for_invalid_unrelated_worktree_allocator(
     payload = workflow.build_doctor_report(skip_external=True)
     compact = workflow._compact_payload(payload)
 
-    assert payload["workflow_gate"] == "warning"
     assert payload["blocking"] == []
     assert payload["bug_id_allocation"]["next_number"] == 329
-    assert any("skipped unrelated invalid BUG id allocator" in item for item in payload["bug_id_allocation"]["warnings"])
-    assert any("bug id allocation: skipped unrelated invalid BUG id allocator" in item for item in payload["warnings"])
+    assert not any("unrelated invalid BUG id allocator" in item for item in payload["bug_id_allocation"]["warnings"])
+    assert not any("unrelated invalid BUG id allocator" in item for item in payload["warnings"])
     assert compact["bug_id_allocation"]["next_number"] == 329
 
 
@@ -1737,6 +6918,37 @@ def test_bug_allocation_report_keeps_canonical_allocator_strict(isolated_workflo
 
     with pytest.raises(workflow.WorkflowError, match="invalid bug id allocator"):
         workflow._bug_id_allocation_report(isolated_workflow_root)
+
+
+def test_bug_id_scan_roots_do_not_enumerate_other_worktrees(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow.BUGS_ROOT.mkdir(parents=True)
+    stale_root = isolated_workflow_root / "worktrees" / "stale" / "tests" / "aistock_validation" / "bugs"
+    stale_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        workflow,
+        "_parse_worktree_list",
+        lambda: pytest.fail("BUG allocation must not enumerate registered worktrees"),
+    )
+
+    roots = workflow._bug_id_scan_roots(isolated_workflow_root)
+
+    assert stale_root not in roots
+    assert roots == [workflow._bugs_root(isolated_workflow_root)]
+
+
+def test_bug_registry_scan_uses_canonical_filename_without_parsing_json(
+    isolated_workflow_root: Path,
+) -> None:
+    bug_path = workflow.BUGS_ROOT / "20260810_BUG-777-invalid-body.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text("{", encoding="utf-8")
+
+    sources = workflow._scan_bug_registry_ids(isolated_workflow_root)
+
+    assert any(item["kind"] == "bug_json" and item["number"] == 777 for item in sources)
 
 
 def test_doctor_compact_reports_codegraph_bootstrap_next_command(
@@ -1914,7 +7126,7 @@ def test_doctor_reports_stale_global_skill_manifest(
 
     assert payload["workflow_gate"] == "warning"
     assert payload["client_manifest"]["codex_skill_status"] == "stale"
-    assert payload["restart_recommended"] is True
+    assert payload["restart_recommended"] is False
     assert "install-client --apply" in payload["install_client_next_command"]
 
 
@@ -1970,20 +7182,18 @@ def test_run_plan_missing_local_bug_json_reports_github_adopt_command(
 ) -> None:
     monkeypatch.setattr(
         workflow,
-        "_scan_github_bug_ids",
-        lambda **_kwargs: (
-            [
-                {
-                    "bug_id": "BUG-302",
-                    "number": 302,
-                    "kind": "github_issue",
-                    "source": "https://github.com/licong01-cloud/AIstock/issues/897",
-                    "github_issue_number": 897,
-                    "github_state": "OPEN",
-                    "title": "BUG-302 P1: missing registry record",
-                    "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
-                }
-            ],
+        "_github_bug_issue_for_id",
+        lambda _bug_id: (
+            {
+                "bug_id": "BUG-302",
+                "number": 302,
+                "kind": "github_issue",
+                "source": "https://github.com/licong01-cloud/AIstock/issues/897",
+                "github_issue_number": 897,
+                "github_state": "OPEN",
+                "title": "BUG-302 P1: missing registry record",
+                "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
+            },
             [],
         ),
     )
@@ -2023,20 +7233,18 @@ def test_run_cli_missing_local_bug_json_emits_compact_recovery_payload(
 ) -> None:
     monkeypatch.setattr(
         workflow,
-        "_scan_github_bug_ids",
-        lambda **_kwargs: (
-            [
-                {
-                    "bug_id": "BUG-302",
-                    "number": 302,
-                    "kind": "github_issue",
-                    "source": "https://github.com/licong01-cloud/AIstock/issues/897",
-                    "github_issue_number": 897,
-                    "github_state": "OPEN",
-                    "title": "BUG-302 P1: missing registry record",
-                    "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
-                }
-            ],
+        "_github_bug_issue_for_id",
+        lambda _bug_id: (
+            {
+                "bug_id": "BUG-302",
+                "number": 302,
+                "kind": "github_issue",
+                "source": "https://github.com/licong01-cloud/AIstock/issues/897",
+                "github_issue_number": 897,
+                "github_state": "OPEN",
+                "title": "BUG-302 P1: missing registry record",
+                "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
+            },
             [],
         ),
     )
@@ -2305,6 +7513,252 @@ def test_submit_bug_dry_run_requires_github_sync(isolated_workflow_root: Path) -
     assert not (isolated_workflow_root / payload["bug_json_path"]).exists()
 
 
+def test_submit_bug_file_preflight_rejects_nonexistent_changed_file(
+    isolated_workflow_root: Path,
+) -> None:
+    missing = "backend/services/simulation_runtime/lifecycle_scheduler.py"
+
+    with pytest.raises(
+        workflow.WorkflowError,
+        match=r"--changed-file does not exist.*lifecycle_scheduler\.py",
+    ):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=[missing],
+            added_files=[],
+            module="simulation_runtime",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_file_preflight_accepts_existing_changed_and_explicit_added_file(
+    isolated_workflow_root: Path,
+) -> None:
+    changed = isolated_workflow_root / "scripts" / "aistock_issue_workflow.py"
+    changed.parent.mkdir(parents=True)
+    changed.write_text("# existing workflow\n", encoding="utf-8")
+
+    result = workflow._validate_submit_bug_file_inputs(
+        changed_files=[
+            r".\scripts\aistock_issue_workflow.py",
+            "scripts/aistock_issue_workflow.py",
+        ],
+        added_files=[r"backend\tests\scripts\test_submit_bug_added_file.py"],
+        module="validation.guardrails",
+        root=isolated_workflow_root,
+    )
+
+    assert result["changed_files"] == ["scripts/aistock_issue_workflow.py"]
+    assert result["added_files"] == ["backend/tests/scripts/test_submit_bug_added_file.py"]
+    assert result["scope_files"] == [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_submit_bug_added_file.py",
+    ]
+    assert result["ownership"]["unmatched_files"] == []
+
+
+def test_submit_bug_file_preflight_rejects_existing_added_file(
+    isolated_workflow_root: Path,
+) -> None:
+    existing = isolated_workflow_root / "backend" / "tests" / "scripts" / "test_existing.py"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("# existing test\n", encoding="utf-8")
+
+    with pytest.raises(
+        workflow.WorkflowError,
+        match=r"--added-file already exists.*use --changed-file",
+    ):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=[],
+            added_files=["backend/tests/scripts/test_existing.py"],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_file_preflight_rejects_changed_directory(
+    isolated_workflow_root: Path,
+) -> None:
+    directory = isolated_workflow_root / "scripts" / "not_a_file"
+    directory.mkdir(parents=True)
+
+    with pytest.raises(workflow.WorkflowError, match=r"--changed-file must identify a file.*not_a_file"):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=["scripts/not_a_file"],
+            added_files=[],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "../outside.py",
+        "/absolute/path.py",
+        r"C:\outside\path.py",
+        r"\\server\share\path.py",
+        "scripts/bad?.py",
+        "scripts/NUL.py",
+        "scripts/trailing-dot.",
+    ],
+)
+def test_submit_bug_file_preflight_rejects_unsafe_paths(
+    isolated_workflow_root: Path,
+    unsafe_path: str,
+) -> None:
+    with pytest.raises(workflow.WorkflowError, match="repository-relative"):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=[],
+            added_files=[unsafe_path],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_file_preflight_rejects_cross_category_duplicate(
+    isolated_workflow_root: Path,
+) -> None:
+    with pytest.raises(workflow.WorkflowError, match="both --changed-file and --added-file"):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=["scripts/aistock_issue_workflow.py"],
+            added_files=[r"scripts\aistock_issue_workflow.py"],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_file_preflight_rejects_unowned_added_file(
+    isolated_workflow_root: Path,
+) -> None:
+    with pytest.raises(
+        workflow.WorkflowError,
+        match=r"file ownership catalog has no match.*unowned/new_file\.py",
+    ):
+        workflow._validate_submit_bug_file_inputs(
+            changed_files=[],
+            added_files=["unowned/new_file.py"],
+            module="validation.guardrails",
+            root=isolated_workflow_root,
+        )
+
+
+def test_submit_bug_parser_exposes_added_file_separately() -> None:
+    args = workflow.build_parser().parse_args(
+        [
+            "submit-bug",
+            "--title",
+            "workflow file contract",
+            "--module",
+            "validation.guardrails",
+            "--changed-file",
+            "scripts/aistock_issue_workflow.py",
+            "--added-file",
+            "backend/tests/scripts/test_new_workflow_contract.py",
+        ]
+    )
+
+    assert args.changed_file == ["scripts/aistock_issue_workflow.py"]
+    assert args.added_file == ["backend/tests/scripts/test_new_workflow_contract.py"]
+
+
+def test_submit_bug_cli_rejects_invalid_scope_before_allocator_or_registry_mutation(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+
+    result = workflow.main(
+        [
+            "submit-bug",
+            "--title",
+            "invalid changed file",
+            "--module",
+            "validation.guardrails",
+            "--severity",
+            "P1",
+            "--bug-id",
+            "BUG-118",
+            "--github-issue-number",
+            "188",
+            "--github-issue-url",
+            "https://github.com/licong01-cloud/AIstock/issues/188",
+            "--changed-file",
+            "scripts/nonexistent_workflow.py",
+            "--apply",
+        ]
+    )
+
+    assert result == 2
+    assert (
+        "--changed-file does not exist: scripts/nonexistent_workflow.py"
+        in capsys.readouterr().err
+    )
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 117
+    assert not list(workflow.BUGS_ROOT.glob("*BUG-118*.json"))
+    assert not (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-118").exists()
+
+
+def test_submit_bug_plan_persists_changed_and_added_file_scope_contract(
+    isolated_workflow_root: Path,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+
+    payload = workflow.build_submit_bug_plan(
+        title="workflow file scope contract",
+        module="validation.guardrails",
+        severity="P1",
+        description="Distinguish existing and planned files.",
+        expected="Exact file categories are persisted.",
+        actual="The old workflow merged both categories.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        added_files=["backend/tests/scripts/test_new_workflow_contract.py"],
+        plan_key="validation_workflow_automation",
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number=None,
+        github_issue_url=None,
+        create_github=False,
+        apply=False,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=False,
+    )
+
+    expected_contract = {
+        "schema_version": "aistock_submit_bug_file_scope_v1",
+        "changed_files": ["scripts/aistock_issue_workflow.py"],
+        "planned_files": [
+            "scripts/aistock_issue_workflow.py",
+            "backend/tests/scripts/test_new_workflow_contract.py",
+        ],
+        "changed_files_source": workflow.FILE_SCOPE_SOURCE_PLANNED_INTAKE,
+        "added_files": ["backend/tests/scripts/test_new_workflow_contract.py"],
+        "scope_files": [
+            "scripts/aistock_issue_workflow.py",
+            "backend/tests/scripts/test_new_workflow_contract.py",
+        ],
+        "ownership": workflow.flow.match_changed_files(
+            [
+                "scripts/aistock_issue_workflow.py",
+                "backend/tests/scripts/test_new_workflow_contract.py",
+            ]
+        ),
+    }
+    assert payload["file_scope_contract"] == expected_contract
+    assert payload["record"]["file_scope_contract"] == expected_contract
+    assert (
+        payload["record"]["runtime_contract"]["inference_basis"]
+        == workflow.RUNTIME_INFERENCE_PLANNED_SCOPE
+    )
+    assert payload["record"]["runtime_contract"]["provisional"] is True
+    assert set(payload["record"]["allowed_write_scope"]) >= set(expected_contract["scope_files"])
+
+
 def test_submit_bug_apply_with_existing_github_link_writes_registry(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2356,6 +7810,164 @@ def test_submit_bug_apply_with_existing_github_link_writes_registry(
     assert active_entry["branch"] is None
     assert "git add tests/aistock_validation/bugs" in payload["next_command"]
     assert "tmp/issue_workflow" not in payload["next_command"]
+
+
+def test_active_index_recovers_extra_data_from_authoritative_states(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISTOCK_ACTIVE_INDEX_LOCK_ROOT", str(isolated_workflow_root / "locks"))
+    workflow_root = isolated_workflow_root / workflow.WORKFLOW_ROOT
+    _write_json(
+        workflow_root / "BUG-201" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-201",
+            "state": "fix_in_progress",
+            "updated_at": "2026-08-14T01:00:00Z",
+            "worktree": str(isolated_workflow_root / "BUG-201"),
+        },
+    )
+    _write_json(
+        workflow_root / "BUG-202" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-202",
+            "state": "cleanup_done",
+            "updated_at": "2026-08-14T01:01:00Z",
+        },
+    )
+    index_path = workflow._active_index_path(isolated_workflow_root)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text('{"active_bugs": {}}\n{"active_bugs": {}}\n', encoding="utf-8")
+
+    payload = workflow._update_active_index(
+        "BUG-203",
+        {
+            "bug_id": "BUG-203",
+            "state": "validation_running",
+            "updated_at": "2026-08-14T01:02:00Z",
+            "worktree": str(isolated_workflow_root / "BUG-203"),
+        },
+        root=isolated_workflow_root,
+    )
+
+    assert sorted(payload["active_bugs"]) == ["BUG-201", "BUG-203"]
+    assert json.loads(index_path.read_text(encoding="utf-8")) == payload
+
+
+def test_active_index_recovery_fails_closed_on_invalid_authoritative_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISTOCK_ACTIVE_INDEX_LOCK_ROOT", str(isolated_workflow_root / "locks"))
+    workflow_root = isolated_workflow_root / workflow.WORKFLOW_ROOT
+    state_path = workflow_root / "BUG-201" / "state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("not-json", encoding="utf-8")
+    index_path = workflow._active_index_path(isolated_workflow_root)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    corrupted = '{"active_bugs": {}}\n{"active_bugs": {}}\n'
+    index_path.write_text(corrupted, encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="invalid authoritative state"):
+        workflow._update_active_index(
+            "BUG-203",
+            {"bug_id": "BUG-203", "state": "validation_running"},
+            root=isolated_workflow_root,
+        )
+
+    assert index_path.read_text(encoding="utf-8") == corrupted
+
+
+def test_missing_active_index_rebuilds_other_active_states(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISTOCK_ACTIVE_INDEX_LOCK_ROOT", str(isolated_workflow_root / "locks"))
+    workflow_root = isolated_workflow_root / workflow.WORKFLOW_ROOT
+    _write_json(
+        workflow_root / "BUG-201" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-201",
+            "state": "ci_running",
+            "updated_at": "2026-08-14T01:00:00Z",
+        },
+    )
+
+    payload = workflow._update_active_index(
+        "BUG-203",
+        {"bug_id": "BUG-203", "state": "validation_running"},
+        root=isolated_workflow_root,
+    )
+
+    assert sorted(payload["active_bugs"]) == ["BUG-201", "BUG-203"]
+
+
+def test_active_index_concurrent_updates_are_locked_and_atomic(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISTOCK_ACTIVE_INDEX_LOCK_ROOT", str(isolated_workflow_root / "locks"))
+    index_path = workflow._active_index_path(isolated_workflow_root)
+    workflow._write_json(
+        index_path,
+        {
+            "schema_version": "aistock_issue_workflow_active_index_v1",
+            "updated_at": "2026-08-14T01:00:00Z",
+            "active_bugs": {},
+        },
+    )
+    original_load_json = workflow._load_json
+
+    def slow_index_read(path: Path) -> dict[str, Any]:
+        payload = original_load_json(path)
+        if path == index_path:
+            time.sleep(0.01)
+        return payload
+
+    monkeypatch.setattr(workflow, "_load_json", slow_index_read)
+
+    def update(number: int) -> None:
+        bug_id = f"BUG-{number}"
+        workflow._update_active_index(
+            bug_id,
+            {
+                "bug_id": bug_id,
+                "state": "fix_in_progress",
+                "updated_at": f"2026-08-14T01:00:{number - 200:02d}Z",
+                "worktree": str(isolated_workflow_root / bug_id),
+            },
+            root=isolated_workflow_root,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(update, range(201, 213)))
+
+    final_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    assert sorted(final_payload["active_bugs"]) == [f"BUG-{number}" for number in range(201, 213)]
+    assert list(index_path.parent.glob(f".{index_path.name}.*.tmp")) == []
+
+
+def test_atomic_json_replace_failure_preserves_previous_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "state.json"
+    original = '{"version": "previous"}\n'
+    path.write_text(original, encoding="utf-8")
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        raise OSError("replace denied")
+
+    monkeypatch.setattr(workflow.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace denied"):
+        workflow._write_json(path, {"version": "next"})
+
+    assert path.read_text(encoding="utf-8") == original
+    assert list(tmp_path.glob(f".{path.name}.*.tmp")) == []
 
 
 def test_submit_bug_registry_pr_only_stops_after_intake(
@@ -2488,6 +8100,10 @@ def test_submit_bug_fast_chain_writes_registration_into_fix_worktree(
 
     def fake_fix_worktree(**kwargs: Any) -> dict[str, Any]:
         fix_root.mkdir(parents=True)
+        _write_json(
+            fix_root / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json",
+            {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117},
+        )
         return {
             "create_worktree": kwargs["create"],
             "dry_run": kwargs["dry_run"],
@@ -2503,7 +8119,7 @@ def test_submit_bug_fast_chain_writes_registration_into_fix_worktree(
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": "?? tests/aistock_validation/bugs/bug118.json\n?? tests/aistock_validation/bugs/.bug_id_allocator.json",
+                "stdout": "?? tests/aistock_validation/bugs/bug118.json",
                 "stderr": "",
             }
         if args[:3] == ["git", "rev-parse", "--short=12"]:
@@ -2544,7 +8160,12 @@ def test_submit_bug_fast_chain_writes_registration_into_fix_worktree(
     assert payload["fix_chain"]["default_path"] == "single_fix_branch_registration_and_fix"
     assert "run --bug-id BUG-118" in payload["fix_chain"]["next_command"]
     assert (fix_root / payload["bug_json_path"]).exists()
-    assert (fix_root / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json").exists()
+    fix_allocator = fix_root / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
+    assert json.loads(fix_allocator.read_text(encoding="utf-8"))["last_allocated"] == 117
+    assert payload["record"]["repository_allocator_persistence"] == (
+        "omitted_from_fix_pr_global_reservation_is_authoritative"
+    )
+    assert "tests/aistock_validation/bugs/.bug_id_allocator.json" not in payload["record"]["allowed_write_scope"]
     assert not list(workflow.BUGS_ROOT.glob("*BUG-118*.json"))
     assert payload["fix_registration_commit"]["workflow_gate"] == "committed"
 
@@ -2745,20 +8366,20 @@ def test_promote_nightly_candidate_apply_creates_github_linked_bug_in_registry_w
             "created": kwargs["create"],
         }
 
-    def fake_execute(args: list[str], *, cwd: Path | None = None, timeout: int = 120) -> dict[str, Any]:
-        assert args[:3] == ["gh", "issue", "create"]
-        body_path = Path(args[args.index("--body-file") + 1])
+    def fake_create_issue(**kwargs: Any) -> dict[str, Any]:
+        body_path = Path(kwargs["body_path"])
         created_issue_body["body"] = body_path.read_text(encoding="utf-8")
-        assert cwd == registry
+        assert kwargs["cwd"] == registry
         return {
-            "ok": True,
-            "returncode": 0,
-            "stdout": "https://github.com/licong01-cloud/AIstock/issues/900",
-            "stderr": "",
+            "created": True,
+            "url": "https://github.com/licong01-cloud/AIstock/issues/900",
+            "number": 900,
+            "recovered_after_transport_error": False,
+            "warnings": [],
         }
 
     monkeypatch.setattr(workflow, "_maybe_create_registry_worktree", fake_registry_worktree)
-    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_create_github_issue_with_recovery", fake_create_issue)
     monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
     monkeypatch.setattr(
         workflow,
@@ -2800,14 +8421,16 @@ def test_promote_nightly_candidate_apply_creates_github_linked_bug_in_registry_w
     assert str(bug_path) in payload["next_command"]
 
 
-def test_submit_bug_allocator_scans_stale_worktrees(
+def test_submit_bug_allocator_uses_reservations_and_ignores_stale_worktrees(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
     stale = isolated_workflow_root / "worktrees" / "stale-registry" / "tests" / "aistock_validation" / "bugs"
-    _write_json(stale / "20260528_BUG-136-other-window.json", {"bug_id": "BUG-136", "title": "Other window"})
+    _write_json(stale / "20260528_BUG-999-other-window.json", {"bug_id": "BUG-999", "title": "Stale worktree"})
+    reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-136.json"
+    _write_json(reservation, {"schema_version": "aistock_bug_id_reservation_v1", "bug_id": "BUG-136"})
     monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
 
     payload = workflow.build_submit_bug_plan(
@@ -2838,18 +8461,19 @@ def test_submit_bug_allocator_scans_stale_worktrees(
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
 
 
-def test_submit_bug_allocator_scans_github_only_bug_ids(
+def test_submit_bug_allocator_skips_exact_github_candidate_collision(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 216})
     monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
-    monkeypatch.setattr(
-        workflow,
-        "_scan_github_bug_ids",
-        lambda **_kwargs: (
-            [
+    looked_up: list[str] = []
+
+    def exact_lookup(bug_id: str, **_kwargs: object):
+        looked_up.append(bug_id)
+        if bug_id == "BUG-217":
+            return (
                 {
                     "bug_id": "BUG-217",
                     "number": 217,
@@ -2857,10 +8481,17 @@ def test_submit_bug_allocator_scans_github_only_bug_ids(
                     "source": "https://github.example/issues/588",
                     "github_issue_number": 588,
                     "github_state": "OPEN",
-                }
-            ],
-            [],
-        ),
+                    "title": "BUG-217 P1: Different existing issue",
+                },
+                [],
+            )
+        return None, []
+
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", exact_lookup)
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: pytest.fail("automatic allocation must not run a full GitHub issue scan"),
     )
 
     payload = workflow.build_submit_bug_plan(
@@ -2888,8 +8519,146 @@ def test_submit_bug_allocator_scans_github_only_bug_ids(
 
     assert payload["bug_id"] == "BUG-218"
     assert payload["bug_id_allocation"]["global_max_number"] == 217
-    assert payload["bug_id_allocation"]["warnings"]
+    assert payload["bug_id_allocation"]["github_lookup_mode"] == "exact_candidate"
+    assert payload["bug_id_allocation"]["github_scanned"] is False
+    assert looked_up == ["BUG-217", "BUG-218"]
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 218
+
+
+def test_reserve_bug_id_performs_exact_github_lookup_after_allocator_lock(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = {"locked": False}
+    original_registry_scan = workflow._scan_bug_registry_ids
+    _write_json(
+        workflow.BUGS_ROOT / ".bug_id_allocator.json",
+        {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 216},
+    )
+
+    class FakeLock:
+        def __enter__(self):
+            assert state["locked"] is False
+            state["locked"] = True
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            state["locked"] = False
+
+    def exact_lookup(bug_id: str, **_kwargs: object):
+        assert state["locked"] is False
+        assert bug_id == "BUG-217"
+        return None, []
+
+    def registry_scan(*args: object, **kwargs: object):
+        assert state["locked"] is True
+        return original_registry_scan(*args, **kwargs)
+
+    monkeypatch.setattr(workflow, "_GlobalBugIdAllocatorLock", FakeLock)
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", exact_lookup)
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: pytest.fail("automatic allocation must not run a full GitHub issue scan"),
+    )
+    monkeypatch.setattr(workflow, "_scan_bug_registry_ids", registry_scan)
+
+    bug_id, number, report, reservation = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id=None,
+        include_github=True,
+        github_required=True,
+        allowed_github_issue_number=None,
+        reservation_title="New allocator issue",
+        reservation_fingerprint="fingerprint-217",
+    )
+    try:
+        assert bug_id == "BUG-217"
+        assert number == 217
+        assert report["github_scanned"] is False
+        assert report["github_lookup_mode"] == "exact_candidate"
+    finally:
+        workflow._release_bug_id_reservation(reservation)
+
+
+def test_submit_bug_retry_adopts_matching_open_github_issue(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+    common = {
+        "title": "Retry-safe allocator issue",
+        "module": "validation",
+        "severity": "P1",
+        "description": "Retry must adopt the exact open GitHub Issue.",
+        "expected": "No duplicate Issue is created.",
+        "actual": "The first attempt lost transport confirmation.",
+        "reproduce_command": "n/a",
+        "evidence_refs": [],
+        "changed_files": ["scripts/aistock_issue_workflow.py"],
+        "plan_key": None,
+        "nox_session": None,
+        "candidate_type": "bug",
+        "bug_id": None,
+        "github_issue_number": None,
+        "github_issue_url": None,
+        "create_github": True,
+        "create_registry_worktree": False,
+        "registry_pr_only": False,
+        "dry_run": False,
+    }
+    dry_run = workflow.build_submit_bug_plan(**common, apply=False)
+    reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-133.json"
+    _write_json(
+        reservation,
+        {
+            "schema_version": "aistock_bug_id_reservation_v1",
+            "bug_id": "BUG-133",
+            "reserved_at": "2026-08-10T00:00:00Z",
+            "reserved_by": "aistock_issue_workflow.py",
+            "root": str(isolated_workflow_root),
+            "status": "github_create_outcome_unknown",
+            "title": common["title"],
+            "fingerprint": dry_run["record"]["trigger_condition"]["fingerprint"],
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_for_id",
+        lambda bug_id, **_kwargs: (
+            {
+                "bug_id": "BUG-133",
+                "number": 133,
+                "kind": "github_issue",
+                "source": "https://github.example/issues/588",
+                "github_issue_number": 588,
+                "github_state": "OPEN",
+                "title": "BUG-133 P1: Retry-safe allocator issue",
+            },
+            [],
+        )
+        if bug_id == "BUG-133"
+        else (None, []),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_create_github_issue_with_recovery",
+        lambda **_kwargs: pytest.fail("matching orphan Issue must be adopted instead of created again"),
+    )
+
+    payload = workflow.build_submit_bug_plan(**common, apply=True)
+
+    assert payload["bug_id"] == "BUG-133"
+    assert payload["github"] == {
+        "created": False,
+        "recovered_existing": True,
+        "url": "https://github.example/issues/588",
+        "number": 588,
+    }
+    assert json.loads(reservation.read_text(encoding="utf-8"))["status"] == "registered"
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 133
 
 
 def test_submit_bug_explicit_duplicate_fails_before_github_create(
@@ -2936,6 +8705,11 @@ def test_submit_bug_explicit_new_id_bumps_allocator(
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
     monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_by_number",
+        lambda _issue_number: (None, ["linked GitHub Issue lookup unavailable: offline"]),
+    )
 
     payload = workflow.build_submit_bug_plan(
         title="Explicit allocator bump",
@@ -2961,16 +8735,21 @@ def test_submit_bug_explicit_new_id_bumps_allocator(
     )
 
     assert payload["bug_id"] == "BUG-137"
+    assert payload["bug_id_allocation"]["warnings"] == ["linked GitHub Issue lookup unavailable: offline"]
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
 
 
-def test_submit_bug_offline_github_scan_warns_but_uses_local_scan(
+def test_submit_bug_offline_exact_github_lookup_warns_but_uses_local_scan(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
-    monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], ["github BUG id scan unavailable: offline"]))
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_for_id",
+        lambda bug_id, **_kwargs: (None, [f"GitHub lookup for {bug_id} unavailable: offline"]),
+    )
 
     payload = workflow.build_submit_bug_plan(
         title="Offline GitHub scan",
@@ -2996,7 +8775,8 @@ def test_submit_bug_offline_github_scan_warns_but_uses_local_scan(
     )
 
     assert payload["bug_id"] == "BUG-133"
-    assert payload["bug_id_allocation"]["warnings"]
+    assert payload["bug_id_allocation"]["warnings"] == ["GitHub lookup for BUG-133 unavailable: offline"]
+    assert payload["bug_id_allocation"]["github_lookup_mode"] == "exact_candidate"
 
 
 def test_install_client_plan_can_copy_global_codex_skill(
@@ -3027,6 +8807,1014 @@ def test_install_client_plan_can_copy_global_codex_skill(
     assert applied["client_manifest_after"]["codex_router_skill_status"] == "current"
     assert applied["client_manifest_after"]["claude_feature_command_status"] == "current"
     assert applied["client_manifest_after"]["claude_router_command_status"] == "current"
+
+    isolated_codex_home = isolated_workflow_root / "official_codex_home"
+    untouched_claude_home = isolated_workflow_root / "untouched_claude_home"
+    sentinel = untouched_claude_home / "commands" / "keep.md"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_text("keep", encoding="utf-8")
+    codex_only = workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(isolated_codex_home),
+        claude_home=str(untouched_claude_home),
+        install_claude=False,
+    )
+    assert codex_only["install_codex"] is True
+    assert codex_only["install_claude"] is False
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert not (untouched_claude_home / "commands" / "fix-aistock-issue.md").exists()
+
+
+def test_verify_clients_workflow_only_checks_every_lane(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    codex_home = isolated_workflow_root / "verified_codex_home"
+    claude_home = isolated_workflow_root / "verified_claude_home"
+    workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        claude_home=str(claude_home),
+    )
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--codex-home",
+            str(codex_home),
+            "--claude-home",
+            str(claude_home),
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["workflow_gate"] == "ready"
+    assert len(payload["client_manifest"]["codex_entries"]) == len(workflow.CLIENT_CODEX_SKILLS)
+    assert len(payload["client_manifest"]["claude_entries"]) == len(workflow.CLIENT_CLAUDE_COMMANDS)
+    assert all(item["status"] == "current" for item in payload["client_manifest"]["codex_entries"].values())
+    assert all(item["status"] == "current" for item in payload["client_manifest"]["claude_entries"].values())
+
+
+def test_verify_clients_selected_lane_warns_for_unrelated_stale_entry(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    codex_home = isolated_workflow_root / "selected_codex_home"
+    workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+    )
+    (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("stale", encoding="utf-8")
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--selected-lane",
+            "issue",
+            "--codex-home",
+            str(codex_home),
+            "--skip-claude",
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["workflow_gate"] == "ready"
+    assert payload["selected_lane_keys"] == ["issue", "router"]
+    assert payload["blocking"] == []
+    assert payload["restart_recommended"] is False
+    assert any("unrelated codex lane feature is stale" in item for item in payload["warnings"])
+
+    workflow._emit(payload, output_format="summary")
+    summary = capsys.readouterr().out.strip()
+    assert "workflow_gate=ready" in summary
+    assert "lane=issue" in summary
+    assert "blocking=0" in summary
+    assert "warnings=1" in summary
+    assert "restart_recommended=false" in summary
+
+
+def test_verify_clients_selected_lane_blocks_when_selected_entry_is_stale(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    codex_home = isolated_workflow_root / "blocked_codex_home"
+    workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+    )
+    (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("stale", encoding="utf-8")
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--selected-lane",
+            "feature",
+            "--codex-home",
+            str(codex_home),
+            "--skip-claude",
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 2
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["warnings"] == []
+    assert payload["restart_recommended"] is False
+    assert payload["blocking"] == ["codex lane feature is stale"]
+
+
+def test_install_client_selected_lane_is_idempotent_and_leaves_unrelated_lane_untouched(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    codex_home = isolated_workflow_root / "targeted_codex_home"
+    unrelated = codex_home / "skills" / "fix-aistock-issue" / "SKILL.md"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("preserve unrelated lane", encoding="utf-8")
+
+    first = workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert first["selected_lane_keys"] == ["feature", "router"]
+    assert first["installed_count"] == 2
+    assert unrelated.read_text(encoding="utf-8") == "preserve unrelated lane"
+    assert (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").exists()
+    assert (codex_home / "skills" / "aistock-task-router" / "SKILL.md").exists()
+
+    second = workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert second["installed_count"] == 0
+    assert second["skipped_current_count"] == 2
+    assert second["single_owner_required"] is False
+    assert unrelated.read_text(encoding="utf-8") == "preserve unrelated lane"
+
+
+def test_verify_clients_uses_merged_authority_instead_of_older_task_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    authority_root = isolated_workflow_root / "canonical"
+    _write_repo_client_entrypoints(authority_root)
+    for key, skill_name in workflow.CLIENT_CODEX_SKILLS:
+        (isolated_workflow_root / ".codex" / "skills" / skill_name / "SKILL.md").write_text(
+            f"older worktree {key}", encoding="utf-8"
+        )
+        (authority_root / ".codex" / "skills" / skill_name / "SKILL.md").write_text(
+            f"merged authority {key}", encoding="utf-8"
+        )
+    authority = {
+        "ready": True,
+        "source": "canonical_main",
+        "root": str(authority_root),
+        "commit": "a" * 40,
+        "origin_main_commit": "a" * 40,
+        "blocking_reason": None,
+    }
+    monkeypatch.setattr(workflow, "_client_source_authority", lambda: authority)
+    monkeypatch.setattr(workflow, "_client_checkout_relation", lambda _authority: "behind_authority")
+    codex_home = isolated_workflow_root / "authority_codex_home"
+
+    installed = workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert installed["workflow_gate"] == "installed"
+    assert installed["source_authority"] == authority
+    assert installed["task_worktree_is_install_source"] is False
+    assert (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "merged authority feature"
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--selected-lane",
+            "feature",
+            "--codex-home",
+            str(codex_home),
+            "--skip-claude",
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    feature = payload["client_manifest"]["codex_entries"]["feature"]
+    assert result == 0
+    assert payload["workflow_gate"] == "ready"
+    assert payload["blocking"] == []
+    assert payload["remediation"]["action"] == "continue_without_install"
+    assert payload["remediation"]["owner_command"] is None
+    assert str(authority_root / "scripts" / "aistock_issue_workflow.py") in payload["remediation"][
+        "window_verify_command"
+    ]
+    assert payload["client_manifest"]["checkout_commit_relation"] == "behind_authority"
+    assert payload["client_manifest"]["codex_feature_skill_sha256"] == feature["authority_sha256"]
+    assert feature["status"] == "current"
+    assert feature["checkout_status"] == "differs_from_authority"
+    assert any("do not install from this task worktree" in item for item in payload["checkout_advisories"])
+
+
+def test_install_client_blocks_when_merged_authority_is_unavailable(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    authority = {
+        "ready": False,
+        "source": "canonical_main",
+        "root": str(isolated_workflow_root),
+        "commit": "a" * 40,
+        "origin_main_commit": "b" * 40,
+        "blocking_reason": "canonical main is not aligned with origin/main",
+    }
+    monkeypatch.setattr(workflow, "_client_source_authority", lambda: authority)
+
+    payload = workflow.build_client_install_plan(
+        codex_home=str(isolated_workflow_root / "blocked_codex_home"),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["task_worktree_is_install_source"] is False
+    assert payload["blocking"] == [
+        "merged client authority is unavailable: canonical main is not aligned with origin/main"
+    ]
+
+
+def test_install_client_rechecks_authority_identity_under_lock(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    first = {
+        "ready": True,
+        "source": "canonical_main",
+        "root": str(isolated_workflow_root),
+        "commit": "a" * 40,
+        "origin_main_commit": "a" * 40,
+        "blocking_reason": None,
+    }
+    changed = {**first, "commit": "b" * 40, "origin_main_commit": "b" * 40}
+    authorities = iter([first, first, changed])
+    monkeypatch.setattr(workflow, "_client_source_authority", lambda: next(authorities))
+
+    with pytest.raises(workflow.WorkflowError, match="authority changed before install"):
+        workflow.build_client_install_plan(
+            apply=True,
+            codex_home=str(isolated_workflow_root / "racing_codex_home"),
+            install_claude=False,
+            selected_lane="feature",
+        )
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "head", "origin_main", "authority_status", "expected_reason"),
+    [
+        (
+            {"ok": False, "branch": None, "dirty": False},
+            "",
+            None,
+            {"ok": False, "stdout": ""},
+            "not a readable Git checkout",
+        ),
+        (
+            {"ok": True, "branch": "main", "dirty": True},
+            "a" * 40,
+            "a" * 40,
+            {"ok": True, "stdout": " M .codex/skills/aistock-task-router/SKILL.md"},
+            "canonical client-authority paths are dirty",
+        ),
+        (
+            {"ok": True, "branch": "main", "dirty": False},
+            "a" * 40,
+            "b" * 40,
+            {"ok": True, "stdout": ""},
+            "canonical main is not aligned with origin/main",
+        ),
+    ],
+)
+def test_client_source_authority_fails_closed_without_clean_aligned_main(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot: dict[str, object],
+    head: str,
+    origin_main: str | None,
+    authority_status: dict[str, object],
+    expected_reason: str,
+) -> None:
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+    monkeypatch.setattr(workflow, "_git_snapshot", lambda _root: snapshot)
+    def fake_run(command: list[str], **_kwargs: object) -> dict[str, object]:
+        if "status" in command:
+            return authority_status
+        return {"ok": bool(head), "stdout": head}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_origin_main_commit", lambda **_kwargs: origin_main)
+
+    authority = workflow._client_source_authority()
+
+    assert authority["ready"] is False
+    assert expected_reason in authority["blocking_reason"]
+
+
+def test_client_source_authority_ignores_unrelated_canonical_dirty_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit = "a" * 40
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda _root: {"ok": True, "branch": "main", "dirty": True},
+    )
+
+    def fake_run(command: list[str], **_kwargs: object) -> dict[str, object]:
+        if "status" in command:
+            return {"ok": True, "stdout": ""}
+        return {"ok": True, "stdout": commit}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_origin_main_commit", lambda **_kwargs: commit)
+
+    authority = workflow._client_source_authority()
+
+    assert authority["ready"] is True
+    assert authority["authority_paths_clean"] is True
+
+
+def test_explicit_linked_issue_reservation_uses_direct_lookup_without_global_scan(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: pytest.fail("global GitHub Issue scan must not run for explicit BUG and Issue identity"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_by_number",
+        lambda issue_number: (
+            {
+                "bug_id": "BUG-952",
+                "number": 952,
+                "kind": "github_issue",
+                "source": "https://github.com/licong01-cloud/AIstock/issues/3041",
+                "github_issue_number": int(issue_number),
+                "github_state": "OPEN",
+                "title": "BUG-952 P1: Client workflow gate",
+                "labels": [],
+            },
+            [],
+        ),
+    )
+
+    bug_id, number, report, reservation = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id="BUG-952",
+        include_github=True,
+        github_required=True,
+        allowed_github_issue_number=3041,
+    )
+    try:
+        assert bug_id == "BUG-952"
+        assert number == 952
+        assert report["github_scanned"] is False
+        assert reservation.exists()
+    finally:
+        workflow._release_bug_id_reservation(reservation)
+
+
+def test_explicit_linked_issue_resumes_matching_incomplete_reservation(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow.write_allocator_state(
+        Path(os.environ["AISTOCK_BUG_ID_STATE_PATH"]),
+        last_allocated=952,
+        updated_at="2026-08-27T00:00:00Z",
+        updated_by="pytest/interrupted-registration",
+        fingerprint_index_version=workflow.FINGERPRINT_INDEX_VERSION,
+    )
+    reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-952.json"
+    _write_json(
+        reservation,
+        {
+            "schema_version": "aistock_bug_id_reservation_v1",
+            "bug_id": "BUG-952",
+            "status": "github_issue_confirmed_local_incomplete",
+            "github_issue_number": 3041,
+            "title": "Client workflow gate",
+            "fingerprint": "fp-952",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_by_number",
+        lambda issue_number: (
+            {
+                "bug_id": "BUG-952",
+                "number": 952,
+                "kind": "github_issue",
+                "source": "https://github.com/licong01-cloud/AIstock/issues/3041",
+                "github_issue_number": int(issue_number),
+                "github_state": "OPEN",
+                "title": "BUG-952 P1: Client workflow gate",
+                "labels": [],
+            },
+            [],
+        ),
+    )
+
+    bug_id, number, _report, reused = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id="BUG-952",
+        include_github=True,
+        github_required=True,
+        allowed_github_issue_number=3041,
+        reservation_title="Client workflow gate",
+        reservation_fingerprint="fp-952",
+    )
+
+    assert bug_id == "BUG-952"
+    assert number == 952
+    assert reused == reservation
+    assert json.loads(reservation.read_text(encoding="utf-8"))["status"] == "reserved"
+
+
+def test_github_issue_create_recovers_exact_issue_after_transport_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = tmp_path / "body.md"
+    body.write_text("body", encoding="utf-8")
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *_args, **_kwargs: {"ok": False, "stdout": "", "stderr": "TLS handshake timeout"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_for_id",
+        lambda bug_id: (
+            {
+                "bug_id": bug_id,
+                "github_issue_number": 3246,
+                "source": "https://github.example/issues/3246",
+                "title": "BUG-1009 P1: Retry-safe allocator",
+            },
+            [],
+        ),
+    )
+
+    result = workflow._create_github_issue_with_recovery(
+        bug_id="BUG-1009",
+        title="BUG-1009 P1: Retry-safe allocator",
+        body_path=body,
+        labels=["bug"],
+        cwd=tmp_path,
+    )
+
+    assert result["number"] == 3246
+    assert result["recovered_after_transport_error"] is True
+
+
+def test_github_issue_create_plain_eof_preserves_unknown_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = tmp_path / "body.md"
+    body.write_text("body", encoding="utf-8")
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "stdout": "",
+            "stderr": 'Post "https://api.github.com/graphql": EOF',
+        },
+    )
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id: (None, []))
+
+    with pytest.raises(workflow.GitHubOutcomeUnknownError, match="automatic recreate blocked"):
+        workflow._create_github_issue_with_recovery(
+            bug_id="BUG-1009",
+            title="BUG-1009 P1: Retry-safe allocator",
+            body_path=body,
+            labels=["bug"],
+            cwd=tmp_path,
+        )
+
+
+def test_submit_bug_plain_eof_keeps_reservation_for_safe_retry(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
+    monkeypatch.setattr(
+        workflow,
+        "_validate_registry_apply_target",
+        lambda root: {"blocking": [], "warnings": [], "target_root": str(root)},
+    )
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
+    monkeypatch.setattr(
+        workflow,
+        "_create_github_issue_with_recovery",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            workflow.GitHubOutcomeUnknownError(
+                'Post "https://api.github.com/graphql": EOF; reservation preserved and automatic recreate blocked'
+            )
+        ),
+    )
+
+    with pytest.raises(workflow.GitHubOutcomeUnknownError, match="automatic recreate blocked"):
+        workflow.build_submit_bug_plan(
+            title="Preserve EOF reservation",
+            module="validation",
+            severity="P1",
+            description="GitHub may have accepted the Issue create.",
+            expected="Retry cannot create a duplicate Issue.",
+            actual="The create response ended with EOF.",
+            reproduce_command="n/a",
+            evidence_refs=[],
+            changed_files=["scripts/aistock_issue_workflow.py"],
+            plan_key=None,
+            nox_session=None,
+            candidate_type="bug",
+            bug_id=None,
+            github_issue_number=None,
+            github_issue_url=None,
+            create_github=True,
+            apply=True,
+            create_registry_worktree=False,
+            registry_pr_only=False,
+            dry_run=False,
+        )
+
+    reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-133.json"
+    payload = json.loads(reservation.read_text(encoding="utf-8"))
+    assert payload["status"] == "github_create_outcome_unknown"
+    assert payload["last_error_type"] == "GitHubOutcomeUnknownError"
+
+
+def test_github_issue_create_does_not_retry_non_transport_label_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = tmp_path / "body.md"
+    body.write_text("body", encoding="utf-8")
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *_args, **_kwargs: {"ok": False, "stdout": "", "stderr": "could not add label: module:missing"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_for_id",
+        lambda _bug_id: pytest.fail("non-transport errors must not trigger remote recovery lookup"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="could not add label"):
+        workflow._create_github_issue_with_recovery(
+            bug_id="BUG-1009",
+            title="BUG-1009 P1: Missing label",
+            body_path=body,
+            labels=["module:missing"],
+            cwd=tmp_path,
+        )
+
+
+def test_global_allocator_lock_reclaims_dead_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_path = tmp_path / "bug-id-allocator.lock"
+    lock_path.write_text("999999\n2026-01-01T00:00:00Z\n", encoding="ascii")
+    monkeypatch.setenv("AISTOCK_BUG_ID_LOCK_PATH", str(lock_path))
+    monkeypatch.setattr(workflow, "_process_id_is_alive", lambda _pid: False)
+
+    with workflow._GlobalBugIdAllocatorLock(timeout=0.1):
+        assert lock_path.exists()
+        owner = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert owner["schema_version"] == "aistock_bug_id_lock_v2"
+        assert owner["pid"] == os.getpid()
+        assert owner["thread_id"]
+        assert owner["token"]
+
+    assert not lock_path.exists()
+
+
+def test_global_allocator_lock_cleans_failed_owner_write(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_path = isolated_workflow_root / "global-allocator.lock"
+    monkeypatch.setenv("AISTOCK_BUG_ID_LOCK_PATH", str(lock_path))
+    monkeypatch.setattr(workflow.os, "write", lambda _fd, _payload: 0)
+
+    with pytest.raises(workflow.WorkflowError, match="failed to initialize BUG id allocator lock"):
+        with workflow._GlobalBugIdAllocatorLock(timeout=0.1):
+            pass
+
+    assert not lock_path.exists()
+
+
+def test_reserve_bug_id_blocks_matching_active_fingerprint(
+    isolated_workflow_root: Path,
+) -> None:
+    reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-133.json"
+    _write_json(
+        reservation,
+        {
+            "schema_version": "aistock_bug_id_reservation_v1",
+            "bug_id": "BUG-133",
+            "status": "reserved",
+            "title": "Concurrent logical bug",
+            "fingerprint": "same-fingerprint",
+        },
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="resume the existing intake"):
+        workflow._reserve_bug_id(
+            isolated_workflow_root,
+            bug_id=None,
+            include_github=False,
+            github_required=False,
+            allowed_github_issue_number=None,
+            reservation_title="Concurrent logical bug",
+            reservation_fingerprint="same-fingerprint",
+        )
+
+
+def test_terminal_reservation_compaction_preserves_unknown_outcome(
+    isolated_workflow_root: Path,
+) -> None:
+    root = isolated_workflow_root / "bug-id-reservations"
+    registered = root / "BUG-133.json"
+    unknown = root / "BUG-134.json"
+    _write_json(registered, {"bug_id": "BUG-133", "status": "registered"})
+    _write_json(unknown, {"bug_id": "BUG-134", "status": "github_create_outcome_unknown"})
+
+    assert workflow.compact_terminal_reservations(root, {"BUG-133", "BUG-134"}) == []
+    assert registered.exists()
+
+    removed = workflow.compact_terminal_reservations(
+        root,
+        {"BUG-133", "BUG-134"},
+        min_age_seconds=0,
+    )
+
+    assert removed == [str(registered)]
+    assert not registered.exists()
+    assert unknown.exists()
+
+
+def test_allocator_steady_state_does_not_scan_registries_or_reservation_inventory(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow.write_allocator_state(
+        Path(os.environ["AISTOCK_BUG_ID_STATE_PATH"]),
+        last_allocated=300,
+        updated_at="2026-08-11T00:00:00Z",
+        updated_by="pytest",
+        fingerprint_index_version=workflow.FINGERPRINT_INDEX_VERSION,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_scan_bug_registry_ids",
+        lambda *_args, **_kwargs: pytest.fail("steady-state allocation must not scan BUG registries"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_scan_bug_id_reservations",
+        lambda: pytest.fail("steady-state allocation must not enumerate all reservations"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_fingerprint_bootstrap_records",
+        lambda *_args, **_kwargs: pytest.fail("steady-state allocation must not rebuild the fingerprint index"),
+    )
+
+    bug_id, number, report, reservation = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id=None,
+        include_github=False,
+        github_required=False,
+        allowed_github_issue_number=None,
+        reservation_title="Steady-state allocator",
+        reservation_fingerprint="steady-state-fingerprint",
+    )
+    try:
+        assert (bug_id, number) == ("BUG-301", 301)
+        assert report["allocator_state_bootstrap_required"] is False
+        assert report["allocator_lock"]["wait_ms"] is not None
+        assert report["allocator_lock"]["hold_ms"] is not None
+    finally:
+        workflow._release_bug_id_reservation(reservation)
+
+
+def test_allocator_missing_state_bootstraps_once_then_uses_direct_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_json(
+        workflow.BUGS_ROOT / ".bug_id_allocator.json",
+        {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 140},
+    )
+    calls = {"registry": 0, "fingerprints": 0}
+    original_registry_scan = workflow._scan_bug_registry_ids
+    original_fingerprint_records = workflow._fingerprint_bootstrap_records
+
+    def registry_scan(*args: object, **kwargs: object):
+        calls["registry"] += 1
+        return original_registry_scan(*args, **kwargs)
+
+    def fingerprint_records(*args: object, **kwargs: object):
+        calls["fingerprints"] += 1
+        return original_fingerprint_records(*args, **kwargs)
+
+    monkeypatch.setattr(workflow, "_scan_bug_registry_ids", registry_scan)
+    monkeypatch.setattr(workflow, "_fingerprint_bootstrap_records", fingerprint_records)
+
+    first = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id=None,
+        include_github=False,
+        github_required=False,
+        allowed_github_issue_number=None,
+        reservation_title="Bootstrap once",
+        reservation_fingerprint="bootstrap-once-1",
+    )
+    workflow._release_bug_id_reservation(first[3])
+    assert calls == {"registry": 1, "fingerprints": 1}
+
+    second = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id=None,
+        include_github=False,
+        github_required=False,
+        allowed_github_issue_number=None,
+        reservation_title="No second bootstrap",
+        reservation_fingerprint="bootstrap-once-2",
+    )
+    try:
+        assert second[0] == "BUG-142"
+        assert calls == {"registry": 1, "fingerprints": 1}
+    finally:
+        workflow._release_bug_id_reservation(second[3])
+
+
+def test_legacy_reservation_compaction_only_removes_durable_statusless_record(
+    isolated_workflow_root: Path,
+) -> None:
+    root = isolated_workflow_root / "bug-id-reservations"
+    durable = root / "BUG-150.json"
+    unmatched = root / "BUG-151.json"
+    unknown = root / "BUG-152.json"
+    _write_json(durable, {"bug_id": "BUG-150"})
+    _write_json(unmatched, {"bug_id": "BUG-151"})
+    _write_json(unknown, {"bug_id": "BUG-152", "status": "github_create_outcome_unknown"})
+
+    removed = workflow.compact_terminal_reservations(
+        root,
+        {"BUG-150", "BUG-152"},
+        min_age_seconds=0,
+    )
+
+    assert removed == [str(durable)]
+    assert not durable.exists()
+    assert unmatched.exists()
+    assert unknown.exists()
+
+
+def test_workflow_policy_sources_are_compact_and_semantically_consistent() -> None:
+    root = workflow.REPO_ROOT
+    standard_path = root / "docs/standards/aistock_development_standard_v1.5_20260523.md"
+    catalog_path = root / "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    quickstart_path = root / "docs/standards/aistock_issue_workflow_quickstart.md"
+    standard = standard_path.read_text(encoding="utf-8")
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    rules = {item["rule_id"]: item for item in catalog["rules"]}
+
+    assert "必须使用 `rtk git`" in standard
+    assert "不把 `doctor` 作为通用前置门禁" in standard
+    assert "同一条用户指令可以明确打包源码合入" in standard
+    assert "禁止再次索要同一授权" in standard
+    assert "裸 `merge` 授权仍只覆盖源码合入" in standard
+    assert rules["TOOL-RTK-001"]["effect"] == "warn"
+    assert rules["TOOL-RTK-001"]["failure_policy"] == "non_blocking_visible_warning"
+    assert rules["ISSUE-BATCH-CONTEXT-001"]["effect"] == "advisory"
+    assert rules["SCRIPT-LOCATION-001"]["effect"] == "warn"
+    assert rules["DOC-LOCATION-001"]["effect"] == "warn"
+    ddl_evidence = rules["PROD-DDL-001"]["checker"]["required_evidence"]
+    assert "authorization_may_be_bundled_with_merge_without_second_prompt" in ddl_evidence
+    assert "immutable_merge_commit_confirmed_before_production_apply" in ddl_evidence
+
+    lane_paths = [
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".codex/skills/aistock-readonly-triage/SKILL.md",
+        ".codex/skills/aistock-docs-handoff/SKILL.md",
+        ".codex/skills/aistock-validation-delegation/SKILL.md",
+        ".codex/skills/verify-aistock-feature/SKILL.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/fix-aistock-issue.md",
+        ".claude/commands/aistock-merge-aftercare.md",
+        ".claude/commands/aistock-readonly-triage.md",
+        ".claude/commands/aistock-docs-handoff.md",
+        ".claude/commands/aistock-validation-delegation.md",
+        ".claude/commands/aistock-feature-workflow.md",
+    ]
+    for relative in lane_paths:
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "TOOL-RTK-001" in text, relative
+        assert "must use RTK" not in text, relative
+        assert "sole development standard" in text, relative
+
+    for relative in (
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/fix-aistock-issue.md",
+    ):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "doctor` before repository mutation" not in text
+        assert "Run `python scripts/aistock_issue_workflow.py doctor`" not in text
+
+    for relative in (
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".claude/commands/aistock-merge-aftercare.md",
+    ):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "Authorizations are action-scoped, not message-scoped" in text
+        assert "do not ask for the same authorization a second time" in text
+        assert "Bare merge authorization" in text
+        assert "exact named cleanup targets" in text
+        assert "confirm the immutable merge commit first" in text
+
+    quickstart = quickstart_path.read_text(encoding="utf-8")
+    assert len(quickstart.splitlines()) <= 130
+    assert "普通任务直接使用" in quickstart
+    assert "same explicit merge authorization requires" not in quickstart
+    assert "full aftercare loop unless" not in quickstart
+    assert "授权按动作和目标独立，但可以在一条用户指令中打包" in quickstart
+    assert "不再二次询问" in quickstart
+
+    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    assert len(agents.splitlines()) <= 80
+    assert "Architecture Overview" not in agents
+    assert "TOOL-RTK-001" in agents
+    assert "docs/standards/aistock_development_standard_v1.5_20260523.md" in agents
+    assert "Authorizations are action-scoped, not message-scoped" in agents
+    assert "A complete bundle needs no second prompt after merge" in agents
+
+    project_memory = (root / "docs/codex_project_memory.md").read_text(encoding="utf-8")
+    assert "Active Multi-Alpha Strategy Evolution Snapshot" not in project_memory
+    assert "Advisory Research Program Working Memory" not in project_memory
+    assert "never add snapshots here" in project_memory
+    assert "Authorization is action-scoped rather than message-scoped" in project_memory
+    assert "with no second prompt after merge" in project_memory
+
+    ownership = (root / "tests/aistock_validation/catalog/file_ownership.yaml").read_text(encoding="utf-8")
+    assert ".claude/commands/aistock-issue-doctor.md" in ownership
+    assert "docs/standards/aistock_development_standard_v1.5_20260523.md" in workflow.WORKFLOW_RULE_DIGEST_REFS
+    assert "docs/standards/aistock_issue_workflow_quickstart.md" not in workflow.WORKFLOW_RULE_DIGEST_REFS
+
+
+def test_rdagent_release_aftercare_is_part_of_every_client_and_resume_digest() -> None:
+    assert ("merge_aftercare", "aistock-merge-aftercare") in workflow.CLIENT_CODEX_SKILLS
+    assert ("merge_aftercare", "aistock-merge-aftercare.md") in workflow.CLIENT_CLAUDE_COMMANDS
+    assert ".codex/skills/aistock-merge-aftercare/SKILL.md" in workflow.WORKFLOW_RULE_DIGEST_REFS
+    assert ".claude/commands/aistock-merge-aftercare.md" in workflow.WORKFLOW_RULE_DIGEST_REFS
+
+    codex_text = (workflow.REPO_ROOT / ".codex/skills/aistock-merge-aftercare/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    claude_text = (workflow.REPO_ROOT / ".claude/commands/aistock-merge-aftercare.md").read_text(
+        encoding="utf-8"
+    )
+    router_text = (workflow.REPO_ROOT / ".codex/skills/aistock-task-router/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    for text in (codex_text, claude_text):
+        assert "RDAGENT_STATE_ROOT" in text
+        assert "blocked_not_implemented" in text
+        assert "deployment receipt" in text.lower()
+        assert "Copy-Item" in text
+        assert "runtime_verified" in text
+    assert "RD-Agent release/deploy/rollback" in router_text
+
+
+def test_verification_budget_does_not_require_nightly_without_deferred_plans() -> None:
+    budget = workflow._verification_budget_for_record(
+        {
+            "title": "Workflow validation issue",
+            "description": "P1 workflow regression",
+            "module": "validation",
+            "severity": "P1",
+            "required_verification": ["l0"],
+        }
+    )
+
+    assert budget["deferred_nightly_verification"] == {
+        "required": False,
+        "modules": [],
+        "plans": [],
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs",
+    }
+    catalog_budget = workflow._verification_budget_for_record(
+        {
+            "title": "Standards catalog synchronization",
+            "description": "Validate the source digest and machine catalog.",
+            "module": "validation",
+            "severity": "P1",
+            "required_verification": ["l0", "validation_catalog_integrity"],
+        }
+    )
+    assert catalog_budget["premerge_required_plans"] == ["l0", "validation_catalog_integrity"]
+    assert catalog_budget["deferred_nightly_verification"]["required"] is False
+
+
+def test_verification_budget_does_not_treat_ddl_policy_wording_as_schema_work() -> None:
+    policy_budget = workflow._verification_budget_for_record(
+        {
+            "title": "Clarify merge and DDL authorization policy",
+            "description": "Workflow standards discuss production migration authorization without changing a database.",
+            "module": "validation",
+            "severity": "P1",
+            "allowed_write_scope": ["docs/standards/aistock_development_standard_v1.5_20260523.md"],
+            "production_ddl_gate": "noop",
+            "required_verification": ["l0"],
+        }
+    )
+    migration_budget = workflow._verification_budget_for_record(
+        {
+            "title": "Apply production DDL migration",
+            "description": "Add a committed migration for the production DB.",
+            "module": "database",
+            "severity": "P2",
+            "allowed_write_scope": ["backend/db/migrations/20260811_add_index.sql"],
+            "production_ddl_gate": "pending",
+            "required_verification": ["l0"],
+        }
+    )
+
+    assert policy_budget["budget"] == "standard"
+    assert migration_budget["budget"] == "deep"
+
+
+def test_verification_budget_requires_nightly_for_explicit_broad_plan() -> None:
+    budget = workflow._verification_budget_for_record(
+        {
+            "title": "Validation Center regression",
+            "description": "Cross-module API flow needs delegated coverage",
+            "module": "validation",
+            "severity": "P1",
+            "required_verification": ["l0", "validation_center_backend"],
+        }
+    )
+
+    assert budget["deferred_nightly_verification"]["required"] is True
+    assert budget["deferred_nightly_verification"]["plans"] == ["validation_center_backend"]
+    assert budget["deferred_nightly_verification"]["modules"] == ["validation", "validation_center"]
 
 
 def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path) -> None:
@@ -3238,7 +10026,8 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     assert payload["timing_summary"]["event_count"] == 2
     assert payload["timing_summary"]["known_duration_seconds"] == 2.5
     assert payload["flow_overhead_estimate"]["context_estimated_tokens"] == 20
-    assert payload["h6_summary"]["top_phase"]["phase"] == "gh_pr_create"
+    assert payload["h6_summary"]["top_phase"]["phase"] == "context_ready"
+    assert payload["h6_summary"]["top_phase"]["inferred_seconds"] == 5.0
     assert payload["phase_cost_table"]
     assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
     assert payload["code_intelligence_efficiency"]["broad_scan_avoided"] is True
@@ -3472,6 +10261,57 @@ def test_pr_check_watch_treats_missing_checks_as_pending(
     assert len(payload["attempts"]) == 2
 
 
+def test_pr_check_watch_transport_failure_falls_back_to_exact_head_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"] and args[2].endswith("/pulls/199"):
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "open",
+                        "merged": False,
+                        "head": {"sha": head_sha},
+                        "base": {"ref": "main"},
+                        "html_url": "https://github.example/pull/199",
+                    }
+                ),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"] and "/check-runs?" in args[2]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "total_count": 1,
+                        "check_runs": [
+                            {"name": "CI verdict", "status": "completed", "conclusion": "success"}
+                        ],
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow._view_pr_checks("https://github.example/pull/199")
+
+    assert payload["workflow_gate"] == "checks_passed"
+    assert payload["source"] == "github_rest"
+    assert payload["classified"]["passed"] == ["CI verdict"]
+    assert sum(args[:3] == ["gh", "pr", "view"] for args in commands) == 2
+
+
 def test_run_pr_mode_blocks_pr_automation_from_canonical_root(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3512,6 +10352,11 @@ def test_close_sync_apply_blocks_canonical_root_pollution(
         "_git_snapshot",
         lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
     )
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     with pytest.raises(workflow.WorkflowError, match="canonical root"):
         workflow.build_close_sync_plan(
@@ -3527,12 +10372,13 @@ def test_close_sync_apply_blocks_canonical_root_pollution(
         )
 
 
-def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
+def test_close_sync_rest_only_mode_still_runs_github_issue_sync(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
     called = False
+    merge_commit = "a" * 40
 
     def fake_sync(record: dict[str, Any], evidence_payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         nonlocal called
@@ -3540,7 +10386,22 @@ def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
         return {"status": "synced"}
 
     monkeypatch.setattr(workflow, "_sync_github_issue_after_close", fake_sync)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "source": "github_rest",
+            "pr": {"mergeCommit": {"oid": merge_commit}, "mergedAt": "2026-08-28T07:00:00Z"},
+        },
+    )
     monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     payload = workflow.build_close_sync_plan(
         bug_id=None,
@@ -3549,17 +10410,98 @@ def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
         apply=True,
         allow_missing_linkage=False,
         validation_evidence=["python -m nox -s l0 -> passed"],
-        merge_commit="abc1234",
+        merge_commit=merge_commit,
         production_gates={"production_ddl_gate": "noop"},
         skip_github_check=True,
     )
 
     assert payload["workflow_gate"] == "close_synced"
-    assert payload["github_issue_sync"]["status"] == "skipped_github_check_disabled"
-    assert called is False
+    assert payload["github_issue_sync"]["status"] == "synced"
+    assert called is True
     updated = json.loads(issue.read_text(encoding="utf-8"))
     assert updated["closed_at"]
     assert updated["fixed_at"]
+
+
+def test_close_sync_blocks_when_github_issue_label_sync_is_incomplete(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    merge_commit = "a" * 40
+    monkeypatch.setattr(workflow, "_sync_github_issue_after_close", lambda *args, **kwargs: {"status": "warning"})
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda *args, **kwargs: {
+            "checked": True,
+            "merged": True,
+            "source": "github_rest",
+            "pr": {"mergeCommit": {"oid": merge_commit}, "mergedAt": "2026-08-31T07:00:00Z"},
+        },
+    )
+    monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
+    monkeypatch.setattr(workflow, "_merged_commit_changed_files", lambda _commit: ["scripts/aistock_issue_workflow.py"])
+
+    with pytest.raises(workflow.WorkflowError, match="state/label synchronization is incomplete"):
+        workflow.build_close_sync_plan(
+            bug_id=None,
+            issue_json=str(issue),
+            pr_url="https://github.example/pull/1",
+            apply=True,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+            merge_commit=merge_commit,
+            production_gates={"production_ddl_gate": "noop"},
+            skip_github_check=True,
+        )
+
+
+def test_close_sync_retry_preserves_fixed_time_and_structured_evidence(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_commit = "a" * 40
+    source_pr = "https://github.example/pull/1"
+    structured = "validation-receipt: id=abc commit=source kind=nox plan=l0 status=passed"
+    issue = _write_json(
+        isolated_workflow_root / "bug.json",
+        _bug(
+            status="fixed",
+            pr_url=source_pr,
+            fix_commit=merge_commit,
+            fixed_at="2026-08-28T06:30:00Z",
+            validation_evidence=[structured],
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda _pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "pr": {"mergeCommit": {"oid": merge_commit}, "mergedAt": "2026-08-28T07:00:00Z"},
+        },
+    )
+    monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda _root: {"blocking": [], "warnings": []})
+    monkeypatch.setattr(workflow, "_merged_commit_changed_files", lambda _commit: ["scripts/aistock_issue_workflow.py"])
+    monkeypatch.setattr(workflow, "_sync_github_issue_after_close", lambda *_args, **_kwargs: {"status": "synced"})
+
+    workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url=source_pr,
+        apply=True,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        merge_commit=merge_commit,
+        production_gates={"production_ddl_gate": "noop"},
+        skip_github_check=False,
+    )
+
+    updated = json.loads(issue.read_text(encoding="utf-8"))
+    assert updated["fixed_at"] == "2026-08-28T06:30:00Z"
+    assert updated["validation_evidence"] == [structured]
 
 
 
@@ -3616,10 +10558,18 @@ def test_merge_uses_cleanup_owned_branch_deletion(
                     {
                         "state": "OPEN",
                         "statusCheckRollup": [
-                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                            {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                            {"name": "advisory", "status": "COMPLETED", "conclusion": "FAILURE"},
                         ],
                     }
                 ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(_green_merge_quality_checks()),
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
@@ -3660,10 +10610,18 @@ def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
                     {
                         "state": "OPEN",
                         "statusCheckRollup": [
-                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                            {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                            {"name": "advisory", "status": "IN_PROGRESS", "conclusion": ""},
                         ],
                     }
                 ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(_green_merge_quality_checks()),
                 "stderr": "",
             }
         if args[:3] == ["gh", "pr", "merge"]:
@@ -3687,6 +10645,856 @@ def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
     assert payload["verified"]["merged"] is True
     merge_commands = [args for args in commands if args[:3] == ["gh", "pr", "merge"]]
     assert merge_commands == [["gh", "pr", "merge", "https://github.example/pull/199", "--squash"]]
+
+
+def test_generic_merge_helper_blocks_failed_required_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "statusCheckRollup": []}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "FAILURE", "bucket": "fail", "workflow": "AIstock CI"}]
+                ),
+                "stderr": "required checks failed",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="CI verdict"):
+        workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert not any(args[:3] == ["gh", "pr", "merge"] for args in commands)
+
+
+def test_merge_quality_contract_blocks_when_only_ci_verdict_is_reported() -> None:
+    result = workflow._normalize_merge_quality_check_result(
+        {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(
+                [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
+            ),
+            "stderr": "",
+        }
+    )
+
+    assert result is not None
+    summary = workflow._required_pr_check_summary(result)
+    assert summary["passed"] == ["CI verdict"]
+    assert summary["pending"] == list(workflow.MERGE_QUALITY_CHECK_CONTEXTS[1:])
+
+
+def test_close_sync_merge_quality_contract_only_requires_ci_verdict() -> None:
+    contexts = workflow._merge_quality_contexts_for_head_ref("chore/BUG-1271-close-sync-20260831")
+    result = workflow._normalize_merge_quality_check_result(
+        {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(
+                [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
+            ),
+            "stderr": "",
+        },
+        required_contexts=contexts,
+    )
+
+    assert contexts == ("CI verdict",)
+    assert result is not None
+    assert workflow._required_pr_check_summary(result) == {
+        "failed": [],
+        "pending": [],
+        "non_blocking": [],
+        "passed": ["CI verdict"],
+    }
+
+
+def test_rest_required_check_fallback_scopes_close_sync_to_ci_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {
+            "head_sha": head_sha,
+            "head_ref": "chore/BUG-1271-close-sync-20260831",
+            "base_ref": "main",
+            "url": pr_url,
+        },
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if "/branches/main/protection/required_status_checks" in args[2]:
+            payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
+        elif "/check-runs?" in args[2]:
+            payload = {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "id": 9,
+                        "name": "CI verdict",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "app": {"id": 15368},
+                    }
+                ],
+            }
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._rest_required_pr_check_result(
+        "https://github.example/pull/199",
+        expected_head=head_sha,
+        base_ref="main",
+    )
+
+    assert workflow._required_pr_check_summary(result)["passed"] == ["CI verdict"]
+
+
+def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        assert args[:3] == ["gh", "pr", "view"]
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps({"state": "MERGED", "statusCheckRollup": []}),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["already_merged"] is True
+    assert commands == [
+        [
+            "gh",
+            "pr",
+            "view",
+            "https://github.example/pull/199",
+            "--json",
+            "state,mergeStateStatus,mergeable,statusCheckRollup,url,headRefOid,baseRefName",
+        ]
+    ]
+
+
+def test_merge_read_transport_failures_recover_through_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "a" * 40
+    merge_sha = "b" * 40
+    commands: list[list[str]] = []
+
+    def ok(payload: Any) -> dict[str, Any]:
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] in (["gh", "pr", "view"], ["gh", "pr", "checks"]):
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"] and args[2].endswith("/pulls/199"):
+            return ok(
+                {
+                    "state": "open",
+                    "merged": False,
+                    "mergeable": True,
+                    "mergeable_state": "clean",
+                    "head": {"sha": head_sha},
+                    "base": {"ref": "main"},
+                    "html_url": "https://github.example/pull/199",
+                }
+            )
+        if args[:2] == ["gh", "api"] and "/branches/main/protection/required_status_checks" in args[2]:
+            return ok({"contexts": ["CI verdict"], "checks": [{"context": "CI verdict", "app_id": 15368}]})
+        if args[:2] == ["gh", "api"] and "/check-runs?" in args[2]:
+            return ok(
+                {
+                    "total_count": len(workflow.MERGE_QUALITY_CHECK_CONTEXTS),
+                    "check_runs": [
+                        {
+                            "id": index,
+                            "name": name,
+                            "status": "completed",
+                            "conclusion": "success",
+                            "app": {"id": 15368},
+                        }
+                        for index, name in enumerate(workflow.MERGE_QUALITY_CHECK_CONTEXTS, start=9)
+                    ],
+                }
+            )
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "headRefOid": head_sha, "mergeCommit": {"oid": merge_sha}},
+        },
+    )
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["verified"]["pr"]["mergeCommit"]["oid"] == merge_sha
+    assert [item["stage"] for item in payload["read_fallbacks"]] == ["pr_view", "required_checks"]
+    assert sum(args[:3] == ["gh", "pr", "view"] for args in commands) == 2
+    assert sum(args[:3] == ["gh", "pr", "checks"] for args in commands) == 2
+    assert sum(args[:3] == ["gh", "pr", "merge"] for args in commands) == 1
+    assert not any(args[:2] == ["gh", "api"] and args[2].endswith("/status") for args in commands)
+
+
+def test_merge_read_non_transport_failure_is_not_retried_or_fallbacked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        return {"ok": False, "returncode": 1, "stdout": "", "stderr": "HTTP 403: forbidden"}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: pytest.fail(f"unexpected REST fallback: {pr_url}"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="403"):
+        workflow._merge_pr_view_with_transport_fallback("https://github.example/pull/199")
+
+    assert len(commands) == 1
+
+
+def test_rest_required_check_fallback_keeps_pending_check_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {"head_sha": head_sha, "base_ref": "main", "url": pr_url},
+    )
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        if "/branches/main/protection/required_status_checks" in args[2]:
+            payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
+        elif "/check-runs?" in args[2]:
+            payload = {
+                "total_count": len(workflow.MERGE_QUALITY_CHECK_CONTEXTS),
+                "check_runs": [
+                    {
+                        "id": index,
+                        "name": name,
+                        "status": "in_progress" if name == "CI verdict" else "completed",
+                        "conclusion": None if name == "CI verdict" else "success",
+                        "app": {"id": 15368},
+                    }
+                    for index, name in enumerate(workflow.MERGE_QUALITY_CHECK_CONTEXTS, start=9)
+                ],
+            }
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._rest_required_pr_check_result(
+        "https://github.example/pull/199",
+        expected_head=head_sha,
+        base_ref="main",
+    )
+
+    assert workflow._required_pr_check_summary(result)["pending"] == ["CI verdict"]
+
+
+def test_rest_required_check_fallback_rejects_head_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_head = "a" * 40
+    observed_head = "b" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {"head_sha": observed_head, "base_ref": "main", "url": pr_url},
+    )
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: pytest.fail("REST checks must not run"))
+
+    with pytest.raises(workflow.WorkflowError, match="PR head changed"):
+        workflow._rest_required_pr_check_result(
+            "https://github.example/pull/199",
+            expected_head=expected_head,
+            base_ref="main",
+        )
+
+
+def test_rest_required_check_fallback_honors_required_app_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "a" * 40
+    monkeypatch.setattr(
+        workflow,
+        "_github_pull_rest_readback",
+        lambda pr_url: {"head_sha": head_sha, "base_ref": "main", "url": pr_url},
+    )
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        if "/branches/main/protection/required_status_checks" in args[2]:
+            payload = {"contexts": [], "checks": [{"context": "CI verdict", "app_id": 15368}]}
+        elif "/check-runs?" in args[2]:
+            payload = {
+                "total_count": len(workflow.MERGE_QUALITY_CHECK_CONTEXTS),
+                "check_runs": [
+                    {
+                        "id": index,
+                        "name": name,
+                        "status": "completed",
+                        "conclusion": "success",
+                        "app": {"id": 99999 if name == "CI verdict" else 15368},
+                    }
+                    for index, name in enumerate(workflow.MERGE_QUALITY_CHECK_CONTEXTS, start=9)
+                ],
+            }
+        elif args[2].endswith("/status"):
+            pytest.fail("an app-bound required check must not fall back to a legacy commit status")
+        else:
+            raise AssertionError(args)
+        return {"ok": True, "returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._rest_required_pr_check_result(
+        "https://github.example/pull/199",
+        expected_head=head_sha,
+        base_ref="main",
+    )
+
+    assert workflow._required_pr_check_summary(result)["pending"] == ["CI verdict"]
+
+
+def test_required_check_reporting_gap_is_pending_not_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        assert args[:3] == ["gh", "pr", "checks"]
+        return {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "no required checks reported for this pull request",
+        }
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_rest_required_pr_check_result",
+        lambda *args, **kwargs: (_ for _ in ()).throw(workflow.WorkflowError("REST temporarily unavailable")),
+    )
+    result, _fallback = workflow._merge_required_check_result_with_transport_fallback(
+        "https://github.example/pull/199",
+        payload={"headRefOid": "a" * 40, "baseRefName": "main"},
+    )
+
+    assert calls == 1
+    assert workflow._required_pr_check_summary(result)["pending"] == ["github-required-checks-reporting"]
+
+
+def test_timing_summary_attributes_wall_time_to_previous_phase_and_keeps_rtk_optional(
+    isolated_workflow_root: Path,
+) -> None:
+    events = [
+        {
+            "timestamp": "2026-08-27T00:00:00Z",
+            "event": "fix_in_progress",
+            "state": "fix_in_progress",
+            "duration_seconds": None,
+            "tooling": {"rtk_used": True, "rtk_fallback": "not_recorded"},
+        },
+        {
+            "timestamp": "2026-08-27T00:00:10Z",
+            "event": "fix_applied",
+            "state": "fix_applied",
+            "duration_seconds": None,
+            "tooling": {"rtk_used": "not_recorded", "rtk_fallback": "not_recorded"},
+        },
+        {
+            "timestamp": "2026-08-27T00:00:12Z",
+            "event": "state:validation_passed",
+            "state": "validation_passed",
+            "duration_seconds": None,
+            "tooling": {"rtk_used": "not_recorded", "rtk_fallback": "not_recorded"},
+        },
+    ]
+    path = workflow._events_path("BUG-199", isolated_workflow_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+
+    summary = workflow._workflow_timing_summary("BUG-199", isolated_workflow_root)
+
+    assert summary["active_fix_seconds"] == 12.0
+    assert summary["phases"]["fix_in_progress"]["inferred_until_next_seconds"] == 10.0
+    assert summary["rtk_telemetry"] == {
+        "used_event_count": 1,
+        "fallback_event_count": 0,
+        "not_recorded_event_count": 2,
+        "status": "recorded",
+    }
+
+
+def test_merge_transport_failure_falls_back_once_to_head_pinned_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    merge_sha = "b" * 40
+    commands: list[list[str]] = []
+    readback_count = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal readback_count
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": head_sha}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(_green_merge_quality_checks()),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:4] == ["gh", "api", "--method", "PUT"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"merged": True, "message": "Pull Request successfully merged", "sha": merge_sha}),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"]:
+            readback_count += 1
+            merged = readback_count == 2
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "closed" if merged else "open",
+                        "merged": merged,
+                        "merged_at": "2026-08-14T00:00:00Z" if merged else None,
+                        "merge_commit_sha": merge_sha if merged else None,
+                        "head": {"sha": head_sha},
+                        "html_url": "https://github.example/pull/199",
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["recovered_from_transport_error"] is True
+    assert payload["already_merged"] is False
+    assert payload["verified"]["source"] == "github_rest"
+    assert payload["verified"]["pr"]["mergeCommit"]["oid"] == merge_sha
+    rest_merge_commands = [args for args in commands if args[:4] == ["gh", "api", "--method", "PUT"]]
+    assert rest_merge_commands == [
+        [
+            "gh",
+            "api",
+            "--method",
+            "PUT",
+            f"repos/{workflow.GITHUB_REPO}/pulls/199/merge",
+            "-f",
+            f"sha={head_sha}",
+            "-f",
+            "merge_method=squash",
+        ]
+    ]
+
+
+def test_bug_merge_transport_fallback_records_recovery_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    head_sha = "a" * 40
+    merge_sha = "b" * 40
+    events: list[str] = []
+    readback_count = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal readback_count
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": head_sha}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(_green_merge_quality_checks()),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "TLS handshake timeout"}
+        if args[:4] == ["gh", "api", "--method", "PUT"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"merged": True, "sha": merge_sha}),
+                "stderr": "",
+            }
+        if args[:2] == ["gh", "api"]:
+            readback_count += 1
+            merged = readback_count == 2
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "closed" if merged else "open",
+                        "merged": merged,
+                        "merge_commit_sha": merge_sha if merged else None,
+                        "head": {"sha": head_sha},
+                        "html_url": "https://github.example/pull/199",
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_append_event",
+        lambda bug_id, **kwargs: events.append(str(kwargs.get("event"))) or {"bug_id": bug_id},
+    )
+
+    payload = workflow._merge_pr_if_ready_for_bug("BUG-199", "https://github.example/pull/199")
+
+    assert payload["recovered_from_transport_error"] is True
+    assert "command:gh_rest_head_pinned_merge_fallback" in events
+    assert "merge_graphql_transport_rest_fallback" in events
+
+
+def test_merge_transport_fallback_fails_closed_on_head_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_head = "a" * 40
+    observed_head = "c" * 40
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": expected_head}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(_green_merge_quality_checks()),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {"state": "open", "merged": False, "head": {"sha": observed_head}, "html_url": "https://github.example/pull/199"}
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="PR head changed"):
+        workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert not any(args[:4] == ["gh", "api", "--method", "PUT"] for args in commands)
+
+
+def test_merge_non_transport_error_does_not_use_rest_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": "a" * 40}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(_green_merge_quality_checks()),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "merge queue policy rejected"}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: (_ for _ in ()).throw(workflow.WorkflowError(f"not merged: {pr_url}")),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="merge queue policy rejected"):
+        workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert not any(args[:2] == ["gh", "api"] for args in commands)
+
+
+def test_merge_success_uses_rest_only_when_graphql_verification_transport_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    merge_sha = "b" * 40
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "headRefOid": head_sha}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(_green_merge_quality_checks()),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        if args[:2] == ["gh", "api"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "closed",
+                        "merged": True,
+                        "merged_at": "2026-08-14T00:00:00Z",
+                        "merge_commit_sha": merge_sha,
+                        "head": {"sha": head_sha},
+                        "html_url": "https://github.example/pull/199",
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: (_ for _ in ()).throw(workflow.WorkflowError(f"Post {pr_url}/graphql: EOF")),
+    )
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["recovered_from_transport_error"] is True
+    assert payload["rest_fallback"]["reason"] == "graphql_verification_transport_failure"
+    assert payload["verified"]["pr"]["mergeCommit"]["oid"] == merge_sha
+    assert not any(args[:4] == ["gh", "api", "--method", "PUT"] for args in commands)
+
+
+def test_pr_create_transport_failure_uses_head_pinned_rest_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    body = tmp_path / "pr.md"
+    body.write_text("body", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        if args[:3] == ["gh", "pr", "create"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+        if args[:2] == ["gh", "api"] and "/pulls?" in args[2]:
+            return {"ok": True, "returncode": 0, "stdout": "[]", "stderr": ""}
+        if args[:2] == ["gh", "api"] and "/git/ref/heads/" in args[2]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"object": {"sha": head_sha}}),
+                "stderr": "",
+            }
+        if args[:4] == ["gh", "api", "--method", "POST"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "html_url": "https://github.example/pull/299",
+                        "head": {"sha": head_sha, "ref": "bug/BUG-199"},
+                        "base": {"ref": "main"},
+                    }
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+
+    result = workflow._create_pr_with_transport_fallback(
+        branch="bug/BUG-199",
+        base="main",
+        title="BUG-199 fix",
+        body_path=body,
+        expected_head=head_sha,
+        root=tmp_path,
+    )
+
+    assert result["ok"] is True
+    assert result["source"] == "github_rest_create"
+    assert result["recovered_from_transport_error"] is True
+    assert sum(args[:4] == ["gh", "api", "--method", "POST"] for args in calls) == 1
+
+
+def test_pr_create_transport_failure_reads_existing_pr_before_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "a" * 40
+    body = tmp_path / "pr.md"
+    body.write_text("body", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        if args[:3] == ["gh", "pr", "create"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "TLS handshake timeout"}
+        if args[:2] == ["gh", "api"] and "/pulls?" in args[2]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [
+                        {
+                            "number": 299,
+                            "html_url": "https://github.example/pull/299",
+                            "title": "BUG-199 fix",
+                            "head": {"sha": head_sha, "ref": "bug/BUG-199"},
+                            "base": {"ref": "main"},
+                        }
+                    ]
+                ),
+                "stderr": "",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._create_pr_with_transport_fallback(
+        branch="bug/BUG-199",
+        base="main",
+        title="BUG-199 fix",
+        body_path=body,
+        expected_head=head_sha,
+        root=tmp_path,
+    )
+
+    assert result["source"] == "github_rest_existing_readback"
+    assert not any(args[:4] == ["gh", "api", "--method", "POST"] for args in calls)
+
+
+def test_pr_create_non_transport_failure_does_not_use_rest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = tmp_path / "pr.md"
+    body.write_text("body", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        return {"ok": False, "returncode": 1, "stdout": "", "stderr": "HTTP 403: forbidden"}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._create_pr_with_transport_fallback(
+        branch="bug/BUG-199",
+        base="main",
+        title="BUG-199 fix",
+        body_path=body,
+        expected_head="a" * 40,
+        root=tmp_path,
+    )
+
+    assert result["ok"] is False
+    assert len(calls) == 1
+
+
+def test_pr_create_does_not_post_when_existing_pr_readback_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = tmp_path / "pr.md"
+    body.write_text("body", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post graphql: EOF"}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(workflow.WorkflowError, match="cannot query open PRs"):
+        workflow._create_pr_with_transport_fallback(
+            branch="bug/BUG-199",
+            base="main",
+            title="BUG-199 fix",
+            body_path=body,
+            expected_head="a" * 40,
+            root=tmp_path,
+        )
+
+    assert not any(args[:4] == ["gh", "api", "--method", "POST"] for args in calls)
 
 
 def test_close_sync_pr_commit_only_stages_bug_registry_files(
@@ -3719,8 +11527,8 @@ def test_close_sync_pr_commit_only_stages_bug_registry_files(
                 "stdout": " M tests/aistock_validation/bugs/bug199.json",
                 "stderr": "",
             }
-        if args[:3] == ["git", "rev-parse", "--short=12"]:
-            return {"ok": True, "returncode": 0, "stdout": "abc123def456", "stderr": ""}
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return {"ok": True, "returncode": 0, "stdout": "a" * 40, "stderr": ""}
         if args[:2] == ["gh", "pr"]:
             return {"ok": True, "returncode": 0, "stdout": "https://github.example/pull/299", "stderr": ""}
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
@@ -3741,13 +11549,13 @@ def test_close_sync_pr_commit_only_stages_bug_registry_files(
     )
 
     assert payload["workflow_gate"] == "pr_opened"
-    assert payload["commit"] == "abc123def456"
+    assert payload["commit"] == "a" * 40
     assert payload["pr_url"] == "https://github.example/pull/299"
     assert ["git", "add", "tests/aistock_validation/bugs/bug199.json"] in calls
     assert not any("close-sync-evidence.json" in " ".join(args) for args in calls if args[:2] == ["git", "add"])
 
 
-def test_close_sync_pr_commit_reuses_existing_branch_pr_without_duplicate_commit(
+def test_close_sync_pr_commit_updates_existing_branch_pr_without_duplicate_pr(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3788,6 +11596,8 @@ def test_close_sync_pr_commit_reuses_existing_branch_pr_without_duplicate_commit
                 ),
                 "stderr": "",
             }
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return {"ok": True, "returncode": 0, "stdout": "a" * 40, "stderr": ""}
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(workflow, "_run_command", fake_run)
@@ -3805,12 +11615,277 @@ def test_close_sync_pr_commit_reuses_existing_branch_pr_without_duplicate_commit
         validation_evidence=["python -m nox -s l0 -> passed"],
     )
 
+    assert payload["reason"] == "updated_existing_open_close_sync_pr"
+    assert payload["pr_url"] == "https://github.example/pull/299"
+    assert any(args[:2] == ["git", "add"] for args in calls)
+    assert any(args[:2] == ["git", "commit"] for args in calls)
+    assert any(args[:2] == ["git", "push"] for args in calls)
+    assert not any(args[:3] == ["gh", "pr", "create"] for args in calls)
+
+
+def test_close_sync_pr_commit_reuses_existing_branch_pr_when_worktree_is_clean(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_path = registry / "tests" / "aistock_validation" / "bugs" / "bug199.json"
+    _write_json(bug_path, _bug(status="fixed"))
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_open_pr_for_branch",
+        lambda _branch, root: {
+            "number": 299,
+            "url": "https://github.example/pull/299",
+            "headRefName": "chore/BUG-199-close-sync",
+        },
+    )
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
+        },
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+
     assert payload["workflow_gate"] == "pr_opened"
     assert payload["reason"] == "existing_open_close_sync_pr_for_branch"
     assert payload["pr_url"] == "https://github.example/pull/299"
-    assert not any(args[:2] == ["git", "add"] for args in calls)
-    assert not any(args[:2] == ["git", "commit"] for args in calls)
+
+
+def test_close_sync_pr_commit_recovers_unpushed_clean_commit(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    head = "a" * 40
+    remote_heads = iter([None, head])
+    calls: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {
+            "commit": head,
+            "changed_files": [bug_file],
+            "merge_base": "b" * 40,
+            "ahead_of_merge_base": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_remote_close_sync_branch_head",
+        lambda _branch, root: next(remote_heads),
+    )
+    monkeypatch.setattr(workflow, "_open_pr_for_branch", lambda _branch, **_kwargs: None)
+    monkeypatch.setattr(
+        workflow,
+        "_create_pr_with_transport_fallback",
+        lambda **_kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "https://github.com/licong01-cloud/AIstock/pull/299",
+            "stderr": "",
+        },
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": bug_file,
+            "merged_pr": "https://github.example/pull/199",
+            "merge_commit": "merge123",
+        },
+        validation_evidence=["targeted test -> passed"],
+    )
+
+    assert payload["workflow_gate"] == "pr_opened"
+    assert payload["reason"] == "recovered_unpushed_close_sync_commit"
+    assert payload["commit"] == head
+    assert ["git", "push", "-u", "origin", "chore/BUG-199-close-sync"] in calls
+
+
+def test_close_sync_pr_commit_recovers_pushed_commit_without_duplicate_pr(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    head = "a" * 40
+    calls: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {"commit": head, "changed_files": [bug_file], "merge_base": "b" * 40},
+    )
+    monkeypatch.setattr(workflow, "_remote_close_sync_branch_head", lambda _branch, root: head)
+    monkeypatch.setattr(
+        workflow,
+        "_open_pr_for_branch",
+        lambda _branch, **_kwargs: {
+            "number": 299,
+            "url": "https://github.example/pull/299",
+            "headRefName": "chore/BUG-199-close-sync",
+            "headRefOid": head,
+        },
+    )
+    monkeypatch.setattr(workflow, "_run_command", lambda args, **_kwargs: calls.append(args) or {})
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": bug_file,
+        },
+        validation_evidence=["targeted test -> passed"],
+    )
+
+    assert payload["reason"] == "recovered_existing_close_sync_commit_and_pr"
+    assert payload["pr_url"] == "https://github.example/pull/299"
     assert not any(args[:2] == ["git", "push"] for args in calls)
+
+
+def test_close_sync_pr_commit_recovery_fails_closed_on_remote_sha_mismatch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {"commit": "a" * 40, "changed_files": [bug_file], "merge_base": "c" * 40},
+    )
+    monkeypatch.setattr(workflow, "_remote_close_sync_branch_head", lambda _branch, root: "b" * 40)
+    monkeypatch.setattr(workflow, "_is_single_commit_fast_forward", lambda **_kwargs: False)
+
+    with pytest.raises(workflow.WorkflowError, match="remote branch diverges"):
+        workflow._maybe_commit_and_pr_close_sync(
+            bug_id="BUG-199",
+            close_sync={
+                "registry_root": str(registry),
+                "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+                "updated_bug_json": bug_file,
+            },
+            validation_evidence=["targeted test -> passed"],
+        )
+
+
+def test_close_sync_pr_commit_recovers_one_commit_ahead_of_existing_remote(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    old_head = "b" * 40
+    head = "a" * 40
+    remote_heads = iter([old_head, head])
+    calls: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {
+            "commit": head,
+            "changed_files": [bug_file],
+            "merge_base": "c" * 40,
+            "ahead_of_merge_base": 2,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_remote_close_sync_branch_head",
+        lambda _branch, root: next(remote_heads),
+    )
+    monkeypatch.setattr(workflow, "_is_single_commit_fast_forward", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        workflow,
+        "_open_pr_for_branch",
+        lambda _branch, **_kwargs: {
+            "number": 299,
+            "url": "https://github.example/pull/299",
+            "headRefOid": head,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, **_kwargs: calls.append(args)
+        or {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": bug_file,
+        },
+        validation_evidence=["targeted test -> passed"],
+    )
+
+    assert payload["reason"] == "recovered_existing_close_sync_commit_and_pr"
+    assert ["git", "push", "-u", "origin", "chore/BUG-199-close-sync"] in calls
+
+
+def test_close_sync_commit_inspection_rejects_unrelated_file(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = "a" * 40
+    base = "b" * 40
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        stdout_by_args = {
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): "chore/BUG-199-close-sync",
+            ("git", "rev-parse", "HEAD"): head,
+            ("git", "merge-base", "HEAD", "origin/main"): base,
+            ("git", "rev-list", "--count", f"{base}..HEAD"): "1",
+            ("git", "rev-list", "--parents", "-n", "1", "HEAD"): f"{head} {base}",
+            ("git", "show", "-s", "--format=%s", "HEAD"): "chore(issue): close-sync BUG-199 after merge",
+            ("git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"): (
+                "tests/aistock_validation/bugs/bug199.json\nscripts/unrelated.py"
+            ),
+        }
+        return {
+            "ok": tuple(args) in stdout_by_args,
+            "returncode": 0,
+            "stdout": stdout_by_args.get(tuple(args), ""),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="files differ"):
+        workflow._inspect_pending_close_sync_commit(
+            root=isolated_workflow_root,
+            branch="chore/BUG-199-close-sync",
+            expected_subject="chore(issue): close-sync BUG-199 after merge",
+            expected_files=["tests/aistock_validation/bugs/bug199.json"],
+        )
 
 
 def test_close_sync_pr_commit_blocks_unexpected_dirty_files(
@@ -3858,11 +11933,22 @@ def test_close_sync_batch_updates_multiple_bug_jsons(
 ) -> None:
     bug_a = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
-        _bug(bug_id="BUG-199", github_issue_number=199, github_issue_url="https://github.example/issues/199"),
+        _bug(
+            bug_id="BUG-199",
+            github_issue_number=199,
+            github_issue_url="https://github.example/issues/199",
+            fixed_at="2026-07-16T10:00:00Z",
+            validation_evidence=["BUG-199 historical evidence", "python -m nox -s l0 -> passed"],
+        ),
     )
     bug_b = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
-        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"),
+        _bug(
+            bug_id="BUG-200",
+            github_issue_number=200,
+            github_issue_url="https://github.example/issues/200",
+            validation_evidence=["BUG-200 historical evidence"],
+        ),
     )
     monkeypatch.setattr(
         workflow,
@@ -3894,12 +11980,158 @@ def test_close_sync_batch_updates_multiple_bug_jsons(
         "tests/aistock_validation/bugs/bug199.json",
         "tests/aistock_validation/bugs/bug200.json",
     ]
-    assert json.loads(bug_a.read_text(encoding="utf-8"))["status"] == "fixed"
+    updated_a = json.loads(bug_a.read_text(encoding="utf-8"))
+    assert updated_a["status"] == "fixed"
+    assert updated_a["fixed_at"] == "2026-07-16T10:00:00Z"
+    assert updated_a["validation_evidence"] == [
+        "BUG-199 historical evidence",
+        "python -m nox -s l0 -> passed",
+    ]
     updated_b = json.loads(bug_b.read_text(encoding="utf-8"))
     assert updated_b["pr_url"] == "https://github.example/pull/299"
     assert updated_b["closed_at"] == "2026-07-17T21:00:19Z"
     assert updated_b["fixed_at"]
+    assert updated_b["validation_evidence"] == [
+        "BUG-200 historical evidence",
+        "python -m nox -s l0 -> passed",
+    ]
     assert set(payload["github_issue_sync"]) == {"BUG-199", "BUG-200"}
+    assert payload["compatibility"]["workflow_gate"] == "compatible"
+    assert payload["compatibility"]["compatibility_key"].startswith("close-sync:")
+    assert {
+        item["compatibility_key"] for item in payload["per_issue"]
+    } == {payload["compatibility"]["compatibility_key"]}
+
+
+@pytest.mark.parametrize(
+    ("overrides_a", "overrides_b", "message"),
+    [
+        ({"module": "validation"}, {"module": "other"}, "share one module"),
+        ({"severity": "P1"}, {"severity": "P2"}, "share one risk tier"),
+        ({"required_verification": ["l0"]}, {"required_verification": ["guardrail_changed_files"]}, "same required_verification"),
+        ({"production_ddl_gate": "noop"}, {"production_ddl_gate": "pending_authorized_apply"}, "same production gate state"),
+    ],
+)
+def test_close_sync_batch_rejects_incompatible_records(
+    isolated_workflow_root: Path,
+    overrides_a: dict[str, Any],
+    overrides_b: dict[str, Any],
+    message: str,
+) -> None:
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(**overrides_a),
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
+        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200", **overrides_b),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match=message):
+        workflow.build_close_sync_batch_plan(
+            bug_ids=["BUG-199", "BUG-200"],
+            pr_url="https://github.example/pull/299",
+            apply=False,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+        )
+
+
+def test_close_sync_batch_allows_compatible_non_restart_client_records(
+    isolated_workflow_root: Path,
+) -> None:
+    client_contract = {
+        "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+        "runtime_impact": "client",
+        "persistence_basis": "not_required",
+    }
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(
+            allowed_write_scope=[".codex/skills/fix-aistock-issue/SKILL.md"],
+            runtime_contract=client_contract,
+        ),
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
+        _bug(
+            bug_id="BUG-200",
+            github_issue_number=200,
+            github_issue_url="https://github.example/issues/200",
+            allowed_write_scope=[".codex/skills/fix-aistock-issue/SKILL.md"],
+            runtime_contract=client_contract,
+        ),
+    )
+
+    payload = workflow.build_close_sync_batch_plan(
+        bug_ids=["BUG-199", "BUG-200"],
+        pr_url="https://github.example/pull/299",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+
+    assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["compatibility"]["runtime_impact"] == "client"
+    assert payload["compatibility"]["backend_restart_required"] == []
+
+
+def test_close_sync_batch_rejects_runtime_bugs_without_per_issue_receipts(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _runtime_bug(isolated_workflow_root),
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
+        _runtime_bug(
+            isolated_workflow_root,
+            bug_id="BUG-200",
+            github_issue_number=200,
+            github_issue_url="https://github.example/issues/200",
+        ),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="cannot close runtime BUGs"):
+        workflow.build_close_sync_batch_plan(
+            bug_ids=["BUG-199", "BUG-200"],
+            pr_url="https://github.example/pull/299",
+            apply=False,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+        )
+
+
+def test_close_sync_batch_rejects_any_invalid_runtime_contract(
+    isolated_workflow_root: Path,
+) -> None:
+    invalid = _bug(
+        allowed_write_scope=[".codex/skills/fix-aistock-issue/SKILL.md"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+        },
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        invalid,
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
+        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="runtime contracts block close-sync-batch"):
+        workflow.build_close_sync_batch_plan(
+            bug_ids=["BUG-199", "BUG-200"],
+            pr_url="https://github.example/pull/299",
+            apply=False,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+        )
 
 
 def test_close_sync_pr_commit_can_use_batch_title_and_body(
@@ -3927,8 +12159,8 @@ def test_close_sync_pr_commit_can_use_batch_title_and_body(
                 "stdout": " M tests/aistock_validation/bugs/bug199.json\n M tests/aistock_validation/bugs/bug200.json",
                 "stderr": "",
             }
-        if args[:3] == ["git", "rev-parse", "--short=12"]:
-            return {"ok": True, "returncode": 0, "stdout": "abc123def456", "stderr": ""}
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return {"ok": True, "returncode": 0, "stdout": "a" * 40, "stderr": ""}
         if args[:2] == ["gh", "pr"]:
             return {"ok": True, "returncode": 0, "stdout": "https://github.example/pull/399", "stderr": ""}
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
@@ -3957,6 +12189,9 @@ def test_close_sync_pr_commit_can_use_batch_title_and_body(
     assert payload["workflow_gate"] == "pr_opened"
     assert ["git", "commit", "-m", "chore(issue): close-sync BUG-199-BUG-200 after merge"] in calls
     assert any(args[:7] == ["gh", "pr", "create", "--repo", workflow.GITHUB_REPO, "--base", "main"] for args in calls)
+    body = (registry / workflow.WORKFLOW_ROOT / "BUG-199-BUG-200" / "close-sync-pr-body.md").read_text(encoding="utf-8")
+    assert "BUG-199=fixed" in body
+    assert "BUG-200=fixed" in body
 
 
 def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
@@ -3964,6 +12199,12 @@ def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    workflow._write_state(
+        "BUG-199",
+        state="validation_passed",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        validation_evidence_errors=[],
+    )
     close_sync_payload = {
         "workflow_gate": "close_synced",
         "registry_root": str(isolated_workflow_root / "registry"),
@@ -3975,7 +12216,7 @@ def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {
+        lambda bug_id, pr_url, **kwargs: {
             "already_merged": True,
             "recovered_from_local_merge_error": True,
             "verified": {"checked": True, "merged": True, "pr": {"mergeCommit": {"oid": "merge123"}}},
@@ -4007,6 +12248,92 @@ def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
         changed_files=[],
         create_worktree=False,
         dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+        pr_url="https://github.example/pull/199",
+        merge=True,
+        branch="bug/BUG-199-workflow",
+        worktree=str(isolated_workflow_root / "task"),
+    )
+
+    assert payload["workflow_gate"] == "merged_close_sync_pr_opened"
+    assert payload["merge"]["recovered_from_local_merge_error"] is True
+    assert captured["create_registry_worktree"] is True
+    assert captured["merge_commit"] == "merge123"
+    assert captured["validation_evidence"] == ["python -m nox -s l0 -> passed"]
+    assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
+    assert payload["cleanup"] is None
+    assert payload["next_actions"] == [
+        "merge_close_sync_pr_after_checks_are_green",
+        "run_cleanup_after_merge",
+    ]
+    assert workflow._load_state("BUG-199")["state"] == "merged"
+
+
+def test_run_merge_mode_requires_evidence_before_source_merge(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    monkeypatch.setattr(
+        workflow,
+        "_merge_pr_if_ready_for_bug",
+        lambda *args, **kwargs: pytest.fail("source PR must not merge before evidence preflight"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="requires validated evidence before source merge"):
+        workflow.build_run_plan(
+            bug_id="BUG-199",
+            mode="merge",
+            issue_json=str(issue),
+            changed_files=[],
+            create_worktree=False,
+            dry_run=False,
+            validation_evidence=[],
+            task_slug=None,
+            allow_missing_linkage=False,
+            allow_closed=False,
+            base="origin/main",
+            head="HEAD",
+            pr_url="https://github.example/pull/199",
+            merge=True,
+        )
+
+
+def test_run_merge_mode_propagates_blocked_finalizer_and_never_infers_cleanup(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    monkeypatch.setattr(
+        workflow,
+        "_merge_pr_if_ready_for_bug",
+        lambda *args, **kwargs: {"verified": {"merged": True}},
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_finalizer(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "workflow_gate": "blocked",
+            "blocking": ["close-sync checks are pending"],
+            "next_actions": ["resume_merge_finalizer"],
+            "cleanup": None,
+        }
+
+    monkeypatch.setattr(workflow, "build_merge_finalizer_plan", fake_finalizer)
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="merge",
+        issue_json=str(issue),
+        changed_files=[],
+        create_worktree=False,
+        dry_run=False,
         validation_evidence=["python -m nox -s l0 -> passed"],
         task_slug=None,
         allow_missing_linkage=False,
@@ -4019,12 +12346,37 @@ def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
         worktree=str(isolated_workflow_root / "task"),
     )
 
-    assert payload["workflow_gate"] == "merged_close_synced"
-    assert payload["merge"]["recovered_from_local_merge_error"] is True
-    assert captured["create_registry_worktree"] is True
-    assert captured["merge_commit"] == "merge123"
-    assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
-    assert payload["cleanup"]["workflow_gate"] == "ready_for_cleanup"
+    assert captured["cleanup"] is False
+    assert payload["workflow_gate"] == "merged_aftercare_blocked"
+    assert payload["blocking"] == ["close-sync checks are pending"]
+    assert payload["next_actions"] == ["resume_merge_finalizer"]
+    assert workflow._load_state("BUG-199")["state"] == "merged"
+
+
+def test_close_sync_auto_merge_uses_single_runner_aware_bounded_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_merge(bug_id: str, pr_url: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"bug_id": bug_id, "pr_url": pr_url, **kwargs})
+        return {"verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}}
+
+    monkeypatch.setattr(workflow, "_merge_pr_if_ready_for_bug", fake_merge)
+
+    payload = workflow._merge_close_sync_pr_if_ready(
+        bug_id="BUG-199",
+        close_sync_commit={"pr_url": "https://github.example/pull/299"},
+        auto_merge=True,
+    )
+
+    assert payload["workflow_gate"] == "merged"
+    assert captured == {
+        "bug_id": "BUG-199",
+        "pr_url": "https://github.example/pull/299",
+        "required_check_attempts": 16,
+        "required_check_delay_seconds": 30,
+    }
 
 
 def test_merge_finalizer_persists_close_sync_and_reports_postmortem(
@@ -4160,6 +12512,40 @@ def test_merge_finalizer_uses_batch_close_sync_for_multiple_bug_ids(
     assert captured["merge_commit"] == "merge123"
 
 
+def test_merge_finalizer_plan_preserves_bundled_cleanup_and_gate_actions() -> None:
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id=["BUG-266", "BUG-267"],
+        issue_json="F:/Dev/task/bug.json",
+        source_pr_url="https://github.example/pull/266",
+        source_branch="bug/BUG-266-workflow",
+        source_worktree="F:/Dev/task worktree",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        allow_missing_linkage=True,
+        production_gates={
+            "production_ddl_gate": "pending_authorized_apply",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+        sync_root=True,
+        merge_close_sync_pr=True,
+        cleanup=True,
+        apply=False,
+    )
+
+    assert payload["workflow_gate"] == "ready_for_apply"
+    command = payload["next_command"]
+    assert command.count("--bug-id") == 2
+    assert '--source-branch "bug/BUG-266-workflow"' in command
+    assert '--source-worktree "F:/Dev/task worktree"' in command
+    assert '--validation-evidence "python -m nox -s l0 -> passed"' in command
+    assert "--allow-missing-linkage" in command
+    assert "--sync-root" in command
+    assert "--merge-close-sync-pr" in command
+    assert "--cleanup" in command
+    assert '--production-ddl-gate "pending_authorized_apply"' in command
+    assert command.endswith("--apply")
+
+
 def test_merge_finalizer_parser_accepts_repeated_bug_ids() -> None:
     args = workflow.build_parser().parse_args(
         [
@@ -4183,6 +12569,7 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
     close_sync_root = isolated_workflow_root / "registry"
     cleanup_calls: list[dict[str, Any]] = []
+    shared_fetch = {"status": "fetched", "result": {"ok": True}}
 
     monkeypatch.setattr(
         workflow,
@@ -4217,16 +12604,19 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+        lambda bug_id, pr_url, **kwargs: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
     )
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
         cleanup_calls.append(kwargs)
-        return {
+        payload = {
             "workflow_gate": "cleanup_done",
             "branch": kwargs["branch"],
             "worktree": kwargs.get("worktree"),
             "sync_root": kwargs.get("sync_root"),
         }
+        if kwargs["branch"] == "bug/BUG-199-workflow":
+            payload["pre_cleanup_fetch"] = shared_fetch
+        return payload
 
     monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", fake_cleanup)
     monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
@@ -4250,24 +12640,13 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     assert payload["close_sync_pr_merge"]["merge_commit"] == "syncmerge123"
     assert payload["cleanup"]["workflow_gate"] == "cleanup_done"
     assert payload["close_sync_cleanup"]["workflow_gate"] == "cleanup_done"
-    assert cleanup_calls == [
-        {
-            "branch": "bug/BUG-199-workflow",
-            "bug_id": "BUG-199",
-            "worktree": str(isolated_workflow_root / "task"),
-            "pr_url": "https://github.example/pull/199",
-            "apply": True,
-            "sync_root": True,
-        },
-        {
-            "branch": "chore/BUG-199-close-sync",
-            "bug_id": "BUG-199",
-            "worktree": str(close_sync_root),
-            "pr_url": "https://github.example/pull/299",
-            "apply": True,
-            "sync_root": False,
-        },
+    assert [(call["branch"], call["apply"], call["sync_root"]) for call in cleanup_calls] == [
+        ("bug/BUG-199-workflow", True, True),
+        ("chore/BUG-199-close-sync", True, False),
     ]
+    assert cleanup_calls[0]["verified_pr_check"]["pr"]["url"] == "https://github.example/pull/199"
+    assert cleanup_calls[1]["verified_pr_check"]["pr"]["mergeCommit"]["oid"] == "syncmerge123"
+    assert cleanup_calls[1]["preflight_fetch"] is shared_fetch
 
 
 def test_merge_finalizer_apply_cleans_source_before_close_sync_pr_merge(
@@ -4339,16 +12718,11 @@ def test_merge_finalizer_apply_cleans_source_before_close_sync_pr_merge(
     assert payload["close_sync_pr_merge"]["workflow_gate"] == "ready_for_merge"
     assert payload["cleanup"]["workflow_gate"] == "cleanup_done"
     assert payload["close_sync_cleanup"] is None
-    assert cleanup_calls == [
-        {
-            "branch": "bug/BUG-199-workflow",
-            "bug_id": "BUG-199",
-            "worktree": str(isolated_workflow_root / "task"),
-            "pr_url": "https://github.example/pull/199",
-            "apply": True,
-            "sync_root": True,
-        }
-    ]
+    assert len(cleanup_calls) == 1
+    assert cleanup_calls[0]["branch"] == "bug/BUG-199-workflow"
+    assert cleanup_calls[0]["apply"] is True
+    assert cleanup_calls[0]["sync_root"] is True
+    assert cleanup_calls[0]["verified_pr_check"]["pr"]["url"] == "https://github.example/pull/199"
 
 
 def test_merge_finalizer_defers_source_cleanup_when_invoked_from_source_worktree(
@@ -4397,7 +12771,7 @@ def test_merge_finalizer_defers_source_cleanup_when_invoked_from_source_worktree
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+        lambda bug_id, pr_url, **kwargs: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
     )
 
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
@@ -4484,7 +12858,7 @@ def test_merge_finalizer_blocks_when_close_sync_cleanup_blocks(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+        lambda bug_id, pr_url, **kwargs: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
     )
 
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
@@ -4512,6 +12886,7 @@ def test_merge_finalizer_blocks_when_close_sync_cleanup_blocks(
     assert payload["workflow_gate"] == "blocked"
     assert payload["close_sync_cleanup"]["workflow_gate"] == "blocked"
     assert payload["blocking"] == ["worktree is dirty"]
+    assert workflow._load_state("BUG-199")["state"] == "blocked"
 
 
 def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
@@ -4555,17 +12930,14 @@ def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+        lambda bug_id, pr_url, **kwargs: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
     )
 
     def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
         cleanup_calls.append(kwargs)
         if kwargs.get("sync_root") and kwargs.get("apply"):
-            raise workflow.WorkflowError(
-                f"canonical root is dirty and not synced to origin/main: {isolated_workflow_root}"
-            )
-        if kwargs.get("sync_root"):
-            return {
+            raise workflow.CleanupBlockedError(
+                {
                 "workflow_gate": "blocked",
                 "branch": kwargs["branch"],
                 "worktree": kwargs.get("worktree"),
@@ -4576,7 +12948,10 @@ def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
                 "origin_equivalent_dirty_files": [],
                 "root_git": {"branch": "main", "dirty": True, "head": "old", "origin_main": "new"},
                 "blocking": [f"canonical root is dirty and not synced to origin/main: {isolated_workflow_root}"],
-            }
+                "pre_cleanup_fetch": {"status": "fetched", "result": {"ok": True}},
+                "merge_verification": {"pr_check": kwargs.get("verified_pr_check")},
+                }
+            )
         return {
             "workflow_gate": "cleanup_done",
             "branch": kwargs["branch"],
@@ -4616,12 +12991,12 @@ def test_merge_finalizer_defers_dirty_root_sync_without_blocking_cleanup(
     assert "sync_root_after_unrelated_dirty_files_are_resolved" in payload["next_actions"]
     assert [(call["sync_root"], call["apply"]) for call in cleanup_calls] == [
         (True, True),
-        (True, False),
         (False, True),
         (True, True),
-        (True, False),
         (False, True),
     ]
+    assert cleanup_calls[1]["preflight_fetch"]["status"] == "fetched"
+    assert cleanup_calls[3]["preflight_fetch"]["status"] == "fetched"
 
 
 def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(
@@ -4630,10 +13005,11 @@ def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(
 ) -> None:
     issue = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
-        _bug(status="fixed", fix_commit="merge123", pr_url="https://github.example/pull/199"),
+        _bug(status="fixed", fix_commit="merge123", pr_url="https://github.example/pull/199", github_issue_number=199),
     )
     close_sync_calls: list[dict[str, Any]] = []
     commit_calls: list[dict[str, Any]] = []
+    compensated: list[int | str] = []
 
     monkeypatch.setattr(
         workflow,
@@ -4674,6 +13050,12 @@ def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(
     monkeypatch.setattr(workflow, "_maybe_commit_and_pr_close_sync", fail_commit)
     monkeypatch.setattr(
         workflow,
+        "_sync_closed_issue_status_labels",
+        lambda issue_number, **kwargs: compensated.append(issue_number)
+        or {"ok": True, "skipped": False, "attempts": 1, "verified": True},
+    )
+    monkeypatch.setattr(
+        workflow,
         "build_cleanup_after_merge_plan",
         lambda **kwargs: {"workflow_gate": "ready_for_cleanup", "branch": kwargs["branch"]},
     )
@@ -4695,6 +13077,8 @@ def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(
 
     assert close_sync_calls == []
     assert commit_calls == []
+    assert compensated == [199]
+    assert payload["close_sync"]["github_issue_compensation"]["verified"] is True
     assert payload["close_sync"]["workflow_gate"] == "already_close_synced"
     assert payload["close_sync_commit"]["workflow_gate"] == "already_merged"
     assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
@@ -4891,7 +13275,7 @@ def test_merge_finalizer_merges_existing_open_close_sync_pr(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: (
+        lambda bug_id, pr_url, **kwargs: (
             merged_prs.append((bug_id, pr_url))
             or {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}}
         ),
@@ -4975,7 +13359,7 @@ def test_merge_finalizer_ignores_close_sync_pr_for_different_source_pr(
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
-        lambda bug_id, pr_url: (
+        lambda bug_id, pr_url, **kwargs: (
             merged_prs.append((bug_id, pr_url))
             or {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}}
         ),
@@ -5089,8 +13473,19 @@ def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
 def test_close_sync_is_dry_run_and_requires_pr_url(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="fixed"))
+    merge_commit = "a" * 40
+    issue = _write_json(
+        isolated_workflow_root / "bug.json",
+        _bug(
+            status="fixed",
+            validation_evidence=[
+                "historical targeted test -> passed",
+                "python -m nox -s l0 -> passed",
+            ],
+        ),
+    )
 
     assert workflow.main(["close-sync", "--issue-json", str(issue)]) == 2
     missing_pr = json.loads(capsys.readouterr().out)
@@ -5110,6 +13505,27 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
     assert ready["dry_run"] is True
     assert (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "close-sync-plan.json").exists()
 
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "source": "github_rest",
+            "pr": {"mergeCommit": {"oid": merge_commit}, "mergedAt": "2026-08-28T07:00:00Z"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_sync_github_issue_after_close",
+        lambda *args, **kwargs: {"status": "synced"},
+    )
+
     assert workflow.main([
         "close-sync",
         "--issue-json",
@@ -5119,7 +13535,7 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
         "--validation-evidence",
         "python -m nox -s l0 -> passed",
         "--merge-commit",
-        "abc1234",
+        merge_commit,
         "--skip-github-check",
         "--allow-current-worktree",
         "--apply",
@@ -5128,13 +13544,18 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
     assert applied["workflow_gate"] == "close_synced"
     updated = json.loads(issue.read_text(encoding="utf-8"))
     assert updated["status"] == "fixed"
-    assert updated["fix_commit"] == "abc1234"
+    assert updated["fix_commit"] == merge_commit
+    assert updated["validation_evidence"] == [
+        "historical targeted test -> passed",
+        "python -m nox -s l0 -> passed",
+    ]
 
 
 def test_close_sync_apply_can_create_registry_worktree(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    merge_commit = "a" * 40
     issue = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
         _bug(status="in_progress"),
@@ -5151,6 +13572,26 @@ def test_close_sync_apply_can_create_registry_worktree(
 
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "source": "github_rest",
+            "pr": {"mergeCommit": {"oid": merge_commit}, "mergedAt": "2026-08-28T07:00:00Z"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_sync_github_issue_after_close",
+        lambda *args, **kwargs: {"status": "synced"},
+    )
 
     payload = workflow.build_close_sync_plan(
         bug_id=None,
@@ -5159,7 +13600,7 @@ def test_close_sync_apply_can_create_registry_worktree(
         apply=True,
         allow_missing_linkage=False,
         validation_evidence=["python -m nox -s l0 -> passed"],
-        merge_commit="abc1234",
+        merge_commit=merge_commit,
         production_gates={"production_ddl_gate": "noop"},
         skip_github_check=True,
         create_registry_worktree=True,
@@ -5168,7 +13609,7 @@ def test_close_sync_apply_can_create_registry_worktree(
     assert payload["workflow_gate"] == "close_synced"
     assert payload["registry_root"] == str(registry)
     assert payload["registry_worktree_plan"]["created"] is True
-    assert json.loads(target.read_text(encoding="utf-8"))["fix_commit"] == "abc1234"
+    assert json.loads(target.read_text(encoding="utf-8"))["fix_commit"] == merge_commit
 
 
 def test_worktree_creation_puts_branch_option_before_path(
@@ -5182,6 +13623,11 @@ def test_worktree_creation_puts_branch_option_before_path(
         return ""
 
     monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
     monkeypatch.setattr(
         workflow,
         "_close_sync_worktree_names",
@@ -5229,6 +13675,118 @@ def test_close_sync_worktree_creation_reuses_clean_existing_worktree(
 
     assert payload["reused"] is True
     assert not any(args[:2] == ["worktree", "add"] for args in calls)
+
+
+def test_close_sync_worktree_fast_forwards_clean_stale_reuse(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "worktrees" / "BUG-199-close-sync"
+    registry.mkdir(parents=True)
+    calls: list[tuple[list[str], Path | None]] = []
+    snapshots = iter(
+        [
+            {
+                "ok": True,
+                "branch": "chore/BUG-199-close-sync",
+                "dirty": False,
+                "dirty_count": 0,
+                "head": "old",
+                "origin_main": "new",
+            },
+            {
+                "ok": True,
+                "branch": "chore/BUG-199-close-sync",
+                "dirty": False,
+                "dirty_count": 0,
+                "head": "new",
+                "origin_main": "new",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        workflow,
+        "_close_sync_worktree_names",
+        lambda bug_id: ("chore/BUG-199-close-sync", registry),
+    )
+    monkeypatch.setattr(workflow, "_git_snapshot", lambda root: next(snapshots))
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, cwd=None, check=True: calls.append((args, cwd)) or "",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, cwd=None, **kwargs: {
+            "ok": args[-2:] == ["HEAD", "origin/main"],
+            "returncode": 0 if args[-2:] == ["HEAD", "origin/main"] else 1,
+            "stdout": "",
+            "stderr": "",
+        },
+    )
+
+    payload = workflow._maybe_create_close_sync_worktree(
+        bug_id="BUG-199",
+        create=True,
+        dry_run=False,
+    )
+
+    assert payload["reused"] is True
+    assert payload["fast_forwarded"] is True
+    assert (["merge", "--ff-only", "origin/main"], registry) in calls
+
+
+def test_close_sync_worktree_reuses_clean_ahead_branch_after_push_failure(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "worktrees" / "BUG-199-close-sync"
+    registry.mkdir(parents=True)
+    git_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        workflow,
+        "_close_sync_worktree_names",
+        lambda bug_id: ("chore/BUG-199-close-sync", registry),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "chore/BUG-199-close-sync",
+            "dirty": False,
+            "dirty_count": 0,
+            "head": "task-commit",
+            "origin_main": "main-commit",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, cwd=None, **kwargs: {
+            "ok": args[-2:] == ["origin/main", "HEAD"],
+            "returncode": 0 if args[-2:] == ["origin/main", "HEAD"] else 1,
+            "stdout": "",
+            "stderr": "",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, cwd=None, check=True: git_calls.append(args) or "",
+    )
+
+    payload = workflow._maybe_create_close_sync_worktree(
+        bug_id="BUG-199",
+        create=True,
+        dry_run=False,
+    )
+
+    assert payload["reused"] is True
+    assert payload["ahead_with_task_commits"] is True
+    assert not any(args[:2] == ["merge", "--ff-only"] for args in git_calls)
 
 
 def test_pr_check_summary_treats_skipped_as_non_blocking() -> None:
@@ -5362,6 +13920,11 @@ def test_cleanup_after_merge_blocks_unmerged_branch(
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(
         workflow,
+        "_run_read_command_with_retry",
+        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
+    monkeypatch.setattr(
+        workflow,
         "_git_snapshot",
         lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
     )
@@ -5399,6 +13962,956 @@ def test_cleanup_after_merge_dry_run_ready_for_merged_branch(
     assert payload["workflow_gate"] == "ready_for_cleanup"
     assert payload["dry_run"] is True
     assert {item["action"] for item in payload["actions"]} >= {"sync_root_main", "delete_local_branch", "delete_remote_branch"}
+
+
+def test_worktree_transient_artifact_profile_and_purge_are_manifest_bound(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    temporary = worktree / "tmp" / "issue_workflow" / "BUG-199" / "context.json"
+    cache = worktree / "frontend" / "node_modules" / "pkg" / "index.js"
+    local_config = worktree / "proxy_config.json"
+    canonical_config = isolated_workflow_root / "proxy_config.json"
+    for path in (temporary, cache, local_config, canonical_config):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("same" if path.name == "proxy_config.json" else "artifact", encoding="utf-8")
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            paths = [
+                rel
+                for rel in (
+                    "tmp/issue_workflow/BUG-199/context.json",
+                    "frontend/node_modules/pkg/index.js",
+                    "proxy_config.json",
+                )
+                if (worktree / rel).exists()
+            ]
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(paths), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(
+        worktree,
+        canonical_root=isolated_workflow_root,
+    )
+
+    assert profile["ignored_count"] == 3
+    assert profile["transient_count"] == 3
+    assert profile["protected_count"] == 0
+    assert profile["unknown_count"] == 0
+    assert set(profile["transient_roots"]) == {"tmp/issue_workflow", "frontend/node_modules", "proxy_config.json"}
+
+    purge = workflow._purge_worktree_transient_artifacts(
+        worktree,
+        canonical_root=isolated_workflow_root,
+        expected_profile=profile,
+    )
+
+    assert purge["ignored_count_before"] == 3
+    assert purge["ignored_count_after"] == 0
+    assert not temporary.exists()
+    assert not cache.exists()
+    assert not local_config.exists()
+    assert canonical_config.exists()
+
+
+def test_worktree_qe_live_log_ring_is_structurally_validated_and_purged(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    relative_paths = sorted(workflow.WORKTREE_QE_LIVE_LOG_PATHS)
+    for index, relative_path in enumerate(relative_paths):
+        target = worktree / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = (
+            {"schema_version": workflow.WORKTREE_QE_LIVE_LOG_SCHEMA, "slot": index}
+            if index in {0, 4}
+            else None
+        )
+        target.write_text(json.dumps(payload) + "\n" if payload else "", encoding="utf-8")
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            existing = [item for item in relative_paths if (worktree / item).exists()]
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(existing), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    assert profile["ignored_count"] == 5
+    assert profile["transient_count"] == 5
+    assert profile["unknown_count"] == 0
+    assert profile["transient_roots"] == [workflow.WORKTREE_QE_LIVE_LOG_ROOT]
+
+    purge = workflow._purge_worktree_transient_artifacts(
+        worktree,
+        canonical_root=isolated_workflow_root,
+        expected_profile=profile,
+    )
+
+    assert purge["ignored_count_before"] == 5
+    assert purge["ignored_count_after"] == 0
+    assert not (worktree / workflow.WORKTREE_QE_LIVE_LOG_ROOT).exists()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("missing_slot", "qe_live_log_ring_inventory_mismatch"),
+        ("extra_file", "qe_live_log_ring_inventory_mismatch"),
+        ("wrong_schema", "qe_live_log_ring_schema_mismatch"),
+        ("invalid_json", "qe_live_log_ring_invalid_jsonl"),
+        ("oversized", "qe_live_log_ring_file_too_large"),
+    ],
+)
+def test_worktree_qe_live_log_ring_remains_unknown_when_contract_is_not_exact(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    expected_reason: str,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    relative_paths = sorted(workflow.WORKTREE_QE_LIVE_LOG_PATHS)
+    for relative_path in relative_paths:
+        target = worktree / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps({"schema_version": workflow.WORKTREE_QE_LIVE_LOG_SCHEMA}) + "\n",
+            encoding="utf-8",
+        )
+
+    if mutation == "missing_slot":
+        (worktree / relative_paths[-1]).unlink()
+    elif mutation == "extra_file":
+        extra = worktree / workflow.WORKTREE_QE_LIVE_LOG_ROOT / "qe-live-5.jsonl"
+        extra.write_text(json.dumps({"schema_version": workflow.WORKTREE_QE_LIVE_LOG_SCHEMA}) + "\n", encoding="utf-8")
+    elif mutation == "wrong_schema":
+        (worktree / relative_paths[0]).write_text('{"schema_version":"unexpected"}\n', encoding="utf-8")
+    elif mutation == "invalid_json":
+        (worktree / relative_paths[0]).write_text("not-json\n", encoding="utf-8")
+    elif mutation == "oversized":
+        monkeypatch.setattr(workflow, "WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES", 1)
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            root = worktree / workflow.WORKTREE_QE_LIVE_LOG_ROOT
+            existing = sorted(path.relative_to(worktree).as_posix() for path in root.iterdir() if path.is_file())
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(existing), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    assert profile["transient_count"] == 0
+    assert profile["unknown_count"] >= 1
+    assert profile["transient_roots"] == []
+    assert {item["reason"] for item in profile["unknown_samples"]} == {expected_reason}
+
+
+def test_worktree_qe_live_log_ring_does_not_widen_other_rdagent_assets(
+    isolated_workflow_root: Path,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    worktree.mkdir(parents=True)
+
+    root, reason = workflow._worktree_transient_root(
+        "rdagent_assets/model.bin",
+        worktree_path=worktree,
+        canonical_root=isolated_workflow_root,
+    )
+
+    assert root is None
+    assert reason == "unknown_ignored_artifact"
+
+
+def test_worktree_transient_purge_stops_on_manifest_drift(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    first = worktree / "tmp" / "validation" / "first.json"
+    second = worktree / "tmp" / "validation" / "second.json"
+    first.parent.mkdir(parents=True)
+    first.write_text("first", encoding="utf-8")
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            paths = [rel for rel in ("tmp/validation/first.json", "tmp/validation/second.json") if (worktree / rel).exists()]
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(paths), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+    second.write_text("second", encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="manifest changed"):
+        workflow._purge_worktree_transient_artifacts(
+            worktree,
+            canonical_root=isolated_workflow_root,
+            expected_profile=profile,
+        )
+    assert first.exists()
+    assert second.exists()
+
+
+def test_worktree_transient_purge_stops_when_root_gains_tracked_file(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    temporary = worktree / "tmp" / "validation" / "first.json"
+    temporary.parent.mkdir(parents=True)
+    temporary.write_text("first", encoding="utf-8")
+    tracked_checks = 0
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal tracked_checks
+        if args[:3] == ["git", "ls-files", "--others"]:
+            existing = "tmp/validation/first.json" if temporary.exists() else ""
+            return {"ok": True, "returncode": 0, "stdout": existing, "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            tracked_checks += 1
+            tracked = "tmp/validation/tracked.txt" if tracked_checks > 1 else ""
+            return {"ok": True, "returncode": 0, "stdout": tracked, "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    with pytest.raises(workflow.WorkflowError, match="gained tracked files"):
+        workflow._purge_worktree_transient_artifacts(
+            worktree,
+            canonical_root=isolated_workflow_root,
+            expected_profile=profile,
+        )
+    assert temporary.exists()
+
+
+def test_worktree_ignored_artifact_profile_blocks_unknown_and_unfinalized_receipt(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    worktree.mkdir(parents=True)
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "notes/local-only.txt\0tmp/issue_workflow/BUG-199/post-restart-verify.json",
+                "stderr": "",
+            }
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(
+        worktree,
+        canonical_root=isolated_workflow_root,
+        protected_paths={"tmp/issue_workflow/BUG-199/post-restart-verify.json"},
+    )
+
+    assert profile["unknown_count"] == 1
+    assert profile["unknown_samples"] == [
+        {"path": "notes/local-only.txt", "reason": "unknown_ignored_artifact"}
+    ]
+    assert profile["protected_count"] == 1
+    assert profile["protected_samples"] == ["tmp/issue_workflow/BUG-199/post-restart-verify.json"]
+
+
+def test_worktree_transient_classifier_rejects_parent_escape(
+    isolated_workflow_root: Path,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    worktree.mkdir(parents=True)
+
+    root, reason = workflow._worktree_transient_root(
+        "../tmp/issue_workflow/escape.json",
+        worktree_path=worktree,
+        canonical_root=isolated_workflow_root,
+    )
+
+    assert root is None
+    assert reason == "invalid_path"
+
+    nested_root, nested_reason = workflow._worktree_transient_root(
+        "tmp/../outside.txt",
+        worktree_path=worktree,
+        canonical_root=isolated_workflow_root,
+    )
+    assert nested_root is None
+    assert nested_reason == "invalid_path"
+
+
+def test_worktree_transient_cleanup_unlinks_external_symlink_without_following(
+    isolated_workflow_root: Path,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    external = isolated_workflow_root / "outside-cache"
+    link = worktree / "tmp" / "external-cache"
+    external.mkdir(parents=True)
+    (external / "keep.txt").write_text("keep", encoding="utf-8")
+    link.parent.mkdir(parents=True)
+    try:
+        link.symlink_to(external, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+
+    workflow._remove_exact_transient_root(worktree, "tmp/external-cache")
+
+    assert not link.exists()
+    assert (external / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_worktree_transient_cleanup_rejects_intermediate_reparse_before_deleting(
+    isolated_workflow_root: Path,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    external = isolated_workflow_root / "outside-cache"
+    link = worktree / "tmp"
+    external.mkdir(parents=True)
+    (external / "keep.txt").write_text("keep", encoding="utf-8")
+    worktree.mkdir(parents=True)
+    try:
+        link.symlink_to(external, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+
+    with pytest.raises(workflow.WorkflowError, match="crosses reparse point"):
+        workflow._validated_transient_root_target(worktree, "tmp/keep.txt")
+    assert (external / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_cleanup_evidence_finalization_requires_structured_receipt(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = isolated_workflow_root / "bug.json"
+    monkeypatch.setattr(
+        workflow,
+        "find_bug_record",
+        lambda **_kwargs: (
+            {
+                "bug_id": "BUG-199",
+                "validation_evidence": [
+                    {
+                        "schema_version": "aistock_validation_receipt_v1",
+                        "receipt_id": "0123456789abcdef",
+                        "commit": "abc1234",
+                        "evidence_kind": "pytest",
+                        "status": "passed",
+                        "command": "pytest backend/tests/test_example.py -q",
+                        "result": "1 passed",
+                    }
+                ],
+            },
+            issue,
+        ),
+    )
+
+    finalized = workflow._cleanup_evidence_finalization("BUG-199")
+    assert finalized["status"] == "finalized_structured_receipt"
+    assert finalized["durable_receipt_present"] is True
+
+    monkeypatch.setattr(
+        workflow,
+        "find_bug_record",
+        lambda **_kwargs: ({"bug_id": "BUG-199", "validation_evidence": ["pytest -> passed"]}, issue),
+    )
+    missing = workflow._cleanup_evidence_finalization("BUG-199")
+    assert missing["status"] == "missing_durable_receipt"
+    assert missing["durable_receipt_present"] is False
+
+    monkeypatch.setattr(
+        workflow,
+        "find_bug_record",
+        lambda **_kwargs: (
+            {
+                "bug_id": "BUG-199",
+                "status": "fixed",
+                "fix_commit": "abc1234",
+                "pr_url": "https://github.example/pull/199",
+                "validation_evidence": ["legacy targeted test -> passed"],
+            },
+            issue,
+        ),
+    )
+    legacy = workflow._cleanup_evidence_finalization("BUG-199")
+    assert legacy["status"] == "finalized_legacy_closed_bug"
+    assert legacy["legacy_closure_present"] is True
+
+
+def test_merged_pr_validation_receipt_profile_is_compact(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = (
+        "Validation\n"
+        "validation-receipt: id=0123456789abcdef commit=abcdef1 kind=pytest "
+        "plan=focused status=passed command=`pytest backend/tests/test_example.py -q` "
+        "result=`1 passed`"
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(
+                {
+                    "state": "MERGED",
+                    "mergedAt": "2026-08-12T00:00:00Z",
+                    "url": "https://github.example/pull/199",
+                    "headRefOid": "abcdef1" + "0" * 33,
+                    "body": body,
+                }
+            ),
+            "stderr": "",
+        },
+    )
+
+    profile = workflow._merged_pr_validation_receipt_profile("https://github.example/pull/199")
+
+    assert profile["status"] == "finalized_merged_pr_receipt"
+    assert profile["durable_receipt_present"] is True
+    assert profile["receipt_commit"] == "abcdef1"
+    assert "body" not in profile
+
+
+def test_merged_pr_validation_receipt_rejects_stale_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = (
+        "validation-receipt: id=0123456789abcdef commit=abcdef1 kind=pytest "
+        "plan=focused status=passed command=`pytest backend/tests/test_example.py -q` result=`1 passed`"
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(
+                {
+                    "state": "MERGED",
+                    "mergedAt": "2026-08-12T00:00:00Z",
+                    "url": "https://github.example/pull/199",
+                    "headRefOid": "1234567" + "0" * 33,
+                    "body": body,
+                }
+            ),
+            "stderr": "",
+        },
+    )
+
+    profile = workflow._merged_pr_validation_receipt_profile("https://github.example/pull/199")
+
+    assert profile["status"] == "receipt_commit_mismatch"
+    assert profile["durable_receipt_present"] is False
+    assert profile["receipt_commit"] is None
+
+
+def test_source_merge_receipt_profile_is_commit_bound_and_runtime_pending() -> None:
+    receipt = workflow._build_source_merge_receipt(
+        bug_id="BUG-1183",
+        source_pr_url="https://github.example/pull/3766",
+        source_pr_check={
+            "pr": {
+                "headRefOid": "a" * 40,
+            }
+        },
+        merge_commit="b" * 40,
+        validation_evidence=["rtk pytest -q -> 12 passed"],
+        runtime_contract={"backend_restart_required": True},
+        production_gates={
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+    )
+
+    valid = workflow._source_merge_receipt_profile(
+        receipt,
+        bug_id="BUG-1183",
+        source_pr_url="https://github.example/pull/3766",
+        merge_commit="b" * 40,
+    )
+    assert valid["status"] == "valid"
+    assert valid["durable_receipt_present"] is True
+    assert valid["runtime_verification"] == "pending_user_restart"
+
+    stale = workflow._source_merge_receipt_profile(
+        receipt,
+        bug_id="BUG-1183",
+        source_pr_url="https://github.example/pull/3766",
+        merge_commit="c" * 40,
+    )
+    assert stale["status"] == "invalid"
+    assert stale["durable_receipt_present"] is False
+    assert "merge commit mismatch" in " ".join(stale["blocking"])
+
+
+def test_source_merge_receipt_is_persisted_in_close_sync_bug_json(
+    isolated_workflow_root: Path,
+) -> None:
+    target = isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug1183.json"
+    _write_json(target, _bug(bug_id="BUG-1183", status="fixed"))
+    close_sync = {
+        "schema_version": "aistock_issue_workflow_close_sync_v1",
+        "bug_id": "BUG-1183",
+        "merged_pr": "https://github.example/pull/3766",
+        "registry_root": str(isolated_workflow_root),
+        "updated_bug_json": "tests/aistock_validation/bugs/bug1183.json",
+        "runtime_contract": {"backend_restart_required": True},
+        "production_gates": {
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+    }
+
+    updated = workflow._attach_source_merge_receipts_to_close_sync(
+        close_sync,
+        source_pr_check={"pr": {"headRefOid": "a" * 40}},
+        merge_commit="b" * 40,
+        validation_evidence=["rtk pytest -q -> 12 passed"],
+        production_gates=close_sync["production_gates"],
+    )
+
+    persisted = json.loads(target.read_text(encoding="utf-8"))
+    assert updated["source_merge_receipt"]["receipt_id"]
+    assert persisted["source_merge_receipt"]["source_merge_commit"] == "b" * 40
+    assert persisted["source_merge_receipt"]["runtime_verification"] == "pending_user_restart"
+
+    first_text = target.read_text(encoding="utf-8")
+    first_receipt = persisted["source_merge_receipt"]
+    retried = workflow._attach_source_merge_receipts_to_close_sync(
+        close_sync,
+        source_pr_check={"pr": {"headRefOid": "a" * 40}},
+        merge_commit="b" * 40,
+        validation_evidence=["rtk pytest -q -> 12 passed"],
+        production_gates=close_sync["production_gates"],
+    )
+
+    assert target.read_text(encoding="utf-8") == first_text
+    assert retried["source_merge_receipt"] == first_receipt
+
+
+def test_stale_pr_check_restores_one_failed_state_with_rest(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (isolated_workflow_root / ".git").mkdir()
+    calls = 0
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "GraphQL EOF"}
+        return {"ok": True, "returncode": 0, "stdout": "[]", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_rest_pr_search_for_bug",
+        lambda bug_id, state: [
+            {
+                "number": 299,
+                "title": f"chore(issue): close-sync {bug_id}",
+                "url": "https://github.example/pull/299",
+                "body": "Source PR: https://github.example/pull/199",
+            }
+        ] if state == "open" else [],
+    )
+
+    result = workflow._stale_pr_check_for_bug("BUG-199")
+
+    assert result["status"] == "checked"
+    assert result["fallback_states"] == ["open"]
+    assert result["open_prs"][0]["number"] == 299
+
+
+def test_rest_pr_search_returns_branch_and_source_body(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"items": [{"number": 299}]}),
+                "stderr": "",
+            },
+            {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "number": 299,
+                        "title": "chore(issue): close-sync BUG-199",
+                        "html_url": "https://github.example/pull/299",
+                        "body": "Source PR: https://github.example/pull/199",
+                        "head": {"ref": "chore/BUG-199-close-sync", "sha": "a" * 40},
+                        "merged_at": None,
+                    }
+                ),
+                "stderr": "",
+            },
+        ]
+    )
+    monkeypatch.setattr(workflow, "_run_transport_read_with_retry", lambda *_args, **_kwargs: next(responses))
+
+    rows = workflow._rest_pr_search_for_bug("BUG-199", state="open")
+
+    assert rows == [
+        {
+            "number": 299,
+            "title": "chore(issue): close-sync BUG-199",
+            "url": "https://github.example/pull/299",
+            "headRefName": "chore/BUG-199-close-sync",
+            "headRefOid": "a" * 40,
+            "mergedAt": None,
+            "body": "Source PR: https://github.example/pull/199",
+            "source": "github_rest_search",
+        }
+    ]
+
+
+def test_close_sync_marker_fails_closed_when_pr_state_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_stale_pr_check_for_bug",
+        lambda _bug_id: {"status": "unavailable", "error": "REST TLS timeout"},
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="refusing duplicate creation"):
+        workflow._close_sync_pr_in_progress_marker(
+            bug_id="BUG-199",
+            source_pr_url="https://github.example/pull/199",
+            merge_commit="a" * 40,
+        )
+
+
+def test_cleanup_uses_merged_pr_receipt_before_close_sync(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    artifact = worktree / "tmp" / "validation" / "focused.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("receipt detail", encoding="utf-8")
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main" if cwd == isolated_workflow_root else branch
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:2] == ["git", "status"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        if args[:3] == ["git", "ls-files", "--others"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "tmp/validation/focused.json",
+                "stderr": "",
+            }
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_registered_worktree_paths", lambda cwd=None: {worktree.resolve()})
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_evidence_finalization",
+        lambda bug_id: {
+            "schema_version": "aistock_cleanup_evidence_finalization_v1",
+            "status": "missing_durable_receipt",
+            "durable_receipt_present": False,
+        },
+    )
+    monkeypatch.setattr(workflow, "_cleanup_protected_receipt_paths", lambda bug_id: set())
+    monkeypatch.setattr(
+        workflow,
+        "_merged_pr_validation_receipt_profile",
+        lambda pr_url: {
+            "schema_version": "aistock_merged_pr_validation_receipt_v1",
+            "pr_url": pr_url,
+            "checked": True,
+            "merged": True,
+            "durable_receipt_present": True,
+            "status": "finalized_merged_pr_receipt",
+        },
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        worktree=str(worktree),
+        pr_url="https://github.example/pull/199",
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert payload["evidence_finalization"]["status"] == "finalized_merged_pr_receipt"
+    assert payload["evidence_finalization"]["durable_receipt_present"] is True
+
+
+def test_cleanup_protects_absolute_runtime_receipt_until_durable_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    receipt_ref = "/tmp/pytest-run/tmp/issue_workflow/BUG-199/post-restart-verify.json"
+    record = {
+        "bug_id": "BUG-199",
+        "runtime_contract": {"post_restart_receipt_ref": receipt_ref},
+    }
+    monkeypatch.setattr(workflow, "find_bug_record", lambda **_kwargs: (record, tmp_path / "bug.json"))
+
+    assert workflow._cleanup_protected_receipt_paths("BUG-199") == {
+        "tmp/issue_workflow/BUG-199/post-restart-verify.json"
+    }
+
+    record["runtime_contract"]["post_restart_receipt_summary"] = {
+        "schema_version": workflow.RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA,
+        "receipt_sha256": "a" * 64,
+        "expected_identity": "abc1234",
+        "observed_identity": "abc1234",
+        "runtime_identity_proof_digest": "b" * 64,
+        "contract_digest": "c" * 64,
+        "catalog_sha256": "d" * 64,
+        "probe_evidence_digest": "e" * 64,
+        "post_restart_effective_gate": "passed",
+        "response_content_persisted": False,
+    }
+    assert workflow._cleanup_protected_receipt_paths("BUG-199") == set()
+
+
+def test_cleanup_after_merge_blocks_active_process_reference(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    worktree.mkdir(parents=True)
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main" if cwd == isolated_workflow_root else branch
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
+    monkeypatch.setattr(workflow, "_registered_worktree_paths", lambda cwd=None: {worktree.resolve()})
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin", lambda root, apply: _fetched_origin_payload())
+    monkeypatch.setattr(
+        workflow,
+        "_worktree_active_process_profile",
+        lambda path: {
+            "schema_version": "aistock_worktree_process_reference_v1",
+            "scan_status": "complete",
+            "reference_count": 1,
+            "references": [{"ProcessId": 123, "Name": "python.exe"}],
+        },
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="active processes"):
+        workflow.build_cleanup_after_merge_plan(
+            branch=branch,
+            worktree=str(worktree),
+            apply=True,
+            canonical_root=str(isolated_workflow_root),
+        )
+
+
+def test_remote_branch_delete_is_sha_lease_bound(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    sha = "a" * 40
+    remote_ref = f"{sha}\trefs/heads/{branch}"
+    executed: list[list[str]] = []
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": remote_ref,
+            "stderr": "",
+            "attempts": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda args, **kwargs: executed.append(args) or {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
+
+    result = workflow._delete_remote_branch_with_lease(
+        root=isolated_workflow_root,
+        branch=branch,
+        expected_remote_ref=remote_ref,
+    )
+
+    assert result["expected_sha"] == sha
+    assert executed == [
+        [
+            "git",
+            "push",
+            "origin",
+            "--delete",
+            f"--force-with-lease=refs/heads/{branch}:{sha}",
+            branch,
+        ]
+    ]
+
+
+def test_remote_branch_delete_stops_on_sha_drift(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    expected = f"{'a' * 40}\trefs/heads/{branch}"
+    observed = f"{'b' * 40}\trefs/heads/{branch}"
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": observed,
+            "stderr": "",
+            "attempts": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda *args, **kwargs: pytest.fail("remote delete must not execute after SHA drift"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="changed after cleanup preflight"):
+        workflow._delete_remote_branch_with_lease(
+            root=isolated_workflow_root,
+            branch=branch,
+            expected_remote_ref=expected,
+        )
+
+
+def test_remote_branch_delete_converges_when_branch_is_already_absent(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    expected = f"{'a' * 40}\trefs/heads/{branch}"
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "attempts": 2,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda *args, **kwargs: pytest.fail("an already-absent remote branch must not be deleted again"),
+    )
+
+    result = workflow._delete_remote_branch_with_lease(
+        root=isolated_workflow_root,
+        branch=branch,
+        expected_remote_ref=expected,
+    )
+
+    assert result["ok"] is True
+    assert result["already_absent"] is True
+    assert result["expected_sha"] == "a" * 40
+    assert result["readback_attempts"] == 2
+
+
+def test_remote_branch_delete_does_not_treat_transport_failure_as_absent(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    expected = f"{'a' * 40}\trefs/heads/{branch}"
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "schannel: SSL/TLS connection failed",
+            "attempts": 2,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda *args, **kwargs: pytest.fail("remote delete must not run after a transport failure"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="SSL/TLS connection failed"):
+        workflow._delete_remote_branch_with_lease(
+            root=isolated_workflow_root,
+            branch=branch,
+            expected_remote_ref=expected,
+        )
 
 
 def test_cleanup_after_merge_apply_refreshes_origin_before_merge_check(
@@ -5517,12 +15030,13 @@ def test_cleanup_after_merge_apply_ignores_untracked_root_files(
 ) -> None:
     branch = "bug/BUG-199-workflow"
     executed: list[list[str]] = []
+    branch_deleted = False
 
     def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
         if args[:2] == ["branch", "--show-current"]:
             return "feature/current"
         if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
-            return branch
+            return "" if branch_deleted else branch
         if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
             return branch
         if args[:2] == ["ls-remote", "--heads"]:
@@ -5530,7 +15044,10 @@ def test_cleanup_after_merge_apply_ignores_untracked_root_files(
         return ""
 
     def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal branch_deleted
         executed.append(args)
+        if args[:2] == ["git", "branch"]:
+            branch_deleted = True
         return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
 
     monkeypatch.setattr(workflow, "_git", fake_git)
@@ -5561,13 +15078,14 @@ def test_cleanup_after_merge_uses_canonical_root_when_called_from_task_worktree(
     task_worktree.mkdir(parents=True)
     calls: list[tuple[tuple[str, ...], Path | None]] = []
     executed: list[tuple[tuple[str, ...], Path | None]] = []
+    branch_deleted = False
 
     def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
         calls.append((tuple(args), cwd))
         if args[:2] == ["branch", "--show-current"]:
             return "main" if cwd == isolated_workflow_root else branch
         if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
-            return branch
+            return "" if branch_deleted else branch
         if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
             return branch
         if args[:2] == ["ls-remote", "--heads"]:
@@ -5577,10 +15095,16 @@ def test_cleanup_after_merge_uses_canonical_root_when_called_from_task_worktree(
     def fake_run(args: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
         if args[:3] == ["git", "status", "--porcelain=v1"]:
             return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+        if args[:3] == ["git", "worktree", "remove"]:
+            task_worktree.rmdir()
+            return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
         return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
 
     def fake_execute(args: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
+        nonlocal branch_deleted
         executed.append((tuple(args), cwd))
+        if args[:2] == ["git", "branch"]:
+            branch_deleted = True
         return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
 
     monkeypatch.chdir(task_worktree)
@@ -5688,12 +15212,13 @@ def test_cleanup_after_merge_apply_can_mark_bug_complete(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     branch = "bug/BUG-199-workflow"
+    branch_deleted = False
 
     def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
         if args[:2] == ["branch", "--show-current"]:
             return "feature/current"
         if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
-            return branch
+            return "" if branch_deleted else branch
         if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
             return branch
         if args[:2] == ["ls-remote", "--heads"]:
@@ -5707,7 +15232,13 @@ def test_cleanup_after_merge_apply_can_mark_bug_complete(
         "_git_snapshot",
         lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
     )
-    monkeypatch.setattr(workflow, "_execute_checked", lambda *args, **kwargs: {"ok": True, "stdout": "", "stderr": "", "returncode": 0})
+    def fake_execute(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        nonlocal branch_deleted
+        if args[:2] == ["git", "branch"]:
+            branch_deleted = True
+        return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
     monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin", lambda root, apply: _fetched_origin_payload())
 
     assert workflow.main(["cleanup-after-merge", "--branch", branch, "--bug-id", "BUG-199", "--apply"]) == 0
@@ -5854,9 +15385,11 @@ def test_cleanup_after_merge_defers_locked_empty_orphan_dir(
         canonical_root=str(isolated_workflow_root),
     )
 
-    assert payload["workflow_gate"] == "cleanup_done"
+    assert payload["workflow_gate"] == "cleanup_deferred"
     assert payload["deferred_cleanup"]["reason"] == "empty_directory_locked_by_windows_handle"
     assert payload["deferred_cleanup"]["safe_to_retry"] is True
+    assert payload["cleanup_verification"]["path_absent"] is False
+    assert payload["cleanup_verification"]["all_clear"] is False
     assert any("deferred empty worktree directory cleanup" in item for item in payload["warnings"])
 
 
@@ -5955,12 +15488,13 @@ def test_cleanup_after_merge_falls_back_when_git_worktree_remove_leaves_reparse(
     worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
     junction_like = worktree / "frontend" / "node_modules"
     junction_like.mkdir(parents=True)
+    branch_deleted = False
 
     def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
         if args[:2] == ["branch", "--show-current"]:
             return "main" if cwd == isolated_workflow_root else branch
         if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
-            return branch
+            return "" if branch_deleted else branch
         if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
             return branch
         if args[:2] == ["ls-remote", "--heads"]:
@@ -5968,15 +15502,22 @@ def test_cleanup_after_merge_falls_back_when_git_worktree_remove_leaves_reparse(
         return ""
 
     def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        nonlocal branch_deleted
         if args[:3] == ["git", "status", "--porcelain=v1"]:
             return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         if args[:3] == ["git", "worktree", "remove"]:
             return {"ok": False, "returncode": 128, "stdout": "", "stderr": "Invalid argument: frontend/node_modules"}
+        if args[:2] == ["git", "branch"]:
+            branch_deleted = True
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(workflow, "_run_command", fake_run)
-    monkeypatch.setattr(workflow, "_registered_worktree_paths", lambda cwd=None: {worktree.resolve()})
+    monkeypatch.setattr(
+        workflow,
+        "_registered_worktree_paths",
+        lambda cwd=None: {worktree.resolve()} if worktree.exists() else set(),
+    )
     monkeypatch.setattr(workflow, "_is_reparse_or_symlink", lambda path: path == junction_like)
     monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
     monkeypatch.setattr(
@@ -6198,6 +15739,75 @@ def test_cleanup_after_merge_uses_pr_merge_commit_when_origin_drifted(
     assert payload["merge_verification"]["method"] == "squash_merge_head_oid_changed_paths_equivalent_to_merge_commit"
     assert payload["merge_verification"]["path_equivalence"]["target_ref"] == "merge123"
     assert payload["merge_verification"]["merge_commit_path_equivalence"]["verified"] is True
+
+
+@pytest.mark.parametrize(("merge_in_origin", "expected_verified"), [(True, True), (False, False)])
+def test_cleanup_merge_verification_uses_exact_pr_head_identity_when_allocator_path_differs(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    merge_in_origin: bool,
+    expected_verified: bool,
+) -> None:
+    branch = "bug/BUG-199-allocator-preservation"
+    head_oid = "a" * 40
+    merge_commit = "b" * 40
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": pr_url,
+                "headRefName": branch,
+                "headRefOid": head_oid,
+                "mergeCommit": {"oid": merge_commit},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, cwd=None, check=True: head_oid if args[:2] == ["rev-parse", "--verify"] else "",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_commit_is_ancestor",
+        lambda ancestor, descendant, root: merge_in_origin
+        if (ancestor, descendant) == (merge_commit, "origin/main")
+        else False,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_ref",
+        lambda *args, **kwargs: {
+            "verified": False,
+            "reason": "changed_paths_differ",
+            "changed_files": ["tests/aistock_validation/bugs/.bug_id_allocator.json"],
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_origin",
+        lambda *args, **kwargs: {"verified": False, "reason": "changed_paths_differ"},
+    )
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: False)
+
+    payload = workflow._cleanup_merge_verification(
+        branch,
+        "https://github.example/pull/199",
+        False,
+        cwd=isolated_workflow_root,
+    )
+
+    assert payload["verified"] is expected_verified
+    assert payload["pr_head_identity"]["merge_commit_in_origin_main"] is merge_in_origin
+    if expected_verified:
+        assert payload["method"] == "merged_pr_exact_head_identity_in_origin_main"
+        assert payload["squash_merge_verified"] is True
+    else:
+        assert payload["method"] is None
 
 
 def test_cleanup_after_merge_blocks_when_squash_pr_head_tree_differs(
@@ -6734,8 +16344,10 @@ def test_ci_issue_janitor_superseded_only_leaves_infra_for_manual_ops(
 
 def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
+    edited = False
 
     def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal edited
         commands.append(args)
         if args[:3] == ["gh", "issue", "view"]:
             return {
@@ -6743,15 +16355,18 @@ def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: py
                 "stdout": json.dumps(
                     {
                         "state": "CLOSED",
-                        "labels": [{"name": "auto-filed"}, {"name": "ci"}, {"name": "status:open"}],
+                        "labels": [{"name": "auto-filed"}, {"name": "ci"}]
+                        if edited
+                        else [{"name": "auto-filed"}, {"name": "ci"}, {"name": "status:open"}],
                     }
                 ),
             }
         if args[:3] == ["gh", "issue", "edit"]:
+            edited = True
             return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         raise AssertionError(args)
 
-    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_run_command", fake_execute)
 
     result = workflow._sync_closed_auto_filed_issue_labels(853)
 
@@ -6761,8 +16376,10 @@ def test_sync_closed_auto_filed_issue_labels_removes_status_open(monkeypatch: py
 
 def test_sync_closed_issue_status_labels_marks_generic_bug_fixed(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
+    edited = False
 
     def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal edited
         commands.append(args)
         if args[:3] == ["gh", "issue", "view"]:
             return {
@@ -6770,15 +16387,18 @@ def test_sync_closed_issue_status_labels_marks_generic_bug_fixed(monkeypatch: py
                 "stdout": json.dumps(
                     {
                         "state": "CLOSED",
-                        "labels": [{"name": "aistock:bug"}, {"name": "status:open"}],
+                        "labels": [{"name": "aistock:bug"}, {"name": "status:fixed"}]
+                        if edited
+                        else [{"name": "aistock:bug"}, {"name": "status:open"}],
                     }
                 ),
             }
         if args[:3] == ["gh", "issue", "edit"]:
+            edited = True
             return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         raise AssertionError(args)
 
-    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_run_command", fake_execute)
 
     result = workflow._sync_closed_issue_status_labels(931)
 
@@ -6786,6 +16406,54 @@ def test_sync_closed_issue_status_labels_marks_generic_bug_fixed(monkeypatch: py
     edit = [command for command in commands if command[:3] == ["gh", "issue", "edit"]][0]
     assert edit[edit.index("--remove-label") + 1] == "status:open"
     assert edit[edit.index("--add-label") + 1] == "status:fixed"
+
+
+def test_sync_closed_issue_status_labels_retries_transport_failure_and_verifies_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    edit_attempts = 0
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal edit_attempts
+        if args[:3] == ["gh", "issue", "view"]:
+            labels = [{"name": "status:fixed"}] if edit_attempts >= 2 else [{"name": "status:open"}]
+            return {"ok": True, "returncode": 0, "stdout": json.dumps({"state": "CLOSED", "labels": labels}), "stderr": ""}
+        if args[:3] == ["gh", "issue", "edit"]:
+            edit_attempts += 1
+            if edit_attempts == 1:
+                return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post api.github.com: EOF"}
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+
+    result = workflow._sync_closed_issue_status_labels(932)
+
+    assert result["ok"] is True
+    assert result["verified"] is True
+    assert result["attempts"] == 2
+    assert edit_attempts == 2
+
+
+def test_sync_closed_issue_status_labels_fails_when_readback_remains_misaligned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["gh", "issue", "view"]:
+            return {"ok": True, "returncode": 0, "stdout": json.dumps({"state": "CLOSED", "labels": [{"name": "status:open"}]}), "stderr": ""}
+        if args[:3] == ["gh", "issue", "edit"]:
+            return {"ok": False, "returncode": 1, "stdout": "", "stderr": "Post api.github.com: EOF"}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _seconds: None)
+
+    result = workflow._sync_closed_issue_status_labels(933)
+
+    assert result["ok"] is False
+    assert result["attempts"] == 2
+    assert result["reason"] == "issue status labels remain unverified"
 
 
 def test_sync_closed_auto_filed_issue_labels_skips_non_auto_or_open(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -6799,7 +16467,7 @@ def test_sync_closed_auto_filed_issue_labels_skips_non_auto_or_open(monkeypatch:
             edit_called = True
         return {"ok": True, "returncode": 0}
 
-    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_run_command", fake_execute)
 
     result = workflow._sync_closed_auto_filed_issue_labels(853)
 
@@ -6990,6 +16658,11 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
         },
     )
     monkeypatch.setattr(
+        workflow,
+        "_github_actions_registry_pr_capability",
+        lambda: {"allowed": True, "source": "test"},
+    )
+    monkeypatch.setattr(
         workflow.ci_failure_summary,
         "summarize_actions_run",
         lambda **kwargs: summary,
@@ -7064,6 +16737,78 @@ def test_promote_ci_issue_apply_requires_registry_worktree_for_code_bug(
     assert "--create-registry-worktree --apply" in payload["next_command"]
     assert payload["triage"]["needs_bug_json"] is True
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
+def test_promote_ci_issue_actions_defers_before_bug_allocation_when_registry_pr_is_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    triage = {
+        "linked_bug": None,
+        "classification_recommendation": "real_regression_candidate",
+        "needs_bug_json": True,
+        "summary": {
+            "failed_jobs": [{"nox_session": "advisory_historical_range_backend"}],
+        },
+        "suggested_bug": {
+            "title": "Nightly advisory failure",
+            "module": "advisory.historical_range",
+            "severity": "P1",
+            "allowed_write_scope": ["backend/services/advisory_historical_range"],
+        },
+    }
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", lambda **_: triage)
+    monkeypatch.setattr(
+        workflow,
+        "_github_actions_registry_pr_capability",
+        lambda: {
+            "allowed": False,
+            "source": "github_actions_workflow_permissions",
+            "reason": "repository Actions cannot create or approve pull requests",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_submit_bug_plan",
+        lambda **_: pytest.fail("BUG allocation must not run before registry PR capability is available"),
+    )
+
+    payload = workflow.build_promote_ci_issue_plan(
+        issue_number=197,
+        apply=True,
+        create_registry_worktree=True,
+    )
+
+    assert payload["workflow_gate"] == "deferred_registry_pr_capability"
+    assert payload["registry_pr_capability"]["allowed"] is False
+    assert payload["triage"]["needs_bug_json"] is True
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
+def test_github_actions_registry_pr_capability_reads_repository_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *_, **__: {
+            "ok": True,
+            "stdout": json.dumps(
+                {
+                    "default_workflow_permissions": "read",
+                    "can_approve_pull_request_reviews": False,
+                }
+            ),
+            "stderr": "",
+        },
+    )
+
+    payload = workflow._github_actions_registry_pr_capability()
+
+    assert payload["allowed"] is False
+    assert payload["default_workflow_permissions"] == "read"
+    assert payload["can_approve_pull_request_reviews"] is False
 
 
 def test_triage_ci_issue_compact_output_keeps_actionable_fields(
@@ -7265,8 +17010,11 @@ def test_submit_bug_ui_intake_hints_fill_scope_labels_and_compact_output(
     assert payload["ui_intake_hints"]["ui_route"] == "/paper-v2/advisory"
     assert payload["ui_intake_hints"]["reproduce_required"] is True
     assert "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts" in record["allowed_write_scope"]
-    assert "frontend_tsc" in record["required_verification"]
-    assert "paper_v2_ui" in record["required_verification"]
+    assert "frontend_type_lint" in record["required_verification"]
+    assert "watchlist_backend" in record["required_verification"]
+    assert "paper_v2_backend" in record["required_verification"]
+    assert "frontend_tsc" not in record["required_verification"]
+    assert not any("/" in plan or "\\" in plan for plan in record["required_verification"])
     assert payload["github_issue_labels"] == ["aistock:bug", "bug", "P1", "severity:p1", "module:paper_v2", "status:open", "paper-v2"]
     body = workflow._render_github_issue_body(record, {"candidate_id": "IC-test"})
     assert "## UI Intake Hints" in body
@@ -7393,7 +17141,7 @@ def test_submit_bug_does_not_infer_ui_hints_from_cleanup_route_wording(
     assert any("cleanup-fast" in item for item in efficiency["recommendations"])
 
 
-def test_submit_bug_workflow_budget_defers_deep_validation_without_ui_hints(
+def test_submit_bug_workflow_budget_skips_nightly_without_explicit_broad_plan(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7429,7 +17177,9 @@ def test_submit_bug_workflow_budget_defers_deep_validation_without_ui_hints(
     assert "ui_intake_hints" not in record
     budget = record["verification_budget"]
     assert budget["budget"] == "standard"
-    assert budget["deferred_nightly_verification"]["required"] is True
+    assert budget["deferred_nightly_verification"]["required"] is False
+    assert budget["deferred_nightly_verification"]["modules"] == []
+    assert budget["deferred_nightly_verification"]["plans"] == []
     assert budget["delegated_validation"]["receipt_default"] == "compact"
     assert any("nightly" in item for item in record["workflow_efficiency_recommendations"]["recommendations"])
 
@@ -7577,6 +17327,18 @@ def test_sync_github_issue_after_close_comment_uses_persisted_not_completed(
 
     def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
         calls.append(args)
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "state": "CLOSED",
+                        "labels": [{"name": "status:fixed"}],
+                    }
+                ),
+                "stderr": "",
+                "returncode": 0,
+            }
         return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
 
     monkeypatch.setattr(workflow, "_run_command", fake_run)

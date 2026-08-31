@@ -14,6 +14,7 @@ from backend.services.miniqmt_execution_runtime import (
     QmtClientMiniQMTEventLoopGateway,
     default_miniqmt_execution_runtime_repository,
 )
+from backend.services.miniqmt_execution_runtime.kernel_diagnostics import KernelDiagnosticsReadServiceV1
 from backend.services.simulation_runtime import SimulationBrokerBackend, SimulationDailyRunStatus
 from backend.services.simulation_runtime.models import OperatorCommand
 from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
@@ -35,7 +36,7 @@ DESTRUCTIVE_MINIQMT_OPERATOR_COMMANDS = frozenset(
 
 
 def get_simulation_runtime_ops_service() -> SimulationRuntimeOpsService:
-    return SimulationRuntimeOpsService()
+    return SimulationRuntimeOpsService(kernel_diagnostics_reader=KernelDiagnosticsReadServiceV1().read)
 
 
 def get_miniqmt_runtime_client() -> MiniQMTExecutionRuntimeClient:
@@ -224,6 +225,26 @@ def get_scheduler_status(
         _raise_http(exc)
 
 
+@router.get("/scheduler/verification-status")
+def get_scheduler_verification_status(
+    broker_backend: str | None = Query(None),
+    run_id: str | None = Query(None),
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+) -> dict[str, Any]:
+    """Return a bounded read-only scheduler smoke scoped to one broker or run subject."""
+
+    try:
+        return {
+            "ok": True,
+            "scheduler": service.scheduler_verification_status(
+                broker_backend=_parse_backend(broker_backend),
+                run_id=run_id,
+            ),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/platform-diagnostics")
 def get_platform_diagnostics(
     trade_date: date | None = None,
@@ -231,6 +252,7 @@ def get_platform_diagnostics(
     run_id: str | None = None,
     runtime_id: str | None = None,
     plan_id: str | None = None,
+    kernel_cursor: str | None = None,
     limit: int = Query(100, ge=1, le=100),
     service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
     runtime_repository: Any = Depends(get_miniqmt_runtime_repository),
@@ -246,6 +268,7 @@ def get_platform_diagnostics(
                 run_id=run_id,
                 runtime_id=runtime_id,
                 plan_id=plan_id,
+                kernel_cursor=kernel_cursor,
                 limit=limit,
                 runtime_repository=runtime_repository,
             ),
@@ -283,6 +306,17 @@ def get_simulation_run(
 ) -> dict[str, Any]:
     try:
         return {"ok": True, **service.get_run_detail(run_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/runs/{run_id}/terminal-evidence")
+def get_simulation_run_terminal_evidence(
+    run_id: str,
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.get_run_terminal_evidence(run_id)}
     except TradingCoreError as exc:
         _raise_http(exc)
 

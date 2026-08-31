@@ -1,0 +1,413 @@
+{
+  "actual": "W7 sample dss_5dbd4a675e1760657b31146884bd85ce had 35-40 GiB physical memory and zero owned commit but global commit headroom below 10 GiB caused RESOURCE_ADMISSION_WAIT, futile pressure-rung changes and BLOCKED_RETRY_EXHAUSTED before run creation.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/profile.py",
+    "backend/services/dataset_release/resource_budget.py",
+    "backend/services/dataset_release/resource_gate.py",
+    "backend/services/dataset_release/worker.py",
+    "backend/services/dataset_release/state_machine.py",
+    "configs/datasets/qe_backtest_monthly_v1.yaml",
+    "backend/tests/dataset_release/test_profile.py",
+    "backend/tests/dataset_release/test_resource_budget.py",
+    "backend/tests/dataset_release/test_resource_gate.py",
+    "backend/tests/dataset_release/test_worker.py",
+    "backend/tests/dataset_release/test_worker_cli.py",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+    "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+    ".codex/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/references/resource-and-worker.md",
+    "tests/aistock_validation/bugs/20260824_BUG-1182-dataset-release-global-resource-telemetry-blocks-monthly-candidates.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1182",
+  "closed_at": "2026-08-24T18:54:36.642399Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-24T16:13:42.141468Z",
+  "description": "W7 sample dss_5dbd4a675e1760657b31146884bd85ce had 35-40 GiB physical memory and zero owned commit but global commit headroom below 10 GiB caused RESOURCE_ADMISSION_WAIT, futile pressure-rung changes and BLOCKED_RETRY_EXHAUSTED before run creation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260824-5b78df4163c1",
+      "timestamp": "2026-08-24T16:13:42.141453Z"
+    }
+  ],
+  "evidence_uris": [
+    "dataset-release submission dss_5dbd4a675e1760657b31146884bd85ce events 225-238"
+  ],
+  "expected": "Monthly candidate resolution/build starts without depending on unrelated WSL, Docker, database or model-training commit reservations. System commit, paging and performance remain observable warnings; only dataset-owned hard limits, actual capacity, identity, data accuracy and production authorization can block.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/resource_budget.py",
+      "backend/services/dataset_release/resource_gate.py",
+      "backend/services/dataset_release/worker.py",
+      "backend/tests/dataset_release/test_resource_budget.py",
+      "backend/tests/dataset_release/test_resource_gate.py",
+      "backend/tests/dataset_release/test_worker.py",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+      "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+      "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      ".codex/skills/update-backtest-dataset/references/resource-and-worker.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/resource_budget.py",
+        "backend/services/dataset_release/resource_gate.py",
+        "backend/services/dataset_release/worker.py",
+        "backend/tests/dataset_release/test_resource_budget.py",
+        "backend/tests/dataset_release/test_resource_gate.py",
+        "backend/tests/dataset_release/test_worker.py",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+        "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+        "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+        ".codex/skills/update-backtest-dataset/SKILL.md",
+        ".codex/skills/update-backtest-dataset/references/resource-and-worker.md"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "docs.operations",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/resource_budget.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/resource_gate.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/worker.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_resource_budget.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_resource_gate.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_worker.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        },
+        {
+          "file": "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": ".codex/skills/update-backtest-dataset/SKILL.md",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": ".codex/skills/update-backtest-dataset/references/resource-and-worker.md",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/resource_budget.py",
+        "backend/services/dataset_release/resource_gate.py",
+        "backend/services/dataset_release/worker.py",
+        "backend/tests/dataset_release/test_resource_budget.py",
+        "backend/tests/dataset_release/test_resource_gate.py",
+        "backend/tests/dataset_release/test_worker.py",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+        "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+        "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+        ".codex/skills/update-backtest-dataset/SKILL.md",
+        ".codex/skills/update-backtest-dataset/references/resource-and-worker.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/resource_budget.py",
+      "backend/services/dataset_release/resource_gate.py",
+      "backend/services/dataset_release/worker.py",
+      "backend/tests/dataset_release/test_resource_budget.py",
+      "backend/tests/dataset_release/test_resource_gate.py",
+      "backend/tests/dataset_release/test_worker.py",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+      "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+      "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      ".codex/skills/update-backtest-dataset/references/resource-and-worker.md"
+    ]
+  },
+  "first_seen_at": "2026-08-24T16:13:42.141468Z",
+  "fix_branch": null,
+  "fix_commit": "ad0f1d3cf2693a442ebcca15d401097c0abd688d",
+  "fixed_at": "2026-08-24T17:28:14Z",
+  "github_issue_number": 3764,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3764",
+  "last_seen_at": "2026-08-24T16:13:42.141468Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3770",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "fresh Python process imported resource_budget/resource_gate/worker and dataset_release_worker.py --help exited 0 from task worktree"
+    ],
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1182/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1182",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "8090a9a76705e46182850210a0829ac08beda0679c8be0a56cb00770b2291a9e",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "ad0f1d3cf2693a442ebcca15d401097c0abd688d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-24T18:53:38.710608Z",
+      "mode": "read_only",
+      "observed_identity": "04a0a8b00b6a862027c4e8ae536755bc9b7691bc",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "dd44ca884bee30342f65cdf63c3718dd513e462f33cd2b19f160fbad3d85b013",
+      "receipt_sha256": "eac525cc71f541f59bf5a9853eafd482e254d44b5fa9287cf630679fe1c390ec",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "3900a35831b7839f352b4751b5c0d53ac2bc459daaeb6a5059d7f4f88592a6d5",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Dataset release global resource telemetry blocks monthly candidates",
+  "trigger_condition": {
+    "fingerprint": "5b78df4163c11114e1834b3f",
+    "source_event_id": "FE-20260824-5b78df4163c1"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests, ownership mapped 14/14",
+    "python -m nox -s qlib_data_backend -> passed: 15 tests",
+    "post-restart-verify worker-scheduler -> workflow_gate=verified; l0 + validation_module_registry_l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

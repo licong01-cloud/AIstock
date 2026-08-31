@@ -584,8 +584,15 @@ def _remote_relpath(value: str) -> str:
     return str(pure)
 
 
-def _score_rows_from_frame(df_scores: pd.DataFrame, expected_date: date) -> list[dict[str, Any]]:
+def _score_rows_from_frame(
+    df_scores: pd.DataFrame,
+    expected_date: date,
+    *,
+    allow_empty: bool = False,
+) -> list[dict[str, Any]]:
     if df_scores is None or df_scores.empty:
+        if allow_empty:
+            return []
         raise DataUnavailableError(
             "live QE model inference produced no score rows",
             context={"expected_trade_date": expected_date.isoformat()},
@@ -777,8 +784,14 @@ class QEExperimentRuntimeAssetResolver:
         model_asset: ModelAsset,
         factor_set: list[FactorAsset],
         runtime_assets: RuntimeAssetManifest | None,
+        cache_namespace: str | None = None,
     ) -> QEExperimentRuntimeSource:
         """Resolve one MULTI_ALPHA leg strictly from parent package-owned assets."""
+
+        leg_namespace = f"leg_{_safe_cache_component(leg_id)}"
+        requested_namespace = _safe_cache_component(cache_namespace or "")
+        if requested_namespace:
+            leg_namespace = f"{leg_namespace}__{requested_namespace}"
 
         return self._source_from_package_assets(
             manifest,
@@ -786,7 +799,22 @@ class QEExperimentRuntimeAssetResolver:
             model_asset_override=model_asset,
             factor_set_override=factor_set,
             runtime_assets_override=runtime_assets,
-            cache_namespace=f"leg_{_safe_cache_component(leg_id)}",
+            cache_namespace=leg_namespace,
+        )
+
+    def load_frozen_source_for_strategy_package(
+        self,
+        *,
+        manifest: StrategyPackageManifest,
+        package_id: str,
+        cache_namespace: str | None = None,
+    ) -> QEExperimentRuntimeSource:
+        """Materialize the declared package assets without QE-source fallback or pre-admission checks."""
+
+        return self._source_from_package_assets(
+            manifest,
+            package_id=package_id,
+            cache_namespace=cache_namespace,
         )
 
     def _source_from_package_assets(
@@ -2007,9 +2035,9 @@ class QEExperimentRuntimeAssetResolver:
         ``allow_cache_fallback=True`` AND the node fetch failed but a local
         cache hit replaced the params.
 
-        Per feedback_no_silent_errors: a node fetch failure with
-        ``allow_cache_fallback=False`` (the default) propagates the original
-        exception. Callers that want to opt into cache fallback must pass
+        Per feedback_no_silent_errors: when cache substitution is disabled, a
+        node fetch failure propagates the original exception. Callers that want
+        to opt into cache fallback must pass
         ``allow_cache_fallback=True`` and record the resulting origin.
         """
 
@@ -2750,12 +2778,15 @@ class QEExperimentRuntimeAssetResolver:
 class LocalStrategyPackageInferenceProvider:
     """Run the live inference engine in the current Python process."""
 
+    backend_name = "local"
+
     def run(
         self,
         *,
         workspace: PreparedInferenceWorkspace,
         trade_date: date,
         cutoff_date: date | None = None,
+        historical_read_only: bool = False,
     ) -> LiveInferenceResult:
         try:
             from backend.inference_engine import InferenceEngine
@@ -2775,6 +2806,15 @@ class LocalStrategyPackageInferenceProvider:
                 cutoff_date=_date_to_datetime(cutoff_date) if cutoff_date else None,
                 experiment_id="strategy_package_live",
                 workspace_path=str(workspace.workspace_path),
+                persist_signals=not historical_read_only,
+                universe_ensure=not historical_read_only,
+                receipt_admissibility=(
+                    "RETROSPECTIVE_DB_CONTENT_HASH"
+                    if historical_read_only
+                    else "PROSPECTIVE_FIRST_OBSERVED"
+                ),
+                allow_external_market_fallback=not historical_read_only,
+                use_selection_data_cache=not historical_read_only,
             )
         except Exception as exc:
             raise DataUnavailableError(
@@ -2793,7 +2833,11 @@ class LocalStrategyPackageInferenceProvider:
                 context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE"},
             )
         return LiveInferenceResult(
-            scores=_score_rows_from_frame(df_scores, cutoff_date or trade_date),
+            scores=_score_rows_from_frame(
+                df_scores,
+                cutoff_date or trade_date,
+                allow_empty=historical_read_only,
+            ),
             metadata={"inference_backend": "local"},
             universe_count=_required_receipt_universe_count(receipt),
             source_read_receipts=_required_receipt_rows(receipt, "source_read_receipts"),
@@ -2824,6 +2868,8 @@ def _extract_malformed_ts_code_samples(text: str, *, limit: int = 10) -> list[st
 class WslStrategyPackageInferenceProvider:
     """Run live inference inside the WSL Qlib environment."""
 
+    backend_name = "wsl"
+
     def __init__(
         self,
         *,
@@ -2831,12 +2877,14 @@ class WslStrategyPackageInferenceProvider:
         conda_sh: str | None = None,
         conda_env: str | None = None,
         repo_root: Path | str | None = None,
+        safe_artifact_roots: tuple[Path | str, ...] = (),
         timeout_seconds: int = 3600,
     ) -> None:
         self.distro = distro or os.getenv("QLIB_WSL_DISTRO") or "Ubuntu"
         self.conda_sh = conda_sh or os.getenv("QLIB_WSL_CONDA_SH") or "~/miniconda3/etc/profile.d/conda.sh"
         self.conda_env = conda_env or os.getenv("QLIB_WSL_CONDA_ENV") or "rdagent-gpu"
         self.repo_root = Path(repo_root or Path.cwd()).resolve()
+        self.safe_artifact_roots = tuple(Path(root).resolve(strict=False) for root in safe_artifact_roots)
         self.timeout_seconds = timeout_seconds
 
     def run(
@@ -2845,6 +2893,7 @@ class WslStrategyPackageInferenceProvider:
         workspace: PreparedInferenceWorkspace,
         trade_date: date,
         cutoff_date: date | None = None,
+        historical_read_only: bool = False,
     ) -> LiveInferenceResult:
         with tempfile.TemporaryDirectory(prefix="sp_live_inference_") as tmp:
             output_path = Path(tmp) / "scores.json"
@@ -2859,7 +2908,9 @@ class WslStrategyPackageInferenceProvider:
             ]
             if cutoff_date:
                 args.extend(["--cutoff-date", cutoff_date.isoformat()])
-            env_exports = self._build_env_exports()
+            if historical_read_only:
+                args.append("--historical-read-only")
+            env_exports = self._build_env_exports(historical_read_only=historical_read_only)
             command = (
                 f"source {self.conda_sh} && "
                 f"conda activate {self.conda_env} && "
@@ -2882,6 +2933,7 @@ class WslStrategyPackageInferenceProvider:
                 raise DataUnavailableError(
                     "WSL live QE model inference failed",
                     context={
+                        "reason_code": "strategy_package_wsl_inference_failed",
                         "returncode": completed.returncode,
                         "stdout_tail": completed.stdout[-4000:],
                         "stderr_tail": completed.stderr[-4000:],
@@ -2897,6 +2949,7 @@ class WslStrategyPackageInferenceProvider:
                 raise DataUnavailableError(
                     "WSL live QE model inference did not write output JSON",
                     context={
+                        "reason_code": "strategy_package_wsl_output_missing",
                         "stdout_tail": completed.stdout[-4000:],
                         "stderr_tail": completed.stderr[-4000:],
                         "output_path": str(output_path),
@@ -2908,7 +2961,7 @@ class WslStrategyPackageInferenceProvider:
                 )
             payload = json.loads(output_path.read_text(encoding="utf-8"))
         scores = payload.get("scores")
-        if not isinstance(scores, list) or not scores:
+        if not isinstance(scores, list) or (not scores and not historical_read_only):
             raise DataUnavailableError(
                 "WSL live QE model inference output contains no scores",
                 context={"payload_keys": sorted(payload.keys())},
@@ -2923,7 +2976,7 @@ class WslStrategyPackageInferenceProvider:
             input_context=_required_receipt_object(payload, "input_context"),
         )
 
-    def _build_env_exports(self) -> str:
+    def _build_env_exports(self, *, historical_read_only: bool = False) -> str:
         keys = [
             "TDX_DB_HOST",
             "TDX_DB_PORT",
@@ -2933,6 +2986,15 @@ class WslStrategyPackageInferenceProvider:
             "AISTOCK_PG_STATEMENT_TIMEOUT_MS",
         ]
         exports = ["PYTHONIOENCODING=utf-8", "PYTHONDONTWRITEBYTECODE=1", "AISTOCK_STRICT_INFERENCE=1"]
+        if historical_read_only:
+            exports.append("PGOPTIONS='-c default_transaction_read_only=on'")
+        if self.safe_artifact_roots:
+            translated_roots = ":".join(
+                win_to_wsl_path(str(root)) for root in self.safe_artifact_roots
+            )
+            exports.append(
+                f"AISTOCK_STRATEGY_PACKAGE_RUNTIME_ROOTS={self._quote(translated_roots)}"
+            )
         for key in keys:
             value = os.getenv(key)
             if value is not None:

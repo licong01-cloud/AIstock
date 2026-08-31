@@ -51,18 +51,18 @@ from backend.services.advisory_phase1.release_schema_apply_postgres import (
 from scripts.advisory_phase1_release_schema import EXIT_DDL, EXIT_POST_VERIFY_STORE, _exit_for_reason, _parser
 
 
-def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() -> None:
+def test_registry_is_full_frozen_contract_with_phase1r_r4_bridge_step() -> None:
     contract = load_release_schema_contract()
     assert contract.schema_version == "advisory_phase1f_release_schema_contract_v2"
-    assert contract.release_schema_version == "advisory_phase1_dataset_foundation_v3"
-    assert len(contract.required_relations) == 35
-    assert len(contract.required_columns) == 637
-    assert len(contract.required_constraints) == 274
-    assert len(contract.required_indexes) == 102
-    assert len(contract.required_functions) == 33
-    assert len(contract.required_triggers) == 63
-    assert len(contract.required_comments) == 151
-    assert [item.order for item in contract.managed_migrations] == [10, 20, 30, 40, 50, 55, 60, 70, 80, 90]
+    assert contract.release_schema_version == "advisory_phase1_dataset_foundation_v4"
+    assert len(contract.required_relations) == 39
+    assert len(contract.required_columns) == 815
+    assert len(contract.required_constraints) == 365
+    assert len(contract.required_indexes) == 121
+    assert len(contract.required_functions) == 39
+    assert len(contract.required_triggers) == 76
+    assert len(contract.required_comments) == 246
+    assert [item.order for item in contract.managed_migrations] == [10, 20, 30, 40, 50, 55, 60, 70, 80, 90, 100]
     assert [item.transaction_mode.value for item in contract.managed_migrations] == [
         "EXECUTOR_MANAGED",
         "EXECUTOR_MANAGED",
@@ -74,6 +74,7 @@ def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() ->
         "EXECUTOR_MANAGED",
         "EXECUTOR_MANAGED",
         "EXECUTOR_MANAGED",
+        "FILE_WRAPPED",
     ]
     assert [item.executor_action.value for item in contract.managed_migrations] == [
         "SQL_FILE",
@@ -86,6 +87,7 @@ def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() ->
         "CREATE_PARTITIONS",
         "CUTOVER",
         "SQL_FILE",
+        "SQL_FILE",
     ]
     assert [item.parent_relation for item in contract.partition_contracts] == [
         "advisory_outcome_label_payload",
@@ -96,7 +98,13 @@ def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() ->
     declared_objects = {
         object_id for migration in contract.managed_migrations for object_id in migration.declared_object_ids
     }
-    assert declared_objects == contract.object_ids()
+    removed_r4_objects = {
+        item.object_id
+        for item in contract.repairable_unexpected_objects
+        if item.repairable_by_orders == (100,)
+    }
+    assert declared_objects - contract.object_ids() == removed_r4_objects
+    assert contract.object_ids().issubset(declared_objects)
     assert [(item.object_id, item.repairable_by_orders) for item in contract.repairable_drift_variants] == [
         ("comment:app.advisory_capture_gap.__table__", (90,)),
         ("comment:app.advisory_selection_stage_trace_outbox.__table__", (90,)),
@@ -110,9 +118,12 @@ def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() ->
     )
     predecessor = load_predecessor_release_schema_contract(contract)
     assert predecessor is not None
-    assert predecessor.release_schema_version == "advisory_phase1_dataset_foundation_v2"
+    assert predecessor.release_schema_version == "advisory_phase1_dataset_foundation_v3"
     assert predecessor.contract_content_hash == contract.predecessor_contract.contract_content_hash
-    predecessor_v1 = load_predecessor_release_schema_contract(predecessor)
+    predecessor_v2 = load_predecessor_release_schema_contract(predecessor)
+    assert predecessor_v2 is not None
+    assert predecessor_v2.release_schema_version == "advisory_phase1_dataset_foundation_v2"
+    predecessor_v1 = load_predecessor_release_schema_contract(predecessor_v2)
     assert predecessor_v1 is not None
     assert predecessor_v1.release_schema_version == "advisory_phase1_dataset_foundation_v1"
     for migration in contract.managed_migrations:
@@ -136,7 +147,7 @@ def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() ->
         automatic_retry=False,
     )
 
-    order_90 = contract.managed_migrations[-1]
+    order_90 = contract.managed_migrations[-2]
     assert order_90.depends_on_orders == (80,)
     assert order_90.transaction_group == "trace_identity_scope"
     assert order_90.declared_object_ids == (
@@ -167,6 +178,13 @@ def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() ->
     assert {
         item.object_id for item in contract.repairable_unexpected_objects if item.repairable_by_orders == (90,)
     } == old_objects
+
+    order_100 = contract.managed_migrations[-1]
+    assert order_100.depends_on_orders == (90,)
+    assert order_100.transaction_mode.value == "FILE_WRAPPED"
+    assert order_100.file_sha256 == "a0f99cd4bca07dcf74ac5f74da0900e589d8cf6dc9d4a114135f9b9ab4e67142"
+    assert "constraint:app.advisory_phase1_r4_capture_union" not in order_100.declared_object_ids
+    assert "constraint:app.advisory_capture_batch.ck_advisory_phase1_r4_capture_union" in order_100.declared_object_ids
 
 
 def test_frozen_migration_loader_accepts_checkout_line_endings_but_rejects_content_tamper(
@@ -204,7 +222,7 @@ def test_frozen_migration_loader_accepts_checkout_line_endings_but_rejects_conte
 
 
 def test_registry_hash_rejects_any_mutated_object_contract() -> None:
-    path = Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v3.json")
+    path = Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v4.json")
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["required_columns"][0]["data_type"] = "integer"
     with pytest.raises(Exception, match="contract_content_hash"):
@@ -398,7 +416,7 @@ def test_catalog_fingerprint_evidence_has_total_count_and_every_kind_hash() -> N
     )
     evidence = expected_managed_catalog_evidence(contract=contract, expected_partitions=partitions)
     assert evidence.object_count == sum(evidence.per_kind_counts.values())
-    assert evidence.per_kind_counts["relations"] == 35
+    assert evidence.per_kind_counts["relations"] == 39
     assert evidence.per_kind_counts["partitions"] == 9
     assert set(evidence.per_kind_hashes) == set(evidence.per_kind_counts)
 

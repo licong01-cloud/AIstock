@@ -1,11 +1,30 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
+source_sha256: 68b774bd23637cd63649e4a890d11d9fb62bdabd6c10dba29e802e14689ea209
+source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-07-18"
+updated_at: "2026-08-29"
 rule_sync_policy:
   authority: human_markdown_standard
+  catalog_role: machine_enforcement_metadata_only
   requirement: Every enabled machine rule references a stable section in the sole human-readable standard.
+  source_digest_required: true
   archive_directory: docs/standards/archive
+control_taxonomy:
+  effects:
+    block: Blocks only the declared enforcement phase when the control applies.
+    warn: Emits a visible warning without blocking the current phase.
+    advisory: Provides non-blocking execution or efficiency guidance.
+  enforcement_phases:
+    - changed_file_scan
+    - task_planning
+    - interactive_execution
+    - pr_readiness
+    - issue_lifecycle
+    - design_delivery
+    - standard_change
+    - production_activation
+    - release_deployment
 scan:
   default_roots:
     - backend
@@ -50,6 +69,8 @@ rules:
     severity: P0
     category: architecture
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -75,12 +96,12 @@ rules:
     severity: P0
     category: production_isolation
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
         - frontend/src/**/*
-        - scripts/**/*
-        - noxfile.py
       exclude_globs: []
     checker:
       type: regex
@@ -93,21 +114,31 @@ rules:
 
   - rule_id: PROD-DDL-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-ddl-001
-    title: Production DB DDL must be applied and verified immediately after main merge when runtime schema changes exist
+    title: Database DDL and DML require existing-DEV validation and action-scoped production authorization that may be bundled with merge
     severity: P0
     category: production_schema
     enabled: true
+    effect: block
+    enforcement_phase: production_activation
+    failure_policy: block_production_ddl_dml_until_dev_validation_and_target_authorization
     checker:
       type: manual_review
       required_evidence:
+        - dev_database_ddl_dml_validation
+        - no_new_test_database_created
+        - no_production_backup_export_or_snapshot_precondition
+        - explicit_production_target_authorization
+        - exact_authorized_migration_identity
+        - authorization_may_be_bundled_with_merge_without_second_prompt
+        - immutable_merge_commit_confirmed_before_production_apply
         - production_db_target_preflight_without_secrets
         - committed_migration_files
-        - ddl_apply_before_after_schema_checks
+        - ddl_dml_apply_before_after_schema_checks
         - table_column_index_constraint_comment_verification
         - api_scheduler_log_smoke_after_apply
         - validation_history_record
     baseline_policy: block_release_until_verified
-    remediation: Apply committed production DDL immediately after main merge, or stop production activation and report production_ddl_pending.
+    remediation: Validate DDL/DML in the existing DEV database; an action-scoped target/migration authorization may be bundled with merge and then needs no second prompt. After confirming the immutable merge commit, preflight and apply only that target/migration, record DEV validation, authorization, merge, apply, and readback separately, treat backup/export/snapshot as a separate operations activity, and report production_ddl_gate=noop when no schema change exists.
 
   - rule_id: ERR-FALLBACK-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-err-fallback-001
@@ -115,12 +146,17 @@ rules:
     severity: P0
     category: error_handling
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
         - scripts/**/*.py
       exclude_globs:
         - backend/tests/**
+        - debug_tools/**
+        - scripts/**/*debug*.py
+        - scripts/**/*diagnos*.py
     checker:
       type: regex
       patterns:
@@ -135,6 +171,8 @@ rules:
     severity: P0
     category: trading_safety
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -158,6 +196,8 @@ rules:
     severity: P1
     category: config
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -180,6 +220,8 @@ rules:
     severity: P1
     category: qe_data_completeness
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/services/quantevolver/**/*.py
@@ -200,6 +242,8 @@ rules:
     severity: P2
     category: frontend
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - frontend/src/**/*.tsx
@@ -210,9 +254,9 @@ rules:
     checker:
       type: regex
       patterns:
-        - 'JSON\.stringify\('
+        - 'JSON[.]stringify[(]'
         - '<pre\b'
-        - 'JsonPanel'
+        - 'Json[P]anel'
     baseline_policy: warn_new_only
     remediation: Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.
 
@@ -222,6 +266,8 @@ rules:
     severity: P2
     category: frontend
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - frontend/src/**/*.tsx
@@ -247,6 +293,8 @@ rules:
     severity: P2
     category: resource
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -258,6 +306,11 @@ rules:
       patterns:
         - 'requests\.(?:get|post|put|delete|patch)\([^\n)]*$'
         - 'subprocess\.Popen\('
+      required_evidence:
+        - pr_check_watch_exact_head_rest_fallback
+        - actions_run_jobs_and_log_rest_fallback
+        - last_green_rest_fallback
+        - non_transport_errors_remain_fail_closed
     baseline_policy: warn_new_only
     remediation: Add timeout, cancellation, output capture, and process cleanup.
 
@@ -267,6 +320,8 @@ rules:
     severity: P1
     category: database
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     checker:
       type: external
       command_key: db_schema_comment_smoke
@@ -279,6 +334,8 @@ rules:
     severity: P1
     category: repository_hygiene
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - "*.py"
@@ -292,6 +349,7 @@ rules:
         - "*.zip"
       exclude_globs:
         - README.md
+        - AGENTS.md
         - AGENTS.override.md
         - CHANGELOG.md
         - LICENSE
@@ -317,6 +375,8 @@ rules:
     severity: P1
     category: repository_hygiene
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - "*.py"
@@ -343,12 +403,15 @@ rules:
     severity: P1
     category: documentation
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - "*.md"
         - docs/*.md
       exclude_globs:
         - README.md
+        - AGENTS.md
         - AGENTS.override.md
         - CHANGELOG.md
         - docs/codex_project_memory.md
@@ -371,6 +434,8 @@ rules:
     severity: P1
     category: performance_memory
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -396,6 +461,8 @@ rules:
     severity: P2
     category: performance_memory
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -419,6 +486,8 @@ rules:
     severity: P1
     category: error_handling
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - debug_tools/**/*.py
@@ -438,6 +507,9 @@ rules:
     severity: P1
     category: agent_efficiency
     enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_feature_pr_readiness_until_design_validation
     checker:
       type: manual_review
       required_evidence:
@@ -457,6 +529,9 @@ rules:
     severity: P1
     category: agent_efficiency
     enabled: true
+    effect: advisory
+    enforcement_phase: interactive_execution
+    failure_policy: non_blocking_advisory
     checker:
       type: manual_review
       required_evidence:
@@ -468,18 +543,28 @@ rules:
 
   - rule_id: ISSUE-BATCH-CONTEXT-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-issue-batch-context-001
-    title: Same-module related issues should use batch worktree and batch context when safe
+    title: Compatible related issues should use batch context while preserving per-issue state
     severity: P1
     category: agent_efficiency
     enabled: true
+    effect: advisory
+    enforcement_phase: task_planning
+    failure_policy: non_blocking_advisory
     checker:
       type: manual_review
       required_evidence:
         - batch_id_or_split_reason
         - per_issue_commit_map
         - shared_validation_matrix
+        - close_sync_compatibility_signature
+        - per_issue_evidence_and_issue_sync
+        - same_run_github_actions_read_prohibited
+        - nightly_failure_groups_are_module_scoped
+        - heterogeneous_failure_groups_require_triage
+        - host_wide_counter_and_permanent_reservation_remain_authoritative
+        - ordinary_fix_pr_omits_repository_allocator_single_value
     baseline_policy: manual_review_only
-    remediation: Group same-module same-validation issues in one branch while preserving per-issue commits and closure records.
+    remediation: Group same-module same-risk same-validation issues in one source batch when safe; close-sync-batch additionally requires identical runtime/activation policy, production/dependency gates, and one shared source PR. Keep backend_restart_required or post-restart receipt BUGs single-issue, and split incompatible modules or gates.
 
   - rule_id: PROD-DEPENDENCY-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-dependency-001
@@ -487,6 +572,9 @@ rules:
     severity: P1
     category: production_release
     enabled: true
+    effect: block
+    enforcement_phase: production_activation
+    failure_policy: block_runtime_activation_until_dependency_gate_verified
     checker:
       type: manual_review
       required_evidence:
@@ -497,11 +585,227 @@ rules:
     baseline_policy: block_release_until_verified
     remediation: Run frontend/backend dependency gates in the production runtime checkout before declaring restart readiness.
 
+  - rule_id: RDAGENT-RELEASE-IDENTITY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-rdagent-release-identity-001
+    title: RD-Agent deployment uses merged immutable releases and external runtime state
+    severity: P1
+    category: production_release
+    enabled: true
+    effect: block
+    enforcement_phase: release_deployment
+    failure_policy: block_release_deploy_restart_and_verified_claims
+    checker:
+      type: manual_review
+      required_evidence:
+        - merged_commit_in_target_branch
+        - clean_source_checkout
+        - repository_merge_tree_manifest_match
+        - immutable_release_path
+        - repo_external_rdagent_state_root
+        - deployment_receipt
+        - atomic_current_pointer
+        - separate_source_deploy_restart_runtime_states
+        - rollback_target
+        - no_source_overlay
+    baseline_policy: block_release_until_verified
+    remediation: Build RD-Agent from a clean merged commit into an immutable release, keep state under RDAGENT_STATE_ROOT, atomically switch current, persist a receipt, and fail instead of using file overlays.
+
+  - rule_id: TOOL-RTK-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-tool-rtk-001
+    title: Interactive windows use supported RTK wrappers for eligible high-output commands without making RTK a gate
+    severity: P1
+    category: agent_efficiency
+    enabled: true
+    effect: warn
+    enforcement_phase: interactive_execution
+    failure_policy: non_blocking_visible_warning
+    checker:
+      type: manual_review
+      required_evidence:
+        - eligible_supported_high_output_commands_use_rtk
+        - unsupported_unavailable_raw_output_or_wrapper_failure_records_fallback
+        - no_rtk_trust_or_ci_dependency
+        - untrusted_custom_filter_does_not_disable_builtin_wrappers
+        - missing_telemetry_does_not_trigger_probe
+    baseline_policy: manual_review_only
+    remediation: Use RTK for supported high-output interactive commands; state the bounded fallback reason when unsupported, unavailable, raw output is required, or the wrapper fails, and never make RTK availability a task or CI gate.
+
+  - rule_id: BACKEND-RESTART-OWNERSHIP-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-backend-restart-ownership-001
+    title: User backend process control requires explicit per-target authorization
+    severity: P0
+    category: production_isolation
+    enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
+    failure_policy: block_process_control_and_runtime_verified_claims
+    applies_to:
+      include_globs:
+        - scripts/**/*
+        - .codex/**/*
+        - .claude/**/*
+        - .github/workflows/**/*
+        - noxfile.py
+      exclude_globs:
+        - backend/tests/**
+    checker:
+      type: regex
+      patterns:
+        - '(?i)(taskkill|stop-process|restart-service|systemctl\s+(?:start|stop|restart)|docker\s+(?:start|stop|restart)|start-process).{0,160}(backend|uvicorn|8001|19080)'
+        - '(?i)(backend|uvicorn|8001|19080).{0,160}(taskkill|stop-process|restart-service|systemctl\s+(?:start|stop|restart)|docker\s+(?:start|stop|restart)|start-process)'
+        - '(?i)(python(?:\.exe)?\s+scripts[/\\]_restart_backend\.py|python(?:\.exe)?\s+backend[/\\]main\.py|uvicorn\s+backend\.main:app)'
+        - '(?i)(sc(?:\.exe)?|net(?:\.exe)?)\s+(?:start|stop)\s+[^\r\n]*(backend|uvicorn|8001|19080)'
+    baseline_policy: block_new_only
+    remediation: Reject user-backend process control in the workflow subprocess executor, emit an operator runbook reference, and wait for the user; validation, merge, close-sync, aftercare, and cleanup never authorize backend process control.
+
+  - rule_id: WORKTREE-CLEANUP-EVIDENCE-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-worktree-cleanup-evidence-001
+    title: Authorized worktree cleanup finalizes compact durable receipts and removes only manifest-classified transient artifacts
+    severity: P1
+    category: issue_workflow
+    enabled: true
+    effect: block
+    enforcement_phase: issue_lifecycle
+    failure_policy: block_cleanup_done_when_durable_or_unknown_artifacts_or_four_state_drift_remain
+    checker:
+      type: manual_review
+      required_evidence:
+        - compact_commit_bound_receipt_persisted
+        - source_merge_receipt_v1_persisted_before_source_cleanup
+        - runtime_post_restart_receipt_summary_durable_before_local_copy_cleanup
+        - ignored_artifact_manifest_classifies_transient_protected_unknown
+        - active_process_and_path_boundary_preflight
+        - exact_transient_roots_only_no_git_clean_or_wildcard
+        - ignored_asset_tree_transients_require_exact_bounded_structural_classifier
+        - single_manifest_reused_without_repeated_full_ignored_tree_scan
+        - same_finalizer_fetch_and_verified_pr_receipts_reused_without_skipping_target_preflight
+        - root_sync_deferral_reuses_blocking_payload_without_redundant_dry_run
+        - manifest_unchanged_before_purge
+        - path_registration_local_remote_four_state_readback
+        - bare_merge_does_not_imply_cleanup
+    baseline_policy: block_incomplete_cleanup_claim_only
+    remediation: Persist a commit-bound source_merge_receipt_v1 in the close-sync BUG JSON/PR before source cleanup; reuse only same-finalizer successful fetch and exact verified PR receipts, preserve per-target branch, artifact, process and four-state checks, avoid redundant dry-run rebuilds during root-sync deferral, keep runtime-pending close-sync open until post-restart verification, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, and fail closed on protected or unknown artifacts.
+
+  - rule_id: BUG-RESTART-EFFECTIVE-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001
+    title: Runtime BUG fixes persist across restart and pass post-restart read-only verification
+    severity: P0
+    category: issue_workflow
+    enabled: true
+    effect: block
+    enforcement_phase: issue_lifecycle
+    failure_policy: block_issue_close_sync_and_verified_claims
+    checker:
+      type: manual_review
+      required_evidence:
+        - runtime_impact_classified_or_unknown_fail_closed
+        - explicit_contract_cannot_downgrade_changed_file_inference
+        - exact_single_runtime_target_or_split_bug
+        - persistent_fix_basis
+        - durable_fresh_process_load_evidence_in_bug_and_pr
+        - runtime_target_catalog_ref
+        - existing_repo_operator_runbook_ref
+        - runtime_source_pr_uses_refs_not_closes
+        - runtime_batch_path_blocked
+        - runtime_identity_match
+        - catalog_origin_limited_post_restart_probes
+        - complete_digest_bound_post_restart_business_smoke
+        - database_readback_when_required
+        - no_probe_response_body_in_receipt
+        - tracked_bug_close_sync_after_runtime_gate
+        - github_issue_open_while_runtime_pending
+        - close_sync_worktree_current_with_origin_main
+    baseline_policy: block_issue_verified_until_post_restart_passed
+    remediation: Keep the BUG fixed_source_pending_user_restart until the user restarts the catalog target and post-restart read-only identity and smoke evidence passes.
+
+  - rule_id: CI-ENVIRONMENT-PARITY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-environment-parity-001
+    title: CI and Nightly use prebuilt Windows tooling and bounded fail-closed execution
+    severity: P0
+    category: ci_efficiency
+    enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_ci_when_prebuilt_environment_is_missing_or_drifted
+    checker:
+      type: external
+      command_key: ci_workflow_policy_scan
+      required_evidence:
+        - windows_self_hosted_runner
+        - prebuilt_aistock_ci_environment
+        - environment_fingerprint_match
+        - bounded_dual_runner_roles
+        - policy_evidence_remains_one_scanner_step
+        - no_setup_actions
+        - no_dependency_install_commands
+        - nox_ci_install_fail_closed_guard
+        - policy_scanner_environment_and_nox_contract_checks
+        - pr_quality_no_external_report_action_dependency
+        - superseded_pr_runs_cancel_in_progress
+        - bounded_pr_base_fetch_retry
+        - pr_base_object_requires_proven_merge_base_with_head
+        - insufficient_shallow_ancestry_fetches_only_pinned_base_and_pr_checkout_or_head_with_limited_deepen
+        - no_unbounded_full_history_checkout_for_merge_base_recovery
+        - non_security_quality_lanes_run_once_on_pull_request
+        - merge_quality_contexts_are_change_scoped
+        - codeql_default_branch_security_scan_preserved
+        - codeql_uses_hash_verified_prebuilt_bundle
+        - codeql_remote_action_download_is_eliminated
+        - codeql_reuses_single_security_runner_allocation
+        - codeql_exact_local_workspace_fetch_is_bounded
+        - codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push
+        - code_intelligence_refresh_is_scheduled_or_manual_only
+        - code_intelligence_refresh_has_no_external_artifact_action_dependency
+        - javascript_actions_use_approved_native_node24_majors
+        - pr_ci_no_separate_failure_publisher_job
+        - pr_ci_no_external_artifact_action_dependency
+        - pr_ci_static_gate_reuses_classifier_checkout
+        - pr_ci_selected_lanes_reuse_ci_verdict_runner
+        - pr_workflows_no_external_report_action_dependency
+        - no_linux_or_production_environment_fallback
+        - windows_git_bash_shell
+        - nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies
+        - self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe
+        - nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed
+        - nightly_retries_failed_or_missing_sessions_plus_new_impact
+        - nightly_change_scoped_l0_uses_explicit_receipt_paths
+    baseline_policy: block_new_and_changed_workflow
+    remediation: Require PR-based main updates and change-scoped merge-quality contexts. Source or mixed PRs require CI verdict plus the isolated CodeQL verdict; PR Quality and Semgrep enforcement execute as fail-closed steps inside the single ordinary-runner CI verdict job, while their standalone workflows remain manual diagnostics only. Official close-sync branches that change only BUG registry JSON run one GitHub-hosted stdlib metadata gate named CI verdict and skip CodeQL before runner allocation. Provision the versioned Windows AIstock-CI runner with Git Bash and a hash-verified local CodeQL bundle, reuse one CI verdict job and one checkout/runner allocation for changed-file classification, static gates, PR quality, Semgrep, every selected ordinary backend/frontend/Go/prompt/workflow lane, workflow policy, and the fail-closed verdict, reuse one security-runner allocation for CodeQL classification, sequential changed-language analysis, SARIF upload, and the CodeQL verdict, invoke the verified CodeQL CLI directly without remote actions, fail closed on mismatch, and never install or download mutable toolchains in the CI job.
+
+  - rule_id: CI-DATABASE-SAFETY-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ci-database-safety-001
+    title: CI never creates a database or service and routes database validation to the existing DEV database
+    severity: P0
+    category: ci_database_safety
+    enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_ci_database_service_or_unrouted_database_plan
+    checker:
+      type: external
+      command_key: ci_workflow_policy_scan
+      required_evidence:
+        - no_workflow_services
+        - no_postgres_or_timescaledb_container_creation
+        - classifier_dev_db_required_output
+        - existing_dev_database_lane_reference
+        - no_ci_ddl_or_dml
+        - no_sqlite_substitution_for_real_database_contract
+        - nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database
+    baseline_policy: block_new_and_changed_workflow
+    remediation: Mark database plans as dev_db_required and run them through the existing DEV database lane; keep CI source checks database-free.
+
 manual_review_controls:
   - control_id: DESIGN-COMPLIANCE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-compliance-001
     severity: P0
     title: "Completed implementation records four explicit checks against approved requirements: complete delivery, visible failures, preserved business semantics, and approved gates or approvals."
+    effect: block
+    enforcement_phase: pr_readiness
+    control_kind: composite_manual_review
+    machine_evidence_refs:
+      - ERR-FALLBACK-001
+      - TRADING-FALLBACK-001
     required_evidence:
       - no_simplified_delivery
       - no_silent_error
@@ -512,31 +816,40 @@ manual_review_controls:
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-issue-github-sync-001
     severity: P1
     title: New BUG or Issue records must be synchronized to GitHub and include github_issue_number and github_issue_url before merge.
+    effect: block
+    enforcement_phase: issue_lifecycle
+    required_evidence:
+      - bounded_graphql_read_with_transport_only_rest_fallback
+      - rest_readback_matches_repository_pr_head_merge_commit_and_merge_time
+      - non_transport_and_identity_failures_remain_fail_closed
+      - skip_github_check_is_verified_rest_only_not_unverified_bypass
+      - pr_read_fallback_does_not_suppress_issue_state_comment_or_label_sync
+    failure_policy: block_bug_record_merge_and_close_sync
   - control_id: DESIGN-MAIN-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-main-001
     severity: P1
     title: Completed detailed design deliverables must be validated, committed, and pushed to origin/main unless explicitly exempted.
-  - control_id: DOC-LOCATION-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-doc-location-001
-    severity: P1
-    title: Standards, architecture designs, analysis reports, and validation evidence must live in their approved directories.
+    effect: block
+    enforcement_phase: design_delivery
+    failure_policy: block_design_complete_claim_and_merge
   - control_id: STD-SYNC-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-std-sync-001
     severity: P1
-    title: Human-readable standard and machine-readable YAML must be updated in the same versioned change.
-  - control_id: FEATURE-WORKFLOW-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-feature-workflow-001
-    severity: P1
-    title: New features use the F0/F1/F2 workflow, a Design Acceptance Index, and an acceptance matrix before merge.
-  - control_id: CONTEXT-BUDGET-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-context-budget-001
-    severity: P1
-    title: Tasks use tiered, module-scoped context and load additional history only when evidence requires it.
-  - control_id: ISSUE-BATCH-CONTEXT-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-issue-batch-context-001
-    severity: P1
-    title: Same-module issues should be batch-processed when safe, with per-issue commits and closure evidence.
-  - control_id: PROD-DEPENDENCY-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-dependency-001
-    severity: P1
-    title: Dependency file changes require frontend/backend production dependency gate evidence after main merge.
+    title: Human-readable standard, machine-readable YAML, and task-relevant client entrypoints stay aligned without unrelated-lane blocking or repeated broad installs.
+    effect: block
+    enforcement_phase: standard_change
+    required_evidence:
+      - markdown_and_yaml_updated_together
+      - full_client_hash_verification_after_entrypoint_merge
+      - canonical_main_origin_aligned_client_authority
+      - client_authority_paths_clean_without_unrelated_root_dirty_blocking
+      - canonical_workflow_cli_for_inflight_verification
+      - checkout_relation_separate_from_profile_status
+      - selected_router_and_lane_only_block_active_task
+      - unrelated_lane_staleness_warning_only
+      - explicit_client_profile_target
+      - single_owner_sync_with_verify_only_peer_windows
+      - task_worktree_never_used_as_global_install_source
+      - idempotent_lock_protected_staged_client_sync
+      - restart_only_when_recommended_or_client_ui_stale
+    failure_policy: block_standard_pr_merge_and_client_current_claims

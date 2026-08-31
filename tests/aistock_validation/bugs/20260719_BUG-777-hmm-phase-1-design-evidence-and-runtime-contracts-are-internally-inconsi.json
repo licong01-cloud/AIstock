@@ -1,0 +1,161 @@
+{
+  "actual": "F2 validation reports 13 acceptance_evidence_not_verifiable items and design text conflicts with the current runtime and UI.",
+  "allowed_write_scope": [
+    "docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md",
+    "docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md",
+    "tests/aistock_validation/bugs/20260719_BUG-777-hmm-phase-1-design-evidence-and-runtime-contracts-are-internally-inconsi.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-777",
+  "closed_at": "2026-07-19T16:44:22Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-19T15:50:04.411802Z",
+  "description": "F2 validation reports 13 acceptance_evidence_not_verifiable items and design text conflicts with the current runtime and UI.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260719-5290908a0655",
+      "timestamp": "2026-07-19T15:50:04.411795Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md;docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md"
+  ],
+  "expected": "Align designs with current Phase 0/1 truth, preserve isolation, prohibit simplified/silent behavior, separate benchmark phases, define legacy and Phase 2 contracts, and pass the F2 design validator without overstating implementation.",
+  "first_seen_at": "2026-07-19T15:50:04.411802Z",
+  "fix_branch": null,
+  "fix_commit": "0430b12eea191cf16045f51ad31215ea3dfa6ff7",
+  "fixed_at": "2026-07-19T16:49:08.043903Z",
+  "github_issue_number": 2480,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2480",
+  "last_seen_at": "2026-07-19T15:50:04.411802Z",
+  "module": "hmm_evolution",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2482",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md --tier F2",
+  "required_verification": [],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm_evolution"
+  ],
+  "title": "HMM Phase 1 design evidence and runtime contracts are internally inconsistent",
+  "trigger_condition": {
+    "fingerprint": "5290908a0655060c24f63e00",
+    "source_event_id": "FE-20260719-5290908a0655"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=8dee392a67a834d8 commit=2deb8e5265eaf1ec917b09e894ad151e07dab239 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_evolution backend/tests/hmm_data_source -q` result=`passed: 248 passed, 8 skipped`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm_evolution"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm_evolution"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

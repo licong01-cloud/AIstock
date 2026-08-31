@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
@@ -35,6 +35,7 @@ TOOL_NAMES = (
     "qe_archive_query_seed_trials",
     "qe_archive_query_hyperparam_history",
     "qe_archive_query_analytics_view_status",
+    "qe_archive_query_long_trend_quality",
     "qe_archive_query_run_leaderboard",
     "qe_archive_query_topk_quality",
     "qe_archive_query_seed_robustness",
@@ -48,7 +49,22 @@ TOOL_NAMES = (
     "multi_alpha_combine_preview",
     "multi_alpha_combine_backtest_run_confirmed",
     "multi_alpha_combine_backtest_result_get",
+    "multi_alpha_combine_backtest_archive_detail_get",
     "multi_alpha_combine_backtest_list",
+    "multi_alpha_combine_backtest_controls_get",
+    "multi_alpha_combine_backtest_children_list",
+    "multi_alpha_combine_backtest_child_get",
+    "multi_alpha_combine_backtest_child_attempts_list",
+    "multi_alpha_combine_backtest_commands_list",
+    "multi_alpha_combine_backtest_command_get",
+    "multi_alpha_combine_backtest_recovery_preview",
+    "multi_alpha_combine_backtest_pause",
+    "multi_alpha_combine_backtest_resume",
+    "multi_alpha_combine_backtest_cancel",
+    "multi_alpha_combine_backtest_stop",
+    "multi_alpha_combine_backtest_reconcile",
+    "multi_alpha_combine_backtest_attempt_cancel",
+    "multi_alpha_combine_backtest_child_recovery_execute",
     "prediction_store_get_pointer",
     "prediction_store_pull_pred",
     "prediction_store_pull_label",
@@ -66,6 +82,30 @@ def register(registry: "ModuleRegistry") -> None:
 
     def _sanitize_ids(values: list[str] | None, field_name: str) -> list[str]:
         return [registry.sanitize(value, field_name) for value in (values or []) if str(value or "").strip()]
+
+    def _idempotency_headers(idempotency_key: str) -> dict[str, str]:
+        normalized = str(idempotency_key or "").strip()
+        if not normalized:
+            raise ValueError("idempotency_key is required for durable multi-alpha mutation")
+        if len(normalized) > 256 or any(ord(char) < 33 or ord(char) > 126 for char in normalized):
+            raise ValueError("idempotency_key must be a visible ASCII token no longer than 256 characters")
+        return {"Idempotency-Key": normalized}
+
+    def _multi_alpha_post_with_idempotency(
+        path: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str,
+    ) -> Any:
+        """Keep the P0-2 header contract local to this MCP module."""
+
+        with multi_alpha_client._client() as http_client:
+            response = http_client.post(
+                path,
+                json=payload,
+                headers=_idempotency_headers(idempotency_key),
+            )
+        return multi_alpha_client._decode(response, "POST", path)
 
     def _positive_indices(values: list[int] | None) -> list[int]:
         result: list[int] = []
@@ -285,6 +325,58 @@ def register(registry: "ModuleRegistry") -> None:
     def qe_archive_query_analytics_view_status() -> Any:
         return client.get("/analytics/views")
 
+    @registry.mcp.tool(name="qe_archive_query_long_trend_quality")
+    def qe_archive_query_long_trend_quality(
+        evaluation_id: str | None = None,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        loop_index: int | None = None,
+        model_type: str | None = None,
+        label_horizon: Literal[20, 40, 60, 120, 180] | None = None,
+        evaluation_asof: str | None = None,
+        outcome_dataset_snapshot_id: str | None = None,
+        horizon: Literal[20, 40, 60, 120, 180] | None = None,
+        sector_code: str | None = None,
+        family_status: Literal["COMPUTED", "COMPUTED_WITH_LIMITATIONS", "NOT_COMPUTABLE", "NOT_VERIFIABLE"]
+        | None = None,
+        entry_execution_status: Literal[
+            "filled_t1", "partial_fill_t1", "delayed_fill", "never_filled",
+            "not_attempted_by_strategy", "not_verifiable",
+        ]
+        | None = None,
+        exit_execution_status: Literal[
+            "filled_on_exit_signal_day", "delayed_exit", "never_exited",
+            "not_attempted_by_strategy", "not_verifiable",
+        ]
+        | None = None,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> Any:
+        """Read bounded compact F-014 quality rows; never returns inline Parquet."""
+
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        return client.get(
+            "/analytics/long-trend-quality",
+            params={
+                "evaluation_id": evaluation_id,
+                "run_id": run_id,
+                "task_id": task_id,
+                "loop_index": loop_index,
+                "model_type": model_type,
+                "label_horizon": label_horizon,
+                "evaluation_asof": evaluation_asof,
+                "outcome_dataset_snapshot_id": outcome_dataset_snapshot_id,
+                "horizon": horizon,
+                "sector_code": sector_code,
+                "family_status": family_status,
+                "entry_execution_status": entry_execution_status,
+                "exit_execution_status": exit_execution_status,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
+
     @registry.mcp.tool(name="qe_archive_query_run_leaderboard")
     def qe_archive_query_run_leaderboard(
         model_type: str | None = None,
@@ -445,10 +537,196 @@ def register(registry: "ModuleRegistry") -> None:
         safe_run_id = registry.sanitize(run_id, "run_id")
         return multi_alpha_client.get(f"/combine-backtest/runs/{safe_run_id}")
 
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_archive_detail_get")
+    def multi_alpha_combine_backtest_archive_detail_get(run_id: str) -> Any:
+        """Read the immutable Archive snapshot, including P0-2 recovery evidence."""
+
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        return multi_alpha_client.get(f"/combine-backtest/runs/{safe_run_id}/archive-detail")
+
     @registry.mcp.tool(name="multi_alpha_combine_backtest_list")
     def multi_alpha_combine_backtest_list(status: str | None = None, limit: int = 20) -> Any:
         bounded_limit = max(1, min(int(limit), 200))
         return multi_alpha_client.get("/combine-backtest/runs", params={"status": status, "limit": bounded_limit})
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_controls_get")
+    def multi_alpha_combine_backtest_controls_get(
+        run_id: str,
+        child_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        params = {
+            "child_id": registry.sanitize(child_id, "child_id") if child_id else None,
+            "attempt_id": registry.sanitize(attempt_id, "attempt_id") if attempt_id else None,
+        }
+        return multi_alpha_client.get(
+            f"/combine-backtest/runs/{safe_run_id}/control-capabilities",
+            params=params,
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_children_list")
+    def multi_alpha_combine_backtest_children_list(run_id: str) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        return multi_alpha_client.get(f"/combine-backtest/runs/{safe_run_id}/children")
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_child_get")
+    def multi_alpha_combine_backtest_child_get(run_id: str, child_id: str) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        safe_child_id = registry.sanitize(child_id, "child_id")
+        return multi_alpha_client.get(
+            f"/combine-backtest/runs/{safe_run_id}/children/{safe_child_id}"
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_child_attempts_list")
+    def multi_alpha_combine_backtest_child_attempts_list(run_id: str, child_id: str) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        safe_child_id = registry.sanitize(child_id, "child_id")
+        return multi_alpha_client.get(
+            f"/combine-backtest/runs/{safe_run_id}/children/{safe_child_id}/attempts"
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_commands_list")
+    def multi_alpha_combine_backtest_commands_list(
+        run_id: str,
+        after_command_seq: int | None = None,
+        limit: int = 200,
+    ) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        return multi_alpha_client.get(
+            f"/combine-backtest/runs/{safe_run_id}/commands",
+            params={
+                "after_command_seq": after_command_seq,
+                "limit": max(1, min(int(limit), 1000)),
+            },
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_command_get")
+    def multi_alpha_combine_backtest_command_get(run_id: str, command_id: str) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        safe_command_id = registry.sanitize(command_id, "command_id")
+        return multi_alpha_client.get(
+            f"/combine-backtest/runs/{safe_run_id}/commands/{safe_command_id}"
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_recovery_preview")
+    def multi_alpha_combine_backtest_recovery_preview(
+        run_id: str,
+        child_id: str,
+        retry_mode: str,
+        idempotency_key: str,
+    ) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        safe_child_id = registry.sanitize(child_id, "child_id")
+        path = f"/combine-backtest/runs/{safe_run_id}/children/{safe_child_id}/recovery/preview"
+        return _multi_alpha_post_with_idempotency(
+            path,
+            {"retry_mode": str(retry_mode or "")},
+            idempotency_key=idempotency_key,
+        )
+
+    def _multi_alpha_durable_run_mutation(
+        *,
+        run_id: str,
+        action: str,
+        idempotency_key: str,
+        request: dict[str, Any] | None,
+    ) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        path = f"/combine-backtest/runs/{safe_run_id}/{action}"
+        return _multi_alpha_post_with_idempotency(
+            path,
+            {"request": dict(request or {})},
+            idempotency_key=idempotency_key,
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_pause")
+    def multi_alpha_combine_backtest_pause(
+        run_id: str,
+        idempotency_key: str,
+        request: dict[str, Any] | None = None,
+    ) -> Any:
+        return _multi_alpha_durable_run_mutation(
+            run_id=run_id, action="pause", idempotency_key=idempotency_key, request=request
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_resume")
+    def multi_alpha_combine_backtest_resume(
+        run_id: str,
+        idempotency_key: str,
+        request: dict[str, Any] | None = None,
+    ) -> Any:
+        return _multi_alpha_durable_run_mutation(
+            run_id=run_id, action="resume", idempotency_key=idempotency_key, request=request
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_cancel")
+    def multi_alpha_combine_backtest_cancel(
+        run_id: str,
+        idempotency_key: str,
+        request: dict[str, Any] | None = None,
+    ) -> Any:
+        return _multi_alpha_durable_run_mutation(
+            run_id=run_id, action="cancel", idempotency_key=idempotency_key, request=request
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_stop")
+    def multi_alpha_combine_backtest_stop(
+        run_id: str,
+        idempotency_key: str,
+        request: dict[str, Any] | None = None,
+    ) -> Any:
+        return _multi_alpha_durable_run_mutation(
+            run_id=run_id, action="stop", idempotency_key=idempotency_key, request=request
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_reconcile")
+    def multi_alpha_combine_backtest_reconcile(
+        run_id: str,
+        idempotency_key: str,
+        request: dict[str, Any] | None = None,
+    ) -> Any:
+        return _multi_alpha_durable_run_mutation(
+            run_id=run_id, action="reconcile", idempotency_key=idempotency_key, request=request
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_attempt_cancel")
+    def multi_alpha_combine_backtest_attempt_cancel(
+        run_id: str,
+        attempt_id: str,
+        idempotency_key: str,
+        request: dict[str, Any] | None = None,
+    ) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        safe_attempt_id = registry.sanitize(attempt_id, "attempt_id")
+        path = f"/combine-backtest/runs/{safe_run_id}/attempts/{safe_attempt_id}/cancel"
+        return _multi_alpha_post_with_idempotency(
+            path,
+            {"request": dict(request or {})},
+            idempotency_key=idempotency_key,
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_child_recovery_execute")
+    def multi_alpha_combine_backtest_child_recovery_execute(
+        run_id: str,
+        child_id: str,
+        retry_mode: str,
+        scope_hash: str,
+        preview_command_id: str,
+        idempotency_key: str,
+    ) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        safe_child_id = registry.sanitize(child_id, "child_id")
+        path = f"/combine-backtest/runs/{safe_run_id}/children/{safe_child_id}/recovery"
+        return _multi_alpha_post_with_idempotency(
+            path,
+            {
+                "retry_mode": str(retry_mode or ""),
+                "scope_hash": str(scope_hash or ""),
+                "preview_command_id": str(preview_command_id or ""),
+            },
+            idempotency_key=idempotency_key,
+        )
 
     @registry.mcp.tool(name="prediction_store_get_pointer")
     def prediction_store_get_pointer(run_id: str | None = None, experiment_id: str | None = None) -> Any:

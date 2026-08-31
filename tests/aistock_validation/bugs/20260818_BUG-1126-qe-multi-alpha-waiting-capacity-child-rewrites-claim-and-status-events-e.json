@@ -1,0 +1,266 @@
+{
+  "actual": "Regression after verified BUG-996/BUG-1023: durable run macb_idem_512dce37bdd1e0096eed1615438d41e35e67966d completed two sequential WSL children in about 7 minutes but wrote 583 events. 274 were claimed/waiting_capacity and 274 were status/waiting_capacity (548 rows, about 94%). While one child held node_parallelism=1, the queued sibling was reclaimed and persisted roughly every 0.8 seconds. Fix must preserve strict capacity=1 and immediate wake on real capacity release, but unchanged waiting-capacity state must not emit repeated claim/status events or DB DML; use bounded state-aware retry/throttle, retain fencing/idempotency/restart recovery, and add multi-child regression tests. Refs prior BUG-996 and BUG-1023 as incomplete path coverage. Runtime backend-main BUG; no backend process control, DDL/DML, dependency install, event cleanup, or experiment mutation.",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/services/multi_alpha/durable_orchestrator.py",
+    "backend/services/multi_alpha/durable_repository.py",
+    "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/services/quantevolver/qe_execution_reservation.py",
+    "backend/tests/multi_alpha/test_durable_capacity.py",
+    "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+    "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+    "backend/tests/multi_alpha/test_durable_repository.py",
+    "tests/aistock_validation/bugs/20260818_BUG-1126-qe-multi-alpha-waiting-capacity-child-rewrites-claim-and-status-events-e.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1126",
+  "closed_at": "2026-08-18T16:26:52.811707Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-18T04:11:49.270642Z",
+  "description": "Regression after verified BUG-996/BUG-1023: durable run macb_idem_512dce37bdd1e0096eed1615438d41e35e67966d completed two sequential WSL children in about 7 minutes but wrote 583 events. 274 were claimed/waiting_capacity and 274 were status/waiting_capacity (548 rows, about 94%). While one child held node_parallelism=1, the queued sibling was reclaimed and persisted roughly every 0.8 seconds. Fix must preserve strict capacity=1 and immediate wake on real capacity release, but unchanged waiting-capacity state must not emit repeated claim/status events or DB DML; use bounded state-aware retry/throttle, retain fencing/idempotency/restart recovery, and add multi-child regression tests. Refs prior BUG-996 and BUG-1023 as incomplete path coverage. Runtime backend-main BUG; no backend process control, DDL/DML, dependency install, event cleanup, or experiment mutation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260818-226644de57ab",
+      "timestamp": "2026-08-18T04:11:49.270623Z"
+    },
+    {
+      "action": "root_cause_confirmed",
+      "actor": "codex",
+      "note": "dispatch treated every unchanged waiting_capacity retry as completed work: it claimed the queued attempt, emitted claim/status evidence, and self-woke again instead of performing a bounded read-only capacity observation.",
+      "timestamp": "2026-08-18T05:53:55Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Waiting attempts now use snapshot-fenced dispatch plus node-coalesced read-only capacity observation; unchanged full capacity performs zero source DML/events, real same-node release clears the cooldown immediately, and deferred nodes do not block other dispatch work.",
+      "timestamp": "2026-08-18T05:53:55Z"
+    },
+    {
+      "action": "related_matrix_validated",
+      "actor": "codex",
+      "note": "Final related multi_alpha matrix passed 240 tests with 13 environment skips; required validation_module_registry_l0 and qe_read_backend plans also passed.",
+      "timestamp": "2026-08-18T05:53:55Z"
+    },
+    {
+      "action": "fresh_process_validated",
+      "actor": "codex",
+      "note": "A fresh Python process imported the tracked orchestrator and verified capacity cooldown plus same-node release behavior without backend process control.",
+      "timestamp": "2026-08-18T05:53:55Z"
+    }
+  ],
+  "evidence_uris": [
+    "multi-alpha-run://macb_idem_512dce37bdd1e0096eed1615438d41e35e67966d"
+  ],
+  "expected": "A queued sibling may record one initial waiting_capacity transition, then unchanged full-node checks must be read-only, event-free, node-coalesced, and bounded to no more than once per minute; a real same-node capacity release must wake the sibling immediately without weakening strict capacity, fencing, idempotency, restart recovery, or other-node throughput.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/tests/multi_alpha/test_durable_capacity.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+      "backend/tests/multi_alpha/test_durable_repository.py",
+      "tests/aistock_validation/bugs/20260818_BUG-1126-qe-multi-alpha-waiting-capacity-child-rewrites-claim-and-status-events-e.json"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-18T04:11:49.270642Z",
+  "fix_branch": null,
+  "fix_commit": "d3ed4ff1086285ea31b93bf6adf8dcd2dfa5611e",
+  "fixed_at": "2026-08-18T08:28:43Z",
+  "github_issue_number": 3594,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3594",
+  "last_seen_at": "2026-08-18T04:11:49.270642Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3598",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read multi-alpha run macb_idem_512dce37bdd1e0096eed1615438d41e35e67966d events: 274 claimed/waiting_capacity plus 274 status/waiting_capacity rows were written while node_parallelism=1 kept the sibling queued.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process imported tracked durable_orchestrator source, verified node capacity cooldown suppresses another probe, verified same-node release clears the cooldown, printed fresh-process-capacity-contract=passed, and exited 0.",
+      "fresh Python process imported tracked durable_orchestrator and verified capacity cooldown plus same-node release -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1126\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1126",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "7b1fafc3311c7eec2f7eb08ca681bfe19ded9fadd2b672a5acf1904ba203bb3b",
+      "contract_digest": "c932e4323e566b9d7d58bed20e500ef46714fd1ed54415e8fda899a26f23fdde",
+      "expected_identity": "d3ed4ff1086285ea31b93bf6adf8dcd2dfa5611e",
+      "generated_at": "2026-08-18T15:53:49.864013Z",
+      "mode": "read_only",
+      "observed_identity": "d3ed4ff1086285ea31b93bf6adf8dcd2dfa5611e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b245b33e1052b27e8dd5a2c7c4552999738d1caa02a2fa37995094f939b84e4e",
+      "receipt_sha256": "f2fe1fbc82e4b388e46bc624d02eb0875f7a427b4144abe25f15f6bb85fb5cec",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ccb9bcceeddf3ce61dd66874e3d9aaf566f209deed3cc049599cc26a4819b924",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "QE multi-alpha waiting-capacity child rewrites claim and status events every scheduler cycle",
+  "trigger_condition": {
+    "fingerprint": "226644de57ab2d3c942f0f89",
+    "source_event_id": "FE-20260818-226644de57ab"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/multi_alpha -q --disable-warnings -> 240 passed, 13 skipped",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership files=14 mapped=14",
+    "rtk nox -s qe_read_backend -> 34 passed",
+    "focused waiting-capacity, restart, dispatch-batch, repository, and capacity observation tests -> passed",
+    "ruff check and python -m py_compile -> passed",
+    "git diff --check -> passed",
+    "fresh-process capacity cooldown/release contract smoke -> passed",
+    "PR #3598 CI verdict -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

@@ -2,118 +2,72 @@
 
 ## Purpose
 
-This file is the lightweight project-level memory for Codex and other LLM coding clients working on AIstock.
-It must stay stable, short, and operational. Do not use it as a changelog, module history, handoff log, or design archive.
+This is stable, lightweight operational context for Codex and other coding clients. It is not a changelog, module-status ledger, handoff, design archive, or second policy source.
 
-Default rule: load this file only for AIstock architecture, backend, frontend, data pipeline, trading, issue workflow, CI/CD, or production-adjacent work. For ordinary issue work, prefer the issue Context Pack and relevant files over full historical documents.
+Load it once for AIstock architecture, backend, frontend, data pipeline, trading, runtime, workflow, CI/CD, or production-adjacent decisions. Ordinary BUG work starts from its task card, Context Pack, ownership catalog, and direct code references.
 
-## Repository And Runtime Map
+## Authority and routing
 
-- Canonical repository root: `F:\Dev\AIstock`.
-- Normal development must use isolated worktrees under `F:\Dev\AIstock_worktrees\<task-name>`.
-- The root checkout `F:\Dev\AIstock` is the sync/runtime baseline, not the default development workspace.
-- Main backend: FastAPI under `backend/`, typical production port `8001`.
-- Main frontend: Next.js under `frontend/`, typical production port `3000`.
-- Market data bridge: TDX Go service under `tdx-api-main/`, typical port `19080`.
-- Important domains: `backend/routers`, `backend/services`, `backend/data_service`, `backend/infra`, `frontend/src/app`, `tests/aistock_validation`.
+- The sole human-readable development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`.
+- `docs/standards/aistock_development_standard_v1.5_20260523.yaml` is machine-derived and has no independent policy authority.
+- `docs/standards/README.md` routes to one Codex skill or Claude command. Quickstarts and lane files provide procedures only.
+- Active module phase, experiment, runtime, BUG, PR, and rollout state lives in the current task card, BUG/feature record, authoritative module design, validation receipt, and live GitHub/runtime evidence. Revalidate it there; never add snapshots here.
 
-## Development Standard
+## Repository and runtime map
 
-Use the development standard only when it is relevant to the current task. Start from `docs/standards/README.md` when routing is unclear.
+- Canonical sync/runtime root: `F:\Dev\AIstock`.
+- Isolated implementation worktrees: `F:\Dev\AIstock_worktrees\<task-name>`.
+- FastAPI backend: `backend/`, typical production port `8001`.
+- Next.js frontend: `frontend/`, typical production port `3000`.
+- TDX Go bridge: `tdx-api-main/`, typical port `19080`.
+- Main boundaries: `backend/routers`, `backend/services`, `backend/data_service`, `backend/infra`, `frontend/src/app`, and `tests/aistock_validation`.
 
-- `docs/standards/README.md`
-- `docs/standards/aistock_development_standard_v1.5_20260523.md`
+## Worktree and scope rules
 
-The Markdown file is the sole human-readable authority. Its same-version YAML is a machine-derived catalog. Quickstarts, architecture documents, skills, and commands provide scenario guidance and reference the authority.
+- Non-trivial feature, BUG, controlled-doc, and workflow changes use a fresh task branch and isolated worktree from latest `origin/main`.
+- The canonical root is not the default implementation workspace. Never reuse another active window's physical worktree.
+- Before editing, verify branch, HEAD, upstream, and `git status --short --branch`.
+- Respect `allowed_write_scope`; update the registered scope before touching additional files.
+- Preserve unrelated dirty files and concurrent work. Never use destructive reset/clean or broad deletion without exact user authorization.
 
-The current issue Context Pack, explicit user request, and relevant code paths are the default starting point. Open module design documents only when the task scope, issue evidence, or user request points to that module.
+## Context and tool budget
 
-## Worktree And Branch Rules
+- Read project rules once, then load exactly one selected lane plus its direct artifacts.
+- T0/T1 work uses compact task cards, Context Packs, ownership/graph summaries, and targeted snippets rather than full standards, quickstarts, history, or unrelated designs.
+- After compaction/restart, use `resume` and the Context Resume Digest. Re-read a rule source only when its hash changed, state is missing, or the user asks.
+- Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK. Direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure; record one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a gate.
+- Use `doctor` only for unknown client/bootstrap readiness, workflow/client changes, stale/conflicting resume state, or an explicit diagnostic request. Ordinary work goes directly to `run`, `resume`, `submit-bug`, or its selected lane.
 
-- Every non-trivial feature, bugfix, or documentation change uses a new task branch and an isolated worktree from latest `origin/main`.
-- Do not develop directly in `F:\Dev\AIstock` when it is on `main` or dirty.
-- Do not reuse another active window's physical worktree.
-- Do not create or keep a non-root worktree on local `main`; task worktrees must use task branches. If a stale worktree holds `main`, audit it outside the repo, remove it safely, and restore `F:\Dev\AIstock` to `main...origin/main`.
-- Before editing, check `git status --short --branch`, current branch, and recent commits.
-- Stage and commit only files belonging to the current task.
-- Never run destructive Git commands such as `git reset --hard`, `git checkout -- .`, or `git clean -fd` unless the user explicitly approves that exact action.
-- If unexpected unrelated changes appear in a touched file or workspace, stop and report before continuing.
+## Feature and issue workflows
 
-## Context Budget Rules
+- New non-trivial feature delivery uses `FEATURE-WORKFLOW-001`, an F0/F1/F2 artifact, stable Design Acceptance Index, and pre-merge acceptance matrix.
+- BUG, workflow-policy, docs-cleanup, audit, and generic maintenance work do not enter the feature lane merely because “feature” appears in the request.
+- BUG/GitHub Issue work uses `scripts/aistock_issue_workflow.py`; `scripts/issue_flow.py` is a lower-level helper.
+- New BUG JSON and GitHub Issue linkage remain synchronized. A required scope expansion is registered before implementation continues.
+- Same-module issues may batch only when module, risk, scope, validation chain, and production gates are compatible; otherwise record a split reason.
+- Runtime BUGs retain their lazy runtime contract and remain `fixed_source_pending_user_restart` until the user's restart is followed by complete read-only identity/business-smoke evidence.
 
-- Read the project-level rules once, then route into exactly one task-specific skill or Claude command for execution.
-- The selected skill is the authority for that scenario; do not also load other scenario skills, quickstarts, full standards, or module designs unless the skill, issue evidence, or user explicitly requires it.
-- T0/T1 BUG, docs, cleanup, merge, and read-only tasks use compact context packs, task cards, ownership catalogs, CodeGraph/UA refs, and narrow code snippets instead of full standards.
-- After context compaction or client restart, use `resume` plus `task-card.md` Context Resume Digest hashes; do not re-read skills, project memory, standards README, quickstart, or RTK unless a digest changed, state is missing, or the user explicitly asks.
-- Keep code exploration bounded: use precise `rg`, avoid reprinting the same source range, and pause to summarize before broad scans when exploratory commands exceed the soft budget.
+## Validation and CI/CD
 
+- Keep the smallest safe local gate: changed-file lint/compile, direct fix-point test or contract smoke, `git diff --check`, scope/ownership check, and production-gate states.
+- After failure, rerun the failed nodeid or `pytest --lf`; after stabilization, run one related small matrix.
+- Delegate broad module, UI/API/business-flow, LLM drift, and cross-module regression to Validation Center, CI, or Nightly and consume compact receipts first.
+- Branch changed-file discovery uses merge-base semantics plus worktree/index/untracked changes; it must not include unrelated files added later to `main`.
 
-## Feature Workflow Rules
+## Production and authorization boundaries
 
-- New non-trivial feature delivery uses `FEATURE-WORKFLOW-001` in the active development standard; BUG fixes, workflow policy changes, docs cleanup, audits, and generic analysis continue to use the issue/docs lane.
-- For LocalSIM or MiniQMT simulation-platform design, feature, BUG, migration, diagnostics, test, or runbook work, `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md` is the sole umbrella authority. Every related code PR must map to its stable acceptance ids and update its current progress ledger with code, test, merge, production-gate, and runtime evidence in the same PR; specialist documents remain subordinate contracts.
-- Classify feature work before implementation: `F0` lightweight Feature Card, `F1` standard single-module design, `F2` cross-module or production-critical architecture design.
-- F0/F1/F2 feature work must keep a stable `Design Acceptance Index` and a pre-merge design acceptance matrix.
-- Before PR or merge, run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2` for the feature artifact.
-- Do not report completion or request merge when the matrix has an unapproved gap, simplified/POC/mock-only/static delivery, or silent fallback.
-- Codex uses `.codex/skills/verify-aistock-feature/SKILL.md`; Claude Code uses `.claude/commands/aistock-feature-workflow.md` for the same feature workflow entrypoint. Do not route non-feature maintenance work through this lane just because the word "feature" appears in the request.
+- User backend start/stop/restart remains user-owned and target-specific. Validation, merge, finalizer, aftercare, cleanup, or another window never transfers that authority.
+- DEV DB validation, production-target/migration authorization, immutable merge confirmation, migration execution, and readback are separate states.
+- Authorization is action-scoped rather than message-scoped: one user instruction may bundle merge, exact cleanup targets, and a named production target/migration, with no second prompt after merge. Bare merge covers only source merge and required BUG/metadata synchronization; it implies no cleanup, DDL/DML, dependency install, activation, process control, or deletion.
+- Report source merge, close-sync, root sync, cleanup, client install, dependencies, DDL, runtime activation, and post-restart verification independently.
 
-## Issue Workflow Rules
+## UI, docs, and evidence
 
-- Use `scripts/aistock_issue_workflow.py` as the high-level entrypoint for submitting, fixing, triaging, batching, finishing, closing, syncing, or resuming AIstock BUG/GitHub Issues.
-- Developer-client workflow entrypoints are synced by `python scripts/aistock_issue_workflow.py install-client --apply`; after `.codex/**` or `.claude/**` changes, run it after merge before old client windows rely on the new wrappers.
-- `scripts/issue_flow.py` is a lower-level helper, not the default entrypoint.
-- New BUG records must stay synchronized with GitHub Issues; a BUG JSON without `github_issue_number` and `github_issue_url` is only a triage draft and must not be merged into `main`.
-- Fix work must respect `allowed_write_scope`. If the fix requires files outside scope, stop and update scope before editing further.
-- Same-module issues may use one batch worktree only when module, risk, write scope, and validation chain are compatible. Each issue still needs independent evidence and closure mapping.
-- Do not close issues until validation evidence and production gates are recorded.
+- New operator UI follows shadcn-compatible tokens and component boundaries; protected legacy styling does not spread to new modules.
+- Durable standards live under `docs/standards`, design under `docs/architecture` or `docs/analysis`, operations under `docs/operations`, and formal handoff under `docs/handoff`.
+- Temporary exchange notes use ignored `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/` paths.
+- Keep secrets out of reports, memory, logs, receipts, and handoffs; record only non-secret credential locations.
 
-## Validation And CI/CD Rules
+## Completion report
 
-- Codex keeps the smallest safe local gate: changed-file lint/compile, direct fix-point targeted test or contract smoke, `git diff --check`, scope check, and production gates.
-- After a local test failure, rerun the failed nodeid or `pytest --lf` first; do not repeat broad suites for the same failure. Run a related final small matrix at most once after behavior stabilizes.
-- If local exploration or validation exceeds about 30 minutes, command count exceeds the task-card soft limit, or coverage must become broad/cross-module/UI/API/business-flow, delegate validation to VC/CI/nightly instead of expanding the interactive window.
-- Broad module matrices, UI journeys, API/business-flow E2E, LLM design drift, and cross-module regression are nightly-deferred by default and run once across the day's merged BUG/PR changes.
-- For complex validation, Codex should request a pipeline/Validation Center run; DeepSeek may select plans and diagnose failures, while allowlisted deterministic runners execute the tests and return a compact receipt.
-- Successful workflow/validation commands should write compact stdout by default; JSON artifacts are diagnostic-only unless a command must persist state/evidence or `AISTOCK_WORKFLOW_ARTIFACTS=1` is set.
-- Immediate deep validation remains only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.
-
-## Production Safety Gates
-
-- Do not restart production backend `8001`, frontend `3000`, TDX `19080`, or other production services unless the user explicitly asks.
-- Do not write production DB data or apply DDL without explicit approval.
-- Local validation ports are owned by `noxfile.py`, environment variables, and the active standard; use the workflow-provided defaults instead of hardcoding ad hoc ports here.
-- Runtime activation and code merge are separate steps.
-- When the user explicitly authorizes merging a PR or branch into `main`, complete the aftercare loop before reporting done: merge/persist close-sync if required, fast-forward `F:\Dev\AIstock` so local `main` equals `origin/main`, clean only safe task branches/worktrees, and apply plus verify any committed production DDL required by the merged change.
-- Every completion report must state:
-  - `production_ddl_gate`: `noop`, `applied_and_verified`, or `pending`.
-  - `production_frontend_dependency_gate`: `noop`, `applied_and_verified`, or `pending`.
-  - `production_backend_dependency_gate`: `noop`, `applied_and_verified`, or `pending`.
-- If a merged change needs new DB objects, apply and verify the committed production migration before claiming production readiness; otherwise report `production_ddl_pending`.
-
-## UI Rules
-
-- New AIstock operator-facing UI defaults to shadcn/ui Blocks visual language, shadcn-compatible tokens, clear component boundaries, and human-friendly layout density.
-- Research Assistant may use `assistant-ui` for conversation primitives but should keep shell, cards, forms, drawers, tables, buttons, and status views shadcn-compatible.
-- Existing Paper v2 `paper-v2.css`, `pv2-*`, and `frontend/src/components/paper-v2/*` are legacy implementation details and must not spread to new modules.
-
-## Documentation Rules
-
-- Durable project standards live under `docs/standards`.
-- Architecture and design docs live under `docs/architecture` or `docs/analysis` as appropriate, but they must not become competing global standards.
-- `docs/handoff/` is for formal tracked handoff evidence only. Temporary Codex/Claude exchange notes must use ignored scratch paths such as `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
-- Do not append detailed module changelogs, historical validation narratives, old handoffs, or temporary troubleshooting notes to this file.
-- Store task evidence in validation history, PR bodies, issue workflow state, or module-specific docs instead of this project memory.
-
-## Completion Report Rules
-
-For code or workflow changes, report:
-
-- Worktree and branch.
-- Commit hash and PR URL when available.
-- Files changed.
-- Validation commands and results.
-- Issue/BUG sync state.
-- Production gates.
-- Whether production runtime or DB was touched.
-- Any remaining blockers before merge or production activation.
+Report worktree/branch, commit and PR when available, exact changed files, direct tests, BUG/Issue state, delegated/nightly coverage, production gates, merge/close-sync/root-sync/cleanup separately, runtime/client activation, DB/runtime impact, and remaining blockers.

@@ -223,6 +223,24 @@ def test_default_ui_target_catalog_matches_frontend_nav_groups() -> None:
     assert target_hrefs - nav_hrefs == set()
 
 
+def test_default_hmm_evolution_target_preserves_authoritative_contract() -> None:
+    loaded = ValidationUiTargetCatalog().load()
+    target = next(item for item in loaded["targets"] if item["route_id"] == "hmm.evolution")
+
+    assert target["href"] == "/hmm-evolution"
+    assert target["nav_group"] == "HMM 研究工作台"
+    assert target["primary_module"] == "hmm.evolution"
+    assert target["impact_modules"] == ["hmm", "qe.archive"]
+    assert target["required_test_plans"] == ["l0", "hmm_evolution_backend"]
+    assert target["recommended_test_plans"] == []
+    assert target["business_operations"] == [
+        "Open HMM Evolution Lab",
+        "Review candidate registry and evaluation batch state",
+        "Inspect read-only QE experiment evidence and evaluation results",
+    ]
+    assert target["coverage_status"] == "partial"
+
+
 def test_ui_target_catalog_loads_and_enriches_quality(tmp_path: Path) -> None:
     catalog = _catalog(tmp_path)
 

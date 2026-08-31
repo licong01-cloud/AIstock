@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
 from backend.services.hmm_evolution.asset_content_policy import sanitize_asset_text
 from backend.services.hmm_evolution.errors import QEAssetContentInvalidError
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_json_asset_policy_recursively_redacts_secrets_and_paths() -> None:
@@ -36,3 +41,21 @@ def test_json_asset_policy_rejects_invalid_json_instead_of_showing_raw_text() ->
             relative_path="reports/config.json",
             content_type="application/json",
         )
+
+
+def test_hmm_acceptance_entrypoints_require_external_dev_db_credentials() -> None:
+    python_entry = (
+        REPO_ROOT / "scripts" / "hmm_acceptance" / "benchmark_acceptance_20260721.py"
+    ).read_text(encoding="utf-8")
+    assert 'os.environ["TDX_DB_DEV_PASSWORD"]' in python_entry
+    assert not re.search(r'"password"\s*:\s*["\'][^"\']+["\']', python_entry)
+
+    for relative_path in (
+        "scripts/hmm_acceptance/dev_backend_8011.sh",
+        "scripts/hmm_acceptance/dev_worker.sh",
+    ):
+        shell_entry = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "TDX_DB_DEV_PASSWORD" in shell_entry
+        assert "printf -v TDX_DB_PASSWORD '%s'" in shell_entry
+        assert "export TDX_DB_PASSWORD" in shell_entry
+        assert not re.search(r"^export TDX_DB_PASSWORD=(?![\"']?\$)", shell_entry, re.MULTILINE)

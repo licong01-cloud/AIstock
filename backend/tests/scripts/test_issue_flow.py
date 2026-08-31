@@ -209,7 +209,10 @@ def test_context_pack_records_token_budget_and_rejects_ambiguous_inputs(tmp_path
     assert pack["token_budget"]["full_docs_allowed"] is False
     assert pack["token_budget"]["target_tokens"] == 12000
     assert pack["standards_refs"] == [
-        "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001"
+        "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-tool-rtk-001",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-backend-restart-ownership-001",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001",
     ]
 
     assert flow.main(["context-pack"]) == 2
@@ -220,20 +223,46 @@ def test_development_standard_is_single_authority_for_workflow_clients() -> None
     authority = "docs/standards/aistock_development_standard_v1.5_20260523.md"
     standard = Path(authority).read_text(encoding="utf-8")
 
-    assert flow.STANDARD_REFS == [f"{authority}#CONTEXT-BUDGET-001"]
+    assert flow.STANDARD_REFS == [
+        f"{authority}#CONTEXT-BUDGET-001",
+        f"{authority}#rule-tool-rtk-001",
+        f"{authority}#rule-backend-restart-ownership-001",
+        f"{authority}#rule-bug-restart-effective-001",
+    ]
+    assert "fixed_source_pending_user_restart" in flow.VALID_BUG_STATUSES
+    design_compliance_lines = [
+        line
+        for line in standard.splitlines()
+        if line.startswith(("1. **禁止", "2. **禁止", "3. **禁止", "4. **禁止"))
+    ]
     assert [
         "**禁止简化交付**",
         "**禁止静默错误**",
         "**禁止改变业务逻辑**",
         "**禁止私增门禁审批**",
-    ] == [line.split("：", 1)[0].split(". ", 1)[1] for line in standard.splitlines() if line.startswith(("1. **禁止", "2. **禁止", "3. **禁止", "4. **禁止"))]
-    assert all(keyword not in standard for keyword in ("不得", "不允许", "严禁"))
+    ] == [line.split("：", 1)[0].split(". ", 1)[1] for line in design_compliance_lines]
+    assert all(
+        keyword not in line
+        for line in design_compliance_lines
+        for keyword in ("不得", "不允许", "严禁")
+    )
+    assert standard.count("**禁止") == 4
 
     client_entries = (
         Path(".codex/skills/aistock-task-router/SKILL.md"),
         Path(".codex/skills/fix-aistock-issue/SKILL.md"),
+        Path(".codex/skills/verify-aistock-feature/SKILL.md"),
+        Path(".codex/skills/aistock-docs-handoff/SKILL.md"),
+        Path(".codex/skills/aistock-merge-aftercare/SKILL.md"),
+        Path(".codex/skills/aistock-readonly-triage/SKILL.md"),
+        Path(".codex/skills/aistock-validation-delegation/SKILL.md"),
         Path(".claude/commands/aistock-task-router.md"),
         Path(".claude/commands/fix-aistock-issue.md"),
+        Path(".claude/commands/aistock-feature-workflow.md"),
+        Path(".claude/commands/aistock-docs-handoff.md"),
+        Path(".claude/commands/aistock-merge-aftercare.md"),
+        Path(".claude/commands/aistock-readonly-triage.md"),
+        Path(".claude/commands/aistock-validation-delegation.md"),
     )
     for entry in client_entries:
         assert authority in entry.read_text(encoding="utf-8")
@@ -285,6 +314,24 @@ def test_validation_select_maps_catalog_plans_and_production_gates(capsys: pytes
     }
 
 
+def test_validation_select_does_not_treat_dataset_release_plan_yaml_as_ddl(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert flow.main(
+        [
+            "validation-select",
+            "--changed-file",
+            "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
+        ]
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert "qlib_data" in payload["impacted_modules"]
+    assert payload["production_gates"]["ddl"] == "noop"
+    assert flow._requires_production_ddl("backend/migrations/example.sql") is True
+    assert flow._requires_production_ddl("backend/db/migrations/run_watchlist_migration.py") is True
+
+
 def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.CaptureFixture[str]) -> None:
     assert flow.main([
         "validation-select",
@@ -302,7 +349,7 @@ def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.Ca
     assert "watchlist" in payload["impacted_modules"]
     assert payload["ownership"]["unmatched_files"] == []
     assert "validation_center_backend" not in payload["required_plans"]
-    assert payload["required_plans"] == ["l0", "validation_module_registry_l0"]
+    assert payload["required_plans"] == ["l0", "validation_module_registry_l0", "watchlist_backend"]
 
 
 def test_validation_select_keeps_backend_only_changes_off_frontend_l3(capsys: pytest.CaptureFixture[str]) -> None:
@@ -374,6 +421,41 @@ def test_validation_select_marks_docs_fast_update_as_version_record_only(capsys:
     assert payload["docs_fast_validation"] == "git_diff_check_and_version_note_only"
     assert payload["docs_controlled_required"] is False
     assert payload["required_plans"] == []
+
+
+def test_validation_select_uses_module_hint_only_when_ownership_is_unmapped() -> None:
+    payload = flow.select_validation(
+        ["scripts/aistock_issue_workflow.py"],
+        module="validation",
+    )
+
+    assert payload["primary_modules"] == ["validation.guardrails"]
+    assert "guardrail_changed_files" in payload["required_plans"]
+    assert "validation_center_backend" not in payload["required_plans"]
+
+
+def test_process_docs_do_not_select_research_assistant_product_tests() -> None:
+    payload = flow.select_validation(
+        [
+            "scripts/ci_change_classifier.py",
+            "docs/process/research_assistant_blueprint_execution_runbook_20260531.md",
+        ],
+        module="validation",
+    )
+
+    assert "docs.standards" in payload["primary_modules"]
+    assert "research_assistant_backend" not in payload["required_plans"]
+    assert "research_assistant_mcp_contract" not in payload["required_plans"]
+    assert "validation_center_backend" not in payload["required_plans"]
+
+
+def test_validation_plan_catalog_selects_runner_contract_only() -> None:
+    payload = flow.select_validation(["backend/services/validation/plan_catalog.py"])
+
+    assert payload["primary_modules"] == ["validation.runner"]
+    assert payload["required_plans"] == ["l0", "validation_catalog_integrity"]
+    assert "validation_center_backend" not in payload["recommended_plans"]
+    assert "validation_center_ui" not in payload["recommended_plans"]
 
 
 def test_validation_select_marks_docs_controlled_as_normal_guardrails(capsys: pytest.CaptureFixture[str]) -> None:
@@ -757,6 +839,7 @@ def test_pr_check_p1_evidence_gate_passes_with_evidence(
         "scope_passed": True,
         "validation_evidence": True,
         "production_gates": True,
+        "production_gate_consistency": True,
     }
 
 
@@ -815,6 +898,7 @@ def test_pr_check_p1_evidence_gate_accepts_bug_record_validation_evidence(
         "scope_passed": True,
         "validation_evidence": True,
         "production_gates": True,
+        "production_gate_consistency": True,
     }
 
 
@@ -1031,19 +1115,9 @@ def test_open_source_tooling_configs_are_parseable() -> None:
 def test_semgrep_runs_only_in_dedicated_changed_file_workflow() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
-    setup_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict) and str(step.get("uses") or "").startswith("actions/setup-python")
-    ]
-    assert setup_steps[0]["with"]["cache-dependency-path"] == ".github/requirements/pr-quality.txt"
-
-    install_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict) and str(step.get("name") or "") == "Install quality tooling"
-    ]
-    assert "python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt" in str(install_steps[0]["run"])
+    assert any(step.get("name") == "Verify prebuilt AIstock-CI tooling" for step in steps)
+    assert not any("setup-python" in str(step.get("uses") or "") for step in steps)
+    assert not any("pip install" in str(step.get("run") or "") for step in steps)
 
     semgrep_steps = [
         step
@@ -1056,7 +1130,11 @@ def test_semgrep_runs_only_in_dedicated_changed_file_workflow() -> None:
     dedicated_steps = semgrep_workflow["jobs"]["semgrep"]["steps"]
     run_step = next(step for step in dedicated_steps if step.get("name") == "Run Semgrep")
     run = str(run_step["run"])
-    assert "git diff --name-only --diff-filter=ACMRT" in run
+    assert "python scripts/ci_changed_files.py" in run
+    assert '--base-ref "${BASE_REF}"' in run
+    assert '--base-sha "${BASE_SHA}"' in run
+    assert '--head-sha "${HEAD_SHA}"' in run
+    assert "--diff-filter ACMRT" in run
     assert "tmp/validation/semgrep/semgrep_changed_files.txt" in run
     assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
     assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
@@ -1079,6 +1157,25 @@ def test_pr_quality_ruff_ignores_deleted_python_files() -> None:
     assert "xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude" in run
 
 
+def test_ci_workflow_keeps_scratch_targets_outside_checkout_and_semgrep_ignores_deleted_paths() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["ci-verdict"]["steps"]
+    runs = {str(step.get("name") or ""): str(step.get("run") or "") for step in steps}
+
+    semgrep_run = runs["Run Semgrep guardrails"]
+    assert 'if [ -f "${path}" ]; then' in semgrep_run
+    assert 'semgrep_files+=("${path}")' in semgrep_run
+    assert 'semgrep "${semgrep_files[@]}"' in semgrep_run
+    assert "xargs -a tmp/validation/ci_change_classifier/changed_files.txt semgrep" not in semgrep_run
+
+    assert "backend_sessions.txt" not in runs["Run selected backend sessions"]
+    assert "module_test_targets.txt" not in runs["Run selected frontend quality"]
+    assert "workflow_test_targets.txt" not in runs["Run focused workflow validation tests"]
+    assert "mapfile -t backend_sessions < <(" in runs["Run selected backend sessions"]
+    assert "mapfile -t module_test_targets < <(" in runs["Run selected frontend quality"]
+    assert "mapfile -t workflow_test_targets < <(" in runs["Run focused workflow validation tests"]
+
+
 def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
@@ -1093,7 +1190,7 @@ def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
     assert env["AISTOCK_PR_QUALITY_ENFORCE_P0P1"] == "${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}"
 
 
-def test_pr_quality_workflow_truncates_oversized_comment() -> None:
+def test_pr_quality_workflow_emits_compact_receipt_without_comment_action() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
     comment_steps = [
@@ -1101,29 +1198,24 @@ def test_pr_quality_workflow_truncates_oversized_comment() -> None:
         for step in steps
         if isinstance(step, dict) and str(step.get("name") or "") == "Comment PR summary"
     ]
-    script = comment_steps[0]["with"]["script"]
+    receipt_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Emit compact PR quality receipt"
+    ]
 
-    assert "const maxChars = 55000;" in script
-    assert "body.length > maxChars" in script
-    assert "omitted from the PR comment because the compact budget was exceeded" in script
+    assert comment_steps == []
+    assert len(receipt_steps) == 1
+    assert "gate=pr_quality_receipt" in receipt_steps[0]["run"]
+    assert "artifact_upload=disabled" in receipt_steps[0]["run"]
 
 
 def test_standalone_semgrep_scans_changed_files_only() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["semgrep"]["steps"]
-    setup_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict) and str(step.get("uses") or "").startswith("actions/setup-python")
-    ]
-    assert setup_steps[0]["with"]["cache-dependency-path"] == ".github/requirements/semgrep.txt"
-
-    install_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict) and str(step.get("name") or "") == "Install Semgrep"
-    ]
-    assert "python -m pip install --prefer-binary -r .github/requirements/semgrep.txt" in str(install_steps[0]["run"])
+    assert any(step.get("name") == "Verify prebuilt AIstock-CI and Semgrep tooling" for step in steps)
+    assert not any("setup-python" in str(step.get("uses") or "") for step in steps)
+    assert not any("pip install" in str(step.get("run") or "") for step in steps)
 
     semgrep_steps = [
         step
@@ -1133,8 +1225,11 @@ def test_standalone_semgrep_scans_changed_files_only() -> None:
     assert len(semgrep_steps) == 1
 
     run = str(semgrep_steps[0]["run"])
-    assert "git diff --name-only --diff-filter=ACMRT" in run
-    assert "git diff-tree --no-commit-id --name-only --diff-filter=ACMRT" in run
+    assert "python scripts/ci_changed_files.py" in run
+    assert '--base-ref "${BASE_REF}"' in run
+    assert '--base-sha "${BASE_SHA}"' in run
+    assert '--head-sha "${HEAD_SHA}"' in run
+    assert "--diff-filter ACMRT" in run
     assert "semgrep_changed_files.txt" in run
     assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
     assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
@@ -1147,12 +1242,20 @@ def test_dependency_update_validate_covers_github_tooling_requirements() -> None
     steps = workflow["jobs"]["dependency-update-validate"]["steps"]
     runs = "\n".join(str(step.get("run") or "") for step in steps if isinstance(step, dict))
 
-    assert 'git diff --name-only --diff-filter=ACMRT "$base_sha...$HEAD_SHA"' in runs
+    assert "python scripts/ci_changed_files.py" in runs
+    assert '--base-ref "${BASE_REF}"' in runs
+    assert '--base-sha "${BASE_SHA}"' in runs
+    assert '--head-sha "${HEAD_SHA}"' in runs
+    assert "--diff-filter ACMRT" in runs
     assert 'selection_args+=(--changed-file "$file")' in runs
     assert "--changed-file requirements.txt" not in runs
-    assert 'python -m pip install --dry-run -r "$file"' in runs
-    assert "python -m pip install --dry-run ." in runs
-    assert "npm ci" in runs
-    assert "npx tsc --noEmit" in runs
+    assert "python scripts/validate_changed_requirements.py" in runs
+    assert '--base-commit "${{ steps.changes.outputs.base_commit }}"' in runs
+    assert '--head-commit "${{ steps.changes.outputs.head_commit }}"' in runs
+    assert "python -m pip check" in runs
+    assert "pip install" not in runs
+    assert "python -m pip install --dry-run ." not in runs
+    assert "npm ci" not in runs
+    assert "node_modules/.bin/tsc --noEmit" in runs
     assert "npm run lint" in runs
     assert 'python -m nox -s l0 -- "${changed_files[@]}"' in runs

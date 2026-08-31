@@ -19,8 +19,9 @@ const TABS = [
 
 export default function PaperV2Layout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const advisoryRoute = pathname === "/paper-v2/advisory" || pathname?.startsWith("/paper-v2/advisory/");
   return (
-    <div className="pv2-shell">
+    <div className={`pv2-shell ${advisoryRoute ? "pv2-shell-advisory" : ""}`}>
       <header className="pv2-hero">
         <div className="pv2-hero-top">
           <div>

@@ -1,0 +1,190 @@
+{
+  "actual": "QMT orders/trades observed on 2026-07-20 project order_time_iso 2026-07-17; 40 TCA arrival quotes project year 1784 and multi-trillion-millisecond latency.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/tca_capture.py",
+    "backend/infra/qmt_client.py",
+    "backend/services/miniqmt_execution_runtime/gateway.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/tests/simulation_runtime/test_tca_capture.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase1_gateway_event_source.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py",
+    "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "tests/aistock_validation/bugs/20260720_BUG-784-p0-simulation-miniqmt-broker-and-tca-time-authority-corrupts-trade-date.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-784",
+  "closed_at": "2026-07-20T08:48:46Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-20T03:02:52.059756Z",
+  "description": "QMT orders/trades observed on 2026-07-20 project order_time_iso 2026-07-17; 40 TCA arrival quotes project year 1784 and multi-trillion-millisecond latency.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260720-e8250554c19a",
+      "timestamp": "2026-07-20T03:02:52.059750Z"
+    },
+    {
+      "action": "design_compliance_followup",
+      "actor": "codex",
+      "note": "Added exact broker date/time alias normalization and cross-field conflict rejection before any durable trade fact is written.",
+      "timestamp": "2026-07-20T06:34:54.0814602Z"
+    }
+  ],
+  "evidence_uris": [
+    "related:BUG-330",
+    "trade_date:2026-07-20"
+  ],
+  "expected": "All broker and TCA time fields use explicit format discrimination and one trade-date authority. 10-digit seconds and 13-digit milliseconds are parsed unambiguously, formatted calendar strings remain supported only at exact lengths, conflicting aliases fail loud, and broker facts outside the requested trading date are exposed without being stamped into the current run.",
+  "first_seen_at": "2026-07-20T03:02:52.059756Z",
+  "fix_branch": null,
+  "fix_commit": "1b7367d6b33aa4a9d74ef5b02593b4a3db08ea3c",
+  "fixed_at": "2026-07-20T08:51:20.493759Z",
+  "github_issue_number": 2493,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2493",
+  "last_seen_at": "2026-07-20T03:02:52.059756Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2497",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Parse representative 10-digit broker seconds and 13-digit TCA milliseconds plus exact yyyyMMddHHmmss strings; assert exact dates, reject ambiguous lengths/conflicts, and verify current-trade-date recovery does not attribute stale broker facts.",
+  "required_verification": [
+    "l0",
+    "miniqmt_execution_runtime_l2",
+    "paper_v2_backend",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P0][Simulation] MiniQMT broker and TCA time authority corrupts trade-date evidence",
+  "trigger_condition": {
+    "fingerprint": "e8250554c19a2f17e790d016",
+    "source_event_id": "FE-20260720-e8250554c19a"
+  },
+  "validation_evidence": [
+    "PR #2497 all required local plans and hosted CI verdict -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core",
+        "miniqmt_execution_runtime"
+      ],
+      "plans": [
+        "simulation_core_l2",
+        "miniqmt_execution_runtime_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core",
+          "miniqmt_execution_runtime"
+        ],
+        "plans": [
+          "simulation_core_l2",
+          "miniqmt_execution_runtime_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

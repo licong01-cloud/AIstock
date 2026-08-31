@@ -23,6 +23,12 @@ class ExecutionContext(BaseModel):
     resource_source_run_key: str | None = None
     resource_session_token: str | None = None
     phase_pipeline_enabled: bool = False
+    submission_source_kind: str | None = None
+    # Reservation/idempotency identity may be retry-attempt scoped while the
+    # atomic source claim must still target the canonical persisted row.
+    submission_source_execution_id: str | None = None
+    submission_source_claim_id: str | None = None
+    submission_node_capacity: int | None = None
 
 
 class ExecutionResult(BaseModel):

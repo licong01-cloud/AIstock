@@ -4,10 +4,13 @@ Level 2 集成测试 — BacktestExecutor
 验证 BacktestExecutor 传给 ConfigComposer 和 QEWorkspaceClient 的参数
 与现有 4 条路径完全一致。使用 Mock 替代真实外部依赖。
 """
+import json
+
 import pytest
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from backend.services.quantevolver.experiment_config import ExperimentConfig
@@ -16,8 +19,12 @@ from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_strategy_evo_loop,
     build_config_from_custom_evo_loop,
 )
+from backend.services.quantevolver.executors import backtest as backtest_module
 from backend.services.quantevolver.executors.base import ExecutionContext
-from backend.services.quantevolver.executors.backtest import BacktestExecutor, BacktestMode
+from backend.services.quantevolver.executors.backtest import (
+    BacktestExecutor as ProductionBacktestExecutor,
+    BacktestMode,
+)
 from tests.fixtures.sample_configs import (
     EVOLUTION_CONFIG_MINIMAL,
     EVOLUTION_TASK_MINIMAL,
@@ -38,6 +45,47 @@ from tests.fixtures.sample_configs import (
 
 MOCK_WSL_COMMAND = "cd /mnt/f && python qrun_limit_minute.py conf.yaml"
 MOCK_EXPERIMENT_FILES = {"conf.yaml": "mock_yaml_content", "factor.py": "mock_factor"}
+
+
+class _UnitSubmissionCoordinator:
+    async def submit(self, *, client, source, payload):
+        loop_id = await client.create_and_run_loop(
+            payload.task_id,
+            payload.loop_index,
+            dict(payload.config),
+            dict(payload.experiment_files),
+            payload.wsl_command,
+            model_source=payload.model_source,
+            callback_url=payload.callback_url,
+            submission_intent_hash=source.submission_intent_hash,
+        )
+        return SimpleNamespace(
+            loop_id=loop_id,
+            state="submitted",
+            reservation_id="qer_unit",
+            reservation_status="submitting",
+            remote_status="reserved",
+            active_count=1,
+            node_capacity=2,
+            duplicate_replay=False,
+            remote_acceptance_unknown=False,
+            detail={},
+        )
+
+
+class BacktestExecutor(ProductionBacktestExecutor):
+    """Unit-only executor with an explicit fake submission coordinator."""
+
+    def __init__(self, composer, client):
+        super().__init__(
+            composer,
+            client,
+            submission_coordinator=_UnitSubmissionCoordinator(),
+        )
+
+    @staticmethod
+    def _submission_source_for_context(_ctx):
+        return SimpleNamespace(submission_intent_hash="a" * 64)
 
 
 def make_mock_composer(wsl_command: str = MOCK_WSL_COMMAND) -> MagicMock:
@@ -93,14 +141,95 @@ class TestBacktestExecutorBasic:
 
         assert result.job_id == "Loop1"
         assert result.status == "submitted"
+
+    def test_task_profile_resolves_node_owned_root_before_compose(self):
+        composer = MagicMock()
+
+        def _compose(**kwargs):
+            return {
+                "experiment_files": dict(MOCK_EXPERIMENT_FILES),
+                "wsl_command": MOCK_WSL_COMMAND,
+                "long_trend_evaluation_descriptor": kwargs["long_trend_evaluation_descriptor"],
+            }
+
+        composer.compose_experiment_in_memory.side_effect = _compose
+        client = make_mock_client()
+        client.get_execution_environment.return_value = SimpleNamespace(
+            execution_environment_snapshot_id="env-1",
+            execution_environment_manifest_sha256="e" * 64,
+            manifest={
+                "schema_version": "qe_execution_environment_v1",
+                "python": {
+                    "implementation": "cpython",
+                    "version": "3.11.9",
+                    "cache_tag": "cpython-311",
+                },
+            },
+        )
+        client.get_dataset_identity.return_value = SimpleNamespace(
+            complete=True,
+            dataset={"dataset_manifest_sha256": "d" * 64},
+            long_trend_snapshot={
+                "snapshot_id": "snapshot-1",
+                "manifest_sha256": "s" * 64,
+            },
+            long_trend_snapshot_reason=None,
+        )
+
+        class _Resolver:
+            calls: list[str] = []
+
+            def primary_factor_data_root(self, node_id: str) -> str:
+                self.calls.append(node_id)
+                return "/node-owned/factor-data"
+
+        resolver = _Resolver()
+        executor = ProductionBacktestExecutor(
+            composer,
+            client,
+            submission_coordinator=_UnitSubmissionCoordinator(),
+            long_trend_snapshot_resolver=resolver,  # type: ignore[arg-type]
+        )
+        cfg = ExperimentConfig(
+            factor_names=["Alpha001"],
+            model_id="model_lgbm_v1",
+            long_trend_profile_id="qe_long_trend_v1",
+        )
+        ctx = ExecutionContext(
+            task_id="task-profile",
+            loop_index=1,
+            experiment_name="task-profile/Loop1",
+            node_id="node-a",
+            resource_session_id="qers-1",
+            resource_source_run_key="qe:task-profile:Loop1",
+            resource_session_token="token",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="loop-row-1",
+        )
+
+        result = asyncio.run(executor.submit(cfg, ctx))
+
+        assert result.status == "submitted"
+        assert resolver.calls == ["node-a"]
+        assert client.get_dataset_identity.await_count == 2
+        assert {
+            call.kwargs["data_root_uri"] for call in client.get_dataset_identity.await_args_list
+        } == {"/node-owned/factor-data"}
+        descriptor = composer.compose_experiment_in_memory.call_args.kwargs[
+            "long_trend_evaluation_descriptor"
+        ]
+        assert descriptor["long_trend_evaluation"]["profile_id"] == "qe_long_trend_v1"
+        assert descriptor["long_trend_evaluation"]["feature_data_root_uri"] == "/node-owned/factor-data"
         assert result.experiment_files == MOCK_EXPERIMENT_FILES
         assert result.wsl_command == MOCK_WSL_COMMAND
 
     def test_submit_redacts_resource_session_secret_from_result(self):
         composer = make_mock_composer()
+        session_token = "scoped" + "-secret"
+        session_secret_payload = json.dumps({"token": session_token}, separators=(",", ":"))
         composer.compose_experiment_in_memory.return_value["experiment_files"][
             "qe_resource_session_secret.json"
-        ] = '{"token":"scoped-secret"}'
+        ] = session_secret_payload
         client = make_mock_client()
         executor = BacktestExecutor(composer, client)
         cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
@@ -110,7 +239,7 @@ class TestBacktestExecutorBasic:
             experiment_name="task_test/Loop1",
             resource_session_id="qers_1",
             resource_source_run_key="task_test_L1",
-            resource_session_token="scoped-secret",
+            resource_session_token=session_token,
             phase_pipeline_enabled=True,
         )
 
@@ -118,7 +247,106 @@ class TestBacktestExecutorBasic:
 
         assert result.experiment_files["qe_resource_session_secret.json"] == "<redacted>"
         submitted_files = client.create_and_run_loop.await_args.args[3]
-        assert submitted_files["qe_resource_session_secret.json"] == '{"token":"scoped-secret"}'
+        assert submitted_files["qe_resource_session_secret.json"] == session_secret_payload
+
+    def test_retry_attempt_identity_is_distinct_from_evolution_loop_claim_id(self):
+        claim_source = MagicMock()
+        record_waiting = MagicMock()
+        ctx = ExecutionContext(
+            task_id="task_retry",
+            loop_index=7,
+            experiment_name="task_retry/Loop7",
+            node_id="wsl2-5080",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="task_retry_Loop7:retry:attempt-1",
+            submission_source_claim_id="task_retry_Loop7",
+        )
+
+        with patch.object(
+            backtest_module.QEExecutionSourceClaimFactory,
+            "evolution_loop",
+            return_value=(claim_source, record_waiting),
+        ) as evolution_loop:
+            source = ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        evolution_loop.assert_called_once_with(
+            loop_id="task_retry_Loop7",
+            node_id="wsl2-5080",
+        )
+        assert source.source_execution_id == "task_retry_Loop7:retry:attempt-1"
+        assert source.claim_source is claim_source
+        assert source.record_waiting_capacity is record_waiting
+
+    def test_evolution_loop_without_claim_id_uses_execution_id_for_claim(self):
+        claim_source = MagicMock()
+        record_waiting = MagicMock()
+        ctx = ExecutionContext(
+            task_id="task_normal",
+            loop_index=3,
+            experiment_name="task_normal/Loop3",
+            node_id="rdagent-node1",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="task_normal_Loop3",
+        )
+
+        with patch.object(
+            backtest_module.QEExecutionSourceClaimFactory,
+            "evolution_loop",
+            return_value=(claim_source, record_waiting),
+        ) as evolution_loop:
+            source = ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        evolution_loop.assert_called_once_with(
+            loop_id="task_normal_Loop3",
+            node_id="rdagent-node1",
+        )
+        assert source.source_execution_id == "task_normal_Loop3"
+
+    def test_qe_experiment_without_claim_id_uses_execution_id_for_claim(self):
+        claim_source = MagicMock()
+        record_waiting = MagicMock()
+        ctx = ExecutionContext(
+            task_id="task_experiment",
+            loop_index=2,
+            experiment_name="task_experiment/Loop2",
+            node_id="wsl2-5080",
+            submission_source_kind="qe_experiment",
+            submission_source_execution_id="experiment_42",
+        )
+
+        with patch.object(
+            backtest_module.QEExecutionSourceClaimFactory,
+            "experiment",
+            return_value=(claim_source, record_waiting),
+        ) as experiment:
+            source = ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        experiment.assert_called_once_with(
+            experiment_id="experiment_42",
+            node_id="wsl2-5080",
+            qe_task_id="task_experiment",
+            qe_loop_id="Loop2",
+        )
+        assert source.source_execution_id == "experiment_42"
+
+    def test_explicit_empty_claim_id_fails_closed(self):
+        ctx = ExecutionContext(
+            task_id="task_retry",
+            loop_index=7,
+            experiment_name="task_retry/Loop7",
+            node_id="wsl2-5080",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="task_retry_Loop7:retry:attempt-1",
+            submission_source_claim_id="",
+        )
+
+        with pytest.raises(
+            backtest_module.QEWorkspaceSubmissionCoordinatorError
+        ) as error:
+            ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        assert error.value.reason_code == "qe_execution_source_identity_missing"
+        assert error.value.context["source_claim_id"] is None
 
     def test_backtest_only_requires_model_source(self):
         executor = BacktestExecutor(make_mock_composer(), make_mock_client())

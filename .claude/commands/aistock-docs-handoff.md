@@ -1,5 +1,7 @@
 # aistock-docs-handoff
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this command provides the docs procedure.
+
 Use this command for AIstock documentation, README, handoff, and temporary Codex/Claude exchange notes.
 
 ## Classify paths first
@@ -12,6 +14,8 @@ Use this command for AIstock documentation, README, handoff, and temporary Codex
 
 ## Rules
 
+- Follow `TOOL-RTK-001` from the sole development standard; this command does not redefine it.
+- Docs work never authorizes backend start/stop/restart; user backend process control remains user-owned even when documenting a runbook or restart contract.
 - Use an isolated worktree/branch for tracked docs changes.
 - For docs-fast, use `git diff --check` as the validation step.
 - For cleanup-fast, keep the change mechanical: relocate/delete only the named files, preserve executable behavior by default, and use `git diff --check`; add focused `py_compile`/`--help` only when the user asks to retain executable scripts.

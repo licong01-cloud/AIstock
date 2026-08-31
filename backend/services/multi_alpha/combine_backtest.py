@@ -16,12 +16,13 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
@@ -37,6 +38,11 @@ from backend.services.model_store import ModelStoreService, PredictionStoreError
 from backend.services.multi_alpha.combiner import CombinerLeg, MultiAlphaCombiner, MultiAlphaCombinerError
 from backend.services.multi_alpha.orthogonality import MultiAlphaOrthogonalityError, normalize_prediction_frame
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError, PanelLegSpec
+from backend.services.multi_alpha.qe_subprocess_env import (
+    qe_subprocess_credential_scrub_command,
+    scrubbed_qe_subprocess_env,
+)
+from backend.services.quantevolver.config_composer import QE_STRATEGY_RUNTIME_HELPER_FILES
 
 
 COMBINE_BACKTEST_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
@@ -45,7 +51,17 @@ DEFAULT_WEIGHTING_SCHEMES = ("equal", "orthogonality_aware", "ic_weighted", "ris
 RANK_FUSION_WEIGHTING_SCHEMES = ("rank_fusion_rrf", "rank_fusion_borda")
 SUPPORTED_WEIGHTING_SCHEMES = DEFAULT_WEIGHTING_SCHEMES + RANK_FUSION_WEIGHTING_SCHEMES
 LOGICAL_PARTIAL_FAILED_STATUS = "partial_failed"
-TERMINAL_STATUSES = {"succeeded", "failed", LOGICAL_PARTIAL_FAILED_STATUS}
+# A P0-2 successor can finish with preserved unavailable children, and a
+# controlled durable run can finish cancelled.  They are terminal business
+# facts just like the legacy succeeded/failed states: archive/read/retry/delete
+# must not pretend they are still active or omit their preserved evidence.
+TERMINAL_STATUSES = {
+    "succeeded",
+    "failed",
+    LOGICAL_PARTIAL_FAILED_STATUS,
+    "partial_recovered",
+    "cancelled",
+}
 PREDICTION_STORE_UPLOAD_URL_ENV = "AISTOCK_PREDICTION_STORE_UPLOAD_URL"
 PREDICTION_STORE_UPLOAD_TIMEOUT_ENV = "AISTOCK_PREDICTION_STORE_UPLOAD_TIMEOUT_SEC"
 DEFAULT_UPLOAD_TIMEOUT_SEC = 120.0
@@ -54,6 +70,20 @@ DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS = 45 * 60
 DEFAULT_READ_EXP_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_RUN_TIMEOUT_GRACE_SECONDS = 5 * 60
 DEFAULT_RUNTIME_TEMPLATE_COPY_TIMEOUT_SECONDS = 15 * 60
+_AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_SECTOR_RISK_OVERLAY_MODES = frozenset({"none", "entry_gate", "bounded_de_risk", "exit_reentry"})
+RUNTIME_EXTERNAL_DATA_LINK_NAMES = frozenset(
+    {
+        "bak_basic.h5",
+        "cyq_perf.h5",
+        "daily_basic.h5",
+        "daily_pv.h5",
+        "margin_detail.h5",
+        "moneyflow.h5",
+        "sector_data.h5",
+        "static_factors.parquet",
+    }
+)
 RUN_HEARTBEAT_REASON_CODE = "combine_backtest_running"
 REQUEST_SNAPSHOT_KEY = "_combine_request_v1"
 RUN_EVENT_LOG_NAME = "run_events.jsonl"
@@ -95,6 +125,7 @@ class CombineBacktestRequest:
     walk_forward: Mapping[str, Any] = field(default_factory=lambda: {"enabled": True, "window": 60, "min_periods": 2})
     rank_fusion: Mapping[str, Any] = field(default_factory=dict)
     backtest_config: Mapping[str, Any] = field(default_factory=dict)
+    prediction_task_selection: Mapping[str, bool] | None = None
     baseline_leg_id: str | None = None
     topk: int = 20
     min_date_coverage: float = 0.8
@@ -253,6 +284,7 @@ class ShellPredBacktestExecutor:
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest_qrun",
+                env=read_env,
                 error_context={**error_context, "stage": "qrun"},
             )
             if qrun.returncode != 0:
@@ -282,6 +314,7 @@ class ShellPredBacktestExecutor:
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest",
+                env=scrubbed_qe_subprocess_env(),
                 error_context={**error_context, "stage": "custom_command"},
             )
             if completed.returncode != 0:
@@ -317,6 +350,11 @@ def prepare_pred_backtest_workspace(*, workspace: Path, backtest_config: Mapping
             _copy_runtime_template_via_wsl(src=src, workspace=workspace, backtest_config=backtest_config)
         else:
             _copy_runtime_template_native(src=src, workspace=workspace, backtest_config=backtest_config)
+
+    _refresh_sector_risk_overlay_runtime_assets(
+        workspace=workspace,
+        backtest_config=backtest_config,
+    )
 
     missing = [name for name in _required_runtime_files() if not (workspace / name).exists()]
     if missing:
@@ -375,6 +413,62 @@ def _runtime_template_source(*, backtest_config: Mapping[str, Any], workspace: P
     return src
 
 
+def _refresh_sector_risk_overlay_runtime_assets(
+    *,
+    workspace: Path,
+    backtest_config: Mapping[str, Any],
+) -> None:
+    """Overlay current strategy helpers after copying a frozen runtime template.
+
+    A multi-alpha retry intentionally reuses its frozen qrun template, but the
+    template is not authoritative for the strategy implementation selected by
+    the new request.  Without this post-copy overlay an old template can
+    silently replace the current sector-risk wrapper and omit its dedicated V2
+    parents.  Only sector-overlay runs take this path; other frozen runtimes are
+    left byte-for-byte unchanged.
+    """
+
+    strategy_kwargs = backtest_config.get("strategy_kwargs")
+    if not isinstance(strategy_kwargs, Mapping):
+        return
+    raw_enabled = strategy_kwargs.get("sector_risk_overlay_enabled")
+    enabled = (
+        raw_enabled
+        if isinstance(raw_enabled, bool)
+        else str(raw_enabled or "").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    mode = str(strategy_kwargs.get("sector_risk_overlay_mode") or "").strip().lower()
+    if not enabled and mode not in _SECTOR_RISK_OVERLAY_MODES - {"none"}:
+        return
+
+    scripts_dir = _AISTOCK_PROJECT_ROOT / "scripts"
+    missing = [
+        helper_name
+        for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES
+        if not (scripts_dir / helper_name).is_file()
+    ]
+    if missing:
+        raise MultiAlphaCombineBacktestError(
+            "current sector-risk runtime helper set is incomplete",
+            reason_code="pred_backtest_sector_risk_runtime_asset_missing",
+            context={
+                "workspace": str(workspace),
+                "scripts_dir": str(scripts_dir),
+                "missing": missing,
+            },
+        )
+    for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES:
+        shutil.copy2(scripts_dir / helper_name, workspace / helper_name)
+    logger.info(
+        "Refreshed sector-risk pred-backtest runtime helpers",
+        extra={
+            "workspace": str(workspace),
+            "mode": mode or None,
+            "helper_files": list(QE_STRATEGY_RUNTIME_HELPER_FILES),
+        },
+    )
+
+
 def _required_runtime_files() -> tuple[str, ...]:
     return ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py")
 
@@ -389,8 +483,24 @@ def _find_unreadable_runtime_template_entry(src: Path) -> tuple[Path, OSError] |
     return None
 
 
+def is_runtime_external_data_link(path: Path) -> bool:
+    """Inspect a canonical QE data entry without dereferencing its target."""
+
+    if path.name not in RUNTIME_EXTERNAL_DATA_LINK_NAMES:
+        return False
+    if path.is_symlink():
+        return True
+    metadata = path.lstat()
+    attributes = int(getattr(metadata, "st_file_attributes", 0) or 0)
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return bool(attributes & reparse_flag)
+
+
 def _copy_runtime_template_native(*, src: Path, workspace: Path, backtest_config: Mapping[str, Any]) -> None:
+    exclude_external_data_links = bool(backtest_config.get("_exclude_runtime_external_data_links"))
     for item in src.iterdir():
+        if exclude_external_data_links and is_runtime_external_data_link(item):
+            continue
         target = workspace / item.name
         if item.is_file():
             if not target.exists():
@@ -405,6 +515,18 @@ def _copy_runtime_template_via_wsl(*, src: Path, workspace: Path, backtest_confi
     src_wsl = win_to_wsl_path(str(src.resolve()))
     workspace_wsl = win_to_wsl_path(str(workspace.resolve()))
     script = _wsl_template_validation_script(src_wsl) + f"; cp -a -n -- {shlex.quote(src_wsl + '/.')} {shlex.quote(workspace_wsl + '/')}"
+    if bool(backtest_config.get("_exclude_runtime_external_data_links")):
+        external_link_names = [
+            item.name
+            for item in src.iterdir()
+            if is_runtime_external_data_link(item)
+        ]
+        excluded_paths = " ".join(
+            shlex.quote(workspace_wsl + "/" + name)
+            for name in sorted(external_link_names)
+        )
+        if excluded_paths:
+            script += f"; rm -f -- {excluded_paths}"
     completed = run_command(
         ["wsl", "-d", distro, "bash", "-lc", script],
         cwd=workspace,
@@ -514,8 +636,11 @@ def _wsl_runtime_settings(
 def _default_local_pred_backtest_commands(
     *, workspace: Path, pred_name: str, backtest_config: Mapping[str, Any]
 ) -> tuple[list[str], list[str], Mapping[str, str] | None]:
+    # The QE data plane is file-only: qrun/read_exp_res must never inherit the
+    # backend PostgreSQL credentials or have any database fallback. Start from a
+    # scrubbed child env and only add the explicit recorder contract.
+    read_env = scrubbed_qe_subprocess_env()
     if not _is_windows_host():
-        read_env = dict(os.environ)
         read_env["QE_REQUIRE_RECORDER_ID"] = "1"
         return (
             [sys.executable, "qrun_limit_minute.py", "conf.yaml", "--pred-backtest", pred_name],
@@ -524,6 +649,7 @@ def _default_local_pred_backtest_commands(
         )
     distro, conda_sh, conda_env = _wsl_runtime_settings(backtest_config=backtest_config, require_conda=True)
     workspace_wsl = win_to_wsl_path(str(workspace.resolve()))
+    scrub_credentials = qe_subprocess_credential_scrub_command()
     prefix = (
         "set -eo pipefail; "
         f"source {shlex.quote(str(conda_sh))}; "
@@ -531,13 +657,14 @@ def _default_local_pred_backtest_commands(
         "set -u; "
         f"cd {shlex.quote(workspace_wsl)}; "
         "if [ -f .factor_env ]; then . ./.factor_env; fi; "
+        f"{scrub_credentials}; "
     )
     qrun_script = prefix + f"python qrun_limit_minute.py conf.yaml --pred-backtest {shlex.quote(pred_name)}"
     read_script = prefix + "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py"
     return (
-        ["wsl", "-d", distro, "bash", "-lc", qrun_script],
-        ["wsl", "-d", distro, "bash", "-lc", read_script],
-        None,
+        ["wsl", "-d", distro, "bash", "--noprofile", "--norc", "-c", qrun_script],
+        ["wsl", "-d", distro, "bash", "--noprofile", "--norc", "-c", read_script],
+        read_env,
     )
 
 
@@ -551,10 +678,19 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
 
     topk = backtest_config.get("topk")
     initial_cash = backtest_config.get("initial_cash")
+    raw_oos_start = backtest_config.get("oos_start")
+    raw_oos_end = backtest_config.get("oos_end")
+    has_oos_override = raw_oos_start is not None or raw_oos_end is not None
     strategy_overrides = backtest_config.get("strategy_kwargs")
     has_strategy_overrides = strategy_overrides is not None
-    if topk is None and initial_cash is None and not has_strategy_overrides:
+    if topk is None and initial_cash is None and not has_strategy_overrides and not has_oos_override:
         return
+    if (raw_oos_start is None) != (raw_oos_end is None):
+        raise MultiAlphaCombineBacktestError(
+            "oos_start and oos_end must be provided together before pred-backtest conf override",
+            reason_code="pred_backtest_window_invalid",
+            context={"workspace": str(workspace), "oos_start": raw_oos_start, "oos_end": raw_oos_end},
+        )
     if has_strategy_overrides and not isinstance(strategy_overrides, Mapping):
         raise MultiAlphaCombineBacktestError(
             "strategy_kwargs must be a mapping before pred-backtest conf override",
@@ -563,6 +699,14 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
         )
     topk_int = _positive_int(topk, field_name="topk") if topk is not None else None
     initial_cash_int = _positive_int(initial_cash, field_name="initial_cash") if initial_cash is not None else None
+    oos_start = _strict_iso_date(raw_oos_start, field_name="oos_start") if has_oos_override else None
+    oos_end = _strict_iso_date(raw_oos_end, field_name="oos_end") if has_oos_override else None
+    if oos_start is not None and oos_end is not None and oos_end < oos_start:
+        raise MultiAlphaCombineBacktestError(
+            "oos_end must be on or after oos_start before pred-backtest conf override",
+            reason_code="pred_backtest_window_invalid",
+            context={"workspace": str(workspace), "oos_start": oos_start, "oos_end": oos_end},
+        )
     conf_path = workspace / "conf.yaml"
     strategy_keys: list[str] = []
     if isinstance(strategy_overrides, Mapping):
@@ -573,6 +717,8 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
         conf_path=conf_path,
         topk=topk_int,
         initial_cash=initial_cash_int,
+        oos_start=oos_start,
+        oos_end=oos_end,
         strategy_overrides=strategy_overrides if isinstance(strategy_overrides, Mapping) else {},
     )
     conf_path.write_text(updated_conf, encoding="utf-8")
@@ -582,9 +728,30 @@ def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[s
             "workspace": str(workspace),
             "effective_topk": topk_int,
             "effective_initial_cash": initial_cash_int,
+            "effective_oos_start": oos_start,
+            "effective_oos_end": oos_end,
             "strategy_kwargs_keys": sorted(strategy_keys),
         },
     )
+
+
+def _strict_iso_date(value: Any, *, field_name: str) -> str:
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise MultiAlphaCombineBacktestError(
+            f"{field_name} must be an ISO date",
+            reason_code="pred_backtest_window_invalid",
+            context={"field": field_name, "value": text},
+        ) from exc
+    if parsed.isoformat() != text:
+        raise MultiAlphaCombineBacktestError(
+            f"{field_name} must use canonical YYYY-MM-DD form",
+            reason_code="pred_backtest_window_invalid",
+            context={"field": field_name, "value": text},
+        )
+    return text
 
 
 def _apply_pred_backtest_overrides_text(
@@ -594,6 +761,8 @@ def _apply_pred_backtest_overrides_text(
     conf_path: Path,
     topk: int | None,
     initial_cash: int | None,
+    oos_start: str | None,
+    oos_end: str | None,
     strategy_overrides: Mapping[str, Any],
 ) -> str:
     lines = text.splitlines(keepends=True)
@@ -606,7 +775,7 @@ def _apply_pred_backtest_overrides_text(
         workspace=workspace,
     )
     port_end = _conf_block_end(lines, start=port_idx + 1, parent_indent=port_indent)
-    if initial_cash is not None:
+    if initial_cash is not None or oos_start is not None:
         backtest_idx, backtest_indent = _find_conf_mapping_key(
             lines,
             key="backtest",
@@ -623,19 +792,37 @@ def _apply_pred_backtest_overrides_text(
             end=backtest_end,
             parent_indent=backtest_indent,
         )
-        _replace_or_insert_conf_mapping_key(
-            lines,
-            key="account",
-            value=initial_cash,
-            start=backtest_idx + 1,
-            end=backtest_end,
-            parent_indent=backtest_indent,
-            child_indent=backtest_child_indent,
-            conf_path=conf_path,
-            workspace=workspace,
-            field_prefix="port_analysis_config.backtest",
-            required=False,
-        )
+        if initial_cash is not None:
+            delta = _replace_or_insert_conf_mapping_key(
+                lines,
+                key="account",
+                value=initial_cash,
+                start=backtest_idx + 1,
+                end=backtest_end,
+                parent_indent=backtest_indent,
+                child_indent=backtest_child_indent,
+                conf_path=conf_path,
+                workspace=workspace,
+                field_prefix="port_analysis_config.backtest",
+                required=False,
+            )
+            backtest_end += delta
+        if oos_start is not None and oos_end is not None:
+            for key, value in (("start_time", oos_start), ("end_time", oos_end)):
+                delta = _replace_or_insert_conf_mapping_key(
+                    lines,
+                    key=key,
+                    value=value,
+                    start=backtest_idx + 1,
+                    end=backtest_end,
+                    parent_indent=backtest_indent,
+                    child_indent=backtest_child_indent,
+                    conf_path=conf_path,
+                    workspace=workspace,
+                    field_prefix="port_analysis_config.backtest",
+                    required=False,
+                )
+                backtest_end += delta
         port_end = _conf_block_end(lines, start=port_idx + 1, parent_indent=port_indent)
     strategy_idx, strategy_indent = _find_conf_mapping_key(
         lines,
@@ -687,6 +874,69 @@ def _apply_pred_backtest_overrides_text(
             required=False,
         )
         kwargs_end += delta
+    if oos_start is not None and oos_end is not None:
+        task_idx, task_indent = _find_conf_mapping_key(
+            lines,
+            key="task",
+            start=0,
+            end=len(lines),
+            conf_path=conf_path,
+            workspace=workspace,
+        )
+        task_end = _conf_block_end(lines, start=task_idx + 1, parent_indent=task_indent)
+        dataset_idx, dataset_indent = _find_conf_mapping_key(
+            lines,
+            key="dataset",
+            start=task_idx + 1,
+            end=task_end,
+            conf_path=conf_path,
+            workspace=workspace,
+            field="task.dataset",
+        )
+        dataset_end = _conf_block_end(lines, start=dataset_idx + 1, parent_indent=dataset_indent)
+        dataset_kwargs_idx, dataset_kwargs_indent = _find_conf_mapping_key(
+            lines,
+            key="kwargs",
+            start=dataset_idx + 1,
+            end=dataset_end,
+            conf_path=conf_path,
+            workspace=workspace,
+            field="task.dataset.kwargs",
+        )
+        dataset_kwargs_end = _conf_block_end(
+            lines,
+            start=dataset_kwargs_idx + 1,
+            parent_indent=dataset_kwargs_indent,
+        )
+        segments_idx, segments_indent = _find_conf_mapping_key(
+            lines,
+            key="segments",
+            start=dataset_kwargs_idx + 1,
+            end=dataset_kwargs_end,
+            conf_path=conf_path,
+            workspace=workspace,
+            field="task.dataset.kwargs.segments",
+        )
+        segments_end = _conf_block_end(lines, start=segments_idx + 1, parent_indent=segments_indent)
+        segments_child_indent = _infer_conf_child_indent(
+            lines,
+            start=segments_idx + 1,
+            end=segments_end,
+            parent_indent=segments_indent,
+        )
+        _replace_or_insert_conf_mapping_key(
+            lines,
+            key="test",
+            value=[oos_start, oos_end],
+            start=segments_idx + 1,
+            end=segments_end,
+            parent_indent=segments_indent,
+            child_indent=segments_child_indent,
+            conf_path=conf_path,
+            workspace=workspace,
+            field_prefix="task.dataset.kwargs.segments",
+            required=True,
+        )
     return "".join(lines)
 
 
@@ -784,8 +1034,22 @@ def _replace_or_insert_conf_mapping_key(
     idx, indent = matches[0]
     rendered = _render_conf_mapping_value(key=key, value=value, indent=indent, newline=_conf_line_newline(lines[idx]) or _conf_newline(lines))
     replacement = rendered.splitlines(keepends=True)
-    lines[idx : idx + 1] = replacement
-    return len(replacement) - 1
+    existing_end = idx + 1
+    existing_value = lines[idx].split(":", 1)[1].strip()
+    if not existing_value:
+        while existing_end < len(lines):
+            stripped = lines[existing_end].strip()
+            if not stripped or stripped.startswith("#"):
+                existing_end += 1
+                continue
+            line_indent = _conf_line_indent(lines[existing_end])
+            if line_indent > indent or (line_indent == indent and stripped.startswith("- ")):
+                existing_end += 1
+                continue
+            break
+    replaced_count = existing_end - idx
+    lines[idx:existing_end] = replacement
+    return len(replacement) - replaced_count
 
 
 def _render_conf_mapping_value(*, key: str, value: Any, indent: int, newline: str) -> str:
@@ -1327,6 +1591,8 @@ class MultiAlphaCombineBacktestService:
         capacity_checker: NodeCapacityChecker | None = None,
         workspace_root: str | Path | None = None,
         clock: CallableUtc | None = None,
+        durable_submission_service: Any | None = None,
+        legacy_execution_mode_for_tests: bool = False,
     ) -> None:
         self._panel_builder = panel_builder or MultiAlphaPanelBuilder()
         self._prediction_loader = prediction_loader
@@ -1336,6 +1602,21 @@ class MultiAlphaCombineBacktestService:
         self._capacity_checker = capacity_checker or DatabaseQENodeCapacityChecker()
         self._workspace_root = Path(workspace_root or os.getenv("AISTOCK_MULTI_ALPHA_BACKTEST_ROOT") or "rdagent_assets/multi_alpha_combine_backtests")
         self._clock = clock or utc_now
+        self._legacy_execution_mode_for_tests = legacy_execution_mode_for_tests
+        if legacy_execution_mode_for_tests:
+            if durable_submission_service is not None:
+                raise ValueError(
+                    "durable_submission_service cannot be combined with legacy_execution_mode_for_tests"
+                )
+            self._durable_submission_service = None
+        else:
+            if durable_submission_service is None:
+                from backend.services.multi_alpha.durable_submission import (
+                    DurableCombineSubmissionService,
+                )
+
+                durable_submission_service = DurableCombineSubmissionService(clock=self._clock)
+            self._durable_submission_service = durable_submission_service
         self._local_executor = ShellPredBacktestExecutor()
         self._remote_executor: BacktestExecutor | None = None
         self._archive_event_capture = None
@@ -1349,7 +1630,19 @@ class MultiAlphaCombineBacktestService:
             except Exception:
                 logger.exception("multi-alpha QE archive event capture is unavailable")
 
-    def submit_run(self, payload: Mapping[str, Any], *, run_async: bool | None = None) -> dict[str, Any]:
+    def submit_run(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        run_async: bool | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        if not self._legacy_execution_mode_for_tests:
+            return self._durable_submission_service.submit(
+                payload,
+                run_async_override=run_async,
+                idempotency_key=idempotency_key,
+            )
         request = parse_request(payload)
         if run_async is not None:
             request = _replace_request(request, run_async=run_async)
@@ -1516,6 +1809,8 @@ class MultiAlphaCombineBacktestService:
         )
         retry_payload["backtest_config"] = backtest_config
         retry_payload["run_async"] = True
+        retry_payload["task_id"] = (bundle.get("run") or {}).get("task_id")
+        retry_payload["retry_of_run_id"] = run_id
         result = self.submit_run(retry_payload, run_async=True)
         return {**result, "retry_of_run_id": run_id, "retry_source": backtest_config["retry_request_source"]}
 
@@ -1528,6 +1823,22 @@ class MultiAlphaCombineBacktestService:
                 reason_code="combine_backtest_delete_not_terminal",
                 context={"run_id": run_id, "status": status},
             )
+        if not self._legacy_execution_mode_for_tests:
+            from backend.services.multi_alpha.durable_repository import (
+                MultiAlphaDurableRepository,
+                MultiAlphaDurableRepositoryError,
+            )
+
+            try:
+                MultiAlphaDurableRepository().assert_recovery_source_delete_allowed(run_id)
+            except MultiAlphaDurableRepositoryError as exc:
+                if exc.reason_code == "recovery_source_copy_in_progress":
+                    raise MultiAlphaCombineBacktestError(
+                        "terminal source deletion is temporarily blocked while its frozen recovery artifacts publish",
+                        reason_code="recovery_source_copy_in_progress",
+                        context=dict(exc.context),
+                    ) from exc
+                raise
         workspace = self._safe_run_workspace(run_id)
         quarantine: Path | None = None
         if cleanup_workspace and workspace.exists():
@@ -1582,7 +1893,7 @@ class MultiAlphaCombineBacktestService:
         workspace = self._safe_run_workspace(run_id)
         events_path = workspace / RUN_EVENT_LOG_NAME
         try:
-            events = read_jsonl_tail(events_path, max(1, min(int(tail_lines), 1000)))
+            file_events = read_jsonl_tail(events_path, max(1, min(int(tail_lines), 1000)))
             files = list_run_log_files(workspace)
         except OSError as exc:
             raise MultiAlphaCombineBacktestError(
@@ -1590,16 +1901,34 @@ class MultiAlphaCombineBacktestService:
                 reason_code="combine_backtest_logs_read_failed",
                 context={"run_id": run_id, "workspace": str(workspace), "error": f"{type(exc).__name__}: {exc}"},
             ) from exc
+        durable_events: list[dict[str, Any]] = []
+        if run.get("task_id") and run.get("request_hash"):
+            from backend.services.multi_alpha.durable_repository import (
+                MultiAlphaDurableRepository,
+            )
+
+            durable_events = MultiAlphaDurableRepository().list_events(
+                run_id,
+                limit=max(1, min(int(tail_lines), 500)),
+            )
+        events = [*file_events, *durable_events]
         reason = dict(run.get("reason") or {}) if isinstance(run.get("reason"), Mapping) else {}
         return {
             "run_id": run_id,
             "status": run.get("status"),
-            "phase": reason.get("phase"),
-            "progress": dict(reason.get("progress") or {}) if isinstance(reason.get("progress"), Mapping) else {},
+            "phase": run.get("phase") or reason.get("phase"),
+            "progress": (
+                dict(run.get("progress_json") or {})
+                if isinstance(run.get("progress_json"), Mapping)
+                else dict(reason.get("progress") or {})
+                if isinstance(reason.get("progress"), Mapping)
+                else {}
+            ),
             "heartbeat_at": reason.get("heartbeat_at") or run.get("updated_at"),
             "reason": reason,
-            "history_available": events_path.is_file(),
+            "history_available": events_path.is_file() or bool(durable_events),
             "events": events,
+            "durable_events": durable_events,
             "files": files,
         }
 
@@ -1615,12 +1944,73 @@ class MultiAlphaCombineBacktestService:
                     """,
                     (run_id,),
                 )
-                row = cur.fetchone()
+                archive_run = cur.fetchone()
+                cur.execute(
+                    """
+                    SELECT phase, reason_code, payload_json, created_at
+                    FROM strategy_pkg.multi_alpha_combine_backtest_event
+                    WHERE run_id = %s
+                      AND phase IN (
+                          'archive_enqueued', 'archive_duplicate',
+                          'archive_skipped_disabled', 'archive_error'
+                      )
+                    ORDER BY event_id DESC
+                    LIMIT 1
+                    """,
+                    (run_id,),
+                )
+                durable_event = cur.fetchone()
+                archive_event_id = None
+                if durable_event and isinstance(durable_event.get("payload_json"), Mapping):
+                    archive_event_id = durable_event["payload_json"].get("archive_event_id")
+                outbox = None
+                if archive_event_id:
+                    cur.execute(
+                        """
+                        SELECT event_id, status, retry_count, next_retry_at,
+                               error_message, created_at, updated_at
+                        FROM qe_archive.outbox_event
+                        WHERE event_id = %s
+                        """,
+                        (archive_event_id,),
+                    )
+                    outbox = cur.fetchone()
+        if archive_run:
+            archive_status = "archived"
+        elif outbox and outbox.get("status") in {"failed", "error"}:
+            archive_status = "archive_error"
+        elif outbox:
+            archive_status = f"archive_{outbox.get('status')}"
+        elif durable_event:
+            archive_status = str(durable_event.get("phase") or "not_archived")
+        else:
+            archive_status = "not_archived"
         return {
             "run_id": run_id,
-            "archive_status": "archived" if row else "not_archived",
-            "archive_run": dict(row) if row else None,
+            "archive_status": archive_status,
+            "archive_run": dict(archive_run) if archive_run else None,
+            "archive_delivery_event": dict(durable_event) if durable_event else None,
+            "archive_outbox": dict(outbox) if outbox else None,
         }
+
+    def get_archive_snapshot(self, run_id: str) -> dict[str, Any]:
+        """Return immutable Archive detail without depending on source rows.
+
+        A terminal source run can be deliberately deleted after Archive
+        delivery.  Reading its archived evidence must still work and must not
+        be redirected to mutable durable tables or a recreated experiment.
+        """
+
+        from backend.services.qe_archive.repository import QEArchiveRepository
+
+        snapshot = QEArchiveRepository().fetch_archived_multi_alpha_combine_run(run_id)
+        if snapshot is None:
+            raise MultiAlphaCombineBacktestError(
+                "archived multi-alpha combine run was not found",
+                reason_code="combine_backtest_archive_snapshot_not_found",
+                context={"run_id": run_id},
+            )
+        return snapshot
 
     def archive_run(self, run_id: str, *, dry_run: bool = True) -> dict[str, Any]:
         bundle = self.get_run(run_id)
@@ -1697,7 +2087,8 @@ class MultiAlphaCombineBacktestService:
             )
 
         task_specs: list[_PredictionTask] = []
-        if request.baseline_leg_id:
+        task_selection = resolved_prediction_task_selection(request)
+        if request.baseline_leg_id and task_selection["include_baseline"]:
             task_specs.append(
                 _PredictionTask(
                     name=f"baseline_{request.baseline_leg_id}",
@@ -1764,7 +2155,7 @@ class MultiAlphaCombineBacktestService:
                     per_window_weights_json=per_window_weights_payload(result, scheme=scheme),
                 )
             )
-            if len(panels) <= 2:
+            if len(panels) <= 2 or not task_selection["include_loo"]:
                 continue
             for dropped_leg in sorted(leg_by_id):
                 source_legs = prediction_legs if is_rank_fusion_scheme(scheme) else panels
@@ -1942,18 +2333,11 @@ class MultiAlphaCombineBacktestService:
         )
 
     def _build_prediction_only_legs(self, request: CombineBacktestRequest) -> list[CombinerLeg]:
-        legs: list[CombinerLeg] = []
-        for spec in request.roster:
-            seed_frames = [self._load_prediction_frame(run_id=run_id, leg_id=spec.leg_id) for run_id in spec.seed_run_ids]
-            ensemble = seed_ensemble_prediction_only(seed_frames, leg_id=spec.leg_id)
-            ensemble = filter_prediction_window(
-                ensemble,
-                leg_id=spec.leg_id,
-                oos_start=request.oos_start,
-                oos_end=request.oos_end,
-            )
-            legs.append(CombinerLeg(leg_id=spec.leg_id, pred_frame=ensemble, metadata=dict(spec.metadata)))
-        return legs
+        return build_prediction_only_legs(
+            request,
+            prediction_loader=self._prediction_loader,
+            model_store=self._model_store,
+        )
 
     def _load_prediction_frame(self, *, run_id: str, leg_id: str) -> pd.DataFrame:
         try:
@@ -2226,6 +2610,7 @@ class MultiAlphaCombineBacktestService:
                     "backtest_name": name,
                     "weighting_scheme": task.scheme if task else None,
                     "dropped_leg_id": task.dropped_leg_id if task else None,
+                    "node_parallelism_limit": node_parallelism_limit,
                 },
             )
         finally:
@@ -2265,6 +2650,15 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
     schemes = tuple(_normalize_scheme(item) for item in (payload.get("weighting_schemes") or DEFAULT_WEIGHTING_SCHEMES))
     if not schemes:
         raise MultiAlphaCombineBacktestError("weighting_schemes cannot be empty", reason_code="scheme_missing")
+    prediction_task_selection = _parse_prediction_task_selection(
+        payload.get("prediction_task_selection")
+    )
+    selection = resolved_prediction_task_selection_value(prediction_task_selection)
+    baseline_leg_id = (
+        str(payload.get("baseline_leg_id") or roster[0].leg_id)
+        if selection["include_baseline"]
+        else None
+    )
     raw_backtest_config = payload.get("backtest_config") if isinstance(payload.get("backtest_config"), Mapping) else {}
     topk = _positive_int(payload.get("topk") or raw_backtest_config.get("topk") or 20, field_name="topk")
     subprocess_timeout_seconds = _positive_int(
@@ -2277,7 +2671,15 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
     )
     raw_run_timeout = payload.get("run_timeout_seconds") or raw_backtest_config.get("run_timeout_seconds")
     if raw_run_timeout is None:
-        task_count = 1 + len(schemes) + (len(schemes) * len(roster) if len(roster) > 2 else 0)
+        task_count = (
+            int(selection["include_baseline"])
+            + len(schemes)
+            + (
+                len(schemes) * len(roster)
+                if len(roster) > 2 and selection["include_loo"]
+                else 0
+            )
+        )
         node_id = str(raw_backtest_config.get("node_id") or "wsl2-5080")
         try:
             node_parallelism = validate_node_parallelism(node_id=node_id, backtest_config=raw_backtest_config)[node_id]
@@ -2303,7 +2705,8 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
         walk_forward=dict(payload.get("walk_forward") or {"enabled": True, "window": 60, "min_periods": 2}),
         rank_fusion=dict(payload.get("rank_fusion") or {}),
         backtest_config=backtest_config,
-        baseline_leg_id=str(payload.get("baseline_leg_id") or roster[0].leg_id),
+        prediction_task_selection=prediction_task_selection,
+        baseline_leg_id=baseline_leg_id,
         topk=topk,
         min_date_coverage=float(payload.get("min_date_coverage") or 0.8),
         run_async=bool(payload.get("run_async", True)),
@@ -2313,30 +2716,13 @@ def parse_request(payload: Mapping[str, Any]) -> CombineBacktestRequest:
 
 
 def _replace_request(request: CombineBacktestRequest, **updates: Any) -> CombineBacktestRequest:
-    data = {
-        "roster": request.roster,
-        "oos_start": request.oos_start,
-        "oos_end": request.oos_end,
-        "weighting_schemes": request.weighting_schemes,
-        "normalize_method": request.normalize_method,
-        "walk_forward": request.walk_forward,
-        "rank_fusion": request.rank_fusion,
-        "backtest_config": request.backtest_config,
-        "baseline_leg_id": request.baseline_leg_id,
-        "topk": request.topk,
-        "min_date_coverage": request.min_date_coverage,
-        "run_async": request.run_async,
-        "scheme_timeout_seconds": request.scheme_timeout_seconds,
-        "run_timeout_seconds": request.run_timeout_seconds,
-    }
-    data.update(updates)
-    return CombineBacktestRequest(**data)
+    return replace(request, **updates)
 
 
 def request_snapshot_for(request: CombineBacktestRequest) -> dict[str, Any]:
     backtest_config = dict(request.backtest_config)
     backtest_config.pop(REQUEST_SNAPSHOT_KEY, None)
-    return {
+    snapshot = {
         "roster": _roster_payload(request.roster),
         "oos_start": request.oos_start,
         "oos_end": request.oos_end,
@@ -2352,6 +2738,54 @@ def request_snapshot_for(request: CombineBacktestRequest) -> dict[str, Any]:
         "scheme_timeout_seconds": request.scheme_timeout_seconds,
         "run_timeout_seconds": request.run_timeout_seconds,
     }
+    if request.prediction_task_selection is not None:
+        snapshot["prediction_task_selection"] = dict(request.prediction_task_selection)
+    return snapshot
+
+
+def resolved_prediction_task_selection(
+    request: CombineBacktestRequest,
+) -> dict[str, bool]:
+    return resolved_prediction_task_selection_value(request.prediction_task_selection)
+
+
+def resolved_prediction_task_selection_value(
+    selection: Mapping[str, bool] | None,
+) -> dict[str, bool]:
+    normalized = _parse_prediction_task_selection(selection)
+    if normalized is None:
+        return {"include_baseline": True, "include_loo": True}
+    return normalized
+
+
+def _parse_prediction_task_selection(value: Any) -> dict[str, bool] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise MultiAlphaCombineBacktestError(
+            "prediction_task_selection must be an object",
+            reason_code="prediction_task_selection_invalid",
+            context={"value_type": type(value).__name__},
+        )
+    supported = {"include_baseline", "include_loo"}
+    unknown = sorted(str(key) for key in value if key not in supported)
+    if unknown:
+        raise MultiAlphaCombineBacktestError(
+            "prediction_task_selection contains unsupported fields",
+            reason_code="prediction_task_selection_invalid",
+            context={"unsupported_fields": unknown, "supported_fields": sorted(supported)},
+        )
+    result: dict[str, bool] = {}
+    for key in sorted(supported):
+        raw = value.get(key, True)
+        if not isinstance(raw, bool):
+            raise MultiAlphaCombineBacktestError(
+                f"prediction_task_selection.{key} must be boolean",
+                reason_code="prediction_task_selection_invalid",
+                context={"field": key, "value": raw},
+            )
+        result[key] = raw
+    return result
 
 
 def persisted_backtest_config_for(request: CombineBacktestRequest) -> dict[str, Any]:
@@ -2598,6 +3032,53 @@ def seed_ensemble_prediction_only(frames: Sequence[pd.DataFrame], *, leg_id: str
     return out.groupby(["trade_date", "instrument"], as_index=False, sort=True)["score"].mean()
 
 
+def build_prediction_only_legs(
+    request: CombineBacktestRequest,
+    *,
+    prediction_loader: Any | None = None,
+    model_store: ModelStoreService | None = None,
+) -> list[CombinerLeg]:
+    store = model_store or ModelStoreService()
+    legs: list[CombinerLeg] = []
+    for spec in request.roster:
+        seed_frames: list[pd.DataFrame] = []
+        for run_id in spec.seed_run_ids:
+            try:
+                raw = prediction_loader(run_id) if prediction_loader is not None else pd.read_pickle(
+                    store.prediction_path(run_id=run_id)
+                )
+                seed_frames.append(normalize_prediction_frame(raw, run_id=run_id))
+            except (
+                PredictionStoreError,
+                MultiAlphaOrthogonalityError,
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+            ) as exc:
+                raise MultiAlphaCombineBacktestError(
+                    f"failed to load prediction artifact for rank-fusion: {type(exc).__name__}: {exc}",
+                    reason_code="prediction_missing_or_invalid",
+                    leg_id=spec.leg_id,
+                    context={"run_id": run_id},
+                ) from exc
+        ensemble = seed_ensemble_prediction_only(seed_frames, leg_id=spec.leg_id)
+        ensemble = filter_prediction_window(
+            ensemble,
+            leg_id=spec.leg_id,
+            oos_start=request.oos_start,
+            oos_end=request.oos_end,
+        )
+        legs.append(
+            CombinerLeg(
+                leg_id=spec.leg_id,
+                pred_frame=ensemble,
+                metadata=dict(spec.metadata),
+            )
+        )
+    return legs
+
+
 def filter_prediction_window(frame: pd.DataFrame, *, leg_id: str, oos_start: str, oos_end: str) -> pd.DataFrame:
     start = pd.to_datetime(oos_start, errors="coerce")
     end = pd.to_datetime(oos_end, errors="coerce")
@@ -2753,6 +3234,8 @@ def per_window_weights_payload(result: Any, *, scheme: str) -> list[dict[str, An
 def runtime_backtest_config(request: CombineBacktestRequest) -> dict[str, Any]:
     config = dict(request.backtest_config)
     config["topk"] = request.topk
+    config["oos_start"] = request.oos_start
+    config["oos_end"] = request.oos_end
     config.setdefault("timeout_seconds", request.scheme_timeout_seconds)
     config.setdefault("read_timeout_seconds", DEFAULT_READ_EXP_TIMEOUT_SECONDS)
     config["run_timeout_seconds"] = request.run_timeout_seconds

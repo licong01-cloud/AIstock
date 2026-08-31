@@ -1,0 +1,201 @@
+{
+  "actual": "On clean producer 1ad5ff6209d723c41537d51b1d2d750a95a2e371, approved preflight passes exact dataset/mapping/L2 identities but fresh_process_1 fails before the first HMM fit: 801010.SI train-only observation coverage is insufficient: 10. The approved autocycle 20D family requires cross-sectional features computed only on complete 31/31 or 131/131 sector dates; the re-frozen input contains 2491 invalid L1 sector-dates. Preflight does not validate the four family/level train-only coverage contracts, a previously written request candidate is not bound to a recomputed coverage receipt, and the parent reports only stderr_sha256 instead of durable typed failure evidence. Fix must fail before grid launch with complete coverage evidence, bind every formal child to a recomputed coverage receipt before fit, persist child failure diagnostics, preserve exact previous-trading-date PIT and approved 7/20 features, and must not impute, drop features, relax cross-section completeness, select seeds, or write model/READY.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/b3_training.py",
+    "backend/tests/hmm_risk/test_b3_training.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "tests/aistock_validation/bugs/20260726_BUG-870-hmm-b3-preflight-accepts-frozen-input-with-insufficient-formal-train-cov.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-870",
+  "closed_at": "2026-07-26T13:53:45Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-26T06:41:29.728906Z",
+  "description": "On clean producer 1ad5ff6209d723c41537d51b1d2d750a95a2e371, approved preflight passes exact dataset/mapping/L2 identities but fresh_process_1 fails before the first HMM fit: 801010.SI train-only observation coverage is insufficient: 10. The approved autocycle 20D family requires cross-sectional features computed only on complete 31/31 or 131/131 sector dates; the re-frozen input contains 2491 invalid L1 sector-dates. Preflight does not validate the four family/level train-only coverage contracts, and the parent reports only stderr_sha256 instead of durable typed failure evidence. Fix must fail before grid launch with complete coverage evidence, persist child failure diagnostics, preserve exact previous-trading-date PIT and approved 7/20 features, and must not impute, drop features, relax cross-section completeness, select seeds, or write model/READY.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260726-75b1d82834a5",
+      "timestamp": "2026-07-26T06:41:29.728901Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260726_1ad5ff62/formal_preflight.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260726_bug870_0660262a/formal_preflight.json"
+  ],
+  "expected": "B3 preflight must audit complete train-only feature coverage for both approved families and both direct levels before emitting a formal request. Any sector below 120 rows must produce a complete immutable blocked receipt and no request candidate or HMM fit. Every emitted formal request must bind the coverage contract version and receipt hash, and every child must recompute and compare that receipt before its first fit so a stale candidate fails closed. If a formal child later fails, the parent must persist bounded typed error evidence rather than return only stderr_sha256.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/b3_training.py",
+      "backend/tests/hmm_risk/test_b3_training.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "scripts/hmm_risk/prepare_state_model_set.py"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/b3_training.py",
+      "backend/tests/hmm_risk/test_b3_training.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+      "scripts/hmm_risk/prepare_state_model_set.py"
+    ]
+  },
+  "first_seen_at": "2026-07-26T06:41:29.728906Z",
+  "fix_branch": null,
+  "fix_commit": "e8f78649007b0933908cfb65d44277cecce19445",
+  "fixed_at": "2026-07-26T13:59:09.456538Z",
+  "github_issue_number": 2755,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2755",
+  "last_seen_at": "2026-07-26T06:41:29.728906Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2756",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run the formal B3 command on clean producer 1ad5ff6209d723c41537d51b1d2d750a95a2e371 with the approved request; fresh_process_1 fails before the first HMM fit with 801010.SI train-only observation coverage is insufficient: 10 and parent stderr_sha256 fae31c52178516b376a69ac89e1b155fc5a3c673132348b12779cc29e9d0e719.",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM B3 preflight accepts frozen input with insufficient formal train coverage",
+  "trigger_condition": {
+    "fingerprint": "75b1d82834a5e514cb3bf41c",
+    "source_event_id": "FE-20260726-75b1d82834a5"
+  },
+  "validation_evidence": [
+    "python -m nox -s hmm_risk_backend -> 75 passed; coverage 74.11%"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": "BUG-870-local-fd7d949c-20260726",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

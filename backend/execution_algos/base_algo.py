@@ -53,6 +53,7 @@ class BaseExecutionAlgo(ABC):
                 total_quantity,
                 symbol=symbol,
                 side=side,
+                allow_sell_residual=True,
             ),
         )
 
@@ -85,8 +86,20 @@ class BaseExecutionAlgo(ABC):
         *,
         symbol: str | None = None,
         side: str = "BUY",
+        allow_sell_residual: bool = False,
     ) -> int:
-        """Use exchange board-lot rules whenever a symbol identity exists."""
+        """Round one quantity without treating intermediate SELLs as residuals.
+
+        ``allow_sell_residual`` is deliberately false by default.  Algorithms
+        may set it only for a child that represents the entire remaining
+        parent quantity.  Parent initialization passes true so an existing
+        sub-minimum holding can still be represented for a final close.
+        """
         if symbol is not None:
-            return round_to_board_lot(qty, symbol, side=side)
+            return round_to_board_lot(
+                qty,
+                symbol,
+                side=side,
+                allow_sell_residual=allow_sell_residual,
+            )
         return (qty // lot_size) * lot_size

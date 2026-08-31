@@ -15,6 +15,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active  # noqa: E402
+
+require_execution_algo_active("V25_TWO_STAGE", operation="legacy_cli_qlib_v25_smoke", semantic_path="cli.execution_algo")
+
 from backend.execution_algos.v25_core import (  # noqa: E402
     V25MarketAction,
     classify_v25_minute_market_state,

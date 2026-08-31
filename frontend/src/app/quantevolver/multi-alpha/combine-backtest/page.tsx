@@ -1,8 +1,11 @@
 ﻿"use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, DownloadCloud, RefreshCw } from "lucide-react";
+import { Activity, DownloadCloud, Plus, RefreshCw } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import MultiAlphaCreateComposer from "../../evolution/components/MultiAlphaCreateComposer";
+import { canonicalMultiAlphaEvolutionUrl, type MultiAlphaCreateResult } from "../../evolution/components/multiAlphaEvolutionAdapter";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const PAGE_SIZE = 50;
@@ -22,6 +25,8 @@ type CombineTask = {
   default_scheme?: string;
   phase?: string | null;
   running_count?: number;
+  queued_count?: number;
+  reconciling_count?: number;
   completed_count?: number;
   partial_failed_count?: number;
   failed_count?: number;
@@ -93,6 +98,8 @@ function combineStatusInfo(status: string): { color: string; bgColor: string; la
       return { label: "运行中", color: "#0369a1", bgColor: "#e0f2fe" };
     case "completed":
       return { label: "已完成", color: "#047857", bgColor: "#d1fae5" };
+    case "partial_recovered":
+      return { label: "已恢复（部分可计算）", color: "#047857", bgColor: "#d1fae5" };
     case "failed":
     case "partial_failed":
       return { label: status === "partial_failed" ? "部分失败" : "已失败", color: "#b91c1c", bgColor: "#fee2e2" };
@@ -125,14 +132,14 @@ function schemeText(task: CombineTask): string {
 function taskProgressText(task: CombineTask): string {
   const progress = task.progress || {};
   if (progress.completed != null || progress.total != null || progress.pending != null) {
-    return `${String(progress.completed ?? "-")}/${String(progress.total ?? "-")} pending=${String(progress.pending ?? "-")}`;
+    return `${String(progress.completed ?? "-")}/${String(progress.total ?? "-")} running=${String(progress.running ?? task.running_count ?? "-")} queued=${String(progress.queued ?? task.queued_count ?? "-")} reconciling=${String(progress.reconciling ?? task.reconciling_count ?? "-")}`;
   }
   return task.phase || "-";
 }
 
-export default function MultiAlphaCombineBacktestPage() {
+function MultiAlphaCombineBacktestWorkspace() {
   const [tasks, setTasks] = useState<CombineTask[]>([]);
-  const [statusFilter, setStatusFilter] = useState<"all" | "running" | "completed" | "partial_failed" | "failed">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "running" | "pending" | "completed" | "partial_recovered" | "partial_failed" | "failed">("all");
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -140,6 +147,7 @@ export default function MultiAlphaCombineBacktestPage() {
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(5);
+  const [showCreate, setShowCreate] = useState(false);
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
@@ -208,7 +216,9 @@ export default function MultiAlphaCombineBacktestPage() {
           >
             <option value="all">全部状态</option>
             <option value="running">运行中</option>
+            <option value="pending">等待容量</option>
             <option value="completed">已完成</option>
+            <option value="partial_recovered">已恢复（部分可计算）</option>
             <option value="partial_failed">部分失败</option>
             <option value="failed">已失败</option>
           </select>
@@ -273,6 +283,9 @@ export default function MultiAlphaCombineBacktestPage() {
                   </span>
                 )}
                 <span>自动进度 + 失败证据 + 配置级操作。</span>
+                <button onClick={() => setShowCreate(true)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 10px", border: "1px solid #2563eb", borderRadius: 6, background: "#2563eb", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  <Plus size={12} /> 创建组合回测
+                </button>
               </div>
             </div>
 
@@ -309,7 +322,7 @@ export default function MultiAlphaCombineBacktestPage() {
                       style={{ cursor: "pointer", backgroundColor: "#fff", borderBottom: "1px solid #f1f5f9", transition: "background-color 0.15s" }}
                       onMouseEnter={event => { event.currentTarget.style.backgroundColor = "#fafafa"; }}
                       onMouseLeave={event => { event.currentTarget.style.backgroundColor = "#fff"; }}
-                      onClick={() => { window.location.href = `/quantevolver/multi-alpha/combine-backtest/${encodeURIComponent(task.task_id)}`; }}
+                      onClick={() => { window.location.href = canonicalMultiAlphaEvolutionUrl(task.task_id); }}
                     >
                       <td style={{ padding: "8px 16px", fontWeight: 500, color: "#0f172a", maxWidth: "360px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         <div title={task.task_name}>{task.task_name}</div>
@@ -345,7 +358,7 @@ export default function MultiAlphaCombineBacktestPage() {
                       <td style={{ padding: "10px 12px", textAlign: "center" }}>
                         <div style={{ display: "flex", gap: "4px", justifyContent: "center" }}>
                           <Link
-                            href={`/quantevolver/multi-alpha/combine-backtest/${encodeURIComponent(task.task_id)}`}
+                            href={canonicalMultiAlphaEvolutionUrl(task.task_id)}
                             onClick={(event) => event.stopPropagation()}
                             title="查看组合回测详情"
                             style={{ padding: "4px 8px", border: "1px solid #3b82f6", borderRadius: "4px", backgroundColor: "#eff6ff", color: "#3b82f6", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "3px", textDecoration: "none" }}
@@ -391,6 +404,30 @@ export default function MultiAlphaCombineBacktestPage() {
           </div>
         </div>
       </div>
+      {showCreate && (
+        <MultiAlphaCreateComposer
+          apiBase={API}
+          onClose={() => setShowCreate(false)}
+          onSubmitted={async (_results: MultiAlphaCreateResult[]) => {
+            await loadTasks();
+          }}
+        />
+      )}
     </div>
   );
+}
+
+function MultiAlphaCombineBacktestLegacyRedirect() {
+  useEffect(() => {
+    const query = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
+    window.location.replace(canonicalMultiAlphaEvolutionUrl(undefined, query));
+  }, []);
+  return <div style={{ padding: 24, color: "#475569" }}>正在转到规范 QE 演进页面…</div>;
+}
+
+export default function MultiAlphaCombineBacktestPage() {
+  const pathname = usePathname();
+  return pathname === "/quantevolver/evolution"
+    ? <MultiAlphaCombineBacktestWorkspace />
+    : <MultiAlphaCombineBacktestLegacyRedirect />;
 }

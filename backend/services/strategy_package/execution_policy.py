@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
-from typing import Any
+from typing import Any, Mapping
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -20,6 +20,8 @@ class ExecutionPolicyValidationStatus(str, Enum):
 
 
 BACKTEST_SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED", "BACKTEST_VALIDATED"}
+LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID = "localsim_twap_only_v1"
+LOCALSIM_TWAP_ONLY_REASON_CODE = "LOCALSIM_TWAP_ONLY_POLICY"
 
 
 ALLOWED_POLICY_JSON_KEYS = {
@@ -35,6 +37,9 @@ ALLOWED_POLICY_JSON_KEYS = {
     "unfilled_handler_params",
     "price_guard",
     "exit_guard",
+    "schedule_window",
+    "quote_contract",
+    "quote_evidence",
 }
 
 PRICE_GUARD_POLICY_KEYS = {
@@ -82,6 +87,7 @@ ALGO_CONFIG_GUARD_FORBIDDEN_KEYS = {
     "t1_handling",
 }
 
+
 def compute_execution_policy_sha256(policy_json: dict[str, Any]) -> str:
     encoded = json.dumps(
         policy_json,
@@ -125,6 +131,207 @@ def normalize_execution_policy_json(policy_json: dict[str, Any]) -> dict[str, An
     return normalized
 
 
+def local_sim_twap_only_policy_snapshot() -> dict[str, Any]:
+    """Return the deterministic, fail-closed execution policy for LocalSIM."""
+
+    policy_json = normalize_execution_policy_json(
+        {
+            "execution_level": "minute",
+            "bar_freq": "1m",
+            "algo_code": "TWAP",
+            "algo_config": {
+                "allow_partial_fill": True,
+                "split_count": 3,
+            },
+            "fallback_algo_code": None,
+            "data_requirements": {
+                "requires_minute_bar": True,
+                "requires_limit_price": True,
+                "requires_trade_calendar": True,
+                "requires_suspend_status": True,
+            },
+            "fallback_policy": {
+                "on_missing_minute_bar": "fail",
+                "on_algo_error": "fail",
+            },
+            "quality_report": {
+                "record_slippage": True,
+                "record_participation_rate": True,
+                "record_unfilled_reason": True,
+            },
+        }
+    )
+    return {
+        "policy_version_id": LOCALSIM_TWAP_ONLY_POLICY_VERSION_ID,
+        "policy_sha256": compute_execution_policy_sha256(policy_json),
+        "policy_json": policy_json,
+    }
+
+
+FROZEN_EXECUTION_POLICY_ID_FIELDS = (
+    "policy_version_id",
+    "validated_execution_policy_id",
+    "policy_id",
+)
+
+
+def validate_frozen_execution_policy_snapshot(
+    snapshot: Mapping[str, Any] | None,
+    *,
+    expected_policy_id: str | None = None,
+    expected_policy_sha256: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate one explicit immutable execution-policy snapshot.
+
+    The accepted ID spellings are distinct persisted schema variants. Exactly
+    one must be present; aliases cannot be combined and no unknown field is
+    ignored. The hash always covers the normalized policy JSON.
+    """
+
+    error_context = dict(context or {})
+    if not isinstance(snapshot, Mapping) or not snapshot:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot must be an explicit non-empty object",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_MISSING",
+            },
+        )
+    payload = dict(snapshot)
+    present_id_fields = [field for field in FROZEN_EXECUTION_POLICY_ID_FIELDS if str(payload.get(field) or "").strip()]
+    if len(present_id_fields) != 1:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot requires exactly one policy identity field",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID",
+                "present_policy_id_fields": present_id_fields,
+                "allowed_policy_id_fields": list(FROZEN_EXECUTION_POLICY_ID_FIELDS),
+            },
+        )
+    id_field = present_id_fields[0]
+    expected_fields = {id_field, "policy_sha256", "policy_json"}
+    if set(payload) != expected_fields:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot fields are not exact",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID",
+                "missing_fields": sorted(expected_fields - set(payload)),
+                "unknown_fields": sorted(set(payload) - expected_fields),
+            },
+        )
+    policy_id = str(payload[id_field]).strip()
+    policy_sha256 = str(payload["policy_sha256"] or "").strip().lower()
+    if not policy_id or not policy_sha256:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot identity is incomplete",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_IDENTITY_INCOMPLETE",
+                "policy_id": policy_id or None,
+                "policy_sha256": policy_sha256 or None,
+            },
+        )
+    raw_policy_json = payload["policy_json"]
+    if not isinstance(raw_policy_json, dict) or not raw_policy_json:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot requires a non-empty policy_json",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_SNAPSHOT_SCHEMA_INVALID",
+                "policy_id": policy_id,
+            },
+        )
+    normalized = normalize_execution_policy_json(dict(raw_policy_json))
+    computed_sha256 = compute_execution_policy_sha256(normalized)
+    if policy_sha256 != computed_sha256:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot hash does not match normalized policy_json",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_HASH_CONFLICT",
+                "policy_id": policy_id,
+                "stored_policy_sha256": policy_sha256,
+                "computed_policy_sha256": computed_sha256,
+            },
+        )
+    expected_id = str(expected_policy_id or "").strip()
+    expected_sha = str(expected_policy_sha256 or "").strip().lower()
+    if expected_id and policy_id != expected_id:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot ID conflicts with the runtime release",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_IDENTITY_CONFLICT",
+                "expected_policy_id": expected_id,
+                "snapshot_policy_id": policy_id,
+            },
+        )
+    if expected_sha and policy_sha256 != expected_sha:
+        raise RuntimeConfigInvalidError(
+            "LocalSim execution policy snapshot hash conflicts with the runtime release",
+            context={
+                **error_context,
+                "reason_code": "LOCALSIM_EXECUTION_POLICY_IDENTITY_CONFLICT",
+                "expected_policy_sha256": expected_sha,
+                "snapshot_policy_sha256": policy_sha256,
+            },
+        )
+    return {
+        id_field: policy_id,
+        "policy_sha256": policy_sha256,
+        "policy_json": normalized,
+    }
+
+
+def local_sim_twap_only_policy_context(requested_context: Mapping[str, Any]) -> dict[str, Any]:
+    """Compile one Paper v2 LocalSIM policy context to explicit TWAP-only mode."""
+
+    requested = dict(requested_context)
+    requested_snapshot = validate_frozen_execution_policy_snapshot(
+        {
+            "validated_execution_policy_id": requested.get("validated_execution_policy_id"),
+            "policy_sha256": requested.get("policy_sha256"),
+            "policy_json": requested.get("policy_json"),
+        },
+        context={
+            "stage": "PAPER_V2_LOCAL_SIM_POLICY_SELECTION",
+            "activation_id": requested.get("activation_id"),
+            "activation_source": requested.get("activation_source"),
+        },
+    )
+    effective = local_sim_twap_only_policy_snapshot()
+    return {
+        "validated_execution_policy_id": effective["policy_version_id"],
+        "policy_sha256": effective["policy_sha256"],
+        "policy_name": "LocalSIM TWAP-only runtime policy",
+        "activation_id": requested.get("activation_id"),
+        "activation_source": "localsim_runtime_mode_policy",
+        "activated_at": requested.get("activated_at"),
+        "activated_by": requested.get("activated_by"),
+        "activation_reason": requested.get("activation_reason"),
+        "algo_code": "TWAP",
+        "source_backtest_id": requested.get("source_backtest_id"),
+        "source_backtest_status": requested.get("source_backtest_status"),
+        "validation_status": "RUNTIME_MODE_POLICY",
+        "policy_json": effective["policy_json"],
+        "runtime_policy_selection": {
+            "schema_version": "localsim_runtime_policy_selection_v1",
+            "reason_code": LOCALSIM_TWAP_ONLY_REASON_CODE,
+            "requested_policy_id": requested_snapshot["validated_execution_policy_id"],
+            "requested_policy_sha256": requested_snapshot["policy_sha256"],
+            "requested_algo_code": requested_snapshot["policy_json"]["algo_code"],
+            "requested_activation_source": requested.get("activation_source"),
+            "effective_policy_id": effective["policy_version_id"],
+            "effective_policy_sha256": effective["policy_sha256"],
+            "effective_algo_code": "TWAP",
+            "fallback_used": False,
+        },
+    }
+
+
 def _validate_optional_guard_policy(normalized: dict[str, Any], key: str, allowed_keys: set[str]) -> None:
     if key not in normalized:
         return
@@ -132,7 +339,12 @@ def _validate_optional_guard_policy(normalized: dict[str, Any], key: str, allowe
     if not isinstance(value, dict):
         raise RuntimeConfigInvalidError(
             f"execution policy {key} must be an object",
-            context={"field": key, "reason_code": "UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR" if key == "price_guard" else "UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR"},
+            context={
+                "field": key,
+                "reason_code": "UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR"
+                if key == "price_guard"
+                else "UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR",
+            },
         )
     unknown = sorted(set(value).difference(allowed_keys))
     if unknown:

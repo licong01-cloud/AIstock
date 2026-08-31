@@ -6,6 +6,8 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
@@ -265,6 +267,59 @@ def test_preview_accepts_sell_residuals_allowed_by_canonical_board_lot() -> None
     assert broker.place_order_calls == 1
 
 
+def test_preview_accepts_complete_nonincrement_sell_position() -> None:
+    service = _service(_repo(available_lot=628))
+
+    result = service.preview_order(_sell_request(quantity=628))
+
+    assert result.allowed is True
+    assert result.strategy_available_sell_quantity == 628
+
+
+def test_preview_rejects_partial_nonincrement_sell_before_broker_call() -> None:
+    broker = CountingBroker()
+    service = _service(_repo(available_lot=800), broker)
+
+    result = service.submit_order(_sell_request(quantity=628))
+
+    assert result.success is False
+    assert result.broker_called is False
+    error = next(error for error in result.preflight.errors if error.code == "SELL_BOARD_LOT")
+    assert error.context == {
+        "symbol": "300604.SZ",
+        "quantity": 628,
+        "available_quantity": 800,
+        "min_quantity": 100,
+        "increment": 100,
+        "canonical_quantity": 600,
+    }
+    assert broker.place_order_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("available_lot", "quantity"),
+    [
+        (100, 1),
+        (500, 83),
+    ],
+)
+def test_preview_rejects_partial_sub_minimum_sell_before_broker_call(
+    available_lot: int,
+    quantity: int,
+) -> None:
+    broker = CountingBroker()
+    service = _service(_repo(available_lot=available_lot), broker)
+
+    result = service.submit_order(_sell_request(quantity=quantity))
+
+    assert result.success is False
+    assert result.broker_called is False
+    error = next(error for error in result.preflight.errors if error.code == "SELL_BOARD_LOT")
+    assert error.context["available_quantity"] == available_lot
+    assert error.context["quantity"] == quantity
+    assert broker.place_order_calls == 0
+
+
 def test_preview_rejects_t1_strategy_lot_shortage() -> None:
     result = _service(_repo(available_lot=0)).preview_order(_sell_request(quantity=1000))
 
@@ -442,8 +497,12 @@ def test_submit_batch_allows_account_group_cash_fit_across_strategy_slots() -> N
 
     result = _service(repo, broker).submit_batch(
         [
-            _buy_request(strategy_name="poc_strategy_a", order_remark="ag622-fit-a", quantity=1000, price=Decimal("10")),
-            _buy_request(strategy_name="poc_strategy_b", order_remark="ag622-fit-b", quantity=1000, price=Decimal("10")),
+            _buy_request(
+                strategy_name="poc_strategy_a", order_remark="ag622-fit-a", quantity=1000, price=Decimal("10")
+            ),
+            _buy_request(
+                strategy_name="poc_strategy_b", order_remark="ag622-fit-b", quantity=1000, price=Decimal("10")
+            ),
         ]
     )
 
@@ -587,6 +646,34 @@ class DisconnectingBroker(CountingBroker):
         raise error
 
 
+class StatusProbeFailingBroker(CountingBroker):
+    def status(self) -> dict:
+        raise RuntimeError("status transport failed")
+
+    def place_order(self, **kwargs):
+        del kwargs
+        self.place_order_calls += 1
+        raise RuntimeError("submit transport failed")
+
+
+def test_broker_status_probe_failure_is_loud_after_submit_exception() -> None:
+    repo = _repo(cash=Decimal("10000"))
+    broker = StatusProbeFailingBroker()
+    service = _service(repo, broker)
+    request = _buy_request(order_remark="status-probe-failure", quantity=100, price=Decimal("10"))
+
+    with pytest.raises(RuntimeError, match="MINIQMT_BROKER_STATUS_PROBE_FAILED"):
+        service.submit_order(request)
+
+    assert broker.place_order_calls == 1
+    account = repo.get_virtual_account("strat_a")
+    assert account.cash == Decimal("10000")
+    assert account.frozen_cash == Decimal("0")
+    intent = repo.get_order_intent_by_remark(ACCOUNT_ID, "status-probe-failure")
+    assert intent is not None
+    assert intent.submit_status is IntentSubmitStatus.REJECTED
+
+
 def test_broker_disconnect_freeze_has_priority_over_pre_trade_and_cash_gates() -> None:
     repo = _repo(cash=Decimal("1000"))
     broker = DisconnectingBroker()
@@ -622,7 +709,9 @@ def test_broker_disconnect_freeze_has_priority_over_pre_trade_and_cash_gates() -
     assert broker.place_order_calls == 1
 
     broker.connected = True
-    recovered = service.submit_batch([_buy_request(order_remark="disconnect-recovered", quantity=100, price=Decimal("10"))])
+    recovered = service.submit_batch(
+        [_buy_request(order_remark="disconnect-recovered", quantity=100, price=Decimal("10"))]
+    )
     assert recovered.success is True
     assert broker.order_query_calls >= 1
     assert broker.trade_query_calls >= 1

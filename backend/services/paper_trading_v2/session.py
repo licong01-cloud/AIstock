@@ -28,8 +28,15 @@ from backend.services.trading_core.execution_algo_capabilities import (
 from backend.services.trading_core.models import RunStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository, StrategyPackageRepository
 from backend.services.selection_center.runtime_profile import validate_runtime_profile_binding
+from backend.services.selection_center.canonical_pit_runtime import (
+    CanonicalPitGenerationDriftError,
+    has_canonical_pit_runtime_profile,
+    require_canonical_pit_generation_current,
+    require_canonical_pit_runtime_binding,
+)
 
-from .market_data import MinuteDataSource, TradeCalendarProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from .models import (
     PaperReplayResult,
     PaperSessionDay,
@@ -110,11 +117,13 @@ class PaperTradingSessionService:
         package_repository: StrategyPackageRepository | Any | None = None,
         calendar_provider: TradeCalendarProvider | Any | None = None,
         enforce_non_trading_window: bool = False,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.package_repository = package_repository
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.enforce_non_trading_window = enforce_non_trading_window
+        self.pit_authority_resolver = pit_authority_resolver
 
     def create_session(
         self,
@@ -205,6 +214,7 @@ class PaperTradingSessionService:
         config = PaperTradingV2PortfolioService(
             package_repository=package_repository,
             repository=self.repository,
+            pit_authority_resolver=self.pit_authority_resolver,
         ).resolve_runtime_config_for_date(
             portfolio=portfolio,
             trade_date=start_date,
@@ -230,6 +240,13 @@ class PaperTradingSessionService:
             **dict(config.get("paper_v2_session") or {}),
         }
         manual_tick_only = bool(config["paper_v2_session"].get("manual_tick_only", False))
+        if has_canonical_pit_runtime_profile(config):
+            if end_date is not None:
+                require_canonical_pit_runtime_binding(config, trade_date=end_date)
+            require_canonical_pit_generation_current(
+                config,
+                authority_resolver=self.pit_authority_resolver,
+            )
         session = PaperTradingSession(
             portfolio_id=portfolio_id,
             mode=session_mode,
@@ -479,7 +496,11 @@ class PaperTradingSessionService:
                 "only paused paper v2 sessions can be resumed",
                 context={"session_id": session_id, "status": session.status.value},
             )
-        resumed_status = PaperSessionStatus.REPLAYING if session.mode == PaperSessionMode.REPLAY_ONLY else PaperSessionStatus.LIVE_WAITING_FOR_BAR
+        resumed_status = (
+            PaperSessionStatus.REPLAYING
+            if session.mode == PaperSessionMode.REPLAY_ONLY
+            else PaperSessionStatus.LIVE_WAITING_FOR_BAR
+        )
         resumed = self.repository.update_session_status(session_id, status=resumed_status)
         self.repository.save_session_event(
             session_id=session_id,
@@ -505,7 +526,9 @@ class PaperTradingSessionService:
             message="paper v2 trade session stopped without deleting persisted artifacts",
         )
         portfolio = self.repository.get_portfolio(session.portfolio_id)
-        if portfolio.status in {PortfolioStatus.RUNNING, PortfolioStatus.PAUSED} and not self._has_running_run(portfolio.portfolio_id):
+        if portfolio.status in {PortfolioStatus.RUNNING, PortfolioStatus.PAUSED} and not self._has_running_run(
+            portfolio.portfolio_id
+        ):
             self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
         return stopped
 
@@ -533,7 +556,10 @@ class PaperTradingSessionService:
 
     def _has_running_run(self, portfolio_id: str) -> bool:
         try:
-            return any(str(row.get("status") or "").upper() == "RUNNING" for row in self.repository.list_runs(portfolio_id, limit=10_000))
+            return any(
+                str(row.get("status") or "").upper() == "RUNNING"
+                for row in self.repository.list_runs(portfolio_id, limit=10_000)
+            )
         except (DataUnavailableError, TradingCoreError) as exc:
             raise SessionConfigError(
                 "paper v2 session could not verify running day-run state",
@@ -580,7 +606,11 @@ class PaperTradingSessionService:
         except ValueError as exc:
             raise SessionSourceUnsupportedError(
                 "unsupported Paper v2 minute data source",
-                context={"field": field_name, "source": str(source), "supported_sources": [item.value for item in MinuteDataSource]},
+                context={
+                    "field": field_name,
+                    "source": str(source),
+                    "supported_sources": [item.value for item in MinuteDataSource],
+                },
             ) from exc
 
     @staticmethod
@@ -594,7 +624,10 @@ class PaperTradingSessionService:
         if start_date < portfolio_start_date:
             raise SessionConfigError(
                 "session start_date cannot be before portfolio start_date",
-                context={"start_date": start_date.isoformat(), "portfolio_start_date": portfolio_start_date.isoformat()},
+                context={
+                    "start_date": start_date.isoformat(),
+                    "portfolio_start_date": portfolio_start_date.isoformat(),
+                },
             )
         if mode == PaperSessionMode.REPLAY_ONLY and end_date is None:
             raise SessionConfigError("REPLAY_ONLY session requires end_date")
@@ -646,7 +679,9 @@ class PaperTradingSessionService:
                 return
         elif mode == PaperSessionMode.CATCHUP_THEN_LIVE:
             if historical_data_source is None or live_data_source is None:
-                raise SessionConfigError("CATCHUP_THEN_LIVE session requires both historical_data_source and live_data_source")
+                raise SessionConfigError(
+                    "CATCHUP_THEN_LIVE session requires both historical_data_source and live_data_source"
+                )
             if broker_backend != "local_sim":
                 raise SessionSourceUnsupportedError(
                     "catch-up then live is not implemented for this broker backend",
@@ -747,16 +782,20 @@ class PaperTradingSessionRunner:
         package_repository: StrategyPackageRepository | Any | None = None,
         replay_service: PaperTradingHistoricalReplay | None = None,
         live_executor: PaperTradingLiveMinuteExecutor | None = None,
+        pit_authority_resolver: Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.package_repository = package_repository
+        self.pit_authority_resolver = pit_authority_resolver
         self.replay_service = replay_service or PaperTradingHistoricalReplay(
             repository=self.repository,
             package_repository=self.package_repository,
+            pit_authority_resolver=self.pit_authority_resolver,
         )
         self.live_executor = live_executor or PaperTradingLiveMinuteExecutor(
             repository=self.repository,
             package_repository=self.package_repository,
+            pit_authority_resolver=self.pit_authority_resolver,
         )
 
     def tick(
@@ -786,6 +825,9 @@ class PaperTradingSessionRunner:
         try:
             with self.repository.session_tick_lock(session_id):
                 session = self.repository.get_session(session_id)
+                if session.status in TERMINAL_SESSION_STATUSES:
+                    return PaperTradingSessionService(repository=self.repository).progress(session_id)
+                self._require_current_pit_or_record_drift(session)
                 if session.status == PaperSessionStatus.PAUSED and not allow_paused:
                     self.repository.save_session_event(
                         session_id=session_id,
@@ -800,8 +842,6 @@ class PaperTradingSessionRunner:
                         message="paper v2 paused manual-tick session claimed by explicit tick request",
                         context={"allow_paused": True},
                     )
-                if session.status in TERMINAL_SESSION_STATUSES:
-                    return PaperTradingSessionService(repository=self.repository).progress(session_id)
                 if session.mode != PaperSessionMode.REPLAY_ONLY:
                     try:
                         return self.live_executor.tick(session, as_of_time=as_of_time)
@@ -822,6 +862,30 @@ class PaperTradingSessionRunner:
                 return self._run_replay_only(session, as_of_time=as_of_time)
         finally:
             lock.release()
+
+    def _require_current_pit_or_record_drift(self, session: PaperTradingSession) -> None:
+        if not has_canonical_pit_runtime_profile(session.runtime_config):
+            return
+        try:
+            require_canonical_pit_generation_current(
+                session.runtime_config,
+                authority_resolver=self.pit_authority_resolver,
+            )
+        except CanonicalPitGenerationDriftError as exc:
+            error = exc.to_dict()
+            self.repository.update_session_status(
+                session.session_id,
+                status=PaperSessionStatus.FAILED,
+                completed_at=datetime.now(UTC),
+                last_error=error,
+            )
+            self.repository.save_session_event(
+                session_id=session.session_id,
+                event_type="SESSION_CANONICAL_PIT_GENERATION_DRIFT",
+                message=exc.message,
+                context=exc.context,
+            )
+            raise
 
     def _run_replay_only(self, session: PaperTradingSession, *, as_of_time: datetime | None) -> PaperSessionProgress:
         if session.end_date is None or session.historical_data_source is None:
@@ -863,6 +927,7 @@ class PaperTradingSessionRunner:
                 rerun_policy=str(replay_opts.get("rerun_policy") or "reject_existing"),
                 confirm_reset=bool(replay_opts.get("confirm_reset", False)),
                 confirm_text=replay_opts.get("confirm_text"),
+                inherit_existing_pit_lease=True,
             )
         except TradingCoreError as exc:
             self._mark_failed(session, exc)
@@ -870,7 +935,11 @@ class PaperTradingSessionRunner:
         except Exception as exc:
             wrapped = TradingCoreError(
                 "paper v2 session replay failed",
-                context={"session_id": session.session_id, "portfolio_id": session.portfolio_id, "reason": f"{type(exc).__name__}: {exc}"},
+                context={
+                    "session_id": session.session_id,
+                    "portfolio_id": session.portfolio_id,
+                    "reason": f"{type(exc).__name__}: {exc}",
+                },
             )
             self._mark_failed(session, wrapped)
             raise wrapped from exc

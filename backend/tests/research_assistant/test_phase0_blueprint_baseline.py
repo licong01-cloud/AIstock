@@ -61,7 +61,7 @@ OWNERSHIP_SAMPLES = {
     "backend/services/research_assistant/aistock_domain_adapter/tools.py": "research_assistant.aistock_domain_adapter",
     "backend/services/research_assistant/aistock_knowledge_pack/loader.py": "research_assistant.aistock_knowledge_pack",
     "backend/db/migrations/ra_upgrade/001_memory_tree.sql": "research_assistant.memory_tree",
-    "docs/process/research_assistant_baseline_verification_20260531.md": "research_assistant",
+    "docs/process/research_assistant_baseline_verification_20260531.md": "docs.standards",
     "backend/tests/research_assistant/test_phase0_blueprint_baseline.py": "research_assistant",
 }
 
@@ -129,11 +129,6 @@ def test_blueprint_baseline_defects_match_current_head_lines() -> None:
             _line_number(SCHEMA, "CREATE TABLE IF NOT EXISTS assistant_prompt_nodes"),
             _line_number(SCHEMA, "CREATE TABLE IF NOT EXISTS assistant_external_agent_sessions"),
         ],
-        "qe_evolution_service.py": [
-            _line_number(QE_SERVICE, "class AutoEvolutionScheduler"),
-            _line_number(QE_SERVICE, "def submit_next_loop"),
-            _line_number(QE_SERVICE, "def append_custom_evo_loops"),
-        ],
     }
     phase1_memory_tree_active = (RA_MIGRATIONS / "001_memory_tree.sql").exists()
     for filename, line_numbers in expected_anchors.items():
@@ -142,6 +137,10 @@ def test_blueprint_baseline_defects_match_current_head_lines() -> None:
                 assert line_number > 0
             else:
                 assert f"{filename}:{line_number}" in report
+
+    for qe_symbol in ("AutoEvolutionScheduler", "submit_next_loop", "append_custom_evo_loops"):
+        assert _line_number(QE_SERVICE, qe_symbol) > 0
+        assert f"`{qe_symbol}`" in report
 
     memory_table = _table_segment(
         SCHEMA,

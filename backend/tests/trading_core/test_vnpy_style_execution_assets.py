@@ -84,6 +84,28 @@ def test_sniper_short_uses_bid_crossing_condition() -> None:
     assert submit.volume == 300
 
 
+def test_sniper_short_does_not_emit_partial_sub_lot_from_larger_parent() -> None:
+    algo = SniperMiniQMTCore(_config("SNIPER_MINIQMT", direction=VnpyDirection.SHORT, price=10.0, volume=100))
+    algo.start()
+
+    actions = algo.update_tick(_tick(bid=10.01, bid_vol=1))
+
+    assert not [action for action in actions if action.action_type == VnpyActionType.SUBMIT]
+
+
+def test_sniper_short_emits_exact_whole_sub_lot_parent_residual() -> None:
+    algo = SniperMiniQMTCore(_config("SNIPER_MINIQMT", direction=VnpyDirection.SHORT, price=10.0, volume=83))
+    algo.start()
+
+    submit = next(
+        action
+        for action in algo.update_tick(_tick(bid=10.01, bid_vol=83))
+        if action.action_type == VnpyActionType.SUBMIT
+    )
+
+    assert submit.volume == 83
+
+
 def test_best_limit_long_submits_at_bid_and_cancels_when_bid_changes() -> None:
     algo = BestLimitMiniQMTCore(
         _config("BEST_LIMIT_MINIQMT", setting={"min_volume": 100, "max_volume": 500}),
@@ -116,7 +138,9 @@ def test_best_limit_short_submits_at_ask_and_validates_volume_window() -> None:
 
 
 def test_twap_lite_timer_waits_interval_cancels_before_slice_and_finishes_on_time() -> None:
-    algo = TwapLiteMiniQMTCore(_config("TWAP_LITE_MINIQMT", price=10.0, volume=1000, setting={"time": 4, "interval": 2}))
+    algo = TwapLiteMiniQMTCore(
+        _config("TWAP_LITE_MINIQMT", price=10.0, volume=1000, setting={"time": 4, "interval": 2})
+    )
     algo.start()
     algo.update_tick(_tick(ask=9.99))
     assert not [a for a in algo.update_timer() if a.action_type == VnpyActionType.SUBMIT]
@@ -142,10 +166,10 @@ def test_template_update_order_trade_and_finish_match_vnpy_lifecycle() -> None:
     assert algo.status.value == "finished"
 
 
-def test_vnpy_style_assets_are_registered_and_declared_live_supported() -> None:
+def test_vnpy_style_assets_are_kernel_owned_and_declared_live_supported() -> None:
     for code in ("SNIPER_MINIQMT", "BEST_LIMIT_MINIQMT", "TWAP_LITE_MINIQMT"):
         assert code in VNPY_STYLE_ASSETS
-        assert code in ALGO_REGISTRY
+        assert code not in ALGO_REGISTRY
         cap = get_execution_algo_capability(code)
         assert cap.live_supported is True
         assert cap.live_step_mode.startswith("miniqmt_event_driven")

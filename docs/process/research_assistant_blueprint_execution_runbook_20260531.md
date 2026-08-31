@@ -10,8 +10,8 @@
 
 蓝图回答"做什么/为什么"；本 Runbook 回答"**怎么严格做完、怎么机械证明、怎么防止缩水**"。它**不新建流程**，而是把蓝图的 DAI/可追溯矩阵/防漂移门禁，**接进 AIstock 已有的执行与验证流水线**：
 
-- `docs/standards/aistock_development_standard_v1.5_20260523.md`（P0/P1 红线、§15.3 `DESIGN-COMPLIANCE-001`）
-- `docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md`（issue 生命周期、scope、batch 执行、`batch_id`）
+- `docs/standards/aistock_development_standard_v1.5_20260523.md`（唯一开发规范，含 §5.2 `DESIGN-COMPLIANCE-001`）
+- `.codex/skills/aistock-task-router/SKILL.md`（选择任务 lane；BUG 生命周期、scope 与 batch 由 `scripts/aistock_issue_workflow.py` 执行）
 - Validation Center：`tests/aistock_validation/catalog/test_plans.yaml`（runner-enabled 验证计划）、`tests/aistock_validation/bugs/*.json`（机器可读记录）、`module_registry.yaml`、`file_ownership.yaml`
 - Validation Center MCP 工具：`list_plans`、`start_validation_execution`、`get_validation_execution_status`、`report_bug`、`update_bug_status`、`get_module_quality_summary`
 

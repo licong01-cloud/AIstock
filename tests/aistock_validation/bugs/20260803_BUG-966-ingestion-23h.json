@@ -1,0 +1,232 @@
+{
+  "actual": "根因: tdx_scheduler._claim_scheduled_fire 在每次触发时以 last_run_at 写入方式认领, 日级冷却窗口23小时; 认领即消耗窗口(哪怕周日skip_non_trade空跑), 且认领失败完全静默(不建job/不写日志表/不推进next_run), 导致任务监视器表现为任务凭空消失。2026-08-03 实证: 旧后端时区偏移+7h于昨夜23:10-01:00触发日线任务并消耗认领窗口, 今日(trading_calendar确认is_trading=True)16:10/16:20/16:50/17:10/17:20/18:00全部核心数据集(kline_daily_raw/kline_minute_raw/index_daily/sw_sector/stock_moneyflow_ts/sector_data)触发被23h冷却静默拦截, 全日核心同步零执行。该机制2026-04-28由commit 75a00e7f引入, 无需求、无设计文档、无Issue依据(docs/codex_project_memory/标准全库零命中), 用户明确禁止任何默认冷却功能。防重已由两层真实机制覆盖: 进程内_tracker.is_running防并发重叠 + _recent_dataset_submission_exists做DB级60分钟queued/running与60秒success去重(多后端实例并存场景同样覆盖)。修复: 彻底删除_claim_scheduled_fire认领门与_frequency_cooldown_seconds, 保留上述两层防重。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260803_BUG-966-ingestion-23h.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-966",
+  "closed_at": "2026-08-19T02:28:09.281221Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-03T09:56:25.788791Z",
+  "description": "根因: tdx_scheduler._claim_scheduled_fire 在每次触发时以 last_run_at 写入方式认领, 日级冷却窗口23小时; 认领即消耗窗口(哪怕周日skip_non_trade空跑), 且认领失败完全静默(不建job/不写日志表/不推进next_run), 导致任务监视器表现为任务凭空消失。2026-08-03 实证: 旧后端时区偏移+7h于昨夜23:10-01:00触发日线任务并消耗认领窗口, 今日(trading_calendar确认is_trading=True)16:10/16:20/16:50/17:10/17:20/18:00全部核心数据集(kline_daily_raw/kline_minute_raw/index_daily/sw_sector/stock_moneyflow_ts/sector_data)触发被23h冷却静默拦截, 全日核心同步零执行。该机制2026-04-28由commit 75a00e7f引入, 无需求、无设计文档、无Issue依据(docs/codex_project_memory/标准全库零命中), 用户明确禁止任何默认冷却功能。防重已由两层真实机制覆盖: 进程内_tracker.is_running防并发重叠 + _recent_dataset_submission_exists做DB级60分钟queued/running与60秒success去重(多后端实例并存场景同样覆盖)。修复: 彻底删除_claim_scheduled_fire认领门与_frequency_cooldown_seconds, 保留上述两层防重。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260803-ba8c89c24dad",
+      "timestamp": "2026-08-03T09:56:25.788786Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "claude_code",
+      "note": "修复需删除 backend/ingestion/tdx_scheduler.py 中 _claim_scheduled_fire/_frequency_cooldown_seconds 及其调用点, 并同步更新 test_tdx_scheduler_state_reconciliation.py 中引用 claim 桩的测试; 用户明确授权: 禁止任何默认冷却功能",
+      "timestamp": "2026-08-03T10:04:23.192368Z"
+    },
+    {
+      "action": "runtime_contract_alignment",
+      "actor": "claude_code",
+      "note": "runtime_impact none->backend (调度器修复需用户重启后端生效); 采用严格校验器认可的可执行探针引用, 与 BUG-960 同格式",
+      "timestamp": "2026-08-03T10:22:34.431681Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-03T09:56:25.788791Z",
+  "fix_branch": null,
+  "fix_commit": "4d796efc2705cc33642859015c69610c27bec633",
+  "fixed_at": "2026-08-03T11:05:19Z",
+  "github_issue_number": 3087,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3087",
+  "last_seen_at": "2026-08-03T09:56:25.788791Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3090",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process loaded backend/ingestion/tdx_scheduler.py by file path and verified _claim_scheduled_fire and _frequency_cooldown_seconds are absent while _scheduled_ingestion_run and _recent_dataset_submission_exists remain intact -> PASS",
+      "fresh process loaded backend/ingestion/tdx_scheduler.py: _claim_scheduled_fire and _frequency_cooldown_seconds absent, _scheduled_ingestion_run and _recent_dataset_submission_exists intact"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-966-close-sync-20260819\\tmp\\issue_workflow\\BUG-966\\post-restart-receipt-20260819.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-966",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "7b1fafc3311c7eec2f7eb08ca681bfe19ded9fadd2b672a5acf1904ba203bb3b",
+      "contract_digest": "23ff80b6460818ac53bdcdabf0a0b5da843f32f1f53ea48953cbe39752d3b1e0",
+      "expected_identity": "4d796efc2705cc33642859015c69610c27bec633",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-19T02:25:56.124748Z",
+      "mode": "read_only",
+      "observed_identity": "24eabb8e1c0ce0a85fa2d75ad99d347c84a0c64f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "067e3c1ef393441656ee271eb9b0083d035f13a96eda71634f70aa22551355a8",
+      "receipt_sha256": "1477ca372fde694a05b87608bbd405a8f807f246b4f0a73f0b07c31b4ac1c667",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2538797444901b81e15099d83a434d213b85f79ca8515efc0d9bc7b7a9e42291",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "ingestion调度器认领冷却(日级23h)无需求依据且静默吞掉交易日全部核心同步任务",
+  "trigger_condition": {
+    "fingerprint": "ba8c89c24dad846f79133455",
+    "source_event_id": "FE-20260803-ba8c89c24dad"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 45 passed",
+    "python -m py_compile backend/ingestion/tdx_scheduler.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed",
+    "validation-receipt: id=7d6b288fb7da7be6 commit=fd659859381719df1d0ead3bd4f87687cedafcea kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q` result=`45 passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

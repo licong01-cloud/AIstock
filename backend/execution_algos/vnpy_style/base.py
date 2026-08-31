@@ -266,8 +266,12 @@ class VnpyAlgoTemplate:
         qty = min(int(requested), remaining)
         if qty <= 0:
             return 0
-        if self.direction == VnpyDirection.SHORT and qty < self.min_volume:
-            return qty
+        if self.direction == VnpyDirection.SHORT and remaining < self.min_volume:
+            # A sell residual is legal only when the child flushes the whole
+            # remaining parent quantity.  Preserving any arbitrary sub-lot
+            # request (for example 1 share from a 100-share parent) creates an
+            # invalid partial odd-lot order.
+            return remaining if qty == remaining else 0
         qty = (qty // self.volume_increment) * self.volume_increment
         if qty < self.min_volume:
             return 0

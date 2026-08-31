@@ -9,16 +9,18 @@ import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-import aiofiles
 from psycopg2.extras import RealDictCursor
 from ...db.pg_pool import get_conn
 from ..qe_archive.models import sha256_json
 
 from .factor_official_evaluation_service import CALC_ENGINE
-from .qe_workspace_client import QEWorkspaceClient, QELoopWorkspaceCleanupUnavailable
+from .qe_workspace_client import QEWorkspaceClient, QEWorkspaceLogEvent, QELoopWorkspaceCleanupUnavailable
+from .qe_log_broker import QELogBrokerSource, get_qe_log_broker
+from .qe_log_store import get_qe_live_log_store
 from .qe_evolution_agents import EvolutionAgents, EvolutionFactorAgent, EvolutionModelAgent, AnalystResult
 from .callback_urls import build_aistock_callback_url
 from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon, normalize_qe_random_seed
+from .long_trend_evaluation_contract import get_long_trend_profile
 from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .seed_contract import ensure_loop_fixed_seed
 from .payload_summary import compact_loop_row, compact_task_row
@@ -55,6 +57,14 @@ from ..strategy_package.workspace_policy import (
 logger = logging.getLogger(__name__)
 
 QE_RESOURCE_MONITORING_DISABLED_REASON = "QE_RESOURCE_MONITORING_DISABLED"
+
+
+def normalize_long_trend_profile_id(value: Any) -> str | None:
+    """Normalize a public task profile without accepting inline overrides."""
+
+    if value in (None, ""):
+        return None
+    return get_long_trend_profile(str(value).strip()).profile_id
 
 
 def _normalize_removed_resource_telemetry(requested: Any, *, context: str) -> bool:
@@ -112,6 +122,8 @@ QE_LOOP_RETRY_MODES = {
     QE_LOOP_RETRY_MODE_FULL_TRAIN,
     QE_LOOP_RETRY_MODE_RESULTS_ONLY,
 }
+_QE_RETRY_SUBMISSION_KEY = "_qe_retry_submission"
+_QE_RERUN_SUBMISSION_KEY = "_qe_rerun_submission"
 _QE_LOOP_RETRY_MODE_ALIASES = {
     "backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
     "only_backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
@@ -138,7 +150,7 @@ CUSTOM_EVO_STARTED_LOOP_STATUSES = {
     "stopped",
 }
 CUSTOM_EVO_ACTIVE_LOOP_STATUSES = ("running", "processing")
-CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS = 15
+CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS = 60
 
 
 _PROCESS_GPU_PHASE_GATES: weakref.WeakKeyDictionary[
@@ -208,7 +220,150 @@ class AutoEvolutionScheduler:
         self._active_log_stream_counts: Dict[str, int] = {}
         self._log_stream_stop_requested: set[str] = set()
         self._resource_session_wait_tasks: set[asyncio.Task] = set()
+        self._retry_resume_tasks: dict[str, asyncio.Task] = {}
+        self._zombie_resume_tasks: dict[str, asyncio.Task] = {}
         self._resource_schema_not_ready_logged = False
+
+    def _ensure_retry_resume_state(self) -> None:
+        if not hasattr(self, "_retry_resume_tasks"):
+            self._retry_resume_tasks = {}
+
+    def _ensure_zombie_resume_state(self) -> None:
+        if not hasattr(self, "_zombie_resume_tasks"):
+            self._zombie_resume_tasks = {}
+
+    @staticmethod
+    def _retry_submission_metadata(config: Any) -> Dict[str, Any] | None:
+        if isinstance(config, str):
+            try:
+                config = json.loads(config)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(config, dict):
+            return None
+        metadata = config.get(_QE_RETRY_SUBMISSION_KEY)
+        return dict(metadata) if isinstance(metadata, dict) else None
+
+    @staticmethod
+    def _custom_evo_submission_identity(
+        loop_config: Any,
+        *,
+        canonical_loop_id: str,
+    ) -> tuple[str, str | None]:
+        """Resolve reservation and canonical-claim identities for a custom Loop.
+
+        Normal first submissions retain the historical canonical identity. A
+        destructive rerun must use a new reservation identity so a terminal
+        worker receipt from the previous generation cannot be adopted as the
+        new execution. The canonical loop row remains the source claim.
+        """
+
+        if not isinstance(loop_config, dict):
+            return canonical_loop_id, None
+        metadata = loop_config.get(_QE_RERUN_SUBMISSION_KEY)
+        if metadata is None:
+            return canonical_loop_id, None
+        if not isinstance(metadata, dict):
+            raise ValueError("QE_CUSTOM_EVO_RERUN_IDENTITY_INVALID: metadata must be an object")
+        attempt_id = str(metadata.get("rerun_attempt_id") or "").strip()
+        source_execution_id = str(metadata.get("source_execution_id") or "").strip()
+        expected_source_execution_id = f"{canonical_loop_id}:rerun:{attempt_id}"
+        if (
+            metadata.get("schema_version") != "qe_custom_evo_rerun_submission_v1"
+            or len(attempt_id) != 32
+            or any(char not in "0123456789abcdef" for char in attempt_id)
+            or source_execution_id != expected_source_execution_id
+        ):
+            raise ValueError(
+                "QE_CUSTOM_EVO_RERUN_IDENTITY_INVALID: rerun attempt identity is incomplete or inconsistent"
+            )
+        return source_execution_id, canonical_loop_id
+
+    def _track_retry_resume_task(self, loop_db_id: str, task: asyncio.Task) -> None:
+        self._ensure_retry_resume_state()
+        self._retry_resume_tasks[loop_db_id] = task
+
+        def _done(completed: asyncio.Task) -> None:
+            self._retry_resume_tasks.pop(loop_db_id, None)
+            if completed.cancelled():
+                logger.error("QE retry capacity resume was cancelled: loop=%s", loop_db_id)
+                return
+            error = completed.exception()
+            if error is not None:
+                logger.error(
+                    "QE retry capacity resume failed: loop=%s error=%s",
+                    loop_db_id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+
+    def _track_zombie_resume_task(self, task_id: str, task: asyncio.Task) -> None:
+        self._ensure_zombie_resume_state()
+        self._zombie_resume_tasks[task_id] = task
+
+        def _done(completed: asyncio.Task) -> None:
+            if self._zombie_resume_tasks.get(task_id) is completed:
+                self._zombie_resume_tasks.pop(task_id, None)
+            if completed.cancelled():
+                logger.error("QE zombie task recovery was cancelled: task=%s", task_id)
+                return
+            error = completed.exception()
+            if error is not None:
+                logger.error(
+                    "QE zombie task recovery failed: task=%s error=%s",
+                    task_id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+
+    def _schedule_zombie_recovery(self, task_id: str) -> bool:
+        """Schedule one process-local recovery attempt for a zombie task."""
+
+        self._ensure_zombie_resume_state()
+        active = self._zombie_resume_tasks.get(task_id)
+        if active is not None and not active.done():
+            return False
+        task = asyncio.create_task(
+            self._safe_submit_or_fail(task_id),
+            name=f"qe-zombie-recovery-{task_id}",
+        )
+        self._track_zombie_resume_task(task_id, task)
+        return True
+
+    @staticmethod
+    def _set_retry_submission_state(
+        loop_db_id: str,
+        *,
+        retry_attempt_id: str,
+        state: str,
+    ) -> None:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_evolution_loops
+                    SET config_json = jsonb_set(
+                            config_json,
+                            '{_qe_retry_submission,state}',
+                            to_jsonb(%s::text),
+                            false
+                        ),
+                        updated_at = NOW()
+                    WHERE loop_id = %s
+                      AND config_json #>> '{_qe_retry_submission,retry_attempt_id}' = %s
+                    """,
+                    (state, loop_db_id, retry_attempt_id),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError(
+                        "retry submission state update lost its persisted attempt identity: "
+                        f"loop={loop_db_id} attempt={retry_attempt_id} state={state}"
+                    )
+            conn.commit()
 
     def _gpu_phase_gate(self, node_id: str) -> ModelAwareGPUPhaseGate:
         event_loop = asyncio.get_running_loop()
@@ -261,6 +416,7 @@ class AutoEvolutionScheduler:
     ) -> tuple[GPUPhaseLease, ResourceSessionSecret]:
         """Atomically reserve the durable GPU slot after acquiring the process-local fair gate."""
 
+        wait_generation: int | None = None
         while True:
             lease = await self._acquire_gpu_phase_lease(node_id, policy)
             try:
@@ -288,7 +444,17 @@ class AutoEvolutionScheduler:
             except Exception:
                 await lease.release()
                 raise
-            await asyncio.sleep(CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS)
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                wait_for_qe_reconciliation,
+            )
+
+            wait_generation = await wait_for_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=f"{task_id}_Loop{int(loop_index)}",
+                timeout_seconds=60,
+                observed_generation=wait_generation,
+            )
 
     def _reconcile_resource_sessions_after_restart(self) -> None:
         """Reconcile terminal resource sessions without making schema readiness a legacy-runtime gate."""
@@ -326,6 +492,29 @@ class AutoEvolutionScheduler:
 
         task.add_done_callback(_done)
 
+    @staticmethod
+    def _mark_resource_session_submitted_after_remote_acceptance(
+        *,
+        service: QEResourcePhaseService,
+        session_id: str,
+        task_id: str,
+        loop_index: int,
+    ) -> None:
+        """Keep accepted remote work authoritative if local resource bookkeeping fails."""
+
+        try:
+            service.mark_session_submitted(session_id)
+        except Exception as exc:
+            logger.error(
+                "QE_RESOURCE_SESSION_POST_ACCEPTANCE_SYNC_FAILED: "
+                "task=%s Loop%s session=%s error=%s; remote execution remains active",
+                task_id,
+                loop_index,
+                session_id,
+                exc,
+                exc_info=True,
+            )
+
     async def _wait_resource_session_until_safe_release(
         self,
         *,
@@ -339,10 +528,23 @@ class AutoEvolutionScheduler:
         service = QEResourcePhaseService()
         released = False
         terminal_safe_release = False
+        wait_generation: int | None = None
         try:
             while True:
                 try:
-                    state = service.get_session_state(session_id)
+                    from .qe_reconciliation_coordinator import (
+                        QEReconciliationScope,
+                        qe_reconciliation_wakeup,
+                        wait_for_qe_reconciliation,
+                    )
+
+                    wait_generation = await wait_for_qe_reconciliation(
+                        QEReconciliationScope.RESOURCE_SESSION,
+                        key=session_id,
+                        timeout_seconds=60,
+                        observed_generation=wait_generation,
+                    )
+                    state = qe_reconciliation_wakeup.resource_state(session_id)
                     current_phase = str((state or {}).get("current_phase") or "")
                     if gpu_lease is not None and current_phase == "gpu_phase_released":
                         logger.info(
@@ -355,14 +557,7 @@ class AutoEvolutionScheduler:
                         released = True
                         gpu_lease = None
 
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "SELECT status FROM qe_evolution_loops WHERE loop_id = %s",
-                                (f"{task_id}_Loop{int(loop_index)}",),
-                            )
-                            row = cur.fetchone()
-                    loop_status = str(row[0]) if row else "failed"
+                    loop_status = str((state or {}).get("loop_status") or "")
                     if loop_status in {
                         "completed",
                         "failed",
@@ -414,7 +609,6 @@ class AutoEvolutionScheduler:
                         exc,
                         exc_info=True,
                     )
-                await asyncio.sleep(5)
         finally:
             if gpu_lease is not None and terminal_safe_release:
                 await gpu_lease.release()
@@ -746,20 +940,25 @@ class AutoEvolutionScheduler:
 
     def get_task_log_tail(self, task_id: str, tail_lines: int = QE_LOG_TAIL_DEFAULT_LINES) -> Dict[str, Any]:
         status = self._get_task_status(task_id)
+        bounded_tail = max(1, min(int(tail_lines or QE_LOG_TAIL_DEFAULT_LINES), 5000))
+        ring_tail = get_qe_live_log_store().read_task_tail(task_id, tail=bounded_tail)
         log_path = Path(SOTA_ASSETS_DIR) / task_id / "logs" / "evolution.log"
-        lines = _read_text_tail_lines(log_path, max(1, min(int(tail_lines or QE_LOG_TAIL_DEFAULT_LINES), 5000)))
+        legacy_lines = _read_text_tail_lines(log_path, bounded_tail) if not ring_tail["logs"] else []
         return {
             "task_id": task_id,
             "task_status": status,
             "terminal": self.is_terminal_log_status(status),
-            "log_path": str(log_path) if log_path.exists() else None,
-            "logs": lines,
+            "log_path": str(log_path) if legacy_lines and log_path.exists() else None,
+            "log_source": ring_tail["source"] if ring_tail["logs"] else "legacy_evolution_log_read_only",
+            "scan_truncated": ring_tail["scan_truncated"],
+            "logs": ring_tail["logs"] or legacy_lines,
         }
 
     def _request_stop_log_streams(self, task_id: str) -> None:
         self._ensure_log_stream_state()
         with self._log_stream_lock:
             self._log_stream_stop_requested.add(task_id)
+        get_qe_log_broker().request_close(task_id)
 
     def _is_log_stream_stop_requested(self, task_id: str) -> bool:
         self._ensure_log_stream_state()
@@ -822,6 +1021,7 @@ class AutoEvolutionScheduler:
         stock_pool: Optional[str] = None,
         label_horizon: Optional[int] = None,
         random_seed: Optional[int] = None,
+        long_trend_profile_id: Optional[str] = None,
     ) -> str:
         """
         创建演进任务并写入数据库。
@@ -853,6 +1053,9 @@ class AutoEvolutionScheduler:
             random_seed,
             field_name="create_task.random_seed",
         )
+        effective_long_trend_profile_id = normalize_long_trend_profile_id(
+            long_trend_profile_id
+        )
         root_experiment_id = base_experiment_id
         # rdagent_task_sota: 从 0 开始，Loop1 为初始回测
         # qe_experiment: 从 1 开始，基础实验已完成相当于 Loop1
@@ -865,10 +1068,22 @@ class AutoEvolutionScheduler:
         task_id = root_experiment_id
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT task_id, status, current_loop, strategy_params FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                cur.execute(
+                    "SELECT task_id, status, current_loop, strategy_params, long_trend_profile_id "
+                    "FROM qe_evolution_tasks WHERE task_id = %s",
+                    (task_id,),
+                )
                 existing_task = cur.fetchone()
 
         if existing_task:
+            stored_profile_id = normalize_long_trend_profile_id(
+                existing_task.get("long_trend_profile_id")
+            )
+            if stored_profile_id != effective_long_trend_profile_id:
+                raise ValueError(
+                    "long_trend_profile_id is immutable for an existing QE task identity: "
+                    f"stored={stored_profile_id!r}, requested={effective_long_trend_profile_id!r}"
+                )
             if existing_task['status'] == 'running':
                 raise ValueError(f"该实验已有正在运行的演进任务: {task_id}")
             # 已有任务但已完成/暂停/失败 → 更新为新一轮
@@ -915,13 +1130,15 @@ class AutoEvolutionScheduler:
                     cur.execute("""
                         INSERT INTO qe_evolution_tasks
                         (task_id, task_name, target_desc, max_loops, current_loop, status,
-                         base_experiment_id, node_id, stock_pool, strategy_params, label_horizon)
-                        VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
+                         base_experiment_id, node_id, stock_pool, strategy_params, label_horizon,
+                         long_trend_profile_id)
+                        VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s)
                     """, (
                         task_id, task_name, target_desc, actual_start + max_loops,
                         actual_start, base_experiment_id, node_id, stock_pool,
                         json.dumps({"random_seed": effective_random_seed}),
                         effective_label_horizon,
+                        effective_long_trend_profile_id,
                     ))
                 conn.commit()
             logger.info(f"Created evolution task {task_id}: start_loop={actual_start}, max_loops={actual_start + max_loops}")
@@ -2053,15 +2270,18 @@ class AutoEvolutionScheduler:
                     """, (json.dumps(config), action_type, evolution_loop_db_id))
                 conn.commit()
 
-            client = self._get_workspace_client_for_task(task_id)
+            effective_node_id = self._get_loop_node_id(task_id, evolution_loop_db_id)
+            client = self._get_workspace_client_for_node_id(effective_node_id)
             executor = BacktestExecutor(ConfigComposer(), client)
             ctx = ExecutionContext(
                 task_id=task_id,
                 loop_index=loop_index,
                 experiment_name=experiment_name,
-                node_id=task.get("node_id"),
+                node_id=effective_node_id,
                 callback_url=self._get_callback_url_for_task(task_id),
                 require_fixed_seed=True,
+                submission_source_kind="qe_evolution_loop",
+                submission_source_execution_id=evolution_loop_db_id,
             )
             await executor.submit(cfg, ctx, mode=BacktestMode.FULL_TRAIN)
         except Exception as e:
@@ -2612,7 +2832,6 @@ class AutoEvolutionScheduler:
         3. F5: 检测 running 的 task 但没有任何活跃 loop（僵尸 task）
         """
         try:
-            self._reconcile_resource_sessions_after_restart()
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     # 原有：扫描 running 状态的 loop
@@ -2648,8 +2867,25 @@ class AutoEvolutionScheduler:
                                 AND l2.status = 'failed'
                                 AND l2.updated_at > NOW() - INTERVAL '10 minutes'
                           )
+                          AND NOT EXISTS (
+                              SELECT 1 FROM qe_evolution_loops l3
+                              WHERE l3.task_id = t.task_id
+                                AND l3.status = 'pending'
+                                AND l3.config_json ? '_qe_retry_submission'
+                          )
                     """)
                     zombie_tasks = cur.fetchall()
+
+                    cur.execute("""
+                        SELECT l.loop_id, l.task_id, l.loop_index
+                        FROM qe_evolution_loops l
+                        JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                        WHERE l.status = 'pending'
+                          AND t.status = 'running'
+                          AND l.config_json ? %s
+                        ORDER BY l.updated_at, l.loop_id
+                    """, (_QE_RETRY_SUBMISSION_KEY,))
+                    pending_retry_loops = cur.fetchall()
 
             # F4: 处理 processing 超时
             for row in stuck_processing:
@@ -2664,8 +2900,31 @@ class AutoEvolutionScheduler:
 
             # F5: 处理僵尸 task — 尝试提交下一轮
             for row in zombie_tasks:
-                logger.warning(f"Zombie task detected: {row['task_id']} is running but has no active loops, attempting recovery")
-                asyncio.create_task(self._safe_submit_or_fail(row['task_id']))
+                task_id = str(row["task_id"])
+                if self._schedule_zombie_recovery(task_id):
+                    logger.warning(
+                        "Zombie task detected and recovery scheduled: task=%s",
+                        task_id,
+                    )
+                else:
+                    logger.info(
+                        "Zombie task recovery already in flight: task=%s",
+                        task_id,
+                    )
+
+            self._ensure_retry_resume_state()
+            for row in pending_retry_loops:
+                loop_db_id = str(row["loop_id"])
+                active = self._retry_resume_tasks.get(loop_db_id)
+                if active is not None and not active.done():
+                    continue
+                task = asyncio.create_task(
+                    self._safe_resume_retry_loop(
+                        str(row["task_id"]),
+                        int(row["loop_index"]),
+                    )
+                )
+                self._track_retry_resume_task(loop_db_id, task)
 
             # 原有逻辑：检查 running 的 loop 在 RDAgent 侧的状态
             for loop_row in running_loops:
@@ -2719,6 +2978,29 @@ class AutoEvolutionScheduler:
             except Exception as db_err:
                 logger.critical(f"FATAL: Failed to mark zombie task {task_id} as failed: {db_err}")
                 raise RuntimeError(f"Failed to mark zombie task {task_id} as failed: {db_err}") from db_err
+
+    async def _safe_resume_retry_loop(self, task_id: str, loop_index: int) -> None:
+        try:
+            result = await self.retry_loop(
+                task_id,
+                loop_index,
+                _capacity_resume=True,
+            )
+            logger.info(
+                "Capacity-waiting retry resume pass completed: task=%s Loop%s result=%s",
+                task_id,
+                loop_index,
+                result,
+            )
+        except Exception as exc:
+            logger.error(
+                "Capacity-waiting retry resume failed without changing the business result: "
+                "task=%s Loop%s error=%s",
+                task_id,
+                loop_index,
+                exc,
+                exc_info=True,
+            )
 
     _LLM_TRANSIENT_KEYWORDS = ("disconnected", "timeout", "rate_limit", "503", "502", "429", "connection", "reset by peer")
 
@@ -2783,6 +3065,7 @@ class AutoEvolutionScheduler:
                         f"""
                         SELECT task_id, task_name, target_desc, max_loops, current_loop,
                                status, base_experiment_id, node_id, label_horizon,
+                               long_trend_profile_id,
                                task_type, source_type, strategy_id, strategy_params,
                                strategy_evo_config, execution_algo,
                                strategy_evo_execution_mode, created_at, updated_at
@@ -2914,6 +3197,7 @@ class AutoEvolutionScheduler:
         node_id: Optional[str] = None,
         label_horizon: Optional[int] = None,
         random_seed: Optional[int] = None,
+        long_trend_profile_id: Optional[str] = None,
     ) -> str:
         """
         从指定 task 的某个已完成 loop 分叉出新的演进任务。
@@ -2973,6 +3257,9 @@ class AutoEvolutionScheduler:
             field_name="fork_task.random_seed",
         )
         effective_strategy_params["random_seed"] = effective_random_seed
+        effective_long_trend_profile_id = normalize_long_trend_profile_id(
+            long_trend_profile_id
+        )
         strategy_id = effective_strategy_id
         data_split = config.get("data_split", {})
         model_params = config.get("model_params", {})
@@ -3046,9 +3333,10 @@ class AutoEvolutionScheduler:
                      evolution_guidance, evolution_mode,
                      fork_from_task_id, fork_from_loop_index, inherit_history,
                      strategy_id, strategy_params, execution_algo, execution_algo_params,
-                     unfilled_handler, unfilled_handler_params, label_horizon)
+                     unfilled_handler, unfilled_handler_params, label_horizon,
+                     long_trend_profile_id)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'fork', %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s)
+                            %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, max_loops,
                     base_exp_id, effective_node_id,
@@ -3061,6 +3349,7 @@ class AutoEvolutionScheduler:
                     effective_unfilled_handler,
                     json.dumps(effective_unfilled_handler_params) if effective_unfilled_handler_params else None,
                     effective_label_horizon,
+                    effective_long_trend_profile_id,
                 ))
             conn.commit()
 
@@ -3079,6 +3368,7 @@ class AutoEvolutionScheduler:
                     cur.execute("""
                         SELECT task_id, task_name, target_desc, max_loops, current_loop,
                                status, base_experiment_id, node_id, label_horizon,
+                               long_trend_profile_id,
                                task_type, source_type, strategy_id, strategy_params,
                                execution_algo, execution_algo_params, unfilled_handler,
                                unfilled_handler_params, strategy_evo_execution_mode,
@@ -3801,6 +4091,8 @@ class AutoEvolutionScheduler:
         task_id: str,
         loop_index: int,
         retry_mode: str = QE_LOOP_RETRY_MODE_AUTO,
+        *,
+        _capacity_resume: bool = False,
     ) -> Dict[str, Any]:
         """重试失败的 Loop：自动判断训练是否已完成，决定从训练或回测恢复.
 
@@ -3811,6 +4103,7 @@ class AutoEvolutionScheduler:
         Returns: {"loop_id": str, "mode": "backtest_only"|"full_train"}
         """
         requested_retry_mode = normalize_qe_loop_retry_mode(retry_mode)
+        original_requested_retry_mode = requested_retry_mode
 
         from .config_composer import (
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
@@ -3830,7 +4123,24 @@ class AutoEvolutionScheduler:
 
         if not loop_row:
             raise ValueError(f"Loop {evolution_loop_db_id} 不存在")
-        if loop_row["status"] not in ("failed", "cancelled"):
+        config = loop_row["config_json"]
+        if isinstance(config, str):
+            config = json.loads(config)
+        config = dict(config or {})
+        retry_submission = self._retry_submission_metadata(config)
+        if _capacity_resume:
+            if loop_row["status"] != "pending" or not retry_submission:
+                raise ValueError(
+                    f"Loop {evolution_loop_db_id} is not a persisted capacity-waiting retry"
+                )
+            requested_retry_mode = normalize_qe_loop_retry_mode(
+                str(retry_submission.get("resolved_retry_mode") or "")
+            )
+            if requested_retry_mode == QE_LOOP_RETRY_MODE_RESULTS_ONLY:
+                raise ValueError(
+                    "results-only retry cannot enter QE execution capacity waiting"
+                )
+        elif loop_row["status"] not in ("failed", "cancelled"):
             raise ValueError(
                 f"Loop {evolution_loop_db_id} 状态为 '{loop_row['status']}'，"
                 f"只有 failed 或 cancelled 状态的 loop 可以重试"
@@ -3866,9 +4176,6 @@ class AutoEvolutionScheduler:
         await preflight_qe_node(effective_node_id)
 
         client = self._get_workspace_client_for_node_id(effective_node_id)
-        config = loop_row["config_json"]
-        if isinstance(config, str):
-            config = json.loads(config)
         original_backtest_only = bool(isinstance(config, dict) and config.get("backtest_only"))
 
         if requested_retry_mode == QE_LOOP_RETRY_MODE_RESULTS_ONLY:
@@ -3934,7 +4241,32 @@ class AutoEvolutionScheduler:
                 effective_node_id,
             )
 
+        if _capacity_resume:
+            retry_attempt_id = str(retry_submission.get("retry_attempt_id") or "").strip()
+            retry_source_execution_id = str(
+                retry_submission.get("source_execution_id") or ""
+            ).strip()
+            if not retry_attempt_id or not retry_source_execution_id:
+                raise ValueError(
+                    f"Loop {evolution_loop_db_id} has incomplete persisted retry identity"
+                )
+        else:
+            retry_attempt_id = uuid.uuid4().hex
+            retry_source_execution_id = (
+                f"{evolution_loop_db_id}:retry:{retry_attempt_id}"
+            )
+            retry_submission = {
+                "schema_version": "qe_retry_submission_v1",
+                "retry_attempt_id": retry_attempt_id,
+                "source_execution_id": retry_source_execution_id,
+                "requested_retry_mode": original_requested_retry_mode,
+                "resolved_retry_mode": retry_mode_name,
+                "state": "submitting",
+            }
+        config[_QE_RETRY_SUBMISSION_KEY] = dict(retry_submission)
+
         # 4. Custom-evo retries queue until per-node node_parallelism capacity is free.
+        retry_claim_statuses = ["pending"] if _capacity_resume else ["failed", "cancelled"]
         if task.get("task_type") == "custom_evo":
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -3958,12 +4290,22 @@ class AutoEvolutionScheduler:
                     cur.execute(
                         """
                         UPDATE qe_evolution_loops
-                        SET status = 'pending', agent_analysis = NULL, updated_at = NOW()
+                        SET status = 'pending', agent_analysis = NULL,
+                            config_json = %s, updated_at = NOW()
                         WHERE loop_id = %s
-                          AND status NOT IN ('running', 'processing', 'completed')
+                          AND status = ANY(%s)
+                        RETURNING loop_id
                         """,
-                        (evolution_loop_db_id,),
+                        (
+                            json.dumps(config, ensure_ascii=False),
+                            evolution_loop_db_id,
+                            retry_claim_statuses,
+                        ),
                     )
+                    if cur.fetchone() is None:
+                        raise ValueError(
+                            f"Loop {evolution_loop_db_id} retry claim lost before queueing"
+                        )
                 conn.commit()
             slot = await self._mark_custom_evo_loop_running_when_slot_available(
                 task=dict(task),
@@ -3978,9 +4320,24 @@ class AutoEvolutionScheduler:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE qe_evolution_loops SET status = 'running', agent_analysis = NULL, updated_at = NOW() WHERE loop_id = %s",
-                        (evolution_loop_db_id,),
+                        """
+                        UPDATE qe_evolution_loops
+                        SET status = 'running', agent_analysis = NULL,
+                            config_json = %s, updated_at = NOW()
+                        WHERE loop_id = %s
+                          AND status = ANY(%s)
+                        RETURNING loop_id
+                        """,
+                        (
+                            json.dumps(config, ensure_ascii=False),
+                            evolution_loop_db_id,
+                            retry_claim_statuses,
+                        ),
                     )
+                    if cur.fetchone() is None:
+                        raise ValueError(
+                            f"Loop {evolution_loop_db_id} retry claim lost before submission"
+                        )
                     cur.execute(
                         "UPDATE qe_evolution_tasks SET status = 'running', updated_at = NOW() WHERE task_id = %s",
                         (task_id,),
@@ -4083,11 +4440,65 @@ class AutoEvolutionScheduler:
                 resource_source_run_key=retry_resource_session.source_run_key if retry_resource_session else None,
                 resource_session_token=retry_resource_session.token if retry_resource_session else None,
                 phase_pipeline_enabled=retry_phase_pipeline_enabled,
+                submission_source_kind="qe_evolution_loop",
+                submission_source_execution_id=retry_source_execution_id,
+                submission_source_claim_id=evolution_loop_db_id,
             )
             retry_mode = BacktestMode.BACKTEST_ONLY if retry_mode_name == "backtest_only" else BacktestMode.FULL_TRAIN
             result = await executor.submit(cfg, ctx, mode=retry_mode)
+            if result.status == "waiting_capacity":
+                try:
+                    self._set_retry_submission_state(
+                        evolution_loop_db_id,
+                        retry_attempt_id=retry_attempt_id,
+                        state="waiting_capacity",
+                    )
+                except Exception as state_error:
+                    logger.error(
+                        "Retry entered capacity waiting but its diagnostic state update failed: "
+                        "loop=%s attempt=%s error=%s",
+                        evolution_loop_db_id,
+                        retry_attempt_id,
+                        state_error,
+                        exc_info=True,
+                    )
+                if retry_resource_session is not None:
+                    retry_resource_service.mark_session_terminal(
+                        retry_resource_session.session_id,
+                        status="cancelled",
+                        reason_code="QE_RESOURCE_WAITING_CANONICAL_CAPACITY",
+                    )
+                if retry_gpu_lease is not None:
+                    await retry_gpu_lease.release()
+                    retry_gpu_lease = None
+                return {
+                    "loop_id": evolution_loop_db_id,
+                    "mode": "queued_capacity",
+                    "qe_submission": (result.detail or {}).get("qe_submission"),
+                }
+            try:
+                self._set_retry_submission_state(
+                    evolution_loop_db_id,
+                    retry_attempt_id=retry_attempt_id,
+                    state=result.status,
+                )
+            except Exception as state_error:
+                logger.error(
+                    "Retry was accepted remotely but its diagnostic state update failed: "
+                    "loop=%s attempt=%s state=%s error=%s",
+                    evolution_loop_db_id,
+                    retry_attempt_id,
+                    result.status,
+                    state_error,
+                    exc_info=True,
+                )
             if retry_resource_session is not None:
-                retry_resource_service.mark_session_submitted(retry_resource_session.session_id)
+                self._mark_resource_session_submitted_after_remote_acceptance(
+                    service=retry_resource_service,
+                    session_id=retry_resource_session.session_id,
+                    task_id=task_id,
+                    loop_index=loop_index,
+                )
                 wait_task = asyncio.create_task(
                     self._wait_resource_session_until_safe_release(
                         session_id=retry_resource_session.session_id,
@@ -4291,8 +4702,8 @@ class AutoEvolutionScheduler:
             "cleaned_dirs": cleaned_dirs,
         }
         
-    async def stream_task_logs(self, task_id: str):
-        """Forward RDAgent SSE logs, including all loop nodes for distributed custom_evo tasks."""
+    async def stream_task_logs(self, task_id: str, *, after_cursor: str | None = None):
+        """Fan out one brokered RD-Agent upstream per task/node to all viewers."""
         current_status = self._get_task_status(task_id)
         if self._is_log_stream_stop_requested(task_id) or current_status is None:
             payload = {
@@ -4306,292 +4717,80 @@ class AutoEvolutionScheduler:
         if self.is_terminal_log_status(current_status):
             snapshot = self.get_task_log_tail(task_id)
             logs = snapshot["logs"] or [
-                f"Task {task_id} is {current_status}; no local evolution.log tail is available."
+                f"Task {task_id} is {current_status}; no bounded or legacy log tail is available."
             ]
             for log_line in logs:
-                yield f"data: {json.dumps({'status': current_status, 'event': 'task_log_tail', 'logs': [log_line]}, ensure_ascii=False)}\n\n"
+                payload = {
+                    "status": current_status,
+                    "event": "task_log_tail",
+                    "logs": [log_line],
+                    "log_source": snapshot.get("log_source"),
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             closed = {
                 "status": current_status,
                 "event": "task_log_terminal",
-                "logs": [
-                    f"Task {task_id} is terminal ({current_status}); no live log stream was opened."
-                ],
+                "logs": [f"Task {task_id} is terminal ({current_status}); no live log stream was opened."],
+                "log_source": snapshot.get("log_source"),
             }
             yield f"data: {json.dumps(closed, ensure_ascii=False)}\n\n"
             return
 
-        self._register_log_stream(task_id)
-        log_dir = os.path.join(SOTA_ASSETS_DIR, task_id, "logs")
-        log_path = os.path.join(log_dir, "evolution.log")
         node_plan = self._get_log_stream_node_plan_for_task(task_id)
-        node_ids = list(node_plan.get("node_ids") or [])
-        if not node_ids:
-            node_ids = [None]
-            node_plan.setdefault("warnings", []).append(
-                f"Task {task_id} log node plan was empty; using local log stream only."
-            )
-        distributed_stream = len(node_ids) > 1
+        node_ids = list(node_plan.get("node_ids") or [None])
+        sources: list[QELogBrokerSource] = []
+        for node_id in node_ids:
+            client = self._get_workspace_client_for_node_id(node_id)
+            node_key = self._log_stream_node_key(node_id)
+            node_label = self._log_stream_node_label(node_id)
 
-        async def append_local_log(text: str) -> None:
-            os.makedirs(log_dir, exist_ok=True)
-            async with aiofiles.open(log_path, "a", encoding="utf-8") as log_file:
-                await log_file.write(text)
-
-        def as_sse(raw_line: str) -> str:
-            if raw_line.startswith("data:"):
-                return f"{raw_line}\n\n"
-            return f"data: {raw_line}\n\n"
-
-        def parse_payload(text: str) -> Optional[Dict[str, Any]]:
-            try:
-                payload = json.loads(text)
-            except Exception as exc:
-                logger.debug("Skipping non-JSON QE log payload for task %s: %s", task_id, exc)
-                return None
-            return payload if isinstance(payload, dict) else None
-
-        def normalize_logs(value: Any) -> List[str]:
-            if value is None:
-                return []
-            if isinstance(value, list):
-                return [str(item) for item in value]
-            return [str(value)]
-
-        def node_prefix_log_line(log_line: str, node_id: Optional[str]) -> str:
-            label = self._log_stream_node_label(node_id)
-            prefix = f"[{label}]"
-            text = str(log_line)
-            return text if text.startswith(prefix) else f"{prefix} {text}"
-
-        def prepare_sse_line(raw_line: str, node_id: Optional[str], *, decorate_node: bool) -> tuple[str, str, Optional[Dict[str, Any]]]:
-            text = raw_line[len("data:"):].strip() if raw_line.startswith("data:") else raw_line
-            payload = parse_payload(text) if text else None
-            if not decorate_node:
-                return as_sse(raw_line), text, payload
-
-            label = self._log_stream_node_label(node_id)
-            if payload is None:
-                decorated_payload: Dict[str, Any] = {
-                    "status": "running",
-                    "event": "node_log",
-                    "node_id": label,
-                    "logs": [node_prefix_log_line(text or raw_line, node_id)],
-                }
-            else:
-                decorated_payload = dict(payload)
-                decorated_payload["node_id"] = label
-                decorated_payload["source_node_id"] = label
-                decorated_payload.setdefault("event", "node_log")
-                logs = normalize_logs(decorated_payload.get("logs"))
-                if logs:
-                    decorated_payload["logs"] = [
-                        node_prefix_log_line(log_line, node_id)
-                        for log_line in logs
-                    ]
-
-            decorated_text = json.dumps(decorated_payload, ensure_ascii=False)
-            return f"data: {decorated_text}\n\n", decorated_text, decorated_payload
-
-        def warning_sse(message: str, *, event: str, node_id: Optional[str] = None) -> tuple[str, str]:
-            label = self._log_stream_node_label(node_id) if node_id is not None else None
-            payload: Dict[str, Any] = {
-                "status": "warning",
-                "event": event,
-                "logs": [message],
-            }
-            if label is not None:
-                payload["node_id"] = label
-            text = json.dumps(payload, ensure_ascii=False)
-            return f"data: {text}\n\n", text
-
-        def is_workspace_waiting(payload: Optional[Dict[str, Any]]) -> bool:
-            if not payload or payload.get("status") != "waiting":
-                return False
-            logs = payload.get("logs") or []
-            if not isinstance(logs, list):
-                logs = [logs]
-            return any("Task directory not found yet" in str(item) for item in logs)
-
-        try:
-            node_labels = ", ".join(self._log_stream_node_label(node_id) for node_id in node_ids)
-            session_header = (
-                f"\n{'='*60}\n"
-                f"[Session Start] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"[Log Nodes] {node_labels}\n"
-                f"{'='*60}\n"
-            )
-            await append_local_log(session_header)
-
-            for warning in node_plan.get("warnings") or []:
-                sse, text = warning_sse(f"[System] {warning}", event="log_node_resolution_warning")
-                await append_local_log(text + "\n")
-                yield sse
-
-            async def forward_single_node(node_id: Optional[str]):
-                client = self._get_workspace_client_for_node_id(node_id)
-                async for line in client.stream_task_logs(task_id):
-                    text = line[len("data:"):].strip() if line.startswith("data:") else line
-                    payload = parse_payload(text) if text else None
-
-                    if self._is_log_stream_stop_requested(task_id):
-                        closed = {
-                            "status": "deleted",
-                            "event": "task_deleted",
-                            "logs": [f"Task {task_id} is being deleted; log stream closed."],
-                        }
-                        yield f"data: {json.dumps(closed, ensure_ascii=False)}\n\n"
-                        return
-
-                    if is_workspace_waiting(payload):
-                        latest_status = self._get_task_status(task_id)
-                        if latest_status is None:
-                            deleted = {
-                                "status": "deleted",
-                                "event": "task_deleted",
-                                "logs": [f"Task {task_id} no longer exists; log stream closed."],
-                            }
-                            yield f"data: {json.dumps(deleted, ensure_ascii=False)}\n\n"
-                            return
-                        if latest_status in {"completed", "failed", "cancelled", "paused"}:
-                            missing = {
-                                "status": "missing",
-                                "event": "task_log_workspace_missing",
-                                "logs": [
-                                    f"Task {task_id} is {latest_status}, but its RDAgent workspace is missing; log stream closed."
-                                ],
-                            }
-                            yield f"data: {json.dumps(missing, ensure_ascii=False)}\n\n"
-                            return
-                        # Transient pre-start wait: show it in UI but do not persist one line per second.
-                        yield as_sse(line)
-                        continue
-
-                    if text:
-                        await append_local_log(text + "\n")
-                    yield as_sse(line)
-
-            if not distributed_stream:
-                node_id = node_ids[0] if node_ids else None
-                try:
-                    async for chunk in forward_single_node(node_id):
-                        yield chunk
-                except Exception as exc:
-                    logger.exception("QE log stream failed for task %s node %s", task_id, self._log_stream_node_label(node_id))
-                    sse, text = warning_sse(
-                        f"[{self._log_stream_node_label(node_id)}] log stream failed: {exc}",
-                        event="node_log_stream_error",
-                        node_id=node_id,
-                    )
-                    await append_local_log(text + "\n")
-                    yield sse
-                return
-
-            queue: asyncio.Queue = asyncio.Queue()
-
-            async def read_node_stream(node_id: Optional[str]) -> None:
-                node_key = self._log_stream_node_key(node_id)
-                try:
-                    client = self._get_workspace_client_for_node_id(node_id)
-                    async for line in client.stream_task_logs(task_id):
-                        await queue.put({"kind": "line", "node_id": node_id, "node_key": node_key, "line": line})
-                except asyncio.CancelledError:
-                    pass
-                except Exception as exc:
-                    logger.exception("QE distributed log stream failed for task %s node %s", task_id, self._log_stream_node_label(node_id))
-                    await queue.put({"kind": "error", "node_id": node_id, "node_key": node_key, "error": str(exc)})
-                finally:
-                    queue.put_nowait({"kind": "done", "node_id": node_id, "node_key": node_key})
-
-            worker_tasks: Dict[str, asyncio.Task] = {
-                self._log_stream_node_key(node_id): asyncio.create_task(read_node_stream(node_id))
-                for node_id in node_ids
-            }
-            active_workers = len(worker_tasks)
-            terminal_missing_nodes: set[str] = set()
-            try:
-                while active_workers > 0:
-                    if self._is_log_stream_stop_requested(task_id):
-                        closed = {
-                            "status": "deleted",
-                            "event": "task_deleted",
-                            "logs": [f"Task {task_id} is being deleted; distributed log stream closed."],
-                        }
-                        yield f"data: {json.dumps(closed, ensure_ascii=False)}\n\n"
-                        return
-
-                    try:
-                        item = await asyncio.wait_for(queue.get(), timeout=1.0)
-                    except asyncio.TimeoutError:
-                        if self._get_task_status(task_id) is None:
-                            deleted = {
-                                "status": "deleted",
-                                "event": "task_deleted",
-                                "logs": [f"Task {task_id} no longer exists; distributed log stream closed."],
-                            }
-                            yield f"data: {json.dumps(deleted, ensure_ascii=False)}\n\n"
-                            return
-                        continue
-
-                    kind = item.get("kind")
-                    node_id = item.get("node_id")
-                    node_key = item.get("node_key")
-                    if kind == "done":
-                        active_workers -= 1
-                        continue
-                    if kind == "error":
-                        sse, text = warning_sse(
-                            f"[{self._log_stream_node_label(node_id)}] log stream failed: {item.get('error')}",
-                            event="node_log_stream_error",
-                            node_id=node_id,
+            async def open_stream(
+                source_cursor: str | None,
+                *,
+                bound_client: QEWorkspaceClient = client,
+            ):
+                typed_stream = getattr(bound_client, "stream_task_log_events", None)
+                if callable(typed_stream):
+                    async for upstream_event in typed_stream(task_id, after_cursor=source_cursor):
+                        yield upstream_event
+                    return
+                if source_cursor:
+                    raise RuntimeError("legacy QE log source cannot resume a cursor")
+                async for raw_line in bound_client.stream_task_logs(task_id):
+                    data = raw_line[len("data:"):].strip() if raw_line.startswith("data:") else raw_line
+                    if data:
+                        yield QEWorkspaceLogEvent(
+                            data=data,
+                            cursor=None,
+                            event_type=None,
+                            terminal=QEWorkspaceClient._log_event_is_terminal(data, None),
                         )
-                        await append_local_log(text + "\n")
-                        yield sse
-                        continue
 
-                    sse_line, persist_text, payload = prepare_sse_line(
-                        item.get("line") or "",
-                        node_id,
-                        decorate_node=True,
-                    )
+            sources.append(
+                QELogBrokerSource(
+                    node_key=node_key,
+                    node_label=node_label,
+                    open_stream=open_stream,
+                )
+            )
 
-                    if is_workspace_waiting(payload):
-                        latest_status = self._get_task_status(task_id)
-                        if latest_status is None:
-                            deleted = {
-                                "status": "deleted",
-                                "event": "task_deleted",
-                                "logs": [f"Task {task_id} no longer exists; distributed log stream closed."],
-                            }
-                            yield f"data: {json.dumps(deleted, ensure_ascii=False)}\n\n"
-                            return
-                        if latest_status in {"completed", "failed", "cancelled", "paused"}:
-                            if node_key not in terminal_missing_nodes:
-                                terminal_missing_nodes.add(node_key)
-                                sse, text = warning_sse(
-                                    f"[{self._log_stream_node_label(node_id)}] Task {task_id} is {latest_status}, "
-                                    "but this node's RDAgent workspace is missing; stopping this node log stream.",
-                                    event="node_log_workspace_missing",
-                                    node_id=node_id,
-                                )
-                                await append_local_log(text + "\n")
-                                yield sse
-                            task = worker_tasks.get(node_key)
-                            if task:
-                                task.cancel()
-                            continue
-                        # Transient pre-start wait: show it in UI but do not persist one line per second.
-                        yield sse_line
-                        continue
-
-                    if persist_text:
-                        await append_local_log(persist_text + "\n")
-                    yield sse_line
-            finally:
-                for task in worker_tasks.values():
-                    if not task.done():
-                        task.cancel()
-                if worker_tasks:
-                    await asyncio.gather(*worker_tasks.values(), return_exceptions=True)
+        self._register_log_stream(task_id)
+        try:
+            for warning in node_plan.get("warnings") or []:
+                payload = {
+                    "status": "warning",
+                    "event": "log_node_resolution_warning",
+                    "logs": [f"[System] {warning}"],
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            async for event in get_qe_log_broker().stream(
+                task_id,
+                sources,
+                after_cursor=after_cursor,
+            ):
+                if self._is_log_stream_stop_requested(task_id):
+                    return
+                yield event.as_sse()
         finally:
             self._unregister_log_stream(task_id)
 
@@ -4867,6 +5066,7 @@ class AutoEvolutionScheduler:
         loops_config: List[Dict[str, Any]] = None,
         inherit_history: bool = False,
         node_id: Optional[str] = None,
+        long_trend_profile_id: Optional[str] = None,
     ) -> str:
         """
         从指定 task 的某个已完成 loop 创建策略演进任务。
@@ -4874,6 +5074,9 @@ class AutoEvolutionScheduler:
         """
         if not loops_config or len(loops_config) == 0:
             raise ValueError("loops_config 不能为空，至少需要配置一个 Loop")
+        effective_long_trend_profile_id = normalize_long_trend_profile_id(
+            long_trend_profile_id
+        )
 
         # 1. 验证源 task 和 loop
         with get_conn() as conn:
@@ -4995,9 +5198,10 @@ class AutoEvolutionScheduler:
                      base_experiment_id, node_id, source_type,
                      task_type, strategy_evo_config,
                      model_source_task_id, model_source_loop_index,
-                     fork_from_task_id, fork_from_loop_index, inherit_history, label_horizon)
+                     fork_from_task_id, fork_from_loop_index, inherit_history, label_horizon,
+                     long_trend_profile_id)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'strategy_fork',
-                            'strategy_evo', %s, %s, %s, %s, %s, %s, %s)
+                            'strategy_evo', %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, len(loops_config),
                     base_exp_id, effective_node_id,
@@ -5005,6 +5209,7 @@ class AutoEvolutionScheduler:
                     source_task_id, from_loop_index,
                     source_task_id, from_loop_index, inherit_history,
                     source_label_horizon,
+                    effective_long_trend_profile_id,
                 ))
             conn.commit()
 
@@ -5177,16 +5382,19 @@ class AutoEvolutionScheduler:
                 target_node_id or "local",
             )
 
-            client = self._get_workspace_client_for_task(task_id)
+            effective_node_id = self._get_loop_node_id(task_id, evolution_loop_db_id)
+            client = self._get_workspace_client_for_node_id(effective_node_id)
             executor = BacktestExecutor(ConfigComposer(), client)
             ctx = ExecutionContext(
                 task_id=task_id,
                 loop_index=loop_index,
                 experiment_name=experiment_name,
-                node_id=task.get("node_id"),
+                node_id=effective_node_id,
                 callback_url=self._get_callback_url_for_task(task_id),
                 model_source=model_source,
                 extra_experiment_files=extra_experiment_files or None,
+                submission_source_kind="qe_evolution_loop",
+                submission_source_execution_id=evolution_loop_db_id,
             )
             await executor.submit(cfg, ctx, mode=BacktestMode.BACKTEST_ONLY)
 
@@ -5290,20 +5498,37 @@ class AutoEvolutionScheduler:
                     return None
                 max_wait = 7200
                 waited = 0
-                interval = 10
+                interval = 60
                 final_status = None
+                wait_generation: int | None = None
                 while waited < max_wait:
-                    await asyncio.sleep(interval)
+                    from .qe_reconciliation_coordinator import (
+                        QEReconciliationScope,
+                        qe_reconciliation_wakeup,
+                        wait_for_qe_reconciliation,
+                    )
+
+                    wait_generation = await wait_for_qe_reconciliation(
+                        QEReconciliationScope.EVOLUTION,
+                        key=loop_id,
+                        timeout_seconds=interval,
+                        observed_generation=wait_generation,
+                    )
                     waited += interval
-                    if self._get_task_status(task_id) != "running":
+                    if qe_reconciliation_wakeup.loop_state(loop_id) in (
+                        "cancelled",
+                        "canceled",
+                        "failed",
+                    ):
                         logger.info(f"策略演进任务 {task_id} 停止; 等待 Loop {loop_index} 中断")
                         return loop_id
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
-                            row = cur.fetchone()
-                    final_status = row[0] if row else None
-                    if not row or final_status in ("completed", "failed", "cancelled"):
+                    final_status = qe_reconciliation_wakeup.loop_state(loop_id)
+                    if final_status is None or final_status in (
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "canceled",
+                    ):
                         break
                 if waited >= max_wait:
                     logger.error(f"策略演进 Loop {loop_index} 等待超时（{max_wait}s）")
@@ -5547,6 +5772,7 @@ class AutoEvolutionScheduler:
         engine_mode: str = "unified",
         clone_from_task_id: Optional[str] = None,
         auto_start: bool = True,
+        long_trend_profile_id: Optional[str] = None,
     ) -> str:
         """
         创建自定义演进任务。每个 Loop 都可以完全自定义因子、模型、策略配置，
@@ -5561,6 +5787,9 @@ class AutoEvolutionScheduler:
         resource_telemetry_enabled = _normalize_removed_resource_telemetry(
             resource_telemetry_enabled,
             context="create_custom_evo_task",
+        )
+        effective_long_trend_profile_id = normalize_long_trend_profile_id(
+            long_trend_profile_id
         )
         if phase_pipeline_enabled:
             QEResourcePhaseService().ensure_schema_ready()
@@ -5649,9 +5878,9 @@ class AutoEvolutionScheduler:
                     INSERT INTO qe_evolution_tasks
                     (task_id, task_name, target_desc, max_loops, current_loop, status,
                      base_experiment_id, node_id, source_type,
-                     task_type, strategy_evo_config, label_horizon)
+                     task_type, strategy_evo_config, label_horizon, long_trend_profile_id)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'custom',
-                            'custom_evo', %s, %s)
+                            'custom_evo', %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, len(loops_config),
                     base_exp_id, node_id,
@@ -5665,6 +5894,7 @@ class AutoEvolutionScheduler:
                         "clone_from_task_id": clone_from_task_id,
                     }),
                     first_label_horizon,
+                    effective_long_trend_profile_id,
                 ))
             conn.commit()
 
@@ -6250,15 +6480,16 @@ class AutoEvolutionScheduler:
         """Keep the loop queued until the per-node node_parallelism slot is free."""
 
         task_id = str(task.get("task_id") or "")
+        initial_task_status = str(task.get("status") or "")
+        if initial_task_status and initial_task_status not in ("pending", "running"):
+            logger.info(
+                "Custom evolution task %s stopped before Loop %s acquired node_parallelism slot",
+                task_id,
+                loop_index,
+            )
+            return None
+        wait_generation: int | None = None
         while True:
-            task_status = self._get_task_status(task_id)
-            if task_status not in ("pending", "running"):
-                logger.info(
-                    "Custom evolution task %s stopped before Loop %s acquired node_parallelism slot",
-                    task_id,
-                    loop_index,
-                )
-                return None
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     slot = self._enforce_custom_evo_node_parallelism_slot(
@@ -6274,31 +6505,86 @@ class AutoEvolutionScheduler:
                     if slot and not slot.get("available", True):
                         if insert_if_missing:
                             cur.execute(
-                                """
-                                INSERT INTO qe_evolution_loops
-                                (loop_id, task_id, loop_index, status, action_type, node_id)
-                                VALUES (%s, %s, %s, 'pending', %s, %s)
-                                ON CONFLICT (loop_id) DO UPDATE SET
-                                    status = CASE
-                                        WHEN qe_evolution_loops.status IN ('running', 'processing', 'completed')
-                                        THEN qe_evolution_loops.status
-                                        ELSE 'pending'
-                                    END,
-                                    node_id = COALESCE(qe_evolution_loops.node_id, EXCLUDED.node_id),
-                                    updated_at = NOW()
-                                """,
-                                (loop_db_id, task_id, loop_index, action_type, target_node_id),
-                            )
-                        else:
-                            cur.execute(
-                                """
-                                UPDATE qe_evolution_loops
-                                SET status = 'pending', updated_at = NOW()
-                                WHERE loop_id = %s
-                                  AND status NOT IN ('running', 'processing', 'completed')
-                                """,
+                                "SELECT status, node_id FROM qe_evolution_loops WHERE loop_id = %s",
                                 (loop_db_id,),
                             )
+                            existing = cur.fetchone()
+                            existing_status = (
+                                str(existing.get("status") or "")
+                                if isinstance(existing, dict)
+                                else str(existing[0] or "") if existing else ""
+                            )
+                            existing_node_id = (
+                                existing.get("node_id")
+                                if isinstance(existing, dict)
+                                else existing[1] if existing and len(existing) > 1 else None
+                            )
+                            already_pending = (
+                                existing_status
+                                in {"pending", "running", "processing", "completed"}
+                                and not (
+                                    existing_node_id is None
+                                    and target_node_id is not None
+                                )
+                            )
+                            if not already_pending:
+                                cur.execute(
+                                    """
+                                    INSERT INTO qe_evolution_loops
+                                    (loop_id, task_id, loop_index, status, action_type, node_id)
+                                    VALUES (%s, %s, %s, 'pending', %s, %s)
+                                    ON CONFLICT (loop_id) DO UPDATE SET
+                                        status = CASE
+                                            WHEN qe_evolution_loops.status IN ('running', 'processing', 'completed')
+                                            THEN qe_evolution_loops.status
+                                            ELSE 'pending'
+                                        END,
+                                        node_id = COALESCE(qe_evolution_loops.node_id, EXCLUDED.node_id),
+                                        updated_at = NOW()
+                                    WHERE (
+                                        qe_evolution_loops.status NOT IN ('running', 'processing', 'completed')
+                                        AND qe_evolution_loops.status IS DISTINCT FROM 'pending'
+                                    ) OR (
+                                        qe_evolution_loops.node_id IS NULL
+                                        AND EXCLUDED.node_id IS NOT NULL
+                                    )
+                                    """,
+                                    (
+                                        loop_db_id,
+                                        task_id,
+                                        loop_index,
+                                        action_type,
+                                        target_node_id,
+                                    ),
+                                )
+                        else:
+                            cur.execute(
+                                "SELECT status FROM qe_evolution_loops WHERE loop_id = %s",
+                                (loop_db_id,),
+                            )
+                            existing = cur.fetchone()
+                            existing_status = (
+                                str(existing.get("status") or "")
+                                if isinstance(existing, dict)
+                                else str(existing[0] or "") if existing else ""
+                            )
+                            if existing_status not in {
+                                "pending",
+                                "running",
+                                "processing",
+                                "completed",
+                                "",
+                            }:
+                                cur.execute(
+                                    """
+                                    UPDATE qe_evolution_loops
+                                    SET status = 'pending', updated_at = NOW()
+                                    WHERE loop_id = %s
+                                      AND status NOT IN ('running', 'processing', 'completed')
+                                      AND status IS DISTINCT FROM 'pending'
+                                    """,
+                                    (loop_db_id,),
+                                )
                         conn.commit()
                     else:
                         if insert_if_missing:
@@ -6353,7 +6639,17 @@ class AutoEvolutionScheduler:
                 slot["active_count"] if slot else "?",
                 slot["limit"] if slot else "?",
             )
-            await asyncio.sleep(poll_seconds)
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                wait_for_qe_reconciliation,
+            )
+
+            wait_generation = await wait_for_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=loop_db_id,
+                timeout_seconds=max(60, poll_seconds),
+                observed_generation=wait_generation,
+            )
 
     async def rerun_custom_evo_loop(
         self,
@@ -6395,6 +6691,15 @@ class AutoEvolutionScheduler:
                     next_loops: List[Dict[str, Any]] = []
                     replacement = dict(loop_config)
                     replacement["loop_index"] = loop_index
+                    rerun_attempt_id = uuid.uuid4().hex
+                    rerun_source_execution_id = (
+                        f"{task_id}_Loop{loop_index}:rerun:{rerun_attempt_id}"
+                    )
+                    replacement[_QE_RERUN_SUBMISSION_KEY] = {
+                        "schema_version": "qe_custom_evo_rerun_submission_v1",
+                        "rerun_attempt_id": rerun_attempt_id,
+                        "source_execution_id": rerun_source_execution_id,
+                    }
                     for cfg in strategy_config["loops"]:
                         if int(cfg.get("loop_index") or 0) == loop_index:
                             next_loops.append(replacement)
@@ -6447,6 +6752,8 @@ class AutoEvolutionScheduler:
                 "loop_index": loop_index,
                 "loop_id": f"{task_id}_Loop{loop_index}",
                 "node_parallelism": full_node_parallelism,
+                "rerun_attempt_id": rerun_attempt_id,
+                "source_execution_id": rerun_source_execution_id,
                 "cleanup": cleanup_result,
                 "message": f"Custom evolution Loop {loop_index} rerun queued.",
             }
@@ -6570,20 +6877,25 @@ class AutoEvolutionScheduler:
     async def _wait_and_process_custom_evo_loop(self, task_id: str, loop_index: int, loop_id: str) -> None:
         max_wait = 14400
         waited = 0
-        interval = 15
+        interval = 60
         final_status = None
+        wait_generation: int | None = None
         while waited < max_wait:
-            await asyncio.sleep(interval)
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                qe_reconciliation_wakeup,
+                wait_for_qe_reconciliation,
+            )
+
+            wait_generation = await wait_for_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=loop_id,
+                timeout_seconds=interval,
+                observed_generation=wait_generation,
+            )
             waited += interval
-            if self._get_task_status(task_id) != "running":
-                logger.info("Custom evolution task %s stopped while waiting for Loop %s", task_id, loop_index)
-                return
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
-                    row = cur.fetchone()
-            final_status = row[0] if row else None
-            if not row or final_status in ("completed", "failed", "cancelled", "canceled"):
+            final_status = qe_reconciliation_wakeup.loop_state(loop_id)
+            if final_status is None or final_status in ("completed", "failed", "cancelled", "canceled"):
                 break
         if waited >= max_wait:
             logger.error("Custom evolution Loop %s wait timed out (%ss); marking failed", loop_index, max_wait)
@@ -6786,6 +7098,12 @@ class AutoEvolutionScheduler:
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
         effective_node_id = loop_config.get("node_id") or task.get("node_id") or resolve_default_qe_node_id()
+        submission_source_execution_id, submission_source_claim_id = (
+            self._custom_evo_submission_identity(
+                loop_config,
+                canonical_loop_id=evolution_loop_db_id,
+            )
+        )
 
         if self._get_task_status(task_id) != "running":
             logger.info(f"Custom evolution task {task_id} is not running; skip submitting Loop {loop_index}")
@@ -6910,6 +7228,9 @@ class AutoEvolutionScheduler:
                 "gpu_training_policy": gpu_training_policy,
                 "resource_session_id": resource_session.session_id if resource_session else None,
             }
+            rerun_submission = loop_config.get(_QE_RERUN_SUBMISSION_KEY)
+            if isinstance(rerun_submission, dict):
+                config_record[_QE_RERUN_SUBMISSION_KEY] = dict(rerun_submission)
             loop_model_params = merge_qe_minute_runtime_contract(
                 cfg.build_custom_params(),
                 config=config_record,
@@ -6995,6 +7316,9 @@ class AutoEvolutionScheduler:
                 resource_source_run_key=resource_session.source_run_key if resource_session else None,
                 resource_session_token=resource_session.token if resource_session else None,
                 phase_pipeline_enabled=phase_pipeline_enabled,
+                submission_source_kind="qe_evolution_loop",
+                submission_source_execution_id=submission_source_execution_id,
+                submission_source_claim_id=submission_source_claim_id,
             )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
@@ -7035,6 +7359,9 @@ class AutoEvolutionScheduler:
                     resource_source_run_key=resource_session.source_run_key if resource_session else None,
                     resource_session_token=resource_session.token if resource_session else None,
                     phase_pipeline_enabled=False,
+                    submission_source_kind="qe_evolution_loop",
+                    submission_source_execution_id=submission_source_execution_id,
+                    submission_source_claim_id=submission_source_claim_id,
                 )
                 mode = BacktestMode.BACKTEST_ONLY
                 logger.info(
@@ -7048,9 +7375,25 @@ class AutoEvolutionScheduler:
                         f"忽略 backtest_only 配置，执行完整训练"
                     )
                 mode = BacktestMode.FULL_TRAIN
-            await executor.submit(cfg, ctx, mode=mode)
+            result = await executor.submit(cfg, ctx, mode=mode)
+            if result.status == "waiting_capacity":
+                if resource_session is not None:
+                    resource_service.mark_session_terminal(
+                        resource_session.session_id,
+                        status="cancelled",
+                        reason_code="QE_RESOURCE_WAITING_CANONICAL_CAPACITY",
+                    )
+                if gpu_phase_lease is not None:
+                    await gpu_phase_lease.release()
+                    gpu_phase_lease = None
+                return evolution_loop_db_id
             if resource_session is not None:
-                resource_service.mark_session_submitted(resource_session.session_id)
+                self._mark_resource_session_submitted_after_remote_acceptance(
+                    service=resource_service,
+                    session_id=resource_session.session_id,
+                    task_id=task_id,
+                    loop_index=loop_index,
+                )
                 wait_task = asyncio.create_task(
                     self._wait_resource_session_until_safe_release(
                         session_id=resource_session.session_id,
@@ -7238,29 +7581,11 @@ class AutoEvolutionScheduler:
                 loop_id = await self.submit_custom_evo_loop(task_id, loop_index, force_full_train=force_full_train)
                 if not loop_id:
                     return None
-                max_wait = 14400
-                waited = 0
-                interval = 15
-                final_status = None
-                while waited < max_wait:
-                    await asyncio.sleep(interval)
-                    waited += interval
-                    if self._get_task_status(task_id) != "running":
-                        logger.info(f"Custom evolution task {task_id} stopped while waiting for Loop {loop_index}")
-                        return loop_id
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
-                            row = cur.fetchone()
-                    final_status = row[0] if row else None
-                    if not row or final_status in ("completed", "failed", "cancelled"):
-                        break
-                if waited >= max_wait:
-                    logger.error("Custom evolution Loop %s wait timed out (%ss)", loop_index, max_wait)
-                if loop_id and final_status == "completed":
-                    await self._safe_process_completed_loop(task_id, loop_id)
-                elif loop_id:
-                    logger.info(f"Custom evolution Loop {loop_index} ended with status={final_status}; skip metrics processing")
+                await self._wait_and_process_custom_evo_loop(
+                    task_id,
+                    int(loop_index),
+                    loop_id,
+                )
                 return loop_id
 
         tasks = [_run_custom_evo_loop(lc) for lc in loops_to_run]

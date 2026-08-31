@@ -65,8 +65,7 @@ _BROKER_DISCONNECT_RECOVERY_BY_SCOPE: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 class ManagedOrderBroker(Protocol):
-    def get_positions(self) -> list[dict[str, Any]]:
-        ...
+    def get_positions(self) -> list[dict[str, Any]]: ...
 
     def place_order(
         self,
@@ -78,11 +77,9 @@ class ManagedOrderBroker(Protocol):
         price: float,
         strategy_name: str,
         order_remark: str,
-    ) -> tuple[int, str]:
-        ...
+    ) -> tuple[int, str]: ...
 
-    def cancel_order(self, order_id: str) -> tuple[bool, str]:
-        ...
+    def cancel_order(self, order_id: str) -> tuple[bool, str]: ...
 
 
 @dataclass(frozen=True)
@@ -270,7 +267,9 @@ class QmtManagedOrderService:
             if board_lot_error is not None:
                 errors.append(board_lot_error)
         if request.order_type == BUY_ORDER_TYPE and request.price <= 0:
-            errors.append(OrderPreflightError("PRICE_REQUIRED_FOR_FREEZE", "buy order requires a positive price for cash freeze"))
+            errors.append(
+                OrderPreflightError("PRICE_REQUIRED_FOR_FREEZE", "buy order requires a positive price for cash freeze")
+            )
         if not request.order_remark.strip():
             errors.append(OrderPreflightError("BLANK_ORDER_REMARK", "order_remark is required"))
         elif self._repository.get_order_intent_by_remark(request.account_id, request.order_remark) is not None:
@@ -306,6 +305,13 @@ class QmtManagedOrderService:
                 as_of_date=request.trade_date,
                 calendar=self._calendar_provider,
             )
+            if request.quantity > 0:
+                board_lot_error = self._sell_board_lot_error(
+                    request,
+                    available_quantity=strategy_available_sell_quantity,
+                )
+                if board_lot_error is not None:
+                    errors.append(board_lot_error)
             if strategy_available_sell_quantity < request.quantity:
                 errors.append(
                     OrderPreflightError(
@@ -339,7 +345,9 @@ class QmtManagedOrderService:
                 allowed=False,
                 errors=(broker_freeze_error,),
             )
-            return ManagedOrderSubmitResult(False, None, None, "broker connectivity preflight failed", failed_preflight, False)
+            return ManagedOrderSubmitResult(
+                False, None, None, "broker connectivity preflight failed", failed_preflight, False
+            )
         preflight = self.preview_order(request)
         if not preflight.allowed:
             return ManagedOrderSubmitResult(
@@ -377,7 +385,9 @@ class QmtManagedOrderService:
         intent = self._create_intent(request, account, preflight, IntentSubmitStatus.SUBMITTED)
         freeze_applied = False
         if request.order_type == BUY_ORDER_TYPE and preflight.freeze_amount > 0:
-            self._apply_cash_entry(account, request, preflight.freeze_amount, CashEntryType.FREEZE_BUY, intent.intent_id)
+            self._apply_cash_entry(
+                account, request, preflight.freeze_amount, CashEntryType.FREEZE_BUY, intent.intent_id
+            )
             freeze_applied = True
 
         try:
@@ -392,10 +402,20 @@ class QmtManagedOrderService:
             )
         except Exception as exc:  # noqa: BLE001
             if freeze_applied:
-                self._release_cash_entry(account.strategy_id, request, preflight.freeze_amount, CashEntryType.UNFREEZE_REJECT, intent.intent_id)
-            self._repository.set_order_intent_submit_status(intent.intent_id, IntentSubmitStatus.REJECTED, updated_at=datetime.now(UTC))
+                self._release_cash_entry(
+                    account.strategy_id,
+                    request,
+                    preflight.freeze_amount,
+                    CashEntryType.UNFREEZE_REJECT,
+                    intent.intent_id,
+                )
+            self._repository.set_order_intent_submit_status(
+                intent.intent_id, IntentSubmitStatus.REJECTED, updated_at=datetime.now(UTC)
+            )
             if not _is_broker_disconnect_exception(self._broker, exc):
-                return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", preflight, True)
+                return ManagedOrderSubmitResult(
+                    False, intent.intent_id, None, f"broker exception: {exc!r}", preflight, True
+                )
             freeze_error = self._mark_broker_disconnect_freeze(
                 request=request,
                 stage="SUBMIT_ORDER",
@@ -407,13 +427,19 @@ class QmtManagedOrderService:
                 allowed=False,
                 errors=preflight.errors + (freeze_error,),
             )
-            return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", failed_preflight, True)
+            return ManagedOrderSubmitResult(
+                False, intent.intent_id, None, f"broker exception: {exc!r}", failed_preflight, True
+            )
 
         success = int(order_id or 0) > 0
         status = IntentSubmitStatus.ACCEPTED if success else IntentSubmitStatus.REJECTED
-        self._repository.set_order_intent_submit_status(intent.intent_id, status, submitted_at=datetime.now(UTC), updated_at=datetime.now(UTC))
+        self._repository.set_order_intent_submit_status(
+            intent.intent_id, status, submitted_at=datetime.now(UTC), updated_at=datetime.now(UTC)
+        )
         if not success and freeze_applied:
-            self._release_cash_entry(account.strategy_id, request, preflight.freeze_amount, CashEntryType.UNFREEZE_REJECT, intent.intent_id)
+            self._release_cash_entry(
+                account.strategy_id, request, preflight.freeze_amount, CashEntryType.UNFREEZE_REJECT, intent.intent_id
+            )
         if success:
             qmt_order_id = str(order_id)
             self._repository.upsert_order_ledger(
@@ -503,7 +529,9 @@ class QmtManagedOrderService:
             return self._retry_dependent_buy_batch(batch_id, requests, deferred_batch)
         deferred_batch = self._find_dependent_buy_batch_by_logical_key(requests)
         if deferred_batch is not None:
-            return self._retry_dependent_buy_batch(deferred_batch.batch_id, _requests_from_batch(deferred_batch), deferred_batch)
+            return self._retry_dependent_buy_batch(
+                deferred_batch.batch_id, _requests_from_batch(deferred_batch), deferred_batch
+            )
         retry_result = self._existing_batch_result(batch_id, len(requests))
         if retry_result is not None:
             return retry_result
@@ -578,7 +606,13 @@ class QmtManagedOrderService:
         results = tuple(results_list)
         succeeded = sum(1 for result in results if result.success)
         failed = len(results) - succeeded
-        status = OrderBatchStatus.SUCCEEDED if failed == 0 else OrderBatchStatus.PARTIAL if succeeded > 0 else OrderBatchStatus.FAILED
+        status = (
+            OrderBatchStatus.SUCCEEDED
+            if failed == 0
+            else OrderBatchStatus.PARTIAL
+            if succeeded > 0
+            else OrderBatchStatus.FAILED
+        )
         residual_failed = sum(
             1
             for request, result in zip(requests, results, strict=True)
@@ -645,8 +679,12 @@ class QmtManagedOrderService:
         if success:
             release_amount = intent.estimated_notional or Decimal("0")
             if release_amount > 0:
-                self._release_cash_entry(account.strategy_id, request, release_amount, CashEntryType.UNFREEZE_CANCEL, intent.intent_id)
-            self._repository.set_order_intent_submit_status(intent.intent_id, IntentSubmitStatus.CANCELLED, updated_at=datetime.now(UTC))
+                self._release_cash_entry(
+                    account.strategy_id, request, release_amount, CashEntryType.UNFREEZE_CANCEL, intent.intent_id
+                )
+            self._repository.set_order_intent_submit_status(
+                intent.intent_id, IntentSubmitStatus.CANCELLED, updated_at=datetime.now(UTC)
+            )
             self._repository.append_order_status_event(
                 OrderStatusEventRecord(
                     event_id=new_id("qmtevt"),
@@ -853,7 +891,9 @@ class QmtManagedOrderService:
             freeze = _BROKER_DISCONNECT_FREEZE_BY_SCOPE.get(_broker_disconnect_scope(request))
         return dict(freeze) if freeze is not None else None
 
-    def _resolve_account(self, request: ManagedOrderRequest, errors: list[OrderPreflightError]) -> VirtualAccount | None:
+    def _resolve_account(
+        self, request: ManagedOrderRequest, errors: list[OrderPreflightError]
+    ) -> VirtualAccount | None:
         if not request.account_id.strip():
             errors.append(OrderPreflightError("BLANK_ACCOUNT_ID", "account_id is required"))
             return None
@@ -895,6 +935,48 @@ class QmtManagedOrderService:
             {
                 "symbol": request.symbol,
                 "quantity": request.quantity,
+                "min_quantity": min_quantity,
+                "increment": increment,
+                "canonical_quantity": canonical_quantity,
+            },
+        )
+
+    def _sell_board_lot_error(
+        self,
+        request: ManagedOrderRequest,
+        *,
+        available_quantity: int,
+    ) -> OrderPreflightError | None:
+        try:
+            min_quantity, increment = board_lot_rule(request.symbol)
+            canonical_quantity = round_to_board_lot(request.quantity, request.symbol, side="SELL")
+        except ValueError as exc:
+            return OrderPreflightError(
+                "SELL_BOARD_LOT",
+                "sell quantity does not match the canonical A-share board-lot rule",
+                {
+                    "symbol": request.symbol,
+                    "quantity": request.quantity,
+                    "available_quantity": available_quantity,
+                    "reason": str(exc),
+                },
+            )
+
+        # A holder may liquidate the complete available position in one order,
+        # including its odd-lot residual.  A partial SELL must remain aligned
+        # to the exchange increment; otherwise the request would strand or
+        # split the odd-lot portion and is rejected before any broker call.
+        if request.quantity == available_quantity:
+            return None
+        if request.quantity >= min_quantity and request.quantity % increment == 0:
+            return None
+        return OrderPreflightError(
+            "SELL_BOARD_LOT",
+            "sell quantity does not match the canonical A-share board-lot rule",
+            {
+                "symbol": request.symbol,
+                "quantity": request.quantity,
+                "available_quantity": available_quantity,
                 "min_quantity": min_quantity,
                 "increment": increment,
                 "canonical_quantity": canonical_quantity,
@@ -969,7 +1051,9 @@ class QmtManagedOrderService:
 
             if request.order_type == BUY_ORDER_TYPE and base_results[index].strategy_id:
                 key = (request.account_id, request.strategy_name)
-                buy_freeze_by_account_strategy[key] = buy_freeze_by_account_strategy.get(key, Decimal("0")) + base_results[index].freeze_amount
+                buy_freeze_by_account_strategy[key] = (
+                    buy_freeze_by_account_strategy.get(key, Decimal("0")) + base_results[index].freeze_amount
+                )
                 account = self._account_by_strategy_name(request.account_id, request.strategy_name)
                 group_limit = _account_group_cash_limit(account) if account is not None else None
                 if group_limit is not None:
@@ -981,9 +1065,9 @@ class QmtManagedOrderService:
                     account_group_context_by_key[group_key] = (cash_limit, context)
             if request.order_type == SELL_ORDER_TYPE:
                 key = (request.account_id, request.strategy_name, request.symbol)
-                sell_quantity_by_account_strategy_symbol[key] = (
-                    sell_quantity_by_account_strategy_symbol.get(key, 0) + max(int(request.quantity), 0)
-                )
+                sell_quantity_by_account_strategy_symbol[key] = sell_quantity_by_account_strategy_symbol.get(
+                    key, 0
+                ) + max(int(request.quantity), 0)
                 strategy_key = (request.account_id, request.strategy_name)
                 sell_proceeds = max(base_results[index].estimated_notional, Decimal("0"))
                 sell_proceeds_by_account_strategy[strategy_key] = (
@@ -999,9 +1083,9 @@ class QmtManagedOrderService:
                     )
                     sell_requests_by_account_group.setdefault(group_key, []).append(request)
                 broker_key = (request.account_id, request.symbol)
-                broker_sell_quantity_by_account_symbol[broker_key] = (
-                    broker_sell_quantity_by_account_symbol.get(broker_key, 0) + max(int(request.quantity), 0)
-                )
+                broker_sell_quantity_by_account_symbol[broker_key] = broker_sell_quantity_by_account_symbol.get(
+                    broker_key, 0
+                ) + max(int(request.quantity), 0)
 
         account_group_overcommit: dict[tuple[str, str], OrderPreflightError] = {}
         for group_key, group_total_freeze in buy_freeze_by_account_group.items():
@@ -1138,7 +1222,9 @@ class QmtManagedOrderService:
                             )
                         )
             if request.order_type == SELL_ORDER_TYPE and result.strategy_available_sell_quantity is not None:
-                total_sell = sell_quantity_by_account_strategy_symbol[(request.account_id, request.strategy_name, request.symbol)]
+                total_sell = sell_quantity_by_account_strategy_symbol[
+                    (request.account_id, request.strategy_name, request.symbol)
+                ]
                 if total_sell > result.strategy_available_sell_quantity:
                     errors_by_index[index].append(
                         OrderPreflightError(
@@ -1192,7 +1278,9 @@ class QmtManagedOrderService:
                 allowed=False,
                 errors=preflight.errors + (_broker_freeze_error_for_request(broker_freeze_error, request),),
             )
-            return ManagedOrderSubmitResult(False, None, None, "broker connectivity preflight failed", failed_preflight, False)
+            return ManagedOrderSubmitResult(
+                False, None, None, "broker connectivity preflight failed", failed_preflight, False
+            )
         account = self._account_by_strategy_name(request.account_id, request.strategy_name)
         intent = self._create_intent(request, account, preflight, IntentSubmitStatus.SUBMITTED, batch_id=batch_id)
         freeze_applied = False
@@ -1201,7 +1289,9 @@ class QmtManagedOrderService:
             # Batch preflight may allow a rebalance BUY using same-batch SELL proceeds.
             applied_freeze_amount = min(preflight.freeze_amount, account.cash)
             if applied_freeze_amount > 0:
-                self._apply_cash_entry(account, request, applied_freeze_amount, CashEntryType.FREEZE_BUY, intent.intent_id)
+                self._apply_cash_entry(
+                    account, request, applied_freeze_amount, CashEntryType.FREEZE_BUY, intent.intent_id
+                )
                 freeze_applied = True
 
         try:
@@ -1223,9 +1313,13 @@ class QmtManagedOrderService:
                     CashEntryType.UNFREEZE_REJECT,
                     intent.intent_id,
                 )
-            self._repository.set_order_intent_submit_status(intent.intent_id, IntentSubmitStatus.REJECTED, updated_at=datetime.now(UTC))
+            self._repository.set_order_intent_submit_status(
+                intent.intent_id, IntentSubmitStatus.REJECTED, updated_at=datetime.now(UTC)
+            )
             if not _is_broker_disconnect_exception(self._broker, exc):
-                return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", preflight, True)
+                return ManagedOrderSubmitResult(
+                    False, intent.intent_id, None, f"broker exception: {exc!r}", preflight, True
+                )
             freeze_error = self._mark_broker_disconnect_freeze(
                 request=request,
                 stage="SUBMIT_BATCH_ORDER",
@@ -1238,11 +1332,15 @@ class QmtManagedOrderService:
                 allowed=False,
                 errors=preflight.errors + (freeze_error,),
             )
-            return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", failed_preflight, True)
+            return ManagedOrderSubmitResult(
+                False, intent.intent_id, None, f"broker exception: {exc!r}", failed_preflight, True
+            )
 
         success = int(order_id or 0) > 0
         status = IntentSubmitStatus.ACCEPTED if success else IntentSubmitStatus.REJECTED
-        self._repository.set_order_intent_submit_status(intent.intent_id, status, submitted_at=datetime.now(UTC), updated_at=datetime.now(UTC))
+        self._repository.set_order_intent_submit_status(
+            intent.intent_id, status, submitted_at=datetime.now(UTC), updated_at=datetime.now(UTC)
+        )
         if not success and freeze_applied:
             self._release_cash_entry(
                 account.strategy_id,
@@ -1332,9 +1430,7 @@ class QmtManagedOrderService:
         batch: OrderBatchRecord,
     ) -> ManagedBatchSubmitResult:
         stored_results = tuple(
-            _result_from_dict(item)
-            for item in (batch.result_json or {}).get("results", ())
-            if isinstance(item, dict)
+            _result_from_dict(item) for item in (batch.result_json or {}).get("results", ()) if isinstance(item, dict)
         )
         if len(stored_results) != len(requests):
             retry_result = self._existing_batch_result(batch_id, len(requests))
@@ -1386,7 +1482,13 @@ class QmtManagedOrderService:
         results = tuple(results_list)
         succeeded = sum(1 for result in results if result.success)
         failed = len(results) - succeeded
-        status = OrderBatchStatus.SUCCEEDED if failed == 0 else OrderBatchStatus.PARTIAL if succeeded > 0 else OrderBatchStatus.FAILED
+        status = (
+            OrderBatchStatus.SUCCEEDED
+            if failed == 0
+            else OrderBatchStatus.PARTIAL
+            if succeeded > 0
+            else OrderBatchStatus.FAILED
+        )
         still_deferred = bool(pending_deferred_indexes)
         dependent_buy_count = sum(
             1
@@ -1441,9 +1543,7 @@ class QmtManagedOrderService:
             return None
         intents = list_intents(batch_id)
         stored_results = tuple(
-            _result_from_dict(item)
-            for item in (batch.result_json or {}).get("results", ())
-            if isinstance(item, dict)
+            _result_from_dict(item) for item in (batch.result_json or {}).get("results", ()) if isinstance(item, dict)
         )
         if batch.batch_status == OrderBatchStatus.PREFLIGHT_FAILED or (
             batch.batch_status == OrderBatchStatus.FAILED
@@ -1477,7 +1577,9 @@ class QmtManagedOrderService:
             failed=failed,
             results=results,
             compensation_required=compensation_required,
-            compensation_hint=batch.result_json.get("compensation_hint") if isinstance(batch.result_json, dict) else None,
+            compensation_hint=batch.result_json.get("compensation_hint")
+            if isinstance(batch.result_json, dict)
+            else None,
             compensation_actions=tuple((batch.result_json or {}).get("compensation_actions") or ()),
         )
 
@@ -1521,7 +1623,15 @@ class QmtManagedOrderService:
                 result_json=result_json,
                 metadata=metadata,
                 created_at=created_at,
-                submitted_at=now if status in {OrderBatchStatus.SUBMITTING, OrderBatchStatus.SUCCEEDED, OrderBatchStatus.PARTIAL, OrderBatchStatus.FAILED} else None,
+                submitted_at=now
+                if status
+                in {
+                    OrderBatchStatus.SUBMITTING,
+                    OrderBatchStatus.SUCCEEDED,
+                    OrderBatchStatus.PARTIAL,
+                    OrderBatchStatus.FAILED,
+                }
+                else None,
                 completed_at=now if completed else None,
             )
         )
@@ -1605,7 +1715,10 @@ class QmtManagedOrderService:
 
 def request_from_payload(payload: dict[str, Any]) -> ManagedOrderRequest:
     order_type = int(payload.get("order_type") or 0)
-    side = str(payload.get("side") or ("BUY" if order_type == BUY_ORDER_TYPE else "SELL" if order_type == SELL_ORDER_TYPE else "")).strip()
+    side = str(
+        payload.get("side")
+        or ("BUY" if order_type == BUY_ORDER_TYPE else "SELL" if order_type == SELL_ORDER_TYPE else "")
+    ).strip()
     return ManagedOrderRequest(
         account_id=str(payload.get("account_id") or "").strip(),
         strategy_name=str(payload.get("strategy_name") or "").strip(),
@@ -1751,9 +1864,8 @@ def _shrink_near_cash_overshoot_requests(
         overshoot = total_freeze - available_cash
         max_tolerance = min(
             _metadata_decimal(shrink_metadata, "miniqmt_cash_shrink_max_overshoot") or Decimal("0"),
-            available_cash * (
-                _metadata_decimal(shrink_metadata, "miniqmt_cash_shrink_max_overshoot_ratio") or Decimal("0")
-            ),
+            available_cash
+            * (_metadata_decimal(shrink_metadata, "miniqmt_cash_shrink_max_overshoot_ratio") or Decimal("0")),
         )
         if max_tolerance <= Decimal("0") or overshoot > max_tolerance:
             continue
@@ -1774,7 +1886,9 @@ def _shrink_near_cash_overshoot_requests(
                 continue
             if request.quantity <= min_qty:
                 continue
-            steps_needed = int((remaining / (request.price * Decimal(increment))).to_integral_value(rounding=ROUND_CEILING))
+            steps_needed = int(
+                (remaining / (request.price * Decimal(increment))).to_integral_value(rounding=ROUND_CEILING)
+            )
             shrink_qty = max(increment, steps_needed * increment)
             max_shrink_qty = max(((request.quantity - min_qty) // increment) * increment, 0)
             shrink_qty = min(shrink_qty, max_shrink_qty)
@@ -2149,7 +2263,10 @@ def _pre_trade_risk_config(
     request: ManagedOrderRequest,
 ) -> tuple[dict[str, Any] | None, list[OrderPreflightError]]:
     raw_sources = [
-        ("account.risk_config", (account.risk_config or {}).get(_PRE_TRADE_RISK_CONFIG_KEY) if account is not None else None),
+        (
+            "account.risk_config",
+            (account.risk_config or {}).get(_PRE_TRADE_RISK_CONFIG_KEY) if account is not None else None,
+        ),
         ("request.metadata", request.metadata.get(_PRE_TRADE_RISK_CONFIG_KEY)),
     ]
     config: dict[str, Any] = {}
@@ -2202,12 +2319,25 @@ def _price_collar_error(
     context_base: dict[str, Any],
 ) -> OrderPreflightError | None:
     if section.get("invalid_field"):
-        return _risk_config_error(request, source="pre_trade_risk.price_collar", field=str(section["invalid_field"]), value=section.get("invalid_value"))
+        return _risk_config_error(
+            request,
+            source="pre_trade_risk.price_collar",
+            field=str(section["invalid_field"]),
+            value=section.get("invalid_value"),
+        )
     min_price = _risk_decimal(section.get("min_price"), field="price_collar.min_price", request=request)
     max_price = _risk_decimal(section.get("max_price"), field="price_collar.max_price", request=request)
-    reference_price = _risk_decimal(section.get("reference_price"), field="price_collar.reference_price", request=request)
-    max_deviation_pct = _risk_decimal(section.get("max_deviation_pct"), field="price_collar.max_deviation_pct", request=request)
-    parse_errors = [value for value in (min_price, max_price, reference_price, max_deviation_pct) if isinstance(value, OrderPreflightError)]
+    reference_price = _risk_decimal(
+        section.get("reference_price"), field="price_collar.reference_price", request=request
+    )
+    max_deviation_pct = _risk_decimal(
+        section.get("max_deviation_pct"), field="price_collar.max_deviation_pct", request=request
+    )
+    parse_errors = [
+        value
+        for value in (min_price, max_price, reference_price, max_deviation_pct)
+        if isinstance(value, OrderPreflightError)
+    ]
     if parse_errors:
         return parse_errors[0]
     if reference_price is not None and max_deviation_pct is not None:
@@ -2247,7 +2377,14 @@ def _fat_finger_errors(
     context_base: dict[str, Any],
 ) -> list[OrderPreflightError]:
     if section.get("invalid_field"):
-        return [_risk_config_error(request, source="pre_trade_risk.fat_finger", field=str(section["invalid_field"]), value=section.get("invalid_value"))]
+        return [
+            _risk_config_error(
+                request,
+                source="pre_trade_risk.fat_finger",
+                field=str(section["invalid_field"]),
+                value=section.get("invalid_value"),
+            )
+        ]
     errors: list[OrderPreflightError] = []
     max_quantity = _risk_int(section.get("max_quantity"), field="fat_finger.max_quantity", request=request)
     max_notional = _risk_decimal(section.get("max_notional"), field="fat_finger.max_notional", request=request)
@@ -2258,7 +2395,12 @@ def _fat_finger_errors(
             OrderPreflightError(
                 "PRE_TRADE_FAT_FINGER_QUANTITY",
                 "MiniQMT pre-trade fat-finger quantity limit rejected order before broker submit",
-                {**context_base, "quantity": request.quantity, "max_quantity": max_quantity, "next_action": "split or resize the child order below max_quantity"},
+                {
+                    **context_base,
+                    "quantity": request.quantity,
+                    "max_quantity": max_quantity,
+                    "next_action": "split or resize the child order below max_quantity",
+                },
             )
         )
     if isinstance(max_notional, OrderPreflightError):
@@ -2288,13 +2430,26 @@ def _buying_power_errors(
     context_base: dict[str, Any],
 ) -> list[OrderPreflightError]:
     if section.get("invalid_field"):
-        return [_risk_config_error(request, source="pre_trade_risk.buying_power", field=str(section["invalid_field"]), value=section.get("invalid_value"))]
-    available = _risk_decimal(section.get("available_buying_power"), field="buying_power.available_buying_power", request=request)
+        return [
+            _risk_config_error(
+                request,
+                source="pre_trade_risk.buying_power",
+                field=str(section["invalid_field"]),
+                value=section.get("invalid_value"),
+            )
+        ]
+    available = _risk_decimal(
+        section.get("available_buying_power"), field="buying_power.available_buying_power", request=request
+    )
     if isinstance(available, OrderPreflightError):
         return [available]
     if available is None:
         if account is None:
-            return [_risk_config_error(request, source="pre_trade_risk.buying_power", field="available_buying_power", value=None)]
+            return [
+                _risk_config_error(
+                    request, source="pre_trade_risk.buying_power", field="available_buying_power", value=None
+                )
+            ]
         available = account.cash
     if freeze_amount > available:
         return [
@@ -2330,7 +2485,9 @@ def _risk_decimal(value: Any, *, field: str, request: ManagedOrderRequest) -> De
     except (InvalidOperation, ValueError) as exc:
         return _risk_config_error(request, source="miniqmt_pre_trade_risk", field=field, value=value, reason=str(exc))
     if parsed < Decimal("0"):
-        return _risk_config_error(request, source="miniqmt_pre_trade_risk", field=field, value=value, reason="must be non-negative")
+        return _risk_config_error(
+            request, source="miniqmt_pre_trade_risk", field=field, value=value, reason="must be non-negative"
+        )
     return parsed
 
 
@@ -2342,7 +2499,9 @@ def _risk_int(value: Any, *, field: str, request: ManagedOrderRequest) -> int | 
     except (TypeError, ValueError) as exc:
         return _risk_config_error(request, source="miniqmt_pre_trade_risk", field=field, value=value, reason=str(exc))
     if parsed < 0:
-        return _risk_config_error(request, source="miniqmt_pre_trade_risk", field=field, value=value, reason="must be non-negative")
+        return _risk_config_error(
+            request, source="miniqmt_pre_trade_risk", field=field, value=value, reason="must be non-negative"
+        )
     return parsed
 
 
@@ -2441,8 +2600,13 @@ def _is_broker_disconnect_exception(broker: Any, exc: BaseException) -> bool:
         return False
     try:
         status = _managed_broker_status(broker)
-    except Exception:
-        return True
+    except Exception as status_exc:  # noqa: BLE001 - a failed status probe must remain visible.
+        raise RuntimeError(
+            "MiniQMT broker status probe failed while classifying a submit exception; "
+            "reason_code=MINIQMT_BROKER_STATUS_PROBE_FAILED, "
+            f"broker_exception_type={type(exc).__name__}, "
+            f"status_exception_type={type(status_exc).__name__}"
+        ) from status_exc
     return bool(status.get("connected")) is False
 
 
@@ -2489,9 +2653,7 @@ def _stable_request_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     vnpy_action = stable.get("vnpy_action")
     if isinstance(vnpy_action, dict):
         stable["vnpy_action"] = {
-            key: value
-            for key, value in vnpy_action.items()
-            if key not in {"action_id", "vt_orderid"}
+            key: value for key, value in vnpy_action.items() if key not in {"action_id", "vt_orderid"}
         }
     return stable
 

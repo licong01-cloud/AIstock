@@ -1,0 +1,88 @@
+{
+  "schema_version": "miniqmt_vnpy_facade_source_manifest_v1",
+  "ordered_upstream_authority_sha256": [
+    "8e73ba64d3d405c382ae3b8b8d1c2df334c809b3331828fa4d85b0d62ed00ad2",
+    "ad72ed1dd243d45d41d3c476d9dd7fbf17f49e6efcb7c12739f8ae6982582541"
+  ],
+  "ordered_sources": [
+    {
+      "schema_version": "miniqmt_vnpy_facade_source_v1",
+      "source_role": "ALGORITHM",
+      "algo_code_or_helper_name": "ICEBERG",
+      "upstream_namespace": "VNPY_ALGOTRADING",
+      "upstream_repo": "https://github.com/vnpy/vnpy_algotrading",
+      "upstream_commit": "4133987530eb28f3538d1983545d81c4f83d7d59",
+      "source_path": "vnpy_algotrading/algos/iceberg_algo.py",
+      "source_size": 3228,
+      "source_sha256": "9019cd20e4288b1642f7bc5f1508244eb9ccb419a2a888f69040fd9c5c6a2c21",
+      "registration_disposition": "CHARACTERIZATION_ONLY_K5",
+      "source_identity_sha256": "32b001ce7d122e7187aa6fc40bce4f12decc2c7e2dc4330006e67ac20be5a11c"
+    },
+    {
+      "schema_version": "miniqmt_vnpy_facade_source_v1",
+      "source_role": "ALGORITHM",
+      "algo_code_or_helper_name": "STOP",
+      "upstream_namespace": "VNPY_ALGOTRADING",
+      "upstream_repo": "https://github.com/vnpy/vnpy_algotrading",
+      "upstream_commit": "4133987530eb28f3538d1983545d81c4f83d7d59",
+      "source_path": "vnpy_algotrading/algos/stop_algo.py",
+      "source_size": 2631,
+      "source_sha256": "18a758b2d86b0704b00ce385f3517061e21dee57178c3abfd10271091e8db090",
+      "registration_disposition": "CHARACTERIZATION_ONLY_K5",
+      "source_identity_sha256": "bbe75b80211141ba45ab42e225c29519c895c49b7fb95bedb510f833d881d2e4"
+    },
+    {
+      "schema_version": "miniqmt_vnpy_facade_source_v1",
+      "source_role": "ALGORITHM",
+      "algo_code_or_helper_name": "BEST_LIMIT_MINIQMT",
+      "upstream_namespace": "VNPY_ALGOTRADING",
+      "upstream_repo": "https://github.com/vnpy/vnpy_algotrading",
+      "upstream_commit": "4133987530eb28f3538d1983545d81c4f83d7d59",
+      "source_path": "vnpy_algotrading/algos/best_limit_algo.py",
+      "source_size": 3560,
+      "source_sha256": "b35227b932a160c2f786d3202283b61656d9f16631fb42f596a9d376765617e9",
+      "registration_disposition": "REGISTERED_CURRENT_THREE",
+      "source_identity_sha256": "909977eb63af584e105abe97ec4b0a4c3b5dde52c42dd2ec0e012018038eb541"
+    },
+    {
+      "schema_version": "miniqmt_vnpy_facade_source_v1",
+      "source_role": "ALGORITHM",
+      "algo_code_or_helper_name": "SNIPER_MINIQMT",
+      "upstream_namespace": "VNPY_ALGOTRADING",
+      "upstream_repo": "https://github.com/vnpy/vnpy_algotrading",
+      "upstream_commit": "4133987530eb28f3538d1983545d81c4f83d7d59",
+      "source_path": "vnpy_algotrading/algos/sniper_algo.py",
+      "source_size": 2186,
+      "source_sha256": "fbf84d2c61f8200079fe1f8da3b3412a036e5a7ffb6c601f9e4614ad110c8c76",
+      "registration_disposition": "REGISTERED_CURRENT_THREE",
+      "source_identity_sha256": "3960c60b92670ae9ec32dc9650579f43d02f25ca5f3e572ea35cb268aac5a07e"
+    },
+    {
+      "schema_version": "miniqmt_vnpy_facade_source_v1",
+      "source_role": "ALGORITHM",
+      "algo_code_or_helper_name": "TWAP_LITE_MINIQMT",
+      "upstream_namespace": "VNPY_ALGOTRADING",
+      "upstream_repo": "https://github.com/vnpy/vnpy_algotrading",
+      "upstream_commit": "4133987530eb28f3538d1983545d81c4f83d7d59",
+      "source_path": "vnpy_algotrading/algos/twap_algo.py",
+      "source_size": 2532,
+      "source_sha256": "aeabb067ef79d48182f357b8d4736f8a90f6a4ecb77bc82506a3244575a6cd0f",
+      "registration_disposition": "REGISTERED_CURRENT_THREE",
+      "source_identity_sha256": "47110d53864e59a0cbade2e8e118e485469889a163290e5326ee80536b954df9"
+    },
+    {
+      "schema_version": "miniqmt_vnpy_facade_source_v1",
+      "source_role": "HELPER",
+      "algo_code_or_helper_name": "round_to",
+      "upstream_namespace": "VNPY_CORE",
+      "upstream_repo": "https://github.com/vnpy/vnpy",
+      "upstream_commit": "1049acf64afd5b2d06d09b1e139dd0cca5d9d6b9",
+      "source_path": "vnpy_core/vnpy/trader/utility.py",
+      "source_size": 32957,
+      "source_sha256": "9bce3f6e18c84668b0ffadd717f0b6fd4ca2b454dc748dad6572af78c850608d",
+      "registration_disposition": "FACADE_HELPER_ONLY",
+      "source_identity_sha256": "e22b91dfa43624ca1612e68bd21ffa202d126936b0a392c341103cf7c9163520"
+    }
+  ],
+  "manifest_sha256": "e0284a6d0e92938626d5a00bd16a325a31ccba35d0158847025af97b0ece51ea"
+}

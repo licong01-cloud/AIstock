@@ -41,6 +41,13 @@ VALIDATION_RECEIPT_KINDS = {
     "ruff",
     "workflow_smoke",
 }
+PRODUCTION_DDL_ROOTS = (
+    "migrations/",
+    "backend/migrations/",
+    "backend/db/migrations/",
+    "scripts/migrations/",
+    "scripts/db/",
+)
 VALIDATION_RECEIPT_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
 VALIDATION_RECEIPT_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
 TIER_COMPLEXITY_THRESHOLDS = {
@@ -53,6 +60,9 @@ TIER_COMPLEXITY_THRESHOLDS = {
 }
 STANDARD_REFS = [
     "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-tool-rtk-001",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-backend-restart-ownership-001",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001",
 ]
 VALID_CANDIDATE_STATUSES = {
     "new",
@@ -68,13 +78,21 @@ VALID_CANDIDATE_TRANSITIONS = {
     "promoted": set(),
     "ignored": set(),
 }
-VALID_BUG_STATUSES = {"open", "in_progress", "fixed", "verified", "wontfix"}
+VALID_BUG_STATUSES = {
+    "open",
+    "in_progress",
+    "fixed_source_pending_user_restart",
+    "fixed",
+    "verified",
+    "wontfix",
+}
 DOCS_LITE_PREFIXES = (
     "docs/architecture/",
     "docs/analysis/",
     "docs/design/",
     "docs/handoff/",
     "docs/operations/",
+    "docs/process/",
 )
 DOCS_LITE_ROOT_FILES = {"README.md"}
 DOCS_STRICT_PREFIXES = ("docs/standards/", ".codex/", ".claude/")
@@ -125,6 +143,13 @@ def _has_validation_receipt(value: Any) -> bool:
             and not VALIDATION_RECEIPT_FAIL_RE.search(result)
         )
     return bool(VALIDATION_RECEIPT_RE.search(str(value or "")))
+
+
+def _requires_production_ddl(path: str) -> bool:
+    """Return true only for executable SQL or an actual database migration root."""
+
+    normalized = str(path).replace("\\", "/").removeprefix("./").lower()
+    return normalized.endswith(".sql") or normalized.startswith(PRODUCTION_DDL_ROOTS)
 
 
 def _utc_now() -> str:
@@ -383,12 +408,10 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         for item in ownership.get("matched_rules") or []
         if item.get("primary_module")
     )
-    if module and module not in impacted:
-        impacted.insert(0, module)
-    if module and module not in primary_modules:
-        primary_modules.insert(0, module)
-    if not impacted and module:
-        impacted = [module]
+    if not primary_modules and module:
+        primary_modules = [module]
+        if module not in impacted:
+            impacted.insert(0, module)
     if not primary_modules and impacted:
         primary_modules = [impacted[0]]
 
@@ -399,7 +422,7 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         entry = modules.get(module_id) or {}
         module_plans = entry.get("test_plans") or {}
         primary_required.update(str(item) for item in _as_list(module_plans.get("required_on_change")))
-    for module_id in impacted:
+    for module_id in primary_modules:
         entry = modules.get(module_id) or {}
         module_plans = entry.get("test_plans") or {}
         required.extend(_as_list(module_plans.get("required_on_change")))
@@ -425,7 +448,7 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         if plan_key not in set(required + recommended)
     }
     gates = {
-        "ddl": "required" if any(path.endswith(".sql") or "/migrations/" in path for path in changed_files) else "noop",
+        "ddl": "required" if any(_requires_production_ddl(path) for path in changed_files) else "noop",
         "frontend_dependency": "required"
         if any(path in {"frontend/package.json", "frontend/package-lock.json", "frontend/pnpm-lock.yaml"} for path in changed_files)
         else "noop",
@@ -773,7 +796,7 @@ def promote_candidate_to_bug(
             "Run required verification plans.",
             "Keep BUG JSON and GitHub Issue synchronized.",
         ],
-        "non_goals": ["Do not restart production runtime services without explicit approval."],
+        "non_goals": ["Do not start, stop, or restart any user backend without explicit per-target approval."],
         "trigger_condition": {
             "source_event_id": candidate.get("source_event_id"),
             "fingerprint": candidate.get("fingerprint"),
@@ -835,7 +858,7 @@ def build_fix_ready(record: dict[str, Any], changed_files: list[str]) -> dict[st
         "recommended_verification": validation["recommended_plans"],
         "non_goals": _unique_strings(
             _as_list(record.get("non_goals"))
-            + ["Do not restart production runtime services without explicit approval."]
+            + ["Do not start, stop, or restart any user backend without explicit per-target approval."]
         ),
         "workflow_gate": "allowed" if scope else "triage_only_until_allowed_write_scope_is_set",
         "validation_selection": validation,
@@ -1330,11 +1353,13 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
     record_has_gates = all(issue_record.get(key) for key in production_gate_keys)
     body_has_gates = bool(inferred.get("pr_body_production_gates"))
     bug_record_has_gates = bool(inferred.get("bug_record_production_gates"))
+    gate_consistency = summary.get("production_gate_consistency") or {}
     checks = {
         "linked_issue": bool(summary.get("linked_issues")),
         "scope_passed": scope.get("status") == "passed",
         "validation_evidence": validation_evidence_present,
         "production_gates": record_has_gates or body_has_gates or bug_record_has_gates,
+        "production_gate_consistency": gate_consistency.get("workflow_gate") != "blocked",
     }
     missing = [name for name, passed in checks.items() if not passed]
     if not is_high_risk:
@@ -1360,6 +1385,53 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
         "checks": checks,
         "blocking": missing if gate == "blocked" else [],
         "warnings": missing if gate == "warning" else [],
+    }
+
+
+def evaluate_production_gate_consistency(
+    *,
+    changed_files: list[str],
+    production_gates: dict[str, Any],
+    issue_record: dict[str, Any] | None,
+    bug_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Block only unsafe under-reporting; non-noop operational states remain valid."""
+
+    records = [issue_record] if issue_record else list(bug_records)
+    implementation_files = [
+        path for path in changed_files if not path.startswith("tests/aistock_validation/bugs/")
+    ]
+    if not records or not implementation_files:
+        return {
+            "schema_version": "aistock_production_gate_consistency_v1",
+            "workflow_gate": "not_applicable",
+            "mismatches": [],
+        }
+
+    field_map = {
+        "production_ddl_gate": "ddl",
+        "production_frontend_dependency_gate": "frontend_dependency",
+        "production_backend_dependency_gate": "backend_dependency",
+    }
+    mismatches: list[dict[str, str]] = []
+    for record in records:
+        bug_id = str(record.get("bug_id") or record.get("candidate_id") or "unknown")
+        for field, derived_key in field_map.items():
+            derived = str(production_gates.get(derived_key) or "noop")
+            recorded = str(record.get(field) or "").strip()
+            if derived == "required" and recorded.lower() == "noop":
+                mismatches.append(
+                    {
+                        "bug_id": bug_id,
+                        "field": field,
+                        "derived": derived,
+                        "recorded": recorded,
+                    }
+                )
+    return {
+        "schema_version": "aistock_production_gate_consistency_v1",
+        "workflow_gate": "blocked" if mismatches else "passed",
+        "mismatches": mismatches,
     }
 
 
@@ -1479,6 +1551,12 @@ def build_pr_quality(
         + _as_list((issue_record or {}).get("candidate_id"))
         + inferred["linked_issues"]
     )
+    production_gate_consistency = evaluate_production_gate_consistency(
+        changed_files=changed_files,
+        production_gates=validation["production_gates"],
+        issue_record=issue_record,
+        bug_records=inferred["bug_records"],
+    )
     summary = {
         "schema_version": "aistock_pr_quality_summary_v1",
         "base": base,
@@ -1520,6 +1598,7 @@ def build_pr_quality(
         "docs_lite_validation": validation.get("docs_lite_validation"),
         "validation_results": "version_change_record_only" if validation.get("docs_lite") else "not_run_by_pr_quality_dry_run",
         "data_acceptance": "not_required",
+        "production_gate_consistency": production_gate_consistency,
         "production_ddl_gate": validation["production_gates"]["ddl"],
         "production_frontend_dependency_gate": validation["production_gates"]["frontend_dependency"],
         "production_backend_dependency_gate": validation["production_gates"]["backend_dependency"],
@@ -1537,6 +1616,7 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
     selected_validation = summary.get("selected_validation") or {}
     required_validation = selected_validation.get("required_plans") or []
     gates = [
+        f"- production_gate_consistency: `{(summary.get('production_gate_consistency') or {}).get('workflow_gate')}`",
         f"- production_ddl_gate: `{summary.get('production_ddl_gate')}`",
         f"- production_frontend_dependency_gate: `{summary.get('production_frontend_dependency_gate')}`",
         f"- production_backend_dependency_gate: `{summary.get('production_backend_dependency_gate')}`",

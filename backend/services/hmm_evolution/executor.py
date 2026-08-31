@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from .errors import (
@@ -21,7 +21,14 @@ from .input_adapter import (
     EvaluationExecutionInputs,
     HMMEvaluationInputAdapter,
 )
-from .models import EvaluationSpec, EvaluationStatus, LeaseConfig
+from .models import (
+    STAGE_COMPUTE,
+    STAGE_RESULT_PERSIST,
+    EvaluationSpec,
+    EvaluationStatus,
+    LeaseConfig,
+)
+from .performance_receipt import StageRecorder, current_rss_bytes, utc_now
 from .repository import HMMEvolutionRepository
 
 logger = logging.getLogger(__name__)
@@ -90,6 +97,9 @@ class HMMEvaluationExecutor:
         execution_inputs: EvaluationExecutionInputs | None = None,
         checkpoint: Callable[[str], tuple[dict[str, Any], dict[str, Any]]] | None = None,
         defer_batch_recompute: bool = False,
+        receipt_recorder: StageRecorder | None = None,
+        compute_started_at: datetime | None = None,
+        rss_samples: list[int] | None = None,
     ) -> None:
         state = _LeaseState(batch=dict(batch), evaluation=dict(evaluation))
 
@@ -106,6 +116,10 @@ class HMMEvaluationExecutor:
                 self._raise_if_cancelled(state)
 
         try:
+            if rss_samples is not None:
+                rss_samples.append(current_rss_bytes())
+            if receipt_recorder is not None and compute_started_at is None:
+                compute_started_at = utc_now()
             durable_checkpoint("before_input_load")
             inputs = execution_inputs
             if inputs is None:
@@ -117,6 +131,8 @@ class HMMEvaluationExecutor:
                         checkpoint=durable_checkpoint,
                     )
                 )
+            if rss_samples is not None:
+                rss_samples.append(current_rss_bytes())
             spec = EvaluationSpec.model_validate(evaluation["evaluation_spec"])
 
             def date_checkpoint(index: int, trade_date: date) -> None:
@@ -131,11 +147,22 @@ class HMMEvaluationExecutor:
                 label_horizon_days=spec.label_horizon_days,
                 topk=spec.topk,
                 db_forward_returns=inputs.market_returns,
+                market_missing_evidence=inputs.market_missing_evidence,
                 market_forward_return_mode=str(spec.market_forward_return["mode"]),
                 date_coverage_evidence=inputs.date_coverage_evidence,
                 checkpoint=date_checkpoint,
             )
+            if rss_samples is not None:
+                rss_samples.append(current_rss_bytes())
+            if receipt_recorder is not None and compute_started_at is not None:
+                receipt_recorder.record(
+                    STAGE_COMPUTE,
+                    started_at=compute_started_at,
+                    completed_at=utc_now(),
+                )
             durable_checkpoint("before_result_commit")
+            if receipt_recorder is not None:
+                receipt_recorder.start(STAGE_RESULT_PERSIST)
             repository.complete_evaluation(
                 eval_id=str(state.evaluation["eval_id"]),
                 owner_id=owner_id,
@@ -144,6 +171,10 @@ class HMMEvaluationExecutor:
                 result=computation.result,
                 defer_batch_recompute=defer_batch_recompute,
             )
+            if receipt_recorder is not None:
+                receipt_recorder.end(STAGE_RESULT_PERSIST)
+            if rss_samples is not None:
+                rss_samples.append(current_rss_bytes())
         except StaleFencingTokenError:
             raise
         except EvaluationCancelledError as exc:

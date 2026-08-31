@@ -10,7 +10,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
@@ -31,10 +31,16 @@ from backend.services.hmm_evolution.errors import (
     sanitized_exception_chain,
 )
 from backend.services.hmm_evolution.models import (
+    STAGE_API_RECEIPT_PERSIST,
     CandidateLifecycle,
     CandidatePreview,
     CandidateSourceType,
     EvaluationSpec,
+)
+from backend.services.hmm_evolution.performance_receipt import (
+    capture_hardware_identity,
+    capture_runtime_identity,
+    utc_now,
 )
 from backend.services.hmm_evolution.runtime import (
     HMMEvolutionRuntime,
@@ -158,6 +164,8 @@ class BatchCreateRequest(BaseModel):
     candidate_ids: list[str] = Field(min_length=1, max_length=50)
     evaluation_spec: EvaluationSpec
     created_by: str = Field(default="hmm_research_ui", min_length=1, max_length=160)
+    execution_purpose: Literal["evaluation", "benchmark"] = "evaluation"
+    benchmark_id: str | None = Field(default=None, min_length=3, max_length=128)
 
     @model_validator(mode="after")
     def _unique_candidates(self) -> "BatchCreateRequest":
@@ -167,6 +175,10 @@ class BatchCreateRequest(BaseModel):
         if len(normalized) != len(set(normalized)):
             raise ValueError("candidate_ids must be unique")
         self.candidate_ids = normalized
+        if self.execution_purpose == "benchmark" and not self.benchmark_id:
+            raise ValueError("benchmark executions require benchmark_id")
+        if self.execution_purpose == "evaluation" and self.benchmark_id:
+            raise ValueError("benchmark_id is only valid for benchmark executions")
         return self
 
 
@@ -176,6 +188,16 @@ class EvaluateRequest(BaseModel):
     candidate_id: str = Field(min_length=1)
     evaluation_spec: EvaluationSpec
     created_by: str = Field(default="hmm_research_ui", min_length=1, max_length=160)
+    execution_purpose: Literal["evaluation", "benchmark"] = "evaluation"
+    benchmark_id: str | None = Field(default=None, min_length=3, max_length=128)
+
+    @model_validator(mode="after")
+    def _purpose_consistency(self) -> "EvaluateRequest":
+        if self.execution_purpose == "benchmark" and not self.benchmark_id:
+            raise ValueError("benchmark executions require benchmark_id")
+        if self.execution_purpose == "evaluation" and self.benchmark_id:
+            raise ValueError("benchmark_id is only valid for benchmark executions")
+        return self
 
 
 class ActorRequest(BaseModel):
@@ -292,6 +314,8 @@ def _evaluation_summary(row: dict[str, Any]) -> dict[str, Any]:
         "net_db_10d",
         "positive_net_label_day_ratio",
         "evidence_quality",
+        "result_validity",
+        "result_validity_reason",
         "reason_code",
         "queued_at",
         "started_at",
@@ -584,17 +608,65 @@ async def _create_batch(
     request: EvaluateRequest | BatchCreateRequest,
     idempotency_key: str | None,
 ) -> ApiSuccess:
-    batch, created = await runtime.service.prepare_and_create_batch(
+    api_stage_started_at = utc_now()
+    batch, created = await asyncio.to_thread(
+        runtime.service.submit_batch,
         candidate_ids=candidate_ids,
         evaluation_spec=request.evaluation_spec,
         recommendation_spec=_recommendation_spec(),
         recommendation_version=RECOMMENDATION_VERSION,
         created_by=request.created_by.strip(),
         idempotency_key=str(idempotency_key or "").strip() or None,
+        execution_purpose=request.execution_purpose,
+        benchmark_id=request.benchmark_id,
     )
+    if created:
+        await asyncio.to_thread(
+            _record_api_receipt_stage,
+            runtime,
+            batch,
+            api_stage_started_at,
+            utc_now(),
+        )
     return ApiSuccess(
         data={"batch": batch, "created": created},
         status_code=202 if created else 200,
+    )
+
+
+def _record_api_receipt_stage(
+    runtime: HMMEvolutionRuntime,
+    batch: dict[str, Any],
+    started_at: Any,
+    completed_at: Any,
+) -> None:
+    """Write the batch receipt and its api_receipt_persist stage for a new submission."""
+
+    receipt, _ = runtime.repository.create_performance_receipt(
+        receipt_level="batch",
+        batch_id=str(batch["batch_id"]),
+        eval_id=None,
+        execution_purpose=str(batch.get("execution_purpose") or "evaluation"),
+        benchmark_id=str(batch["benchmark_id"]) if batch.get("benchmark_id") else None,
+        runtime_identity=capture_runtime_identity(role="api"),
+        hardware_identity=capture_hardware_identity(),
+        input_identity={
+            "request_hash": str(batch["request_hash"]),
+            "candidate_count": int(batch["candidate_count"]),
+        },
+    )
+    runtime.repository.merge_performance_receipt_progress(
+        receipt_id=str(receipt["receipt_id"]),
+        expected_row_version=int(receipt["row_version"]),
+        stage_timings={
+            STAGE_API_RECEIPT_PERSIST: {
+                "started_at": started_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+                "duration_ms": max(
+                    0, int(round((completed_at - started_at).total_seconds() * 1000))
+                ),
+            }
+        },
     )
 
 
@@ -604,10 +676,18 @@ async def get_evaluation(
     runtime: RuntimeDependency,
     trace_id: TraceDependency,
 ) -> JSONResponse:
-    return await _call(
-        lambda: asyncio.to_thread(runtime.service.get_evaluation, eval_id),
-        trace_id=trace_id,
-    )
+    async def operation() -> dict[str, Any]:
+        row = await asyncio.to_thread(runtime.service.get_evaluation, eval_id)
+        receipt = await asyncio.to_thread(
+            runtime.repository.get_performance_receipt, eval_id=eval_id
+        )
+        return {
+            **row,
+            "performance_receipt": receipt,
+            "receipt_unavailable": receipt is None,
+        }
+
+    return await _call(operation, trace_id=trace_id)
 
 
 @router.get("/batches")
@@ -629,10 +709,18 @@ async def get_batch(
     runtime: RuntimeDependency,
     trace_id: TraceDependency,
 ) -> JSONResponse:
-    return await _call(
-        lambda: asyncio.to_thread(runtime.service.get_batch, batch_id),
-        trace_id=trace_id,
-    )
+    async def operation() -> dict[str, Any]:
+        row = await asyncio.to_thread(runtime.service.get_batch, batch_id)
+        receipt = await asyncio.to_thread(
+            runtime.repository.get_performance_receipt, batch_id=batch_id
+        )
+        return {
+            **row,
+            "performance_receipt": receipt,
+            "receipt_unavailable": receipt is None,
+        }
+
+    return await _call(operation, trace_id=trace_id)
 
 
 @router.post("/batches/{batch_id}/cancel")
@@ -660,16 +748,63 @@ async def retry_failed_batch(
     trace_id: TraceDependency,
     idempotency_key: IdempotencyHeader = None,
 ) -> JSONResponse:
-    return await _call(
-        lambda: asyncio.to_thread(
+    async def operation() -> ApiSuccess:
+        api_stage_started_at = utc_now()
+        batch = await asyncio.to_thread(
             runtime.service.retry_failed_batch,
             batch_id=batch_id,
             created_by=request.created_by.strip(),
             idempotency_key=str(idempotency_key or "").strip() or None,
-        ),
-        trace_id=trace_id,
-        success_status=202,
-    )
+        )
+        await asyncio.to_thread(
+            _record_api_receipt_stage,
+            runtime,
+            batch,
+            api_stage_started_at,
+            utc_now(),
+        )
+        return ApiSuccess(data=batch, status_code=202)
+
+    return await _call(operation, trace_id=trace_id)
+
+
+WORKER_HEALTHY_MAX_POLL_AGE_SECONDS = 120.0
+
+
+def _worker_health(row: dict[str, Any]) -> str:
+    """Derive health from durable evidence; stale is never shown as healthy."""
+
+    if str(row.get("runtime_status")) == "stopped":
+        return "stopped"
+    last_poll_at = row.get("last_poll_at")
+    if last_poll_at is None:
+        return "unknown"
+    age_seconds = (utc_now() - last_poll_at).total_seconds()
+    return "healthy" if age_seconds <= WORKER_HEALTHY_MAX_POLL_AGE_SECONDS else "stale"
+
+
+@router.get("/workers")
+async def list_workers(
+    runtime: RuntimeDependency,
+    trace_id: TraceDependency,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> JSONResponse:
+    async def operation() -> dict[str, Any]:
+        rows = await asyncio.to_thread(
+            runtime.repository.list_worker_runtime_status, limit=limit
+        )
+        return {
+            "workers": [
+                {
+                    **row,
+                    "health": _worker_health(row),
+                    "healthy_max_poll_age_seconds": WORKER_HEALTHY_MAX_POLL_AGE_SECONDS,
+                }
+                for row in rows
+            ]
+        }
+
+    return await _call(operation, trace_id=trace_id)
 
 
 def _positive_content_limit() -> int:

@@ -265,10 +265,7 @@ else:
 
             for c in list(df.columns):
                 if df[c].dtype == object:
-                    try:
-                        df[c] = pd.to_numeric(df[c], errors="ignore")
-                    except Exception:
-                        pass
+                    df[c] = pd.to_numeric(df[c], errors="ignore")
             return df
 
         ret_schema_df = _normalize_ret_df(ret_data_frame)
@@ -515,11 +512,17 @@ def _extract_training_diagnostics() -> dict:
             log_candidates.append(p)
 
     all_text = ""
+    log_read_errors = []
     for lf in log_candidates:
         try:
             all_text += lf.read_text(encoding="utf-8", errors="replace") + "\n"
-        except Exception:
-            pass
+        except OSError as exc:
+            log_read_errors.append(
+                {"path": str(lf), "error_type": type(exc).__name__, "message": str(exc)}
+            )
+
+    if log_read_errors:
+        result["log_read_errors"] = log_read_errors
 
     if not all_text:
         return result
@@ -1115,7 +1118,7 @@ def _round_or_none(value, digits=6):
         if _np.isnan(value) or _np.isinf(value):
             return None
         return round(value, digits)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -1577,8 +1580,8 @@ def _extract_feature_importance_correlation(recorder) -> list:
                 # artifact_uri looks like file:///.../Loop1/mlruns/.../artifacts
                 ws_dir = _os.path.abspath(_os.path.join(str(art_uri).replace("file://", "").replace("file:", ""), "..", "..", "..", "..", ".."))
                 candidate_paths.append(_os.path.join(ws_dir, "combined_factors_df.parquet"))
-        except Exception:
-            pass
+        except (AttributeError, OSError, TypeError, ValueError) as e:
+            print(f"Warning: failed to resolve recorder artifact workspace: {type(e).__name__}: {e}")
         # Fallback: current working directory
         candidate_paths.append(_os.path.abspath("combined_factors_df.parquet"))
         candidate_paths.append(_os.path.abspath(_os.path.join(_os.path.dirname(__file__), "combined_factors_df.parquet")) if "__file__" in globals() else "")
@@ -1927,6 +1930,96 @@ def _generate_llm_summary(enhanced: dict) -> dict:
 # ============================================================
 # Generate enhanced output files
 # ============================================================
+def _load_long_trend_registration_observation():
+    success_path = Path.cwd() / "qe_long_trend_registration.json"
+    pending_path = Path.cwd() / "postprocess_registration_pending.json"
+    if success_path.is_file():
+        try:
+            payload = json.loads(success_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {
+                "status": "invalid",
+                "reason_code": "QELT_REGISTRATION_RECEIPT_INVALID",
+                "reason_json": {"error_type": type(exc).__name__, "message": str(exc)},
+            }
+        required = {
+            "schema_version", "receipt_stage", "evaluation_id", "profile_id", "job_id",
+            "request_sha", "evaluation_asof", "task_status", "platform_delivery_status",
+            "artifact_manifest_uri", "artifact_manifest_sha256", "worker_terminal_sha256",
+        }
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != "qe_long_trend_registration_v1"
+            or payload.get("receipt_stage") != "registered"
+            or set(payload) != required
+        ):
+            return {
+                "status": "invalid",
+                "reason_code": "QELT_REGISTRATION_RECEIPT_INVALID",
+                "reason_json": {
+                    "missing_fields": sorted(required - set(payload)) if isinstance(payload, dict) else sorted(required),
+                    "unexpected_fields": sorted(set(payload) - required) if isinstance(payload, dict) else [],
+                    "payload_type": type(payload).__name__,
+                },
+            }
+        return {"status": "registered", "receipt": payload}
+    if pending_path.is_file():
+        try:
+            payload = json.loads(pending_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {
+                "status": "invalid",
+                "reason_code": "QELT_REGISTRATION_PENDING_INVALID",
+                "reason_json": {"error_type": type(exc).__name__, "message": str(exc)},
+            }
+        required = {
+            "schema_version", "receipt_stage", "status", "reason_code",
+            "reason_json", "descriptor_sha256",
+        }
+        allowed = required | {"pending_index_error"}
+        valid_descriptor_sha = (
+            payload.get("descriptor_sha256") is None
+            or (
+                isinstance(payload.get("descriptor_sha256"), str)
+                and len(payload["descriptor_sha256"]) == 64
+            )
+        ) if isinstance(payload, dict) else False
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != "qe_long_trend_registration_pending_v1"
+            or payload.get("receipt_stage") != "registration_pending"
+            or payload.get("status") != "pending"
+            or not isinstance(payload.get("reason_code"), str)
+            or not payload.get("reason_code")
+            or not isinstance(payload.get("reason_json"), dict)
+            or not valid_descriptor_sha
+            or not required.issubset(payload)
+            or bool(set(payload) - allowed)
+            or (
+                "pending_index_error" in payload
+                and not isinstance(payload.get("pending_index_error"), dict)
+            )
+        ):
+            return {
+                "status": "invalid",
+                "reason_code": "QELT_REGISTRATION_PENDING_INVALID",
+                "reason_json": {
+                    "missing_fields": sorted(required - set(payload)) if isinstance(payload, dict) else sorted(required),
+                    "unexpected_fields": sorted(set(payload) - allowed) if isinstance(payload, dict) else [],
+                    "payload_type": type(payload).__name__,
+                },
+            }
+        return {
+            "status": "registration_pending",
+            "reason_code": payload["reason_code"],
+            "reason_json": payload["reason_json"],
+        }
+    return {
+        "status": "missing",
+        "reason_code": "QELT_REGISTRATION_RECEIPT_MISSING",
+    }
+
+
 if latest_recorder is not None:
     try:
         _summary_dict = metrics.to_dict() if metrics is not None else {}
@@ -1979,6 +2072,9 @@ if latest_recorder is not None:
                 print(f"Warning: excess_return fallback failed: {_fb_e}")
 
         _enhanced = {"summary": _summary_dict}
+        _long_trend_registration = _load_long_trend_registration_observation()
+        _enhanced["long_trend_registration"] = _long_trend_registration
+        _summary_dict["long_trend_registration_status"] = _long_trend_registration["status"]
         _enhanced["ic_diagnostics"] = _extract_ic_diagnostics(latest_recorder)
         _enhanced["training_diagnostics"] = _extract_training_diagnostics()
         _enhanced["return_curves"] = _extract_return_curves(latest_recorder)

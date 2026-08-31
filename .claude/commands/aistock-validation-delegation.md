@@ -1,9 +1,13 @@
 # aistock-validation-delegation
 
+The sole development authority is `docs/standards/aistock_development_standard_v1.5_20260523.md`; this command provides the delegated-validation procedure.
+
 Use this command when a Claude Code task needs broad AIstock validation without spending the interactive window on large test suites or logs.
 
 ## Boundary
 
+- Validation Center, CI and Nightly manage only explicitly marked runner-owned temporary processes on isolated ports; they never control user backends and delegation never transfers restart authority.
+- Follow `TOOL-RTK-001` from the sole development standard; this command does not redefine RTK or CI semantics.
 - Keep only the minimal local gate: changed-file lint/compile, direct fix-point targeted test or contract smoke, `git diff --check`, scope check, and production gates.
 - Send broad module matrices, UI journeys, API/business-flow E2E, LLM design-drift, and cross-module regression to Validation Center, GitHub CI, or Nightly.
 - When a local test fails, rerun only the failed nodeid or `pytest --lf` before escalating to a broader suite.

@@ -1,0 +1,332 @@
+{
+  "actual": "The sole standard and client aftercare lanes do not yet prohibit source overlay or require immutable RD-Agent release identity; some runtime state defaults remain repo-relative. RD-Agent PR #11 only addresses ignored artifacts and does not establish deployment identity.",
+  "allowed_write_scope": [
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    ".codex/skills/aistock-task-router/SKILL.md",
+    ".codex/skills/aistock-merge-aftercare/SKILL.md",
+    ".claude/commands/aistock-task-router.md",
+    ".claude/commands/aistock-merge-aftercare.md",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/test_aistock_guardrail_scan.py",
+    "tests/aistock_validation/bugs/20260724_BUG-853-rd-agent-release-identity-and-external-runtime-state-are-not-enforced-ac.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-853",
+  "closed_at": "2026-07-24T15:08:16Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-24T14:32:37.698416Z",
+  "description": "The sole standard and client aftercare lanes do not yet prohibit source overlay or require immutable RD-Agent release identity; some runtime state defaults remain repo-relative. RD-Agent PR #11 only addresses ignored artifacts and does not establish deployment identity.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260724-8d4ba128a625",
+      "timestamp": "2026-07-24T14:32:37.698412Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/RD-Agent/pull/6",
+    "https://github.com/licong01-cloud/RD-Agent/pull/11"
+  ],
+  "expected": "All Codex and Claude windows route RD-Agent deployment through one fail-closed aftercare workflow: merged commit only, clean immutable release, external RDAGENT_STATE_ROOT, atomic current pointer, durable receipt, and separate merge/deploy/restart/runtime reporting without new business approval gates.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".claude/commands/aistock-task-router.md",
+      ".claude/commands/aistock-merge-aftercare.md",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/test_aistock_guardrail_scan.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/aistock-merge-aftercare.md",
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/test_aistock_guardrail_scan.py"
+      ],
+      "impacted_modules": [
+        "docs.standards",
+        "validation.guardrails",
+        "validation.module_quality",
+        "validation.center",
+        "validation.runner",
+        "tests.backend",
+        "validation.coverage"
+      ],
+      "matched_rules": [
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.md",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": ".codex/skills/aistock-task-router/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".codex/skills/aistock-merge-aftercare/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-task-router.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-merge-aftercare.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "backend/tests/test_aistock_guardrail_scan.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        }
+      ],
+      "risk_levels": [
+        "medium",
+        "high"
+      ],
+      "suggested_scope": [
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/aistock-merge-aftercare.md",
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/test_aistock_guardrail_scan.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      ".codex/skills/aistock-task-router/SKILL.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".claude/commands/aistock-task-router.md",
+      ".claude/commands/aistock-merge-aftercare.md",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/test_aistock_guardrail_scan.py"
+    ]
+  },
+  "first_seen_at": "2026-07-24T14:32:37.698416Z",
+  "fix_branch": null,
+  "fix_commit": "e097a3e6265141fc3c77ddf6972815e1709897f9",
+  "fixed_at": "2026-07-24T15:08:34.582766Z",
+  "github_issue_number": 2697,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2697",
+  "last_seen_at": "2026-07-24T14:32:37.698416Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2698",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py verify-clients --workflow-only",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "RD-Agent release identity and external runtime state are not enforced across clients",
+  "trigger_condition": {
+    "fingerprint": "8d4ba128a62525e67a98f483",
+    "source_event_id": "FE-20260724-8d4ba128a625"
+  },
+  "validation_evidence": [
+    "PR #2698 required checks -> 10 passed, 0 failed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

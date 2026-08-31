@@ -202,11 +202,6 @@ def test_official_metric_upsert_accepts_new_and_legacy_payloads(
 ) -> None:
     conn = _FakeConnection()
     monkeypatch.setattr(official_service, "get_conn", lambda: conn)
-    monkeypatch.setattr(
-        official_service,
-        "_emit_factor_recompute_event",
-        lambda **kwargs: "evt-h20",
-    )
     service = object.__new__(official_service.FactorOfficialEvaluationService)
 
     result = service._save_metrics(

@@ -11,16 +11,21 @@ import json
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from backend.services.qmt_strategy_ledger.models import OrderBatchStatus
-from backend.services.trading_core.errors import RuntimeConfigInvalidError
+from backend.services.miniqmt_execution_runtime.kernel_diagnostics import (
+    project_k6d_product_diagnostics_v1,
+    project_kernel_diagnostics_v1,
+)
+from backend.services.trading_core.errors import InvalidStateTransitionError, RuntimeConfigInvalidError
 
 from .models import (
-    LocalSimExecutionStateV1,
     SimulationBrokerBackend,
     SimulationDailyRun,
     SimulationDailyRunStatus,
 )
+from .repository import _local_sim_state_map
 
 
 PLATFORM_DIAGNOSTICS_SCHEMA_VERSION = "simulation_platform_diagnostics_v1"
@@ -37,6 +42,10 @@ METRIC_LABEL_ALLOWLIST = frozenset(
         "reason_code",
         "market_phase",
         "source",
+        "event_type",
+        "command_type",
+        "reason_family",
+        "route",
     }
 )
 METRIC_HIGH_CARDINALITY_LABELS = frozenset(
@@ -56,6 +65,7 @@ ALERT_LIMIT = 100
 SCHEDULER_TICK_LAG_MULTIPLIER = 2
 LOCAL_SIM_CAUSAL_BAR_LAG_ALERT_SECONDS = 120
 LOCAL_SIM_OUTBOX_BACKLOG_ALERT_SECONDS = 120
+LOCAL_SIM_MARKET_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 BLOCKING_RUN_STATUSES = frozenset(
     {
@@ -87,6 +97,16 @@ ACTIVE_MARKET_PHASES = frozenset(
         "POST_CLOSE_RECONCILIATION",
     }
 )
+LOCAL_SIM_BAR_PROGRESS_MARKET_PHASES = frozenset({"OPEN_AM", "OPEN_PM"})
+LOCAL_SIM_ACTIVE_RUNTIME_STATUSES = frozenset(
+    {
+        "WAITING_FOR_CAUSAL_BAR",
+        "WAITING_FOR_MARKET_DATA",
+        "WAITING_FOR_MARKET_STATE",
+        "WAITING_FOR_CAPITAL",
+        "ACTIVE",
+    }
+)
 SCHEDULER_WINDOW_MARKET_PHASE = {
     "pre_open": "PRE_OPEN",
     "selection": "PRE_OPEN",
@@ -101,8 +121,13 @@ SCHEDULER_WINDOW_MARKET_PHASE = {
 LOCAL_SIM_PERSISTENCE_STATUSES = frozenset(
     {
         "PROJECTION_PENDING",
+        "INTRADAY_WAITING_FOR_CAUSAL_BAR",
+        "INTRADAY_VALUATION_PENDING",
+        "INTRADAY_PERSISTED",
         "PERSISTED",
         "PERSISTED_WITH_CAPACITY_RESIDUAL",
+        "PERSISTED_WITH_RESIDUAL",
+        "PERSISTED_WITH_TERMINAL_FAILURE",
     }
 )
 LOCAL_SIM_OUTBOX_STATUSES = frozenset({"PENDING", "PROJECTION_RETRYABLE", "PROJECTED"})
@@ -411,6 +436,8 @@ class SimulationPlatformObservability:
         runs: Sequence[SimulationDailyRun],
         query: Mapping[str, Any],
         quote_diagnostics: Mapping[str, Any] | None = None,
+        runtime_projection_consistency: Mapping[str, Any] | None = None,
+        kernel_diagnostics: Mapping[str, Any] | None = None,
         generated_at: datetime | None = None,
     ) -> dict[str, Any]:
         now = generated_at or datetime.now(UTC)
@@ -427,11 +454,32 @@ class SimulationPlatformObservability:
         market_phase = self._market_phase(exact_scheduler)
         binding_layers = [self._binding_layer(run) for run in exact_runs]
         durability_layers = [self._durability_layer(run, observed_at=now) for run in exact_runs]
-        business_layers = [self._business_layer(run) for run in exact_runs]
+        if runtime_projection_consistency is not None:
+            durability_layers = self._apply_runtime_projection_consistency(
+                durability_layers=durability_layers,
+                consistency=runtime_projection_consistency,
+            )
+        business_layers = [self._business_layer(run, observed_at=now) for run in exact_runs]
         backend_layers = self._backend_layers(
             runs=exact_runs,
             quote_diagnostics=quote_diagnostics,
         )
+        kernel_projection = (
+            project_kernel_diagnostics_v1(kernel_diagnostics) if kernel_diagnostics is not None else None
+        )
+        k6d_projection = None
+        if kernel_diagnostics is not None and isinstance(kernel_diagnostics.get("product_route"), Mapping):
+            quote_activation = exact_scheduler.get("miniqmt_quote_ingress_activation")
+            if not isinstance(quote_activation, Mapping):
+                raise _invalid(
+                    "K6-D product diagnostics require quote activation readback",
+                    field="scheduler_status.miniqmt_quote_ingress_activation",
+                    value=quote_activation,
+                )
+            k6d_projection = project_k6d_product_diagnostics_v1(
+                kernel_diagnostics,
+                quote_activation=quote_activation,
+            )
         lifecycle_layer = self._lifecycle_layer(
             scheduler_status=exact_scheduler,
             runs=exact_runs,
@@ -448,6 +496,30 @@ class SimulationPlatformObservability:
             backend_layers=backend_layers,
             market_phase=market_phase,
         )
+        if kernel_projection is not None:
+            alerts.extend(
+                _alert(
+                    alert_type=item["alert_type"],
+                    status=item["status"],
+                    reason_code=item["reason_code"],
+                    source=item["source"],
+                    identity=item["identity"],
+                    context=item["context"],
+                )
+                for item in kernel_projection.alerts
+            )
+        if k6d_projection is not None:
+            alerts.extend(
+                _alert(
+                    alert_type=item["alert_type"],
+                    status=item["status"],
+                    reason_code=item["reason_code"],
+                    source=item["source"],
+                    identity=item["identity"],
+                    context=item["context"],
+                )
+                for item in k6d_projection.alerts
+            )
         metrics = self._metrics(
             scheduler_status=exact_scheduler,
             process_layer=process_layer,
@@ -460,6 +532,46 @@ class SimulationPlatformObservability:
             active_alert_count=len(alerts),
             generated_at=now,
         )
+        if kernel_projection is not None:
+            metrics.extend(
+                _metric(
+                    name=item["name"],
+                    kind=item["kind"],
+                    value=item["value"],
+                    labels=item["labels"],
+                )
+                for item in kernel_projection.metrics
+            )
+            if len(metrics) > METRIC_SERIES_LIMIT:
+                raise RuntimeConfigInvalidError(
+                    "simulation platform metric series exceed the bounded contract",
+                    context={
+                        "reason_code": "SIMULATION_PLATFORM_METRIC_CARDINALITY_EXCEEDED",
+                        "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                        "series_count": len(metrics),
+                        "bounded_limit": METRIC_SERIES_LIMIT,
+                    },
+                )
+        if k6d_projection is not None:
+            metrics.extend(
+                _metric(
+                    name=item["name"],
+                    kind=item["kind"],
+                    value=item["value"],
+                    labels=item["labels"],
+                )
+                for item in k6d_projection.metrics
+            )
+            if len(metrics) > METRIC_SERIES_LIMIT:
+                raise RuntimeConfigInvalidError(
+                    "simulation platform metric series exceed the bounded contract",
+                    context={
+                        "reason_code": "SIMULATION_PLATFORM_METRIC_CARDINALITY_EXCEEDED",
+                        "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                        "series_count": len(metrics),
+                        "bounded_limit": METRIC_SERIES_LIMIT,
+                    },
+                )
         overall = self._overall_health(
             process_layer=process_layer,
             lifecycle_layer=lifecycle_layer,
@@ -467,6 +579,15 @@ class SimulationPlatformObservability:
             durability_layers=durability_layers,
             business_layers=business_layers,
             backend_layers=backend_layers,
+            kernel_layer=(
+                None
+                if kernel_projection is None
+                else (
+                    k6d_projection.layer
+                    if k6d_projection is not None and k6d_projection.layer["status"] == "BLOCKED"
+                    else kernel_projection.layer
+                )
+            ),
             market_phase=market_phase,
         )
         bounded_alerts = sorted(alerts, key=lambda item: (item["alert_type"], item["alert_id"]))[:ALERT_LIMIT]
@@ -474,6 +595,9 @@ class SimulationPlatformObservability:
             "schema_version": PLATFORM_DIAGNOSTICS_SCHEMA_VERSION,
             "generated_at": now.astimezone(UTC).isoformat(),
             "query": dict(query),
+            "runtime_projection_consistency": (
+                dict(runtime_projection_consistency) if runtime_projection_consistency is not None else None
+            ),
             "overall_health": overall,
             "layers": {
                 "process": process_layer,
@@ -482,6 +606,8 @@ class SimulationPlatformObservability:
                 "backends": backend_layers,
                 "durability": durability_layers,
                 "business": business_layers,
+                **({} if kernel_projection is None else {"miniqmt_kernel": kernel_projection.layer}),
+                **({} if k6d_projection is None else {"miniqmt_k6d": k6d_projection.layer}),
             },
             "metrics": {
                 "schema_version": PLATFORM_METRICS_SCHEMA_VERSION,
@@ -535,6 +661,89 @@ class SimulationPlatformObservability:
                 "execution_gate": False,
             },
         }
+
+    @staticmethod
+    def _apply_runtime_projection_consistency(
+        *,
+        durability_layers: Sequence[Mapping[str, Any]],
+        consistency: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        status = _required_text(consistency, "status", field_prefix="runtime_projection_consistency")
+        if status not in {"CONSISTENT", "STALE", "NOT_APPLICABLE"}:
+            raise _invalid(
+                "MiniQMT runtime projection consistency status is unsupported",
+                field="runtime_projection_consistency.status",
+                value=status,
+            )
+        reason_code = _required_text(
+            consistency,
+            "reason_code",
+            field_prefix="runtime_projection_consistency",
+        )
+        runtime_id = _required_text(
+            consistency,
+            "runtime_id",
+            field_prefix="runtime_projection_consistency",
+        )
+        run_id = _optional_text(
+            consistency,
+            "run_id",
+            field_prefix="runtime_projection_consistency",
+        )
+        mismatches = consistency.get("mismatches")
+        if not isinstance(mismatches, list) or any(not isinstance(item, Mapping) for item in mismatches):
+            raise _invalid(
+                "MiniQMT runtime projection mismatches must be a list of mappings",
+                field="runtime_projection_consistency.mismatches",
+                value=mismatches,
+            )
+        if status == "STALE" and not mismatches:
+            raise _invalid(
+                "stale MiniQMT runtime projection requires explicit mismatches",
+                field="runtime_projection_consistency.mismatches",
+                value=mismatches,
+            )
+        if status != "STALE" and mismatches:
+            raise _invalid(
+                "non-stale MiniQMT runtime projection cannot carry mismatches",
+                field="runtime_projection_consistency.mismatches",
+                value=mismatches,
+            )
+        updated: list[dict[str, Any]] = []
+        matched = False
+        for raw_layer in durability_layers:
+            layer = dict(raw_layer)
+            identity = layer.get("identity") if isinstance(layer.get("identity"), Mapping) else {}
+            if run_id is not None and identity.get("run_id") == run_id and identity.get("runtime_id") == runtime_id:
+                matched = True
+                facts = dict(layer.get("facts") or {})
+                facts.update(
+                    {
+                        "runtime_projection_status": status,
+                        "runtime_projection_reason_code": reason_code,
+                        "runtime_projection_mismatch_count": len(mismatches),
+                        "runtime_projection_actual": dict(consistency.get("actual") or {}),
+                        "runtime_projection_projected": (
+                            dict(consistency.get("projected") or {})
+                            if consistency.get("projected") is not None
+                            else None
+                        ),
+                    }
+                )
+                layer["facts"] = facts
+                layer["source"] = f"{layer['source']}+miniqmt_runtime_repository"
+                if status == "STALE" and layer["status"] != "BLOCKED":
+                    layer["status"] = "DEGRADED"
+                    layer["reason_code"] = "MINIQMT_RUNTIME_PROJECTION_STALE"
+            updated.append(layer)
+        if status != "NOT_APPLICABLE" and not matched:
+            raise _invalid(
+                "MiniQMT runtime projection consistency has no matching durability layer",
+                field="runtime_projection_consistency.run_id",
+                value=run_id,
+                runtime_id=runtime_id,
+            )
+        return updated
 
     @staticmethod
     def _market_phase(scheduler_status: Mapping[str, Any]) -> str:
@@ -944,17 +1153,41 @@ class SimulationPlatformObservability:
             else:
                 outbox_status = None
                 outbox_attempt_count = 0
+            projected_submitted = _optional_nonnegative_int(
+                payload,
+                "submitted_intents",
+                field_prefix="run_payload_json",
+            )
             outbox_age_seconds = max(
                 0.0,
                 (observed_at.astimezone(UTC) - run.updated_at.astimezone(UTC)).total_seconds(),
             )
-            if terminal_failure is not None or readback_terminal is not None:
+            if run.status in BLOCKING_RUN_STATUSES and persistence is None and int(projected_submitted or 0) > 0:
+                status = "BLOCKED"
+                reason_code = "LOCAL_SIM_DURABLE_FACTS_UNRECONSTRUCTIBLE"
+            elif run.status in BLOCKING_RUN_STATUSES and persistence is None:
+                status = "BLOCKED"
+                reason_code = "LOCAL_SIM_DURABILITY_COMMIT_FAILED"
+            elif terminal_failure is not None or readback_terminal is not None:
                 status = "BLOCKED"
                 reason_code = (
                     _reason_code_from_mapping(terminal_failure)
                     or _reason_code_from_mapping(readback_terminal)
                     or "LOCAL_SIM_PROJECTION_TERMINAL_FAILURE"
                 )
+            elif (
+                persistence_status == "INTRADAY_VALUATION_PENDING"
+                and outbox_status in {"PENDING", "PROJECTION_RETRYABLE"}
+                and outbox_age_seconds > LOCAL_SIM_OUTBOX_BACKLOG_ALERT_SECONDS
+            ):
+                status = "DEGRADED"
+                reason_code = "LOCAL_SIM_VALUATION_PENDING_STALE"
+            elif persistence_status == "INTRADAY_VALUATION_PENDING" and outbox_status in {
+                "PENDING",
+                "PROJECTION_RETRYABLE",
+            }:
+                status = "IN_PROGRESS"
+                reason_code = "LOCAL_SIM_VALUATION_PENDING"
             elif (
                 readback_failure is not None
                 or outbox_status == "PROJECTION_RETRYABLE"
@@ -993,6 +1226,16 @@ class SimulationPlatformObservability:
                     "outbox_backlog_alert_seconds": LOCAL_SIM_OUTBOX_BACKLOG_ALERT_SECONDS,
                     "terminal_failure_present": terminal_failure is not None or readback_terminal is not None,
                     "readback_failure_present": readback_failure is not None,
+                    "valuation_pending": persistence_status == "INTRADAY_VALUATION_PENDING",
+                    "missing_mark_symbols": list(persistence.get("missing_mark_symbols") or [])
+                    if isinstance(persistence, Mapping)
+                    else [],
+                    "projected_submitted_intents": projected_submitted,
+                    "durable_facts_reconstructible": not (
+                        run.status in BLOCKING_RUN_STATUSES
+                        and persistence is None
+                        and int(projected_submitted or 0) > 0
+                    ),
                 },
                 "execution_gate": False,
             }
@@ -1068,6 +1311,70 @@ class SimulationPlatformObservability:
                     **batch_counts,
                 },
             )
+        runtime_evidence = _optional_mapping(
+            batch,
+            "runtime_evidence",
+            field_prefix="run_payload_json.qmt_batch_result",
+        )
+        submitted_child_count = (
+            _optional_nonnegative_int(
+                runtime_evidence,
+                "submitted_child_count",
+                field_prefix="run_payload_json.qmt_batch_result.runtime_evidence",
+            )
+            if runtime_evidence is not None
+            else None
+        )
+        rejected_child_count = (
+            _optional_nonnegative_int(
+                runtime_evidence,
+                "rejected_child_count",
+                field_prefix="run_payload_json.qmt_batch_result.runtime_evidence",
+            )
+            if runtime_evidence is not None
+            else None
+        )
+        pending_algo_count = (
+            _optional_nonnegative_int(
+                runtime_evidence,
+                "pending_algo_count",
+                field_prefix="run_payload_json.qmt_batch_result.runtime_evidence",
+            )
+            if runtime_evidence is not None
+            else None
+        )
+        trade_event_count = (
+            _optional_nonnegative_int(
+                runtime_evidence,
+                "trade_event_count",
+                field_prefix="run_payload_json.qmt_batch_result.runtime_evidence",
+            )
+            if runtime_evidence is not None
+            else None
+        )
+        triggered_child_order_count = _optional_nonnegative_int(
+            batch,
+            "triggered_child_order_count",
+            field_prefix="run_payload_json.qmt_batch_result",
+        )
+        if (
+            submitted_child_count is not None
+            and triggered_child_order_count is not None
+            and submitted_child_count != triggered_child_order_count
+        ):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT submitted child counters conflict across durable carriers",
+                context={
+                    "reason_code": "SIMULATION_PLATFORM_RUNTIME_CHILD_COUNT_CONFLICT",
+                    "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                    "run_id": run.run_id,
+                    "batch_id": batch_id,
+                    "runtime_evidence_submitted_child_count": submitted_child_count,
+                    "triggered_child_order_count": triggered_child_order_count,
+                },
+            )
+        if submitted_child_count is None:
+            submitted_child_count = triggered_child_order_count
         status = (
             "BLOCKED"
             if batch_status in {OrderBatchStatus.FAILED.value, OrderBatchStatus.PREFLIGHT_FAILED.value}
@@ -1087,12 +1394,20 @@ class SimulationPlatformObservability:
                 "total": total,
                 "success": success,
                 **batch_counts,
+                "submitted_child_count": submitted_child_count,
+                "rejected_child_count": rejected_child_count,
+                "pending_algo_count": pending_algo_count,
+                "trade_event_count": trade_event_count,
             },
             "execution_gate": False,
         }
 
     @staticmethod
-    def _business_layer(run: SimulationDailyRun) -> dict[str, Any]:
+    def _business_layer(
+        run: SimulationDailyRun,
+        *,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
         payload = run.run_payload_json
         submitted = _optional_nonnegative_int(payload, "submitted_intents", field_prefix="run_payload_json")
         failed = _optional_nonnegative_int(payload, "failed_intents", field_prefix="run_payload_json")
@@ -1130,43 +1445,32 @@ class SimulationPlatformObservability:
                 submitted = aliases["submitted"][1]
                 failed = aliases["failed"][1]
                 pending = aliases["pending"][1]
-        execution_states = payload.get("local_sim_execution_states_v1")
-        if execution_states is not None:
-            if not isinstance(execution_states, list) or any(
-                not isinstance(item, Mapping) for item in execution_states
-            ):
-                raise _invalid(
-                    "LocalSIM execution states must be a list of mappings",
-                    field="run_payload_json.local_sim_execution_states_v1",
-                    value=execution_states,
-                )
-            parsed_states: list[LocalSimExecutionStateV1] = []
-            for index, item in enumerate(execution_states):
-                try:
-                    parsed_states.append(LocalSimExecutionStateV1.model_validate(item))
-                except Exception as exc:  # noqa: BLE001 - durable state validation must use one stable reason.
-                    raise RuntimeConfigInvalidError(
-                        "LocalSIM durable execution state is invalid",
-                        context={
-                            "reason_code": "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID",
-                            "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
-                            "run_id": run.run_id,
-                            "state_index": index,
-                            "error_type": type(exc).__name__,
-                            "error": str(exc)[:2048],
-                        },
-                    ) from exc
-            state_statuses = Counter(state.runtime_status.value for state in parsed_states)
-        else:
-            parsed_states = []
-            state_statuses = Counter()
+        try:
+            parsed_states = list(_local_sim_state_map(payload).values())
+        except InvalidStateTransitionError as exc:
+            durable_context = dict(exc.context)
+            raise RuntimeConfigInvalidError(
+                "LocalSIM durable execution state is invalid",
+                context={
+                    "reason_code": "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID",
+                    "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                    "run_id": run.run_id,
+                    "durable_reason_code": durable_context.get("reason_code"),
+                    "durable_context": durable_context,
+                },
+            ) from exc
+        parsed_states.sort(key=lambda item: (item.intent_id, item.algo_instance_id, item.state_id))
+        state_statuses = Counter(state.runtime_status.value for state in parsed_states)
         residual_count = state_statuses.get("EXPIRED_WITH_RESIDUAL", 0)
-        active_algo_count = sum(state_statuses.get(status, 0) for status in ("WAITING_FOR_CAUSAL_BAR", "ACTIVE"))
+        active_algo_count = sum(state_statuses.get(status, 0) for status in LOCAL_SIM_ACTIVE_RUNTIME_STATUSES)
         partial_count = sum(state.filled_quantity > 0 and state.remaining_quantity > 0 for state in parsed_states)
         bar_lag_candidates = [
-            max(0.0, (state.causality_cursor - state.last_processed_bar_time).total_seconds())
+            SimulationPlatformObservability._local_sim_bar_lag_seconds(
+                observed_at=observed_at,
+                reference_time=state.last_processed_bar_time or state.causality_cursor,
+            )
             for state in parsed_states
-            if state.last_processed_bar_time is not None
+            if state.runtime_status.value in LOCAL_SIM_ACTIVE_RUNTIME_STATUSES
         ]
         max_bar_lag_seconds = max(bar_lag_candidates) if bar_lag_candidates else None
         reconciliation = _optional_mapping(payload, "reconcile_after_submit", field_prefix="run_payload_json")
@@ -1232,6 +1536,44 @@ class SimulationPlatformObservability:
             },
             "execution_gate": False,
         }
+
+    @staticmethod
+    def _local_sim_bar_lag_seconds(
+        *,
+        observed_at: datetime,
+        reference_time: datetime,
+    ) -> float:
+        """Return wall-clock age of the latest causal progress evidence.
+
+        TDX minute timestamps are local-market naive datetimes, while the
+        diagnostics clock is timezone-aware UTC.  Aware state timestamps keep
+        their own timezone; naive state timestamps are interpreted as
+        Asia/Shanghai.  The previous cursor-minus-bar calculation measured the
+        order admission gap, so a healthy 09:31 bar after a 09:30:55 cursor
+        collapsed to zero forever and could never reveal a stalled event loop.
+        """
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            raise _invalid(
+                "observed_at must be timezone-aware",
+                field="observed_at",
+                value=observed_at,
+            )
+        if reference_time.tzinfo is None or reference_time.utcoffset() is None:
+            comparable_observed = observed_at.astimezone(LOCAL_SIM_MARKET_TIMEZONE).replace(tzinfo=None)
+        else:
+            comparable_observed = observed_at.astimezone(reference_time.tzinfo)
+        lag_seconds = (comparable_observed - reference_time).total_seconds()
+        if lag_seconds < 0:
+            raise RuntimeConfigInvalidError(
+                "LocalSIM causal progress timestamp is later than the diagnostics observation clock",
+                context={
+                    "reason_code": "SIMULATION_PLATFORM_LOCAL_SIM_BAR_TIME_IN_FUTURE",
+                    "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                    "observed_at": observed_at.isoformat(),
+                    "reference_time": reference_time.isoformat(),
+                },
+            )
+        return lag_seconds
 
     @staticmethod
     def _backend_layers(
@@ -1418,6 +1760,20 @@ class SimulationPlatformObservability:
                         identity=layer.get("identity"),
                     )
                 )
+            facts = layer.get("facts") if isinstance(layer.get("facts"), Mapping) else {}
+            if facts.get("runtime_projection_status") == "STALE":
+                alerts.append(
+                    _alert(
+                        alert_type="MINIQMT_RUNTIME_PROJECTION_STALE",
+                        status="CRITICAL" if layer["status"] == "BLOCKED" else "WARNING",
+                        reason_code="MINIQMT_RUNTIME_PROJECTION_STALE",
+                        source=str(layer["source"]),
+                        identity=layer.get("identity"),
+                        context={
+                            "mismatch_count": facts.get("runtime_projection_mismatch_count"),
+                        },
+                    )
+                )
         for layer in business_layers:
             if layer["status"] in {"BLOCKED", "DEGRADED"}:
                 alerts.append(
@@ -1436,7 +1792,7 @@ class SimulationPlatformObservability:
                 and isinstance(bar_lag, (int, float))
                 and not isinstance(bar_lag, bool)
                 and bar_lag > LOCAL_SIM_CAUSAL_BAR_LAG_ALERT_SECONDS
-                and market_phase in ACTIVE_MARKET_PHASES
+                and market_phase in LOCAL_SIM_BAR_PROGRESS_MARKET_PHASES
             ):
                 alerts.append(
                     _alert(
@@ -1648,13 +2004,13 @@ class SimulationPlatformObservability:
             if layer["facts"]["backend"] == SimulationBrokerBackend.LOCAL_SIM.value
         )
         miniqmt_pending = sum(
-            int(layer["facts"].get("pending_intents") or 0)
-            for layer in business_layers
+            int(layer["facts"].get("pending_algo_count") or 0)
+            for layer in durability_layers
             if layer["facts"]["backend"] == SimulationBrokerBackend.MINIQMT_SIM.value
         )
         miniqmt_submitted = sum(
-            int(layer["facts"].get("submitted_intents") or 0)
-            for layer in business_layers
+            int(layer["facts"].get("submitted_child_count") or 0)
+            for layer in durability_layers
             if layer["facts"]["backend"] == SimulationBrokerBackend.MINIQMT_SIM.value
         )
         reconcile_mismatch = sum(
@@ -1684,6 +2040,11 @@ class SimulationPlatformObservability:
             for layer in durability_layers
             if layer["facts"]["backend"] == SimulationBrokerBackend.LOCAL_SIM.value
         )
+        miniqmt_projection_stale = sum(
+            layer["facts"].get("runtime_projection_status") == "STALE"
+            for layer in durability_layers
+            if layer["facts"]["backend"] == SimulationBrokerBackend.MINIQMT_SIM.value
+        )
         aggregate_specs = (
             ("simulation_localsim_active_algo_count", local_active, SimulationBrokerBackend.LOCAL_SIM.value),
             ("simulation_localsim_partial_count", local_partial, SimulationBrokerBackend.LOCAL_SIM.value),
@@ -1697,6 +2058,11 @@ class SimulationPlatformObservability:
             ("simulation_localsim_outbox_backlog_count", outbox_backlog, SimulationBrokerBackend.LOCAL_SIM.value),
             ("simulation_miniqmt_pending_algo_count", miniqmt_pending, SimulationBrokerBackend.MINIQMT_SIM.value),
             ("simulation_miniqmt_submitted_child_count", miniqmt_submitted, SimulationBrokerBackend.MINIQMT_SIM.value),
+            (
+                "simulation_miniqmt_projection_stale_count",
+                miniqmt_projection_stale,
+                SimulationBrokerBackend.MINIQMT_SIM.value,
+            ),
             (
                 "simulation_miniqmt_reconcile_mismatch_count",
                 reconcile_mismatch,
@@ -1768,6 +2134,7 @@ class SimulationPlatformObservability:
         durability_layers: Sequence[Mapping[str, Any]],
         business_layers: Sequence[Mapping[str, Any]],
         backend_layers: Sequence[Mapping[str, Any]],
+        kernel_layer: Mapping[str, Any] | None,
         market_phase: str,
     ) -> dict[str, Any]:
         all_layers = [
@@ -1777,6 +2144,7 @@ class SimulationPlatformObservability:
             *durability_layers,
             *business_layers,
             *backend_layers,
+            *([] if kernel_layer is None else [kernel_layer]),
         ]
         blocked_reasons = sorted({str(layer["reason_code"]) for layer in all_layers if layer["status"] == "BLOCKED"})
         degraded_reasons = sorted({str(layer["reason_code"]) for layer in all_layers if layer["status"] == "DEGRADED"})

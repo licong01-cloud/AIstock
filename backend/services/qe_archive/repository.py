@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from datetime import date
 from typing import Any
 
 from psycopg2.extras import Json, execute_values
@@ -129,7 +130,48 @@ MULTI_ALPHA_RUN_COLUMNS = (
     "status",
     "logical_status",
     "reason_json",
+    "archive_schema_version",
+    "retry_of_run_id",
+    "recovery_kind",
+    "recovery_scope_json",
+    "recovery_scope_hash",
+    "execution_identity_json",
+    "execution_identity_hash",
+    "execution_identity_evidence_json",
     "source_created_at",
+    "archived_at",
+)
+
+MULTI_ALPHA_RECOVERY_CHILD_COLUMNS = (
+    "run_id",
+    "child_id",
+    "child_key",
+    "child_kind",
+    "status",
+    "execution_disposition",
+    "selected_attempt_id",
+    "source_child_id",
+    "source_lineage_json",
+    "source_lineage_hash",
+    "input_manifest_json",
+    "input_manifest_hash",
+    "prediction_artifact_uri",
+    "prediction_artifact_hash",
+    "archived_at",
+)
+
+MULTI_ALPHA_RECOVERY_ATTEMPT_COLUMNS = (
+    "run_id",
+    "child_id",
+    "attempt_id",
+    "attempt_no",
+    "retry_mode",
+    "execution_kind",
+    "status",
+    "source_attempt_id",
+    "artifact_manifest_json",
+    "result_manifest_json",
+    "result_manifest_hash",
     "archived_at",
 )
 
@@ -852,12 +894,224 @@ class QEArchiveRepository:
                     (run_id,),
                 )
                 loo = self._fetch_dicts(cur)
-        return {"run": run_rows[0], "scheme_results": schemes, "loo": loo}
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_child
+                    WHERE run_id = %s
+                    ORDER BY ordinal, child_id
+                    """,
+                    (run_id,),
+                )
+                children = self._fetch_dicts(cur)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt
+                    WHERE run_id = %s
+                    ORDER BY child_id, attempt_no, attempt_id
+                    """,
+                    (run_id,),
+                )
+                attempts = self._fetch_dicts(cur)
+        return {
+            "run": run_rows[0],
+            "scheme_results": schemes,
+            "loo": loo,
+            "children": children,
+            "attempts": attempts,
+        }
+
+    def fetch_archived_multi_alpha_combine_run(self, run_id: str) -> dict[str, Any] | None:
+        """Read one immutable multi-alpha Archive snapshot.
+
+        The source durable run may have been explicitly deleted after its
+        Archive delivery.  This reader therefore uses only `qe_archive` rows
+        and returns the actual child/attempt history rather than inferring it
+        from the run-level archive attempt number.  V1 snapshots remain
+        readable with empty P0-2 recovery collections.
+        """
+
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return None
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        r.run_id AS archive_run_id,
+                        r.logical_experiment_id,
+                        r.attempt_no AS archive_attempt_no,
+                        r.is_latest_attempt,
+                        r.source_system,
+                        r.run_type,
+                        r.status AS archive_status,
+                        r.research_valid,
+                        r.invalid_reason,
+                        r.completed_at,
+                        r.archived_at AS run_archived_at,
+                        ar.*
+                    FROM qe_archive.run AS r
+                    JOIN qe_archive.multi_alpha_run AS ar ON ar.run_id = r.run_id
+                    WHERE r.run_id = %s
+                      AND r.run_type = 'multi_alpha_combine'
+                    """,
+                    (run_id,),
+                )
+                header_rows = self._fetch_dicts(cur)
+                if not header_rows:
+                    return None
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qe_archive.run_source
+                    WHERE run_id = %s
+                    ORDER BY source_system, source_type, source_id, source_sub_id NULLS FIRST
+                    """,
+                    (run_id,),
+                )
+                sources = self._fetch_dicts(cur)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qe_archive.multi_alpha_leg
+                    WHERE run_id = %s
+                    ORDER BY leg_order, leg_id
+                    """,
+                    (run_id,),
+                )
+                legs = self._fetch_dicts(cur)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qe_archive.multi_alpha_leg_source
+                    WHERE run_id = %s
+                    ORDER BY leg_id, source_seq
+                    """,
+                    (run_id,),
+                )
+                leg_sources = self._fetch_dicts(cur)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qe_archive.multi_alpha_scheme
+                    WHERE run_id = %s
+                    ORDER BY weighting_scheme
+                    """,
+                    (run_id,),
+                )
+                schemes = self._fetch_dicts(cur)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qe_archive.multi_alpha_loo
+                    WHERE run_id = %s
+                    ORDER BY weighting_scheme, dropped_leg_id
+                    """,
+                    (run_id,),
+                )
+                loo = self._fetch_dicts(cur)
+                # Keep legacy v1 Archive readable during the independently
+                # authorized Archive-v2 DDL rollout.  The capability fact is
+                # returned below rather than treating absence of the additive
+                # tables as a missing research result.
+                cur.execute(
+                    """
+                    SELECT
+                        to_regclass('qe_archive.multi_alpha_recovery_child') AS recovery_child_table,
+                        to_regclass('qe_archive.multi_alpha_recovery_attempt') AS recovery_attempt_table
+                    """
+                )
+                table_rows = self._fetch_dicts(cur)
+                table_state = table_rows[0] if table_rows else {}
+                recovery_tables_ready = bool(
+                    table_state.get("recovery_child_table")
+                    and table_state.get("recovery_attempt_table")
+                )
+                if recovery_tables_ready:
+                    cur.execute(
+                        """
+                        SELECT *
+                        FROM qe_archive.multi_alpha_recovery_child
+                        WHERE run_id = %s
+                        ORDER BY child_key, child_id
+                        """,
+                        (run_id,),
+                    )
+                    recovery_children = self._fetch_dicts(cur)
+                    cur.execute(
+                        """
+                        SELECT *
+                        FROM qe_archive.multi_alpha_recovery_attempt
+                        WHERE run_id = %s
+                        ORDER BY child_id, attempt_no, attempt_id
+                        """,
+                        (run_id,),
+                    )
+                    recovery_attempts = self._fetch_dicts(cur)
+                else:
+                    recovery_children = []
+                    recovery_attempts = []
+        header = header_rows[0]
+        archive_run = {
+            key: header.get(key)
+            for key in (
+                "archive_run_id",
+                "logical_experiment_id",
+                "archive_attempt_no",
+                "is_latest_attempt",
+                "source_system",
+                "run_type",
+                "archive_status",
+                "research_valid",
+                "invalid_reason",
+                "completed_at",
+                "run_archived_at",
+            )
+        }
+        multi_alpha_run = {
+            key: value
+            for key, value in header.items()
+            if key not in archive_run
+        }
+        return {
+            "archive_run": archive_run,
+            "run": multi_alpha_run,
+            "sources": sources,
+            "legs": legs,
+            "leg_sources": leg_sources,
+            "schemes": schemes,
+            "loo": loo,
+            "recovery_children": recovery_children,
+            "recovery_attempts": recovery_attempts,
+            "recovery_readback_evidence": {
+                "available": recovery_tables_ready,
+                "reason_code": (
+                    None if recovery_tables_ready else "qe_archive_multi_alpha_p0_2_schema_unavailable"
+                ),
+                "missing": (
+                    []
+                    if recovery_tables_ready
+                    else [
+                        "qe_archive.multi_alpha_recovery_child",
+                        "qe_archive.multi_alpha_recovery_attempt",
+                    ]
+                ),
+                "acquisition_suggestions": (
+                    []
+                    if recovery_tables_ready
+                    else [
+                        "apply the separately authorized QE Archive P0-2 additive migration before expecting recovery child/attempt snapshots",
+                    ]
+                ),
+            },
+        }
 
     def list_multi_alpha_combine_run_ids(
         self,
         *,
-        statuses: Sequence[str] = ("succeeded", "partial_failed", "failed"),
+        statuses: Sequence[str] = ("succeeded", "partial_failed", "partial_recovered", "failed", "cancelled"),
         include_archived: bool = False,
         limit: int = 500,
     ) -> list[str]:
@@ -1819,6 +2073,66 @@ class QEArchiveRepository:
                     params,
                 )
                 return self._fetch_dicts(cur)
+
+    def query_operator_run_options(
+        self,
+        *,
+        search: str | None = None,
+        run_type: str | None = None,
+        model_type: str | None = None,
+        label_horizon: int | None = None,
+        completed_from: date | None = None,
+        completed_to: date | None = None,
+        limit: int = 30,
+    ) -> dict[str, Any]:
+        """Return bounded, business-labelled run choices for operator UI controls."""
+
+        bounded = max(1, min(int(limit or 30), 50))
+        filters = ["r.status = 'completed'"]
+        params: list[Any] = []
+        if run_type and run_type not in {"all", "*"}:
+            filters.append("r.run_type = %s")
+            params.append(run_type)
+        if model_type:
+            filters.append("r.model_type = %s")
+            params.append(model_type)
+        if label_horizon is not None:
+            filters.append("r.label_horizon = %s")
+            params.append(int(label_horizon))
+        if completed_from is not None:
+            filters.append("COALESCE(r.completed_at, r.archived_at)::date >= %s")
+            params.append(completed_from)
+        if completed_to is not None:
+            filters.append("COALESCE(r.completed_at, r.archived_at)::date <= %s")
+            params.append(completed_to)
+        if search and search.strip():
+            pattern = f"%{search.strip()}%"
+            filters.append(
+                "(COALESCE(t.task_name, '') ILIKE %s OR COALESCE(r.model_type, '') ILIKE %s "
+                "OR COALESCE(r.run_type, '') ILIKE %s OR COALESCE(r.status, '') ILIKE %s "
+                "OR COALESCE(r.completed_at, r.archived_at)::date::text ILIKE %s)"
+            )
+            params.extend([pattern] * 5)
+        params.append(bounded)
+
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT r.run_id AS value, t.task_name, r.run_type, r.model_type,
+                           r.label_horizon, r.factor_count, r.loop_index, r.status,
+                           r.completed_at, r.archived_at
+                    FROM qe_archive.run r
+                    LEFT JOIN qe_evolution_tasks t ON t.task_id = r.task_id
+                    WHERE {' AND '.join(filters)}
+                    ORDER BY COALESCE(r.completed_at, r.archived_at) DESC NULLS LAST,
+                             r.archived_at DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                items = self._fetch_dicts(cur)
+        return {"items": items, "limit": bounded}
 
     def list_prediction_artifact_link_candidates(
         self,
@@ -2862,6 +3176,8 @@ class QEArchiveRepository:
         leg_sources: Sequence[Mapping[str, Any]],
         schemes: Sequence[Mapping[str, Any]],
         loo: Sequence[Mapping[str, Any]],
+        recovery_children: Sequence[Mapping[str, Any]] = (),
+        recovery_attempts: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         """Idempotently write all Phase A macb archive rows in one transaction."""
 
@@ -2875,6 +3191,14 @@ class QEArchiveRepository:
         source_records = [self._prepare_record(row, MULTI_ALPHA_LEG_SOURCE_COLUMNS) for row in leg_sources]
         scheme_records = [self._prepare_record(row, MULTI_ALPHA_SCHEME_COLUMNS) for row in schemes]
         loo_records = [self._prepare_record(row, MULTI_ALPHA_LOO_COLUMNS) for row in loo]
+        recovery_child_records = [
+            self._prepare_record(row, MULTI_ALPHA_RECOVERY_CHILD_COLUMNS)
+            for row in recovery_children
+        ]
+        recovery_attempt_records = [
+            self._prepare_record(row, MULTI_ALPHA_RECOVERY_ATTEMPT_COLUMNS)
+            for row in recovery_attempts
+        ]
         for record in leg_records:
             self._require(record, ("run_id", "leg_id", "leg_order"))
         for record in source_records:
@@ -2883,6 +3207,24 @@ class QEArchiveRepository:
             self._require(record, ("run_id", "weighting_scheme", "scheme_algorithm"))
         for record in loo_records:
             self._require(record, ("run_id", "weighting_scheme", "dropped_leg_id"))
+        for record in recovery_child_records:
+            self._require(
+                record,
+                (
+                    "run_id",
+                    "child_id",
+                    "child_key",
+                    "child_kind",
+                    "status",
+                    "execution_disposition",
+                    "input_manifest_hash",
+                ),
+            )
+        for record in recovery_attempt_records:
+            self._require(
+                record,
+                ("run_id", "child_id", "attempt_id", "attempt_no", "retry_mode", "execution_kind", "status"),
+            )
 
         with self._transaction_connection() as conn:
             with conn.cursor() as cur:
@@ -2928,6 +3270,22 @@ class QEArchiveRepository:
                     delete_sql="DELETE FROM qe_archive.multi_alpha_loo WHERE run_id = %s",
                     delete_params=(run_id,),
                 )
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_recovery_child",
+                    columns=MULTI_ALPHA_RECOVERY_CHILD_COLUMNS,
+                    records=recovery_child_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_recovery_child WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_recovery_attempt",
+                    columns=MULTI_ALPHA_RECOVERY_ATTEMPT_COLUMNS,
+                    records=recovery_attempt_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_recovery_attempt WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
         return {
             "run_id": str(macb_run["run_id"]),
             "run_rows": 1,
@@ -2935,6 +3293,8 @@ class QEArchiveRepository:
             "leg_source_rows": len(source_records),
             "scheme_rows": len(scheme_records),
             "loo_rows": len(loo_records),
+            "recovery_child_rows": len(recovery_child_records),
+            "recovery_attempt_rows": len(recovery_attempt_records),
         }
 
     def _transaction_connection(self) -> Any:

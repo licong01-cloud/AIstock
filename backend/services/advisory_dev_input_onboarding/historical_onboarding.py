@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import subprocess
@@ -108,6 +109,7 @@ from backend.services.trading_calendar_status import TradingCalendarStatusServic
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError, TradingCoreError
 
 from .contracts import (
+    AdvisoryImmutableArtifactRef,
     HistoricalProgramResult,
     HistoricalProgramSpec,
     HistoricalProgramStatus,
@@ -149,6 +151,14 @@ HISTORICAL_STORE_POLICY_HASH = canonical_json_sha256(
 )
 HISTORICAL_DECISION_TIMEZONE = ZoneInfo("Asia/Shanghai")
 HISTORICAL_TARGET_ENTRY_CUTOFF = time(9, 25)
+
+
+def prospective_target_entry_cutoff(target_trade_date: date) -> datetime:
+    return datetime.combine(
+        target_trade_date,
+        HISTORICAL_TARGET_ENTRY_CUTOFF,
+        tzinfo=HISTORICAL_DECISION_TIMEZONE,
+    )
 
 
 def target_package_asset_root_hash(path: Path) -> str:
@@ -266,6 +276,51 @@ class HistoricalOnboardingEvidenceStore:
             relative.as_posix(),
             False,
         )
+
+    @staticmethod
+    def artifact_ref(stored: HistoricalStoredArtifact) -> AdvisoryImmutableArtifactRef:
+        kind = "historical_run_request" if stored.kind == "request" else "historical_run_receipt"
+        return AdvisoryImmutableArtifactRef(
+            artifact_kind=kind,
+            store_policy_hash=stored.store_policy_hash,
+            relative_path=stored.relative_path,
+            semantic_hash=stored.semantic_hash,
+            file_sha256=stored.file_sha256,
+        )
+
+    def load(
+        self,
+        ref: AdvisoryImmutableArtifactRef,
+    ) -> RealDevHistoricalRunRequest | RealDevHistoricalRunReceipt:
+        model_by_kind = {
+            "historical_run_request": RealDevHistoricalRunRequest,
+            "historical_run_receipt": RealDevHistoricalRunReceipt,
+        }
+        model_type = model_by_kind.get(ref.artifact_kind)
+        if model_type is None or ref.store_policy_hash != HISTORICAL_STORE_POLICY_HASH:
+            raise RealDevOnboardingError(REASON_DSE_INVALID, "historical artifact ref kind or store policy is invalid")
+        folder = "historical-requests" if ref.artifact_kind == "historical_run_request" else "historical-receipts"
+        expected_relative = (Path(folder) / ref.semantic_hash[:2] / f"{ref.semantic_hash}.json").as_posix()
+        if ref.relative_path != expected_relative:
+            raise RealDevOnboardingError(REASON_DSE_INVALID, "historical artifact ref path differs from its identity")
+        path = (self._root / ref.relative_path).resolve()
+        _assert_contained(path=path, root=self._root)
+        raw = _read_exact(path=path, root=self._root)
+        if hashlib.sha256(raw).hexdigest() != ref.file_sha256:
+            raise RealDevOnboardingError(REASON_DSE_INVALID, "historical artifact file hash differs from its ref")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RealDevOnboardingError(REASON_DSE_INVALID, "historical artifact is not valid UTF-8 JSON") from exc
+        model = model_type.model_validate(payload)
+        semantic_hash = (
+            str(model.historical_request_hash)
+            if isinstance(model, RealDevHistoricalRunRequest)
+            else str(model.receipt_hash)
+        )
+        if semantic_hash != ref.semantic_hash:
+            raise RealDevOnboardingError(REASON_DSE_INVALID, "historical artifact semantic hash differs from its ref")
+        return model
 
 
 class ExactDevConnectionFactory:
@@ -1489,11 +1544,7 @@ class RealDevHistoricalOnboardingService:
     ) -> datetime:
         if generated_at.tzinfo is None or generated_at.utcoffset() is None:
             raise RuntimeConfigInvalidError("historical onboarding clock must be timezone-aware")
-        latest_legal_cutoff = datetime.combine(
-            target_trade_date,
-            HISTORICAL_TARGET_ENTRY_CUTOFF,
-            tzinfo=HISTORICAL_DECISION_TIMEZONE,
-        )
+        latest_legal_cutoff = prospective_target_entry_cutoff(target_trade_date)
         if generated_at > latest_legal_cutoff:
             raise HistoricalResearchInputUnavailable(
                 "historical replay occurred after the prospective recommendation window",

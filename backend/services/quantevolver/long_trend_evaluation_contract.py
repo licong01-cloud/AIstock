@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Mapping
@@ -88,6 +89,22 @@ class QELongTrendReason(str, Enum):
     ARCHIVE_PERSIST_FAILED = "QELT_ARCHIVE_PERSIST_FAILED"
     DUPLICATE_IDENTITY_CONFLICT = "QELT_DUPLICATE_IDENTITY_CONFLICT"
     RESOURCE_EVENT_INVALID = "QELT_RESOURCE_EVENT_INVALID"
+    BUNDLE_INVALID = "QELT_BUNDLE_INVALID"
+    NODE_CAPABILITY_UNAVAILABLE = "QELT_NODE_CAPABILITY_UNAVAILABLE"
+    EXECUTION_ENVIRONMENT_MISMATCH = "QELT_EXECUTION_ENVIRONMENT_MISMATCH"
+    RECORDER_REF_MISSING = "QELT_RECORDER_REF_MISSING"
+    WORKSPACE_CATALOG_PARTIAL = "QELT_WORKSPACE_CATALOG_PARTIAL"
+    INDICATOR_FREQUENCY_CONFLICT = "QELT_INDICATOR_FREQUENCY_CONFLICT"
+    INDICATOR_OBJECT_MISSING = "QELT_INDICATOR_OBJECT_MISSING"
+    PICKLE_PARSER_FAILED = "QELT_PICKLE_PARSER_FAILED"
+    CONTROL_STATE_CONFLICT = "QELT_CONTROL_STATE_CONFLICT"
+    NODE_JOB_IDENTITY_CONFLICT = "QELT_NODE_JOB_IDENTITY_CONFLICT"
+    NODE_PROCESS_IDENTITY_CONFLICT = "QELT_NODE_PROCESS_IDENTITY_CONFLICT"
+    NODE_STATE_UNKNOWN = "QELT_NODE_STATE_UNKNOWN"
+    ARTIFACT_STREAM_INTERRUPTED = "QELT_ARTIFACT_STREAM_INTERRUPTED"
+    ARTIFACT_HASH_MISMATCH = "QELT_ARTIFACT_HASH_MISMATCH"
+    ARTIFACT_SCHEMA_MISMATCH = "QELT_ARTIFACT_SCHEMA_MISMATCH"
+    CAS_MANIFEST_CONFLICT = "QELT_CAS_MANIFEST_CONFLICT"
 
 
 class QELongTrendError(RuntimeError):
@@ -419,6 +436,7 @@ class QELongTrendEvaluationContext:
     outcome_snapshot: QEDatasetSnapshotIdentity
     overlap_receipt: SnapshotOverlapParityReceipt
     input_artifact_hashes: Mapping[str, Any]
+    execution_environment_manifest_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not self.run_id or not self.evaluator_source_sha256:
@@ -505,6 +523,7 @@ class QELongTrendEvaluationContext:
             feature_dataset_manifest_sha256=self.feature_snapshot.manifest_sha256,
             outcome_dataset_manifest_sha256=self.outcome_snapshot.manifest_sha256,
             input_manifest_sha256=canonical_sha256(identity_manifest),
+            execution_environment_manifest_sha256=self.execution_environment_manifest_sha256,
         )
 
     def as_dict(
@@ -521,6 +540,11 @@ class QELongTrendEvaluationContext:
             ),
             "run_id": self.run_id,
             "evaluator_source_sha256": self.evaluator_source_sha256,
+            "execution_environment_manifest_sha256": (
+                self.execution_environment_manifest_sha256
+                if self.execution_environment_manifest_sha256
+                else typed_null("execution_environment_manifest_sha256")
+            ),
             "feature_snapshot": asdict(self.feature_snapshot),
             "outcome_snapshot": asdict(self.outcome_snapshot),
             "overlap_receipt": self.overlap_receipt.as_dict(),
@@ -595,6 +619,7 @@ def build_evaluation_id(
     feature_dataset_manifest_sha256: str | None,
     outcome_dataset_manifest_sha256: str | None,
     input_manifest_sha256: str,
+    execution_environment_manifest_sha256: str | None = None,
 ) -> str:
     if not run_id or not profile_sha256 or not evaluator_source_sha256 or not input_manifest_sha256:
         raise QELongTrendError(
@@ -617,6 +642,13 @@ def build_evaluation_id(
         ),
         "input_manifest_sha256": input_manifest_sha256,
     }
+    if execution_environment_manifest_sha256 is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", execution_environment_manifest_sha256):
+            raise QELongTrendError(
+                QELongTrendReason.EXECUTION_ENVIRONMENT_MISMATCH,
+                "execution environment manifest sha256 is invalid",
+            )
+        payload["execution_environment_manifest_sha256"] = execution_environment_manifest_sha256
     return f"qelt_{canonical_sha256(payload)}"
 
 

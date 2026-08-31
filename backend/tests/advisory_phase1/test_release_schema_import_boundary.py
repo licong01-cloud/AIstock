@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import re
 
 
 _ROOT = Path("backend/services/advisory_phase1")
@@ -131,15 +132,15 @@ def test_snapshot_writer_remains_read_only_against_phase1f1_compatibility_views(
 
 def test_no_non_release_runtime_module_writes_phase1f1_compatibility_view_names() -> None:
     forbidden = (
-        "insert into app.advisory_signal_observation_lineage",
-        "update app.advisory_signal_observation_lineage",
-        "delete from app.advisory_signal_observation_lineage",
-        "insert into app.advisory_signal_stage_candidate",
-        "update app.advisory_signal_stage_candidate",
-        "delete from app.advisory_signal_stage_candidate",
+        r"insert\s+into\s+app\.advisory_signal_observation_lineage(?![a-z0-9_])",
+        r"update\s+app\.advisory_signal_observation_lineage(?![a-z0-9_])",
+        r"delete\s+from\s+app\.advisory_signal_observation_lineage(?![a-z0-9_])",
+        r"insert\s+into\s+app\.advisory_signal_stage_candidate(?![a-z0-9_])",
+        r"update\s+app\.advisory_signal_stage_candidate(?![a-z0-9_])",
+        r"delete\s+from\s+app\.advisory_signal_stage_candidate(?![a-z0-9_])",
     )
     for path in Path("backend/services").rglob("*.py"):
         if path == _ROOT / "release_schema_apply_postgres.py":
             continue
         source = path.read_text(encoding="utf-8").lower()
-        assert not any(statement in source for statement in forbidden), path
+        assert not any(re.search(pattern, source) for pattern in forbidden), path

@@ -1,0 +1,274 @@
+{
+  "actual": "After more than 14 hours the real production catalog was only 61.4% through DISCOVER; recent throughput was about 72 requirements/hour while CPU remained active and no lock wait existed.",
+  "allowed_write_scope": [
+    "backend/services/advisory_historical_range/catalog_postgres.py",
+    "backend/services/advisory_historical_range/composition.py",
+    "backend/tests/advisory_historical_range/test_r2b_catalog_planner.py",
+    "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py",
+    "tests/aistock_validation/bugs/20260804_BUG-978-historical-range-catalog-serially-rescans-overlapping-full-market-window.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-978",
+  "closed_at": "2026-08-05T06:29:24.951929Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-04T17:57:42.819372Z",
+  "description": "After more than 14 hours the real production catalog was only 61.4% through DISCOVER; recent throughput was about 72 requirements/hour while CPU remained active and no lock wait existed.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260804-fe2a0fcc8c66",
+      "timestamp": "2026-08-04T17:57:42.819366Z"
+    }
+  ],
+  "evidence_uris": [
+    "Production batch ahrb_907074c8d4cfb5cfb8791880cf3a72b7 operation ahrop_2392df53ecef04ba0747e2d0a5abffb2",
+    "Legacy threaded read-only ordinal 10081-10112 benchmark: 32 requirements in 549.885s, 209.5 requirements/hour, peak RSS 167.4 MB, cumulative chain hash exactly matched the existing checkpoint",
+    "Final 24-process read-only ordinal 10081-10112 benchmark: 32 requirements in 158.093s, 728.7 requirements/hour, peak aggregate parent-plus-child RSS 1443.0 MB, cumulative chain hash 05adb5764a0fd489ac569094ea0085d0ec824ffdec1255e9a2e476bfce059272 exactly matched the existing checkpoint",
+    "Capacity comparison rejected 32 workers: the same read-only chunk took 195.850s at 588.2 requirements/hour with 1845.3 MB aggregate RSS; 24 workers is the measured throughput optimum and remains below the 8 GB limit",
+    "Final targeted performance, transaction, dependency-wave, cleanup and hash contracts: 19 passed",
+    "Final advisory_historical_range_backend nox matrix: 344 passed, 5 skipped"
+  ],
+  "expected": "Exact existing PIT, canonical content hash, lineage, drift detection and checkpoint semantics complete multi-year DISCOVER plus VERIFY in hours with measured peak RSS below 8 GB, bounded connections, restart-safe files and no silent fallback.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py"
+    ],
+    "changed_files": [
+      "backend/services/advisory_historical_range/catalog_postgres.py",
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/tests/advisory_historical_range/test_r2b_catalog_planner.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_historical_range/catalog_postgres.py",
+        "backend/services/advisory_historical_range/composition.py",
+        "backend/tests/advisory_historical_range/test_r2b_catalog_planner.py",
+        "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py"
+      ],
+      "impacted_modules": [
+        "advisory.historical_range",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_historical_range/catalog_postgres.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/composition.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_r2b_catalog_planner.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_historical_range/catalog_postgres.py",
+        "backend/services/advisory_historical_range/composition.py",
+        "backend/tests/advisory_historical_range/test_r2b_catalog_planner.py",
+        "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_historical_range/catalog_postgres.py",
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/tests/advisory_historical_range/test_r2b_catalog_planner.py",
+      "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py"
+    ]
+  },
+  "first_seen_at": "2026-08-04T17:57:42.819372Z",
+  "fix_branch": null,
+  "fix_commit": "dd8d617f8567823c93a39da0df93daf2c2d96d57",
+  "fixed_at": "2026-08-05T05:05:07Z",
+  "github_issue_number": 3137,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3137",
+  "last_seen_at": "2026-08-04T17:57:42.819372Z",
+  "module": "advisory_historical_range",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3143",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_catalog_postgres_performance.py -q",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python processes loaded the BUG-978 worktree source and passed 19 performance/transaction/dependency/cleanup/hash contracts plus the advisory_historical_range_backend matrix with 344 passed and 5 environment-gated skips",
+      "Fresh Python processes loaded committed BUG-978 source and passed 19 direct performance/transaction/dependency/cleanup/hash contracts plus 344 module tests"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-978/post-restart-verify.json",
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "advisory_historical_range"
+  ],
+  "title": "Historical Range catalog serially rescans overlapping full-market windows",
+  "trigger_condition": {
+    "fingerprint": "fe2a0fcc8c660cb9978d23ef",
+    "source_event_id": "FE-20260804-fe2a0fcc8c66"
+  },
+  "validation_evidence": [
+    "post-restart-verify backend-main -> health, identity, and Advisory business smoke passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_historical_range"
+      ],
+      "plans": [
+        "advisory_historical_range_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_historical_range"
+        ],
+        "plans": [
+          "advisory_historical_range_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

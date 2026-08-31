@@ -241,7 +241,6 @@ def ensure_sector_data(cur) -> None:
     for col, desc in comments.items():
         cur.execute(f"COMMENT ON COLUMN market.sector_data.{col} IS %s;", (desc,))
 
-
 # ---------------------------------------------------------------------------
 # data_stats_config registration
 # ---------------------------------------------------------------------------

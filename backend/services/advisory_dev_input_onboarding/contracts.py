@@ -17,12 +17,20 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
+from backend.services.advisory_phase0a.models import (
+    AuditReceipt,
+    AuditRequest,
+    HandoffReadinessReport,
+    Phase1HandoffBundle,
+)
+from backend.services.advisory_phase0a.handoff import audit_request_identity_payload
 from backend.services.advisory_phase1.phase1g_contract import (
     PHASE1F2_RELEASE_RECEIPT_LAYOUT_POLICY,
     Phase1GInputArtifactKind,
     Phase1GInputArtifactRef,
 )
 from backend.services.advisory_phase1.release_schema_contract import DatabaseIdentity, TargetLabel
+from backend.services.advisory_phase1.source_resolution import SourceRequirementSet, SourceResolutionReceipt
 
 
 REQUEST_SCHEMA_VERSION = "advisory_real_dev_onboarding_request_v1"
@@ -41,6 +49,9 @@ SOURCE_OBSERVATION_SCOPE_REQUEST_SCHEMA_VERSION = "advisory_source_observation_s
 SOURCE_REQUIREMENT_REGISTRY_SCHEMA_VERSION = "advisory_source_requirement_registry_v1"
 PHASE1E_PROGRAM_INPUT_SCHEMA_VERSION = "advisory_phase1e_program_input_v1"
 PHASE1E_REAL_INPUT_BUNDLE_SCHEMA_VERSION = "advisory_phase1e_real_input_bundle_v1"
+PHASE1E_PROGRAM_COMPILER_DEPENDENCY_SCHEMA_VERSION = "advisory_phase1e_program_compiler_dependency_v1"
+PHASE1E_COMPILE_RECEIPT_SCHEMA_VERSION = "advisory_phase1e_compile_receipt_v1"
+O4_TYPED_PAYLOAD_SCHEMA_VERSION = "advisory_phase1e_typed_payload_v1"
 O4_ARTIFACT_REF_SCHEMA_VERSION = "advisory_phase1e_input_artifact_ref_v1"
 STRATEGY_PACKAGE_INPUT_PROJECTION_SCHEMA_VERSION = "strategy_package_advisory_input_projection_v1"
 STRATEGY_PACKAGE_INPUT_PROJECTION_SOURCE = "ADMITTED_MANIFEST_ONLY"
@@ -123,20 +134,30 @@ O4_ARTIFACT_STORE_POLICY_PAYLOAD = {
     "namespace": "advisory/phase1e/inputs",
     "layout": "<kind>/<semantic_hash_prefix>/<semantic_hash>.json",
     "artifact_kinds": [
+        "artifact_store_policy",
         "capacity_program_coverage",
         "capacity_program_workload",
         "capacity_policy",
         "capacity_receipt",
         "capacity_request",
+        "calendar_identity",
         "input_bundle",
+        "observer_config",
+        "partition_policy",
+        "phase0a_policy_registry",
         "phase1e_batch_request",
+        "phase1e_compile_receipt",
         "phase1e_program_date_request",
+        "program_compiler_dependency",
         "program_input",
         "real_input_build_request",
         "source_mapping_registry",
         "source_observation_scope_request",
+        "source_query_registry",
+        "source_resolution_receipt",
         "source_requirement_set",
         "source_requirement_registry",
+        "store_backend_policy",
         "strategy_package_input_projection",
     ],
     "canonical_json": True,
@@ -308,10 +329,73 @@ class O4ArtifactKind(str, Enum):
     CAPACITY_PROGRAM_WORKLOAD = "capacity_program_workload"
     CAPACITY_RECEIPT = "capacity_receipt"
     CAPACITY_PROGRAM_COVERAGE = "capacity_program_coverage"
+    PHASE0A_POLICY_REGISTRY = "phase0a_policy_registry"
+    SOURCE_QUERY_REGISTRY = "source_query_registry"
+    SOURCE_RESOLUTION_RECEIPT = "source_resolution_receipt"
+    OBSERVER_CONFIG = "observer_config"
+    CALENDAR_IDENTITY = "calendar_identity"
+    PARTITION_POLICY = "partition_policy"
+    STORE_BACKEND_POLICY = "store_backend_policy"
+    ARTIFACT_STORE_POLICY = "artifact_store_policy"
+    PROGRAM_COMPILER_DEPENDENCY = "program_compiler_dependency"
     PROGRAM_INPUT = "program_input"
     INPUT_BUNDLE = "input_bundle"
     PHASE1E_PROGRAM_DATE_REQUEST = "phase1e_program_date_request"
     PHASE1E_BATCH_REQUEST = "phase1e_batch_request"
+    PHASE1E_COMPILE_RECEIPT = "phase1e_compile_receipt"
+
+
+class O4TypedPayloadArtifact(HashClosedContract):
+    """Hash-close one explicitly typed policy/config payload stored in the O4 CAS."""
+
+    hash_field: ClassVar[str] = "content_hash"
+    schema_version: Literal[O4_TYPED_PAYLOAD_SCHEMA_VERSION] = O4_TYPED_PAYLOAD_SCHEMA_VERSION
+    payload: dict[str, Any]
+    content_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("content_hash")
+    @classmethod
+    def _hash(cls, value: str | None) -> str | None:
+        return validate_sha256(value, field_name="content_hash") if value is not None else None
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return self.payload
+
+    @model_validator(mode="after")
+    def _close(self) -> "O4TypedPayloadArtifact":
+        if not self.payload:
+            raise ValueError("typed O4 payload must not be empty")
+        object.__setattr__(self, "payload", canonicalize(self.payload))
+        self.close_hash()
+        return self
+
+
+class Phase0APolicyRegistryArtifact(O4TypedPayloadArtifact):
+    artifact_kind: Literal[O4ArtifactKind.PHASE0A_POLICY_REGISTRY] = O4ArtifactKind.PHASE0A_POLICY_REGISTRY
+
+
+class SourceQueryRegistryArtifact(O4TypedPayloadArtifact):
+    artifact_kind: Literal[O4ArtifactKind.SOURCE_QUERY_REGISTRY] = O4ArtifactKind.SOURCE_QUERY_REGISTRY
+
+
+class ObserverConfigArtifact(O4TypedPayloadArtifact):
+    artifact_kind: Literal[O4ArtifactKind.OBSERVER_CONFIG] = O4ArtifactKind.OBSERVER_CONFIG
+
+
+class CalendarIdentityArtifact(O4TypedPayloadArtifact):
+    artifact_kind: Literal[O4ArtifactKind.CALENDAR_IDENTITY] = O4ArtifactKind.CALENDAR_IDENTITY
+
+
+class PartitionPolicyArtifact(O4TypedPayloadArtifact):
+    artifact_kind: Literal[O4ArtifactKind.PARTITION_POLICY] = O4ArtifactKind.PARTITION_POLICY
+
+
+class StoreBackendPolicyArtifact(O4TypedPayloadArtifact):
+    artifact_kind: Literal[O4ArtifactKind.STORE_BACKEND_POLICY] = O4ArtifactKind.STORE_BACKEND_POLICY
+
+
+class ArtifactStorePolicyArtifact(O4TypedPayloadArtifact):
+    artifact_kind: Literal[O4ArtifactKind.ARTIFACT_STORE_POLICY] = O4ArtifactKind.ARTIFACT_STORE_POLICY
 
 
 class AdvisoryStrategyPackageInputLegV1(StrictContract):
@@ -1858,8 +1942,10 @@ class Phase1EProgramDateInput(StrictContract):
     historical_reason_codes: tuple[str, ...] = ()
     historical_batch_receipt_ref: AdvisoryImmutableArtifactRef | None = None
     historical_batch_receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    compiler_dependency_ref: AdvisoryImmutableArtifactRef | None = None
+    compiler_dependency_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
-    @field_validator("manifest_sha256", "historical_batch_receipt_hash")
+    @field_validator("manifest_sha256", "historical_batch_receipt_hash", "compiler_dependency_hash")
     @classmethod
     def _hashes(cls, value: str | None, info: Any) -> str | None:
         return validate_sha256(value, field_name=info.field_name) if value is not None else None
@@ -1872,9 +1958,21 @@ class Phase1EProgramDateInput(StrictContract):
             semantic_hash=self.historical_batch_receipt_hash,
             field_name="historical_batch_receipt",
         )
+        _validate_ref_hash(
+            ref=self.compiler_dependency_ref,
+            semantic_hash=self.compiler_dependency_hash,
+            field_name="compiler_dependency",
+            expected_artifact_kind=O4ArtifactKind.PROGRAM_COMPILER_DEPENDENCY,
+        )
         if self.historical_status is HistoricalProgramStatus.COMPLETE:
-            if self.historical_program_run_id is None or self.historical_batch_receipt_ref is None or reasons:
-                raise ValueError("COMPLETE Program date requires exact historical run and batch receipt identities")
+            if (
+                self.historical_program_run_id is None
+                or self.historical_batch_receipt_ref is None
+                or reasons
+            ):
+                raise ValueError(
+                    "COMPLETE Program date requires exact historical run and batch receipt identities without reasons"
+                )
         elif not reasons:
             raise ValueError("non-complete Program date requires stable historical reason codes")
         object.__setattr__(self, "historical_reason_codes", reasons)
@@ -1893,24 +1991,10 @@ class Phase1ERealInputBuildRequest(HashClosedContract):
     target_database_identity_hash: str = Field(min_length=64, max_length=64)
     target_package_asset_root_hash: str = Field(min_length=64, max_length=64)
     program_dates: tuple[Phase1EProgramDateInput, ...] = Field(min_length=1)
-    phase0a_policy_registry_ref: AdvisoryImmutableArtifactRef
-    phase0a_policy_registry_hash: str = Field(min_length=64, max_length=64)
     source_mapping_registry_ref: AdvisoryImmutableArtifactRef
     source_mapping_registry_hash: str = Field(min_length=64, max_length=64)
-    source_query_registry_ref: AdvisoryImmutableArtifactRef
-    source_query_registry_hash: str = Field(min_length=64, max_length=64)
-    calendar_registry_ref: AdvisoryImmutableArtifactRef
-    calendar_registry_hash: str = Field(min_length=64, max_length=64)
-    label_policy_bundle_ref: AdvisoryImmutableArtifactRef
-    label_policy_bundle_hash: str = Field(min_length=64, max_length=64)
-    partition_policy_ref: AdvisoryImmutableArtifactRef
-    partition_policy_hash: str = Field(min_length=64, max_length=64)
-    store_backend_policy_ref: AdvisoryImmutableArtifactRef
-    store_backend_policy_hash: str = Field(min_length=64, max_length=64)
     capacity_policy_ref: AdvisoryImmutableArtifactRef
     capacity_policy_hash: str = Field(min_length=64, max_length=64)
-    phase1e_artifact_store_policy_ref: AdvisoryImmutableArtifactRef
-    phase1e_artifact_store_policy_hash: str = Field(min_length=64, max_length=64)
     code_release_id: str = Field(min_length=1, max_length=160)
     code_release_hash: str = Field(min_length=64, max_length=64)
     research_scope: Literal["HISTORICAL_RESEARCH_ONLY"] = "HISTORICAL_RESEARCH_ONLY"
@@ -1922,15 +2006,8 @@ class Phase1ERealInputBuildRequest(HashClosedContract):
         "historical_run_receipt_hash",
         "target_database_identity_hash",
         "target_package_asset_root_hash",
-        "phase0a_policy_registry_hash",
         "source_mapping_registry_hash",
-        "source_query_registry_hash",
-        "calendar_registry_hash",
-        "label_policy_bundle_hash",
-        "partition_policy_hash",
-        "store_backend_policy_hash",
         "capacity_policy_hash",
-        "phase1e_artifact_store_policy_hash",
         "code_release_hash",
         "build_request_hash",
     )
@@ -1943,15 +2020,8 @@ class Phase1ERealInputBuildRequest(HashClosedContract):
         for field_name in (
             "historical_run_request",
             "historical_run_receipt",
-            "phase0a_policy_registry",
             "source_mapping_registry",
-            "source_query_registry",
-            "calendar_registry",
-            "label_policy_bundle",
-            "partition_policy",
-            "store_backend_policy",
             "capacity_policy",
-            "phase1e_artifact_store_policy",
         ):
             _validate_ref_hash(
                 ref=getattr(self, f"{field_name}_ref"),
@@ -1963,6 +2033,137 @@ class Phase1ERealInputBuildRequest(HashClosedContract):
         if len(identities) != len(set(identities)):
             raise ValueError("program_dates must contain unique Program/date identities")
         object.__setattr__(self, "program_dates", programs)
+        self.close_hash()
+        return self
+
+
+class Phase1EProgramCompilerDependency(HashClosedContract):
+    hash_field: ClassVar[str] = "dependency_hash"
+    schema_version: Literal[PHASE1E_PROGRAM_COMPILER_DEPENDENCY_SCHEMA_VERSION] = (
+        PHASE1E_PROGRAM_COMPILER_DEPENDENCY_SCHEMA_VERSION
+    )
+    program_id: str = Field(min_length=1, max_length=160)
+    decision_trade_date: date
+    package_id: str = Field(min_length=1, max_length=160)
+    manifest_sha256: str = Field(min_length=64, max_length=64)
+    alpha_mode: AlphaMode
+    style_family: str = Field(min_length=1, max_length=120)
+    historical_program_run_id: str = Field(min_length=1, max_length=160)
+    historical_batch_receipt_ref: AdvisoryImmutableArtifactRef
+    historical_batch_receipt_hash: str = Field(min_length=64, max_length=64)
+    phase0a_audit_request: AuditRequest
+    phase0a_audit_receipt: AuditReceipt
+    handoff_readiness_report: HandoffReadinessReport
+    phase1_handoff_bundle: Phase1HandoffBundle | None = None
+    admission_scope_id: str | None = Field(default=None, min_length=1, max_length=200)
+    admission_scope_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    phase0a_policy_registry_ref: AdvisoryImmutableArtifactRef
+    phase0a_policy_registry_hash: str = Field(min_length=64, max_length=64)
+    source_query_registry_ref: AdvisoryImmutableArtifactRef
+    source_query_registry_hash: str = Field(min_length=64, max_length=64)
+    observer_config_ref: AdvisoryImmutableArtifactRef
+    observer_config_hash: str = Field(min_length=64, max_length=64)
+    calendar_identity_ref: AdvisoryImmutableArtifactRef
+    calendar_identity_hash: str = Field(min_length=64, max_length=64)
+    dataset_schema_fingerprint: str = Field(min_length=1, max_length=160)
+    partition_policy_ref: AdvisoryImmutableArtifactRef
+    partition_policy_hash: str = Field(min_length=64, max_length=64)
+    store_backend_policy_ref: AdvisoryImmutableArtifactRef
+    store_backend_policy_hash: str = Field(min_length=64, max_length=64)
+    artifact_store_policy_ref: AdvisoryImmutableArtifactRef
+    artifact_store_policy_hash: str = Field(min_length=64, max_length=64)
+    compiler_version: str = Field(min_length=1, max_length=160)
+    serializer_version: str = Field(min_length=1, max_length=160)
+    compiler_source_hash: str = Field(min_length=64, max_length=64)
+    dependency_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "manifest_sha256",
+        "historical_batch_receipt_hash",
+        "admission_scope_hash",
+        "phase0a_policy_registry_hash",
+        "source_query_registry_hash",
+        "observer_config_hash",
+        "calendar_identity_hash",
+        "partition_policy_hash",
+        "store_backend_policy_hash",
+        "artifact_store_policy_hash",
+        "compiler_source_hash",
+        "dependency_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "Phase1EProgramCompilerDependency":
+        _validate_ref_hash(
+            ref=self.historical_batch_receipt_ref,
+            semantic_hash=self.historical_batch_receipt_hash,
+            field_name="historical_batch_receipt",
+        )
+        for field_name, artifact_kind in (
+            ("phase0a_policy_registry", O4ArtifactKind.PHASE0A_POLICY_REGISTRY),
+            ("source_query_registry", O4ArtifactKind.SOURCE_QUERY_REGISTRY),
+            ("observer_config", O4ArtifactKind.OBSERVER_CONFIG),
+            ("calendar_identity", O4ArtifactKind.CALENDAR_IDENTITY),
+            ("partition_policy", O4ArtifactKind.PARTITION_POLICY),
+            ("store_backend_policy", O4ArtifactKind.STORE_BACKEND_POLICY),
+            ("artifact_store_policy", O4ArtifactKind.ARTIFACT_STORE_POLICY),
+        ):
+            _validate_ref_hash(
+                ref=getattr(self, f"{field_name}_ref"),
+                semantic_hash=getattr(self, f"{field_name}_hash"),
+                field_name=field_name,
+                expected_artifact_kind=artifact_kind,
+            )
+        if (self.admission_scope_id is None) != (self.admission_scope_hash is None):
+            raise ValueError("admission scope id and hash must either both be present or both be absent")
+        audit_request_hash = canonical_json_sha256(audit_request_identity_payload(self.phase0a_audit_request))
+        if self.phase0a_audit_receipt.request_hash != audit_request_hash:
+            raise ValueError("Phase0A audit receipt does not bind the stored audit request")
+        self.close_hash()
+        return self
+
+
+class AdvisorySourceResolutionArtifact(HashClosedContract):
+    """Bridge O4 physical requirements to the exact Phase1 requirement set and resolution receipt."""
+
+    hash_field: ClassVar[str] = "artifact_hash"
+    schema_version: Literal["advisory_o4_source_resolution_artifact_v1"] = (
+        "advisory_o4_source_resolution_artifact_v1"
+    )
+    program_id: str = Field(min_length=1, max_length=160)
+    decision_trade_date: date
+    physical_requirement_set_ref: AdvisoryImmutableArtifactRef
+    physical_requirement_set_hash: str = Field(min_length=64, max_length=64)
+    phase1_requirement_set: SourceRequirementSet
+    resolution_receipt: SourceResolutionReceipt
+    artifact_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("physical_requirement_set_hash", "artifact_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "AdvisorySourceResolutionArtifact":
+        _validate_ref_hash(
+            ref=self.physical_requirement_set_ref,
+            semantic_hash=self.physical_requirement_set_hash,
+            field_name="physical_requirement_set",
+            expected_artifact_kind=O4ArtifactKind.SOURCE_REQUIREMENT_SET,
+        )
+        if (
+            self.phase1_requirement_set.program_id != self.program_id
+            or self.phase1_requirement_set.decision_as_of_trade_date != self.decision_trade_date
+        ):
+            raise ValueError("Phase1 source requirement set identity differs from the O4 Program/date")
+        if (
+            self.resolution_receipt.source_requirement_set_hash
+            != self.phase1_requirement_set.source_requirement_set_hash
+        ):
+            raise ValueError("source resolution receipt does not bind the embedded Phase1 requirement set")
         self.close_hash()
         return self
 
@@ -2267,14 +2468,8 @@ class Phase1EProgramInputUnit(HashClosedContract):
     manifest_sha256: str = Field(min_length=64, max_length=64)
     alpha_mode: AlphaMode
     style_family: str = Field(min_length=1, max_length=120)
-    historical_program_run_ref: AdvisoryImmutableArtifactRef | None = None
-    historical_program_run_hash: str | None = Field(default=None, min_length=64, max_length=64)
-    phase0a_audit_ref: AdvisoryImmutableArtifactRef | None = None
-    phase0a_audit_hash: str | None = Field(default=None, min_length=64, max_length=64)
-    handoff_readiness_ref: AdvisoryImmutableArtifactRef | None = None
-    handoff_readiness_hash: str | None = Field(default=None, min_length=64, max_length=64)
-    handoff_bundle_ref: AdvisoryImmutableArtifactRef | None = None
-    handoff_bundle_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    compiler_dependency_ref: AdvisoryImmutableArtifactRef | None = None
+    compiler_dependency_hash: str | None = Field(default=None, min_length=64, max_length=64)
     source_requirement_set_ref: AdvisoryImmutableArtifactRef | None = None
     source_requirement_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
     source_resolution_receipt_ref: AdvisoryImmutableArtifactRef | None = None
@@ -2285,6 +2480,8 @@ class Phase1EProgramInputUnit(HashClosedContract):
     capacity_coverage_hash: str | None = Field(default=None, min_length=64, max_length=64)
     phase1e_program_date_request_ref: AdvisoryImmutableArtifactRef | None = None
     phase1e_program_date_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    phase1e_batch_request_ref: AdvisoryImmutableArtifactRef | None = None
+    phase1e_batch_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
     identity_readiness: ProgramIdentityReadiness
     source_readiness: ProgramSourceReadiness
     capacity_status: ProgramCapacityStatus
@@ -2295,15 +2492,13 @@ class Phase1EProgramInputUnit(HashClosedContract):
 
     @field_validator(
         "manifest_sha256",
-        "historical_program_run_hash",
-        "phase0a_audit_hash",
-        "handoff_readiness_hash",
-        "handoff_bundle_hash",
+        "compiler_dependency_hash",
         "source_requirement_set_hash",
         "source_resolution_receipt_hash",
         "capacity_program_workload_hash",
         "capacity_coverage_hash",
         "phase1e_program_date_request_hash",
+        "phase1e_batch_request_hash",
         "program_input_hash",
     )
     @classmethod
@@ -2312,23 +2507,14 @@ class Phase1EProgramInputUnit(HashClosedContract):
 
     @model_validator(mode="after")
     def _close(self) -> "Phase1EProgramInputUnit":
-        for field_name in (
-            "historical_program_run",
-            "phase0a_audit",
-            "handoff_readiness",
-            "handoff_bundle",
-            "source_resolution_receipt",
-        ):
-            _validate_ref_hash(
-                ref=getattr(self, f"{field_name}_ref"),
-                semantic_hash=getattr(self, f"{field_name}_hash"),
-                field_name=field_name,
-            )
         for field_name, artifact_kind in (
+            ("compiler_dependency", O4ArtifactKind.PROGRAM_COMPILER_DEPENDENCY),
             ("source_requirement_set", O4ArtifactKind.SOURCE_REQUIREMENT_SET),
+            ("source_resolution_receipt", O4ArtifactKind.SOURCE_RESOLUTION_RECEIPT),
             ("capacity_program_workload", O4ArtifactKind.CAPACITY_PROGRAM_WORKLOAD),
             ("capacity_coverage", O4ArtifactKind.CAPACITY_PROGRAM_COVERAGE),
             ("phase1e_program_date_request", O4ArtifactKind.PHASE1E_PROGRAM_DATE_REQUEST),
+            ("phase1e_batch_request", O4ArtifactKind.PHASE1E_BATCH_REQUEST),
         ):
             _validate_ref_hash(
                 ref=getattr(self, f"{field_name}_ref"),
@@ -2358,10 +2544,7 @@ class Phase1EProgramInputUnit(HashClosedContract):
             raise ValueError("plan_readiness does not match Program identity/source/capacity state")
         if expected is ProgramPlanReadiness.FULL_READY:
             required_refs = (
-                self.historical_program_run_ref,
-                self.phase0a_audit_ref,
-                self.handoff_readiness_ref,
-                self.handoff_bundle_ref,
+                self.compiler_dependency_ref,
                 self.source_requirement_set_ref,
                 self.source_resolution_receipt_ref,
                 self.capacity_program_workload_ref,
@@ -2386,22 +2569,8 @@ class Phase1ERealInputBundle(HashClosedContract):
     build_request_ref: AdvisoryImmutableArtifactRef
     build_request_hash: str = Field(min_length=64, max_length=64)
     target_database_identity_hash: str = Field(min_length=64, max_length=64)
-    phase0a_policy_registry_ref: AdvisoryImmutableArtifactRef
-    phase0a_policy_registry_hash: str = Field(min_length=64, max_length=64)
-    source_query_registry_ref: AdvisoryImmutableArtifactRef
-    source_query_registry_hash: str = Field(min_length=64, max_length=64)
-    calendar_registry_ref: AdvisoryImmutableArtifactRef
-    calendar_registry_hash: str = Field(min_length=64, max_length=64)
-    label_policy_bundle_ref: AdvisoryImmutableArtifactRef
-    label_policy_bundle_hash: str = Field(min_length=64, max_length=64)
-    partition_policy_ref: AdvisoryImmutableArtifactRef
-    partition_policy_hash: str = Field(min_length=64, max_length=64)
-    store_backend_policy_ref: AdvisoryImmutableArtifactRef
-    store_backend_policy_hash: str = Field(min_length=64, max_length=64)
     capacity_policy_ref: AdvisoryImmutableArtifactRef
     capacity_policy_hash: str = Field(min_length=64, max_length=64)
-    phase1e_artifact_store_policy_ref: AdvisoryImmutableArtifactRef
-    phase1e_artifact_store_policy_hash: str = Field(min_length=64, max_length=64)
     source_mapping_registry_ref: AdvisoryImmutableArtifactRef
     source_mapping_registry_hash: str = Field(min_length=64, max_length=64)
     source_requirement_registry_ref: AdvisoryImmutableArtifactRef | None = None
@@ -2410,8 +2579,6 @@ class Phase1ERealInputBundle(HashClosedContract):
     capacity_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
     capacity_receipt_ref: AdvisoryImmutableArtifactRef | None = None
     capacity_receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
-    phase1e_revalidation_batch_request_ref: AdvisoryImmutableArtifactRef | None = None
-    phase1e_revalidation_batch_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
     program_inputs: tuple[Phase1EProgramInputUnit, ...] = Field(min_length=1)
     counts_by_identity_readiness: dict[str, int]
     counts_by_source_readiness: dict[str, int]
@@ -2424,19 +2591,11 @@ class Phase1ERealInputBundle(HashClosedContract):
     @field_validator(
         "build_request_hash",
         "target_database_identity_hash",
-        "phase0a_policy_registry_hash",
-        "source_query_registry_hash",
-        "calendar_registry_hash",
-        "label_policy_bundle_hash",
-        "partition_policy_hash",
-        "store_backend_policy_hash",
         "capacity_policy_hash",
-        "phase1e_artifact_store_policy_hash",
         "source_mapping_registry_hash",
         "source_requirement_registry_hash",
         "capacity_request_hash",
         "capacity_receipt_hash",
-        "phase1e_revalidation_batch_request_hash",
         "dependency_closure_hash",
         "input_bundle_hash",
     )
@@ -2452,27 +2611,12 @@ class Phase1ERealInputBundle(HashClosedContract):
             field_name="build_request",
             expected_artifact_kind=O4ArtifactKind.REAL_INPUT_BUILD_REQUEST,
         )
-        for field_name in (
-            "phase0a_policy_registry",
-            "source_query_registry",
-            "calendar_registry",
-            "label_policy_bundle",
-            "partition_policy",
-            "store_backend_policy",
-            "phase1e_artifact_store_policy",
-        ):
-            _validate_ref_hash(
-                ref=getattr(self, f"{field_name}_ref"),
-                semantic_hash=getattr(self, f"{field_name}_hash"),
-                field_name=field_name,
-            )
         for field_name, artifact_kind in (
             ("capacity_policy", O4ArtifactKind.CAPACITY_POLICY),
             ("source_mapping_registry", O4ArtifactKind.SOURCE_MAPPING_REGISTRY),
             ("source_requirement_registry", O4ArtifactKind.SOURCE_REQUIREMENT_REGISTRY),
             ("capacity_request", O4ArtifactKind.CAPACITY_REQUEST),
             ("capacity_receipt", O4ArtifactKind.CAPACITY_RECEIPT),
-            ("phase1e_revalidation_batch_request", O4ArtifactKind.PHASE1E_BATCH_REQUEST),
         ):
             _validate_ref_hash(
                 ref=getattr(self, f"{field_name}_ref"),
@@ -2513,31 +2657,19 @@ class Phase1ERealInputBundle(HashClosedContract):
         )
         if self.aggregate_readiness is not expected_aggregate:
             raise ValueError("aggregate_readiness differs from independent Program readiness")
-        if any(item.source_readiness is not ProgramSourceReadiness.NOT_EVALUATED for item in programs):
+        if any(item.source_requirement_set_ref is not None for item in programs):
             if self.source_requirement_registry_ref is None:
-                raise ValueError("evaluated Program source state requires the batch source requirement registry")
+                raise ValueError("Program source requirement refs require the batch source requirement registry")
         if any(item.capacity_status is not ProgramCapacityStatus.NOT_MEASURED for item in programs):
             if self.capacity_request_ref is None or self.capacity_receipt_ref is None:
                 raise ValueError("measured Program capacity state requires the batch capacity request and receipt")
-        if any(item.plan_readiness is ProgramPlanReadiness.FULL_READY for item in programs):
-            if self.phase1e_revalidation_batch_request_ref is None:
-                raise ValueError("FULL_READY Program input requires the Phase 1E batch request artifact")
-
         dependency_refs = [
             self.build_request_ref,
-            self.phase0a_policy_registry_ref,
-            self.source_query_registry_ref,
-            self.calendar_registry_ref,
-            self.label_policy_bundle_ref,
-            self.partition_policy_ref,
-            self.store_backend_policy_ref,
             self.capacity_policy_ref,
-            self.phase1e_artifact_store_policy_ref,
             self.source_mapping_registry_ref,
             self.source_requirement_registry_ref,
             self.capacity_request_ref,
             self.capacity_receipt_ref,
-            self.phase1e_revalidation_batch_request_ref,
         ]
         dependency_hash = canonical_json_sha256(
             {
@@ -2549,6 +2681,111 @@ class Phase1ERealInputBundle(HashClosedContract):
             raise ValueError("dependency_closure_hash differs from the immutable input closure")
         object.__setattr__(self, "program_inputs", programs)
         object.__setattr__(self, "dependency_closure_hash", dependency_hash)
+        self.close_hash()
+        return self
+
+
+class Phase1ECompileProgramStatus(str, Enum):
+    COMPLETE = "COMPLETE"
+    PENDING = "PENDING"
+    BLOCKED = "BLOCKED"
+    FAILED = "FAILED"
+
+
+class Phase1ECompileAggregateStatus(str, Enum):
+    COMPLETE = "COMPLETE"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+
+
+class Phase1ECompileProgramResult(HashClosedContract):
+    hash_field: ClassVar[str] = "result_hash"
+    program_id: str = Field(min_length=1, max_length=160)
+    decision_trade_date: date
+    status: Phase1ECompileProgramStatus
+    phase1e_batch_request_ref: AdvisoryImmutableArtifactRef | None = None
+    phase1e_batch_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    plan_refs: tuple[AdvisoryImmutableArtifactRef, ...] = ()
+    batch_receipt_ref: AdvisoryImmutableArtifactRef | None = None
+    batch_receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    reason_codes: tuple[str, ...] = ()
+    result_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("phase1e_batch_request_hash", "batch_receipt_hash", "result_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "Phase1ECompileProgramResult":
+        _validate_ref_hash(
+            ref=self.phase1e_batch_request_ref,
+            semantic_hash=self.phase1e_batch_request_hash,
+            field_name="phase1e_batch_request",
+            expected_artifact_kind=O4ArtifactKind.PHASE1E_BATCH_REQUEST,
+        )
+        _validate_ref_hash(
+            ref=self.batch_receipt_ref,
+            semantic_hash=self.batch_receipt_hash,
+            field_name="batch_receipt",
+        )
+        plan_refs = tuple(sorted(self.plan_refs, key=lambda ref: (ref.artifact_kind, ref.semantic_hash)))
+        if len({(ref.artifact_kind, ref.semantic_hash) for ref in plan_refs}) != len(plan_refs):
+            raise ValueError("compile Program result plan refs must be unique")
+        reasons = sorted_unique(self.reason_codes, field_name="reason_codes") if self.reason_codes else ()
+        if self.status is Phase1ECompileProgramStatus.COMPLETE:
+            if (
+                self.phase1e_batch_request_ref is None
+                or self.batch_receipt_ref is None
+                or not plan_refs
+                or reasons
+            ):
+                raise ValueError("COMPLETE compile result requires batch request, plans, batch receipt, and no reasons")
+        elif not reasons:
+            raise ValueError("non-complete compile result requires stable reason codes")
+        object.__setattr__(self, "plan_refs", plan_refs)
+        object.__setattr__(self, "reason_codes", reasons)
+        self.close_hash()
+        return self
+
+
+class Phase1ECompileReceipt(HashClosedContract):
+    hash_field: ClassVar[str] = "compile_receipt_hash"
+    schema_version: Literal[PHASE1E_COMPILE_RECEIPT_SCHEMA_VERSION] = PHASE1E_COMPILE_RECEIPT_SCHEMA_VERSION
+    input_bundle_ref: AdvisoryImmutableArtifactRef
+    input_bundle_hash: str = Field(min_length=64, max_length=64)
+    program_results: tuple[Phase1ECompileProgramResult, ...] = Field(min_length=1)
+    aggregate_status: Phase1ECompileAggregateStatus
+    compile_receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("input_bundle_hash", "compile_receipt_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validate_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close(self) -> "Phase1ECompileReceipt":
+        _validate_ref_hash(
+            ref=self.input_bundle_ref,
+            semantic_hash=self.input_bundle_hash,
+            field_name="input_bundle",
+            expected_artifact_kind=O4ArtifactKind.INPUT_BUNDLE,
+        )
+        results = tuple(sorted(self.program_results, key=lambda item: (item.program_id, item.decision_trade_date)))
+        identities = tuple((item.program_id, item.decision_trade_date) for item in results)
+        if len(identities) != len(set(identities)):
+            raise ValueError("compile receipt must contain one result per Program/date")
+        statuses = {item.status for item in results}
+        expected = (
+            Phase1ECompileAggregateStatus.COMPLETE
+            if statuses == {Phase1ECompileProgramStatus.COMPLETE}
+            else Phase1ECompileAggregateStatus.FAILED
+            if statuses <= {Phase1ECompileProgramStatus.BLOCKED, Phase1ECompileProgramStatus.FAILED}
+            else Phase1ECompileAggregateStatus.PARTIAL
+        )
+        if self.aggregate_status is not expected:
+            raise ValueError("compile aggregate status differs from Program results")
+        object.__setattr__(self, "program_results", results)
         self.close_hash()
         return self
 

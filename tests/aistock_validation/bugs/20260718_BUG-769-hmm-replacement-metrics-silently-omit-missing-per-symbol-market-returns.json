@@ -1,0 +1,180 @@
+{
+  "actual": "Missing per-symbol returns are filtered out before fmean; partial subsets may be reported as complete and only sampled replacement rows are persisted.",
+  "allowed_write_scope": [
+    "docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md",
+    "docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md",
+    "backend/services/hmm_evolution/evaluator.py",
+    "backend/services/hmm_evolution/executor.py",
+    "backend/services/hmm_evolution/input_adapter.py",
+    "backend/services/hmm_evolution/market_repository.py",
+    "backend/tests/hmm_evolution/test_evaluator.py",
+    "backend/tests/hmm_evolution/test_executor.py",
+    "backend/tests/hmm_evolution/test_input_adapter.py",
+    "backend/tests/hmm_evolution/test_market_repository.py",
+    "tests/aistock_validation/bugs/20260718_BUG-769-hmm-replacement-metrics-silently-omit-missing-per-symbol-market-returns.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-769",
+  "closed_at": "2026-07-19T04:56:53Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-18T20:11:03.502670Z",
+  "description": "Missing per-symbol returns are filtered out before fmean; partial subsets may be reported as complete and only sampled replacement rows are persisted.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260718-550ba630108b",
+      "timestamp": "2026-07-18T20:11:03.502661Z"
+    }
+  ],
+  "evidence_uris": [
+    "hmme_13a9e0e7a20b4e5c86d6445e83ed006c:2025-05-09:600358.SH:horizon_date=2025-05-23"
+  ],
+  "expected": "A changed day is comparable only when every expected entered and dropped symbol has the required return. Any missing symbol must make the affected metric incomplete and persist symbol, replacement side, horizon, required price dates, and a stable missing reason.",
+  "first_seen_at": "2026-07-18T20:11:03.502670Z",
+  "fix_branch": null,
+  "fix_commit": "e085962489aa4002a1cad52c5a97d8ab125b8717",
+  "fixed_at": "2026-07-19T05:00:07.150317Z",
+  "github_issue_number": 2461,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2461",
+  "last_seen_at": "2026-07-18T20:11:03.502670Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2465",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/hmm_evolution/test_evaluator.py backend/tests/hmm_evolution/test_market_repository.py -q",
+  "required_verification": [
+    "l0",
+    "hmm_evolution_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "HMM replacement metrics silently omit missing per-symbol market returns",
+  "trigger_condition": {
+    "fingerprint": "550ba630108bd3596b1dac4d",
+    "source_event_id": "FE-20260718-550ba630108b"
+  },
+  "validation_evidence": [
+    "python -m nox -s hmm_evolution_backend qe_read_backend -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "hmm_evolution"
+      ],
+      "plans": [
+        "hmm_evolution_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "hmm_evolution"
+        ],
+        "plans": [
+          "hmm_evolution_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

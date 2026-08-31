@@ -12,11 +12,15 @@ DispatchService — 多节点任务调度核心服务。
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
 import shutil
+import threading
+import time
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -235,6 +239,139 @@ class DispatchService:
     # Custom jobs can be CPU/IO bound for minutes while still writing logs/results.
     _CUSTOM_SYNC_FAIL_THRESHOLD = _int_env("AISTOCK_CUSTOM_TASK_SYNC_FAIL_THRESHOLD", 10)
 
+    # Process-local observation bus.  Background observation is the only
+    # producer for remote progress; business monitors consume these snapshots
+    # instead of independently polling PostgreSQL and the compute nodes.
+    _observation_condition = threading.Condition(threading.RLock())
+    _observation_generation = 0
+    _task_observations: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    _node_observations: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    _OBSERVATION_CACHE_LIMIT = _int_env("AISTOCK_DISPATCH_OBSERVATION_CACHE_LIMIT", 2048)
+
+    @classmethod
+    def _publish_observation(
+        cls,
+        bucket: "OrderedDict[str, Dict[str, Any]]",
+        key: str,
+        value: Dict[str, Any],
+        *,
+        fingerprint_value: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        fingerprint = json.dumps(
+            fingerprint_value if fingerprint_value is not None else value,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        with cls._observation_condition:
+            previous = bucket.get(key)
+            if previous and previous.get("fingerprint") == fingerprint:
+                previous["value"] = copy.deepcopy(value)
+                bucket.move_to_end(key)
+                return int(previous["generation"])
+            cls._observation_generation += 1
+            generation = cls._observation_generation
+            bucket[key] = {
+                "generation": generation,
+                "fingerprint": fingerprint,
+                "value": copy.deepcopy(value),
+            }
+            bucket.move_to_end(key)
+            while len(bucket) > cls._OBSERVATION_CACHE_LIMIT:
+                bucket.popitem(last=False)
+            cls._observation_condition.notify_all()
+            return generation
+
+    @classmethod
+    def publish_task_observation(cls, task: Dict[str, Any]) -> int:
+        task_id = str(task.get("task_id") or "").strip()
+        if not task_id:
+            raise ValueError("dispatch observation requires task_id")
+        return cls._publish_observation(cls._task_observations, task_id, task)
+
+    @classmethod
+    def publish_node_observation(cls, node: Dict[str, Any]) -> int:
+        node_id = str(node.get("node_id") or "").strip()
+        if not node_id:
+            raise ValueError("dispatch observation requires node_id")
+        stable = {
+            "node_id": node_id,
+            "status": node.get("status"),
+            "online": bool(node.get("online")),
+            "busy": bool(node.get("busy")),
+            "error": node.get("error"),
+        }
+        return cls._publish_observation(
+            cls._node_observations,
+            node_id,
+            node,
+            fingerprint_value=stable,
+        )
+
+    @classmethod
+    def get_task_observation(cls, task_id: str) -> tuple[int, Optional[Dict[str, Any]]]:
+        with cls._observation_condition:
+            item = cls._task_observations.get(str(task_id))
+            if item is None:
+                return 0, None
+            cls._task_observations.move_to_end(str(task_id))
+            return int(item["generation"]), copy.deepcopy(item["value"])
+
+    @classmethod
+    def get_node_observation(cls, node_id: str) -> tuple[int, Optional[Dict[str, Any]]]:
+        with cls._observation_condition:
+            item = cls._node_observations.get(str(node_id))
+            if item is None:
+                return 0, None
+            cls._node_observations.move_to_end(str(node_id))
+            return int(item["generation"]), copy.deepcopy(item["value"])
+
+    @classmethod
+    def _overlay_node_observation(cls, node: Dict[str, Any]) -> Dict[str, Any]:
+        generation, observation = cls.get_node_observation(str(node.get("node_id") or ""))
+        if observation is None:
+            return node
+        result = dict(node)
+        result["status"] = observation.get("status", result.get("status"))
+        result["observed_at"] = observation.get("observed_at")
+        result["observation_generation"] = generation
+        result["observation_error"] = observation.get("error")
+        return result
+
+    @classmethod
+    def wait_for_task_observation(
+        cls,
+        task_id: str,
+        *,
+        after_generation: int = 0,
+        timeout: float = 65.0,
+    ) -> tuple[int, Optional[Dict[str, Any]]]:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        task_key = str(task_id)
+        with cls._observation_condition:
+            while True:
+                item = cls._task_observations.get(task_key)
+                if item is not None and int(item["generation"]) > int(after_generation):
+                    cls._task_observations.move_to_end(task_key)
+                    return int(item["generation"]), copy.deepcopy(item["value"])
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if item is None:
+                        return int(after_generation), None
+                    return int(item["generation"]), copy.deepcopy(item["value"])
+                cls._observation_condition.wait(timeout=remaining)
+
+    @classmethod
+    def forget_task_observation(cls, task_id: str) -> None:
+        with cls._observation_condition:
+            cls._task_observations.pop(str(task_id), None)
+
+    @classmethod
+    def forget_node_observation(cls, node_id: str) -> None:
+        with cls._observation_condition:
+            cls._node_observations.pop(str(node_id), None)
+
     # ━━━━━━━━━━━━━━━━━━━━━━
     # 节点管理
     # ━━━━━━━━━━━━━━━━━━━━━━
@@ -243,14 +380,15 @@ class DispatchService:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT * FROM infra.compute_nodes ORDER BY created_at")
-                return [dict(r) for r in cur.fetchall()]
+                rows = [dict(r) for r in cur.fetchall()]
+        return [self._overlay_node_observation(row) for row in rows]
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT * FROM infra.compute_nodes WHERE node_id = %s", (node_id,))
                 row = cur.fetchone()
-                return dict(row) if row else None
+                return self._overlay_node_observation(dict(row)) if row else None
 
     def create_node(self, data: Dict[str, Any]) -> Dict[str, Any]:
         with get_conn() as conn:
@@ -308,21 +446,69 @@ class DispatchService:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM infra.compute_nodes WHERE node_id = %s", (node_id,))
-                return cur.rowcount > 0
+                deleted = cur.rowcount > 0
+        if deleted:
+            self.forget_node_observation(node_id)
+        return deleted
 
     def update_node_status(
         self,
         node_id: str,
         status: str,
         metrics: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> bool:
+        """Persist an explicit node transition, never an unchanged heartbeat."""
         with get_conn() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     UPDATE infra.compute_nodes
                     SET status = %s, last_heartbeat = NOW(), metrics_snapshot = %s
                     WHERE node_id = %s
-                """, (status, json.dumps(metrics) if metrics else None, node_id))
+                      AND (
+                        status IS DISTINCT FROM %s
+                        OR metrics_snapshot IS DISTINCT FROM %s::jsonb
+                      )
+                    RETURNING *
+                """, (
+                    status,
+                    json.dumps(metrics) if metrics is not None else None,
+                    node_id,
+                    status,
+                    json.dumps(metrics) if metrics is not None else None,
+                ))
+                row = cur.fetchone()
+        if row:
+            self.publish_node_observation({
+                **dict(row),
+                "online": status != "offline",
+                "busy": status == "busy",
+            })
+            return True
+        return False
+
+    def update_node_observed_status(self, node: Dict[str, Any], status: str) -> bool:
+        """Change-only background write fenced by the observed persisted state."""
+        node_id = str(node["node_id"])
+        expected_status = str(node.get("status") or "unknown")
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    UPDATE infra.compute_nodes
+                    SET status = %s, last_heartbeat = NOW(), metrics_snapshot = NULL
+                    WHERE node_id = %s
+                      AND status IS NOT DISTINCT FROM %s
+                      AND status IS DISTINCT FROM %s
+                    RETURNING *
+                """, (status, node_id, expected_status, status))
+                row = cur.fetchone()
+        if not row:
+            return False
+        self.publish_node_observation({
+            **dict(row),
+            "online": status != "offline",
+            "busy": status == "busy",
+        })
+        return True
 
     async def probe_node(self, node_id: str) -> Dict[str, Any]:
         node = self.get_node(node_id)
@@ -350,6 +536,87 @@ class DispatchService:
         if not node:
             raise ValueError(f"节点不存在: {node_id}")
         return ComputeNodeClient(node["api_base_url"])
+
+    def load_observer_snapshot(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Read nodes and active tasks with one aggregate PostgreSQL statement."""
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT
+                      COALESCE((
+                        SELECT jsonb_agg(
+                          jsonb_build_object(
+                            'node_id', node.node_id,
+                            'api_base_url', node.api_base_url,
+                            'status', node.status,
+                            'current_task_id', node.current_task_id,
+                            'created_at', node.created_at
+                          ) ORDER BY node.created_at
+                        )
+                        FROM infra.compute_nodes AS node
+                      ), '[]'::jsonb) AS nodes,
+                      COALESCE((
+                        SELECT jsonb_agg(
+                          jsonb_build_object(
+                            'task_id', task.task_id,
+                            'task_name', task.task_name,
+                            'task_type', task.task_type,
+                            'node_id', task.node_id,
+                            'status', task.status,
+                            'current_loop', task.current_loop,
+                            'total_loops', task.total_loops,
+                            'progress_pct', task.progress_pct,
+                            'remote_task_id', task.remote_task_id,
+                            'best_ic', task.best_ic,
+                            'best_sharpe', task.best_sharpe,
+                            'best_ann_return', task.best_ann_return,
+                            'best_max_dd', task.best_max_dd,
+                            'log_tail', task.log_tail,
+                            'started_at', task.started_at,
+                            'finished_at', task.finished_at,
+                            'updated_at', task.updated_at
+                          ) ORDER BY task.created_at
+                        )
+                        FROM infra.dispatch_tasks AS task
+                        WHERE task.status IN ('running', 'queued', 'paused')
+                      ), '[]'::jsonb) AS tasks
+                """)
+                row = dict(cur.fetchone() or {})
+        return {
+            "nodes": [dict(item) for item in (row.get("nodes") or [])],
+            "tasks": [dict(item) for item in (row.get("tasks") or [])],
+        }
+
+    async def observe_node_health(
+        self,
+        node: Dict[str, Any],
+        *,
+        busy: bool,
+    ) -> bool:
+        """Perform the only automatic node request: one /health probe."""
+        client = ComputeNodeClient(str(node["api_base_url"]))
+        error: Optional[str] = None
+        try:
+            result = await client.probe_health()
+            online = bool(result.get("online"))
+            if not online:
+                error = str(result.get("error") or "node health probe reported offline")
+        except Exception as exc:
+            online = False
+            error = str(exc)
+        status = "busy" if online and busy else ("online" if online else "offline")
+        observation = {
+            "node_id": str(node["node_id"]),
+            "status": status,
+            "online": online,
+            "busy": bool(online and busy),
+            "error": error,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.publish_node_observation(observation)
+        if str(node.get("status") or "unknown") == status:
+            return False
+        return await asyncio.to_thread(self.update_node_observed_status, node, status)
 
     def _sync_fail_threshold_for_task(self, task: Dict[str, Any]) -> int:
         if task.get("task_type") in _CUSTOM_TASK_TYPES:
@@ -417,7 +684,9 @@ class DispatchService:
                     data.get("total_loops"),
                     data.get("time_limit"),
                 ))
-                return dict(cur.fetchone())
+                row = dict(cur.fetchone())
+        self.publish_task_observation(row)
+        return row
 
     def _update_task_fields(self, task_id: str, **fields: Any) -> None:
         if not fields:
@@ -432,11 +701,63 @@ class DispatchService:
                 vals.append(v)
         vals.append(task_id)
         with get_conn() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    f"UPDATE infra.dispatch_tasks SET {', '.join(sets)} WHERE task_id = %s",
+                    f"UPDATE infra.dispatch_tasks SET {', '.join(sets)} WHERE task_id = %s RETURNING *",
                     vals,
                 )
+                row = cur.fetchone()
+        if row:
+            self.publish_task_observation(dict(row))
+
+    def _update_observed_task_fields(
+        self,
+        task: Dict[str, Any],
+        **fields: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Persist changed remote observations without overwriting newer control state."""
+        if not fields:
+            return None
+        assignments: list[str] = []
+        assignment_values: list[Any] = []
+        difference_terms: list[str] = []
+        difference_values: list[Any] = []
+        for key, raw_value in fields.items():
+            value = json.dumps(raw_value) if isinstance(raw_value, (dict, list)) else raw_value
+            assignments.append(f"{key} = %s")
+            assignment_values.append(value)
+            difference_terms.append(f"{key} IS DISTINCT FROM %s")
+            difference_values.append(value)
+        task_id = str(task["task_id"])
+        expected_status = task.get("status")
+        expected_remote_task_id = task.get("remote_task_id")
+        params = [
+            *assignment_values,
+            task_id,
+            expected_status,
+            expected_remote_task_id,
+            *difference_values,
+        ]
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE infra.dispatch_tasks
+                    SET {', '.join(assignments)}, updated_at = NOW()
+                    WHERE task_id = %s
+                      AND status IS NOT DISTINCT FROM %s
+                      AND remote_task_id IS NOT DISTINCT FROM %s
+                      AND ({' OR '.join(difference_terms)})
+                    RETURNING *
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        self.publish_task_observation(result)
+        return result
 
     def _add_event(self, task_id: str, event_type: str, event_data: Any = None) -> None:
         with get_conn() as conn:
@@ -889,6 +1210,7 @@ class DispatchService:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM infra.dispatch_tasks WHERE task_id = %s", (task_id,))
+        self.forget_task_observation(task_id)
 
         return {"task_id": task_id, "deleted": True}
 
@@ -930,6 +1252,8 @@ class DispatchService:
                         (old_tasks,),
                     )
                     deleted_db = cur.rowcount
+            for task_id in old_tasks:
+                self.forget_task_observation(task_id)
 
         return {"cleaned_logs": cleaned_logs, "deleted_db_records": deleted_db, "total_old_tasks": len(old_tasks)}
 
@@ -1051,23 +1375,36 @@ class DispatchService:
 
     # ── 状态同步（供调度器调用） ──
 
-    async def sync_running_tasks(self) -> int:
-        """同步所有活跃任务（running/queued/paused）的进度。返回同步数量。"""
-        running = self.list_tasks(status="running")
-        queued = self.list_tasks(status="queued")
-        paused = self.list_tasks(status="paused")
-        tasks = running + queued + paused
+    async def sync_running_tasks(
+        self,
+        snapshot: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    ) -> int:
+        """Observe active remote tasks once and persist only real changes."""
+        observer_snapshot = snapshot or await asyncio.to_thread(self.load_observer_snapshot)
+        tasks = list(observer_snapshot.get("tasks") or [])
+        node_by_id = {
+            str(node["node_id"]): node
+            for node in (observer_snapshot.get("nodes") or [])
+            if node.get("node_id")
+        }
+        for task in tasks:
+            self.publish_task_observation(task)
         synced = 0
         for task in tasks:
             if not task.get("remote_task_id") or not task.get("node_id"):
                 continue
             try:
-                client = self.get_node_client(task["node_id"])
+                node = node_by_id.get(str(task["node_id"]))
+                if node is None:
+                    raise RuntimeError(f"dispatch node missing from observer snapshot: {task['node_id']}")
+                client = ComputeNodeClient(str(node["api_base_url"]))
                 progress = await client.get_task_progress(task["remote_task_id"])
                 # 节点返回 200 但 body 含 error（如 "Task not found"）→ 视为任务已丢失
                 if progress.get("error"):
                     raise RuntimeError(f"节点返回错误: {progress['error']}")
                 updates: Dict[str, Any] = {}
+                terminal_event: Optional[tuple[str, Dict[str, Any]]] = None
+                clear_node_task = False
                 if "current_loop" in progress:
                     updates["current_loop"] = progress["current_loop"]
                 if "total_loops" in progress:
@@ -1088,7 +1425,7 @@ class DispatchService:
                             else:
                                 updates["status"] = "failed"
                                 updates["error_message"] = reason or "remote_success_validation_failed"
-                                self._add_event(task["task_id"], "remote_success_rejected", {
+                                terminal_event = ("remote_success_rejected", {
                                     "reason": reason,
                                     "validation": meta,
                                 })
@@ -1097,12 +1434,7 @@ class DispatchService:
                         else:
                             updates["status"] = node_status
                         updates["finished_at"] = datetime.now(timezone.utc).isoformat()
-                        with get_conn() as conn:
-                            with conn.cursor() as cur:
-                                cur.execute(
-                                    "UPDATE infra.compute_nodes SET current_task_id = NULL WHERE current_task_id = %s",
-                                    (task["task_id"],),
-                                )
+                        clear_node_task = True
                     elif node_status == "running":
                         cur_loop = progress.get("current_loop", 0)
                         tot_loop = progress.get("total_loops", 0)
@@ -1117,7 +1449,7 @@ class DispatchService:
                             else:
                                 updates["status"] = "failed"
                                 updates["error_message"] = reason or "remote_completion_validation_failed"
-                                self._add_event(task["task_id"], "remote_success_rejected", {
+                                terminal_event = ("remote_success_rejected", {
                                     "reason": reason,
                                     "validation": meta,
                                 })
@@ -1126,12 +1458,7 @@ class DispatchService:
                                 "Task %s reached loop target on node (%d/%d); validated final status=%s",
                                 task["task_id"], cur_loop, tot_loop, updates["status"],
                             )
-                            with get_conn() as conn:
-                                with conn.cursor() as cur:
-                                    cur.execute(
-                                        "UPDATE infra.compute_nodes SET current_task_id = NULL WHERE current_task_id = %s",
-                                        (task["task_id"],),
-                                    )
+                            clear_node_task = True
                 if "best_ic" in progress:
                     updates["best_ic"] = progress["best_ic"]
                 if "best_sharpe" in progress:
@@ -1143,9 +1470,28 @@ class DispatchService:
                 if "log_tail" in progress:
                     updates["log_tail"] = progress["log_tail"]
 
-                if updates:
-                    self._update_task_fields(task["task_id"], **updates)
-                    synced += 1
+                changed_updates = {
+                    key: value
+                    for key, value in updates.items()
+                    if task.get(key) != value
+                }
+                if changed_updates:
+                    updated_task = await asyncio.to_thread(
+                        self._update_observed_task_fields,
+                        task,
+                        **changed_updates,
+                    )
+                    if updated_task is not None:
+                        synced += 1
+                        if terminal_event is not None:
+                            self._add_event(task["task_id"], terminal_event[0], terminal_event[1])
+                        if clear_node_task:
+                            with get_conn() as conn:
+                                with conn.cursor() as cur:
+                                    cur.execute(
+                                        "UPDATE infra.compute_nodes SET current_task_id = NULL WHERE current_task_id = %s",
+                                        (task["task_id"],),
+                                    )
                 # 同步成功，重置失败计数
                 self._sync_fail_counts.pop(task["task_id"], None)
             except Exception as e:
@@ -1160,27 +1506,55 @@ class DispatchService:
                     logger.error(
                         "任务 %s 连续 %d 次同步失败，自动标记为 failed", tid, count,
                     )
-                    self._update_task_fields(
-                        tid,
+                    updated_task = await asyncio.to_thread(
+                        self._update_observed_task_fields,
+                        task,
                         status="failed",
                         error_message=f"节点不可达，连续 {count} 次同步失败: {e}",
                         finished_at=datetime.now(timezone.utc).isoformat(),
                     )
-                    self._add_event(tid, "auto_failed", {
-                        "reason": "sync_unreachable",
-                        "consecutive_failures": count,
-                        "threshold": threshold,
-                        "last_error": str(e),
-                    })
-                    # 清空节点当前任务
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "UPDATE infra.compute_nodes SET current_task_id = NULL WHERE current_task_id = %s",
-                                (tid,),
-                            )
+                    if updated_task is not None:
+                        self._add_event(tid, "auto_failed", {
+                            "reason": "sync_unreachable",
+                            "consecutive_failures": count,
+                            "threshold": threshold,
+                            "last_error": str(e),
+                        })
+                        with get_conn() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "UPDATE infra.compute_nodes SET current_task_id = NULL WHERE current_task_id = %s",
+                                    (tid,),
+                                )
                     self._sync_fail_counts.pop(tid, None)
         return synced
+
+    async def observe_dispatch_state(self) -> Dict[str, int]:
+        """Run one bounded observer cycle from one aggregate database snapshot."""
+        snapshot = await asyncio.to_thread(self.load_observer_snapshot)
+        tasks = list(snapshot.get("tasks") or [])
+        busy_node_ids = {
+            str(task["node_id"])
+            for task in tasks
+            if task.get("node_id") and str(task.get("status")) in {"running", "queued"}
+        }
+        node_changes = 0
+        for node in snapshot.get("nodes") or []:
+            try:
+                changed = await self.observe_node_health(
+                    node,
+                    busy=str(node.get("node_id")) in busy_node_ids,
+                )
+                node_changes += int(changed)
+            except Exception as exc:
+                logger.warning("dispatch node observation failed (node=%s): %s", node.get("node_id"), exc)
+        task_changes = await self.sync_running_tasks(snapshot)
+        return {
+            "nodes_observed": len(snapshot.get("nodes") or []),
+            "tasks_observed": len(tasks),
+            "node_changes": node_changes,
+            "task_changes": task_changes,
+        }
 
     async def resume_log_collectors(self) -> int:
         """为所有活跃任务恢复缺失的日志采集器。后端重启后调用。"""
