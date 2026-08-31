@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import NoticePanel from "@/components/paper-v2/NoticePanel";
-import PaperIndustryBlacklistSelector, { selectedIndustryCodes, selectedIndustryTrace, type Sw2Entry } from "@/components/paper-v2/PaperIndustryBlacklistSelector";
-import PaperTable from "@/components/paper-v2/PaperTable";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
-import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
+import ErrorPanel from "@/components/trading-console/ErrorPanel";
+import NoticePanel from "@/components/trading-console/NoticePanel";
+import PaperIndustryBlacklistSelector, { selectedIndustryCodes, selectedIndustryTrace, type Sw2Entry } from "@/components/trading-console/PaperIndustryBlacklistSelector";
+import PaperTable from "@/components/trading-console/PaperTable";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
+import WorkflowStepper from "@/components/trading-console/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
 import { advisoryApi } from "@/lib/api/advisory";
 import { asText, dataSourceLabel, formatNumber, formatPercent, paperV2WorkflowSteps, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
@@ -139,9 +139,12 @@ export default function PaperV2SelectionPage() {
 
   useEffect(() => {
     let alive = true;
-    paperV2Api.tradingDayDefaults(10).then((defaults) => {
+    paperV2Api.tradingDayStatus().then((status) => {
       if (!alive) return;
-      setTradeDate((current) => (current === todayIso() ? defaults.latest_trading_day : current));
+      const authoritativeDay = status.latest_completed_trading_day;
+      if (authoritativeDay) {
+        setTradeDate((current) => (current === todayIso() ? authoritativeDay : current));
+      }
     }).catch((exc) => {
       if (alive) setError(exc);
     });

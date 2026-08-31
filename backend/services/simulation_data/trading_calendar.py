@@ -30,6 +30,9 @@ class TradeCalendarProvider:
     def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
         return self.calendar_service.list_trading_days(start_date, end_date)
 
+    def latest_trading_day_on_or_before(self, as_of_date: date) -> date | None:
+        return self.calendar_service.latest_trading_day_on_or_before(as_of_date)
+
     def snapshot(self, trade_date: date) -> TradingCalendarSnapshot:
         status = self.calendar_service.status(as_of_date=trade_date)
 

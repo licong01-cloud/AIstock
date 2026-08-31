@@ -984,7 +984,7 @@ class SelectionCenterService:
             self.repository.fail_run(run, error)
             raise
 
-    def prepare_paper_portfolio_creation(
+    def prepare_localsim_account_creation(
         self,
         *,
         run_id: str,
@@ -992,22 +992,22 @@ class SelectionCenterService:
         run = self.repository.get_run(run_id)
         if run.status != SelectionRunStatus.SUCCEEDED:
             raise InvalidStateTransitionError(
-                "only successful selection runs can create paper portfolios",
+                "only successful selection runs can create LocalSIM accounts",
                 context={"run_id": run_id, "status": run.status.value},
             )
         if not run.aggregate_results:
             raise DataUnavailableError(
-                "selection run has no aggregate results for paper portfolio creation",
+                "selection run has no aggregate results for LocalSIM account creation",
                 context={"run_id": run_id},
             )
         if run.mode != SelectionMode.SINGLE_PACKAGE or len(run.package_ids) != 1:
             raise UnsupportedFeatureError(
-                "creating a paper portfolio from multi-package selection requires a combined StrategyPackage",
+                "creating a LocalSIM account from multi-package selection requires a combined StrategyPackage",
                 context={"run_id": run_id, "mode": run.mode.value, "package_ids": run.package_ids},
             )
         if is_non_trading_runtime_config(run.runtime_config):
             raise InvalidStateTransitionError(
-                "non-trading selection preview cannot create a Paper v2 portfolio",
+                "non-trading selection preview cannot create a LocalSIM account",
                 context={
                     "run_id": run_id,
                     "runtime_config_scope": runtime_config_scope(run.runtime_config),
@@ -1219,7 +1219,7 @@ class SelectionCenterService:
             return effective
         return validate_runtime_profile_binding(
             run.runtime_config,
-            context={"run_id": run.run_id, "path": "selection_center.paper_runtime_config_from_selection_run"},
+            context={"run_id": run.run_id, "path": "selection_center.localsim_account_from_selection_run"},
             require_trade_enabled=True,
         )
 

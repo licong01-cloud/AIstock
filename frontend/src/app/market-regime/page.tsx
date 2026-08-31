@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import MetricCard from "@/components/paper-v2/MetricCard";
-import PaperTable from "@/components/paper-v2/PaperTable";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
+import ErrorPanel from "@/components/trading-console/ErrorPanel";
+import MetricCard from "@/components/trading-console/MetricCard";
+import PaperTable from "@/components/trading-console/PaperTable";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
 import {
   API_BASE,
   REGIME_LABELS,

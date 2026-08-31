@@ -396,6 +396,15 @@ rules:
     layer: backend_test
     risk_level: high
     ownership_reason: Research Pipeline tests prove workflow, HMM ingestion, artifact, and promotion contracts.
+  - rule_id: research_pipeline_frontend
+    priority: 100
+    include:
+      - frontend/src/app/research-pipeline/**
+    primary_module: research_pipeline
+    impact_modules: [frontend_common]
+    layer: frontend_ui
+    risk_level: high
+    ownership_reason: Research Pipeline pages expose experiment execution, artifacts, HMM evidence, and promotion state.
   - rule_id: dev_quality_tooling
     priority: 100
     include:
@@ -613,11 +622,11 @@ rules:
     layer: script
     risk_level: critical
     ownership_reason: Governed retained-package terminalization changes historical unified simulation run status while preserving broker and economic evidence.
-  - rule_id: localsim_failed_history_physical_prune_cli
+  - rule_id: localsim_history_physical_prune_cli
     priority: 98
     include:
-      - scripts/localsim_failed_history_prune_core.py
-      - scripts/prune_localsim_failed_history.py
+      - scripts/localsim_history_prune_core.py
+      - scripts/prune_localsim_history.py
     primary_module: simulation_runtime
     impact_modules: [paper_v2]
     layer: script
@@ -685,7 +694,9 @@ rules:
     priority: 120
     include:
       - backend/migrations/localsim_successor_core_*.sql
+      - backend/migrations/localsim_product_cutover_bridge_*.sql
       - backend/services/simulation_runtime/localsim_control.py
+      - backend/services/simulation_runtime/localsim_cutover_inventory.py
       - backend/services/simulation_runtime/localsim_replay.py
       - backend/services/simulation_runtime/successor_models.py
       - backend/services/simulation_runtime/successor_repository.py
@@ -693,6 +704,11 @@ rules:
       - backend/tests/simulation_runtime/test_localsim_replay_live_transition.py
       - backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py
       - backend/tests/simulation_runtime/test_localsim_successor_schema.py
+      - scripts/localsim_product_validation.py
+      - scripts/prepare_localsim_successor_cutover.py
+      - backend/tests/scripts/test_localsim_product_validation.py
+      - backend/tests/scripts/test_prepare_localsim_successor_cutover.py
+      - frontend/src/app/simulation/localsim/**
     primary_module: simulation.localsim_successor_core
     impact_modules: [simulation_runtime, platform.db, paper_v2, strategy_package]
     layer: trading_runtime
@@ -736,6 +752,15 @@ rules:
     layer: trading_infra
     risk_level: critical
     ownership_reason: MiniQMT client and realtime quote subscription infrastructure are trading-infra boundaries consumed by Paper v2.
+  - rule_id: qmt_frontend
+    priority: 85
+    include:
+      - frontend/src/app/qmt/**
+    primary_module: qmt
+    impact_modules: [miniqmt_execution_runtime, frontend_common]
+    layer: frontend_ui
+    risk_level: critical
+    ownership_reason: QMT pages expose broker connectivity, managed strategy, order, position, and virtual-strategy state.
   - rule_id: selection_center_services
     priority: 80
     include:
