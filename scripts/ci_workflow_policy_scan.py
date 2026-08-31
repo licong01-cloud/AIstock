@@ -141,7 +141,13 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
             rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
             re.IGNORECASE,
         )
-        if not runner_re.search(text):
+        dynamic_windows_runner = (
+            path.name == "test.yml"
+            and f'fromJSON(\'["self-hosted","Windows","{expected_label}"]\')' in text
+            and "ubuntu-latest" in text
+            and "close-sync-" in text
+        )
+        if not runner_re.search(text) and not dynamic_windows_runner:
             findings.append(
                 {
                     "path": path.as_posix(),
@@ -210,33 +216,33 @@ def build_contract_evidence(
         nightly_session_runner_path.read_text(encoding="utf-8") if nightly_session_runner_path.exists() else ""
     )
     ci_preparation_match = re.search(
-        r"(?ms)^  classify-changes:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n)",
-        test_text,
-    )
-    ci_preparation_text = ci_preparation_match.group("body") if ci_preparation_match else ""
-    ci_verdict_match = re.search(
         r"(?ms)^  ci-verdict:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
         test_text,
     )
-    ci_verdict_text = ci_verdict_match.group("body") if ci_verdict_match else ""
-    frontend_quality_match = re.search(
-        r"(?ms)^  frontend-quality:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n)",
-        test_text,
-    )
-    frontend_quality_text = frontend_quality_match.group("body") if frontend_quality_match else ""
+    ci_preparation_text = ci_preparation_match.group("body") if ci_preparation_match else ""
+    ci_verdict_text = ci_preparation_text
+    frontend_quality_text = ci_verdict_text
     issue_workflow_text = issue_workflow_path.read_text(encoding="utf-8") if issue_workflow_path.exists() else ""
     workflow_findings = scan_workflows(path_list)
     combined_workflow_text = "\n".join(workflow_text.values())
     reasons = {item["reason"] for item in workflow_findings}
     def uses_expected_runner(name: str) -> bool:
         expected_label = WINDOWS_PR_WORKFLOW_RUNNER_LABEL[name]
-        return bool(
+        literal_runner = bool(
             re.search(
                 rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
                 workflow_text.get(name, ""),
                 re.IGNORECASE,
             )
         )
+        dynamic_windows_runner = (
+            name == "test.yml"
+            and f'fromJSON(\'["self-hosted","Windows","{expected_label}"]\')'
+            in workflow_text.get(name, "")
+            and "ubuntu-latest" in workflow_text.get(name, "")
+            and "close-sync-" in workflow_text.get(name, "")
+        )
+        return literal_runner or dynamic_windows_runner
 
     evidence = {
         "windows_self_hosted_runner": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
@@ -300,7 +306,8 @@ def build_contract_evidence(
             )
             and "github_hosted_metadata" in test_text
             and "ubuntu-latest" in test_text
-            and "CI verdict (standard lane skipped)" in test_text
+            and "name: CI verdict" in test_text
+            and not re.search(r"(?m)^  classify-changes:\s*$", test_text)
             and "scripts/bug_registry_metadata_check.py" in test_text
             and "_merge_quality_contexts_for_head_ref" in issue_workflow_text
             and all(f'"{context}"' in issue_workflow_text for context in STABLE_MERGE_QUALITY_CONTEXTS)
@@ -382,13 +389,27 @@ def build_contract_evidence(
         and "Classify CI lane" in ci_preparation_text
         and "scripts/bug_registry_metadata_check.py" in ci_preparation_text
         and "nox -s l0 -- changed files" in ci_preparation_text,
-        "pr_ci_workflow_validation_reuses_ci_verdict_runner": bool(ci_verdict_text)
+        "pr_ci_selected_lanes_reuse_ci_verdict_runner": bool(ci_verdict_text)
+        and test_text.count("runs-on:") == 1
+        and not any(
+            re.search(rf"(?m)^  {re.escape(job)}:\s*$", test_text)
+            for job in ("classify-changes", "backend-tests", "frontend-quality", "tdx-go-tests", "prompt-evaluation")
+        )
         and not re.search(r"(?m)^  workflow-validation-tests:\s*$", test_text)
-        and "- workflow-validation-tests" not in ci_verdict_text
         and ci_verdict_text.count("actions/checkout@v7") == 1
         and ci_verdict_text.count("ci_environment_verify.py") == 1
+        and "id: backend_validation" in ci_verdict_text
+        and "id: frontend_dependencies" in ci_verdict_text
+        and "id: frontend_validation" in ci_verdict_text
+        and "id: go_validation" in ci_verdict_text
+        and "id: prompt_validation" in ci_verdict_text
         and "id: workflow_validation" in ci_verdict_text
         and "id: workflow_policy" in ci_verdict_text
+        and "BACKEND_RESULT: ${{ steps.backend_validation.outcome }}" in ci_verdict_text
+        and "FRONTEND_DEPENDENCIES_RESULT: ${{ steps.frontend_dependencies.outcome }}" in ci_verdict_text
+        and "FRONTEND_RESULT: ${{ steps.frontend_validation.outcome }}" in ci_verdict_text
+        and "GO_RESULT: ${{ steps.go_validation.outcome }}" in ci_verdict_text
+        and "PROMPT_RESULT: ${{ steps.prompt_validation.outcome }}" in ci_verdict_text
         and "WORKFLOW_TEST_RESULT: ${{ steps.workflow_validation.outcome }}" in ci_verdict_text
         and "WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}" in ci_verdict_text
         and "workflow_validation=${WORKFLOW_TEST_RESULT}" in ci_verdict_text
@@ -397,10 +418,10 @@ def build_contract_evidence(
         and "AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock" in test_text
         and "actions/checkout@v7" in frontend_quality_text
         and "Attach lockfile-matched prebuilt frontend dependencies" in frontend_quality_text
-        and "Verify prebuilt frontend toolchain" in frontend_quality_text
+        and "Run selected frontend quality" in frontend_quality_text
         and frontend_quality_text.find("actions/checkout@v7")
         < frontend_quality_text.find("Attach lockfile-matched prebuilt frontend dependencies")
-        < frontend_quality_text.find("Verify prebuilt frontend toolchain")
+        < frontend_quality_text.find("Run selected frontend quality")
         and '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"'
         in frontend_quality_text
         and "--attach-frontend-only" in frontend_quality_text
