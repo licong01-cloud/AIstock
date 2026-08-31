@@ -33,16 +33,20 @@
   ],
   "expected": "Dataset-release read-only sessions enforce a versioned low-memory PostgreSQL execution contract so source scans stay bounded without changing global database settings.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/source_pool.py",
+      "backend/tests/dataset_release/test_source_pool.py",
+      "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+      "tests/aistock_validation/bugs/20260831_BUG-1290-dataset-release-source-scan-can-oom-production-postgresql-container.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/profile.py",
       "backend/services/dataset_release/source_pool.py",
-      "configs/datasets/qe_backtest_monthly_v1.yaml",
-      "backend/tests/dataset_release/test_profile.py",
       "backend/tests/dataset_release/test_source_pool.py",
-      "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md"
+      "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+      "tests/aistock_validation/bugs/20260831_BUG-1290-dataset-release-source-scan-can-oom-production-postgresql-container.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/profile.py",
@@ -181,16 +185,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "BUG1290_FRESH_PROCESS_IMPORT_OK: isolated Python imported final worktree source_pool.py and verified v1 8 MiB / one-worker constants; no side effects"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },
