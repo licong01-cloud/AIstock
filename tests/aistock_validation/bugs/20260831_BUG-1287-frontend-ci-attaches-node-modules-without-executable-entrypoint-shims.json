@@ -2,6 +2,7 @@
   "actual": "Attach reported ready with direct entrypoints present, then ./node_modules/.bin/tsc returned No such file or directory.",
   "allowed_write_scope": [
     ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_issue_flow.py",
     "tests/aistock_validation/bugs/20260831_BUG-1287-frontend-ci-attaches-node-modules-without-executable-entrypoint-shims.json"
   ],
