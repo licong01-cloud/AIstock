@@ -293,7 +293,7 @@ CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须�
 
 其他确需 JavaScript Action 的 workflow 仅允许使用经 runner 实跑验证的原生 Node 24 主版本：`actions/checkout@v7`、`actions/upload-artifact@v7`、`actions/download-artifact@v8`、`actions/github-script@v9`；不得为了消除告警依赖 runner 的强制 Node 版本兼容层。版本升级必须同步 machine-policy evidence 与合同测试，但不得把这些远端 Action 重新引入 CodeQL 或 Code Intelligence 快速路径。
 
-main 必须启用“通过 PR 合入”的分支保护，并与自动合入器使用同一组稳定质量判定。AIstock CI 与不发布主线安全基线的 Semgrep source 判定在 PR merge tree 上各执行一次，合入生成的 main merge commit 不重复运行；CodeQL 必须同时保留 PR 扫描和 `push: main` 扫描，因为后者负责更新默认分支 Security/Code Scanning 基线，不能当作重复门禁删除。CodeQL/Semgrep 对无需扫描源码的 metadata-only PR 仍须发布稳定的轻量 no-op verdict，不得因 `paths-ignore` 造成 required context 永久缺失。定时或手工安全扫描可以保留，close-sync metadata 只运行其专用轻量校验及上述 required no-op verdict。若临时取消 PR 保护，必须先恢复 main push 的等价 fail-closed 校验，不得留下无验证直推路径。
+main 必须启用“通过 PR 合入”的分支保护，并与自动合入器使用同一组 change-scoped 质量判定。AIstock CI 与不发布主线安全基线的 Semgrep source 判定在 PR merge tree 上各执行一次，合入生成的 main merge commit 不重复运行；CodeQL 必须同时保留 source/mixed PR 扫描和 `push: main` 扫描，因为后者负责更新默认分支 Security/Code Scanning 基线，不能当作重复门禁删除。仅修改 BUG registry JSON 的官方 close-sync PR 只发布分支保护实际要求的轻量 `CI verdict`，由 GitHub-hosted stdlib metadata gate 校验；PR Quality、Semgrep 和 CodeQL workflow 保持触发以发布可见的 skipped 状态，但其 job 必须在 runner 分配前按官方 close-sync 分支身份精确跳过，不得使用会误伤普通 metadata PR 的全局 `paths-ignore`。任一非 registry 文件、非官方 close-sync 分支或 metadata 校验失败都不得进入该轻量路径。定时或手工安全扫描以及 CodeQL `push: main` 不受该 PR 例外影响。若临时取消 PR 保护，必须先恢复 main push 的等价 fail-closed 校验，不得留下无验证直推路径。
 
 Nox、测试 helper 和脚本内部同样受零安装约束：GitHub Actions 或 `AISTOCK_CI_INSTALL_FORBIDDEN=1` 下发现依赖缺失必须直接失败，禁止在 helper 内自动执行安装。CI policy scanner 同时检查 workflow YAML、Windows `AIstock-CI` runner/环境/DEV-DB 路由标记和 Nox 隐式安装边界；仅做关键词扫描不得宣称完整合同通过。
 
@@ -307,7 +307,7 @@ Nightly 的验证/测试 job 与 PR CI 使用同一预构建 `AIstock-CI` Conda 
 
 Scheduled Nightly 必须以显式仓库参数查询最近一次具备完整 `execution-plan.json` 与 `session-results.json` 的已完成定时运行，并分别检查命令退出码、JSON 解析、receipt 与 source HEAD 绑定以及本地 commit 可用性。下一轮 change window 从该 receipt HEAD 前进，只重跑 receipt 中失败或尚未写入结果的已选 session 与新 changed files 映射出的计划；change-scoped `l0` 必须继续使用失败 receipt 的原始文件范围并合并新增范围，通过短路径 scope 文件传递，禁止在干净 checkout 上重新猜测 changed files或把大批路径展开到 Windows 命令行。任一步失败或不存在有效 receipt 时以基础设施错误 fail-closed，不得静默转换为全量执行；`--full-run` 只允许由 `workflow_dispatch` 的 `full_nightly_run=true` 明确触发。自动故障恢复不得因单个长期失败而反复运行已经通过的数十个无关 session。
 
-同一 PR merge tree 的 changed-file 分类、close-sync metadata 校验和静态 L0/catalog 门禁必须复用一个准备 job、一次 checkout、一次 base-ref 准备和一次环境校验；docs-lite 记录同样在该 job 内生成，不得为不被后续消费的临时记录再分配 runner job。合并 job 只消除重复初始化，不得删除、跳过或放宽原有 metadata、L0、catalog 质量结论。workflow validation 被选中时，其 focused tests、workflow policy 与最终 `CI verdict` 必须复用同一个 final job/runner allocation，并由 step outcome fail-closed 汇总；禁止再建立独立 `workflow-validation-tests` job 后重新排队 verdict。backend、frontend、Go、prompt 等其他被分类选中的验证 lane 和最终 `CI verdict` 继续 fail-closed。
+source/mixed PR merge tree 的 changed-file 分类与静态 L0/catalog 门禁必须复用一个准备 job、一次 checkout、一次 base-ref 准备和一次 AIstock-CI 环境校验；docs-lite 记录同样在该 job 内生成，不得为不被后续消费的临时记录再分配 runner job。官方 close-sync 分支在同一动态 job 中切换到 `ubuntu-latest`，只使用系统 Python 标准库、一次 checkout/base-ref 准备和 `bug_registry_metadata_check.py --close-sync-only`，不得获取普通或安全 self-hosted runner，也不得执行环境/依赖安装。任一越界文件必须 fail-closed。workflow validation 被选中时，其 focused tests、workflow policy 与最终 `CI verdict` 必须复用同一个 final job/runner allocation，并由 step outcome fail-closed 汇总；禁止再建立独立 `workflow-validation-tests` job 后重新排队 verdict。backend、frontend、Go、prompt 等其他被分类选中的验证 lane 和最终 `CI verdict` 继续 fail-closed。
 
 <a id="rule-ci-database-safety-001"></a>
 ### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证

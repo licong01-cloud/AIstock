@@ -25,6 +25,7 @@ defaults:
 jobs:
   pr-quality:
     name: Context, scope, and open-source tooling dry-run
+    if: ${{ github.event_name != 'pull_request' || !(startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')) }}
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 20
     steps:

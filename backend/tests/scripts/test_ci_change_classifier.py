@@ -1250,9 +1250,18 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
         "prompt-evaluation",
     }
 
-    assert verdict["name"] == "CI verdict"
-    assert sum(job.get("name") == "CI verdict" for job in jobs.values()) == 1
-    assert verdict["if"] == "always()"
+    close_sync_expression = "startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')"
+    classifier = jobs["classify-changes"]
+    assert close_sync_expression in classifier["name"]
+    assert "'CI verdict'" in classifier["name"]
+    assert "ubuntu-latest" in classifier["runs-on"]
+    classify_step = next(step for step in classifier["steps"] if step.get("id") == "classify")
+    assert "scripts/bug_registry_metadata_check.py" in classify_step["run"]
+    assert "runner_kind=github_hosted_metadata" in classify_step["run"]
+    assert "close_sync_metadata_only=true" in classify_step["run"]
+    assert "CI verdict (standard lane skipped)" in verdict["name"]
+    assert close_sync_expression in verdict["if"]
+    assert "always()" in verdict["if"]
     assert set(verdict["needs"]) == expected_needs
     verdict_step = next(
         step for step in verdict["steps"] if step.get("name") == "Require every selected CI lane to pass"
@@ -1288,17 +1297,10 @@ def test_classification_job_reuses_one_checkout_for_static_and_registry_gates() 
     static_gate_steps = jobs["classify-changes"]["steps"]
     assert sum("actions/checkout@" in str(step.get("uses") or "") for step in static_gate_steps) == 1
     assert sum(step.get("name") == "Verify prebuilt AIstock-CI environment" for step in static_gate_steps) == 1
-    registry_steps = [
-        step
-        for step in static_gate_steps
-        if isinstance(step, dict) and str(step.get("name") or "") == "BUG registry metadata check"
-    ]
-
-    assert len(registry_steps) == 1
-    assert registry_steps[0]["if"] == "steps.classify.outputs.close_sync_metadata_only == 'true'"
-    assert "scripts/bug_registry_metadata_check.py" in registry_steps[0]["run"]
-    assert "--close-sync-only" in registry_steps[0]["run"]
-    assert "tmp/validation/ci_change_classifier/changed_files.txt" in registry_steps[0]["run"]
+    classify_step = next(step for step in static_gate_steps if step.get("id") == "classify")
+    assert "scripts/bug_registry_metadata_check.py" in classify_step["run"]
+    assert "--close-sync-only" in classify_step["run"]
+    assert "tmp/validation/ci_change_classifier/changed_files.txt" in classify_step["run"]
 
     nox_steps = [
         step
