@@ -1,6 +1,6 @@
 # AIstock LocalSIM 旧业务逻辑退役与三层隔离 F2 详细设计
 
-> 文档状态：`implementation_plan_revision_ready_for_user_merge_approval`
+> 文档状态：`sim_lr_c_contract_revision_merge_ready`
 >
 > 上位权威：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)
 >
@@ -257,6 +257,19 @@ execution planning 只消费 frozen release/binding、DailySelectionEvidence、T
 
 所有写入继续遵守 existing CAS、canonical hash、幂等 key、transaction/readback 契约。projector 只消费 committed outbox，不重新执行 broker 或 signal。router、replay controller、scheduler 和 diagnostics 都不得复制 writer。
 
+#### 4.5.1 Successor ledger-scope bridge
+
+`SIM-LR-C`不能把`SimulationAccountV1.account_id`直接写入仍外键引用`paper_v2.portfolio`的经济表，也不能为新account创建一条影子Paper portfolio。C源PR必须新增DEV-first migration与唯一`SimulationLedgerScopeV1` repository authority：
+
+- 新表物理位于既有`paper_v2` schema但使用中性名称`simulation_ledger_scope_v1`，冻结`ledger_scope_id/hash`、`scope_kind=LEGACY_PORTFOLIO|SUCCESSOR_NATIVE`、唯一source identity、可空且immutable的native `account_id`、created/readback identity；legacy scope的source identity是原portfolio id且`account_id=NULL`，native scope的source/account identity均为`SimulationAccountV1.account_id`；表本身不是account、release、position或portfolio truth；
+- migration为每个历史`paper_v2.portfolio_id`确定性回填一个`LEGACY_READ_ONLY` scope，并验证orders/fills/cash/positions/plans/runs/snapshots等全部distinct scope均有覆盖；只把successor runtime仍会写入且当前有旧FK的`paper_v2.run.portfolio_id`与`paper_v2.intraday_snapshots.portfolio_id`两个约束以同一锁事务改指向`simulation_ledger_scope_v1(ledger_scope_id)`。execution-policy activation、runtime-profile/config activation、trade-session/session-day、reset-audit以及MiniQMT broker binding等legacy/product-specific FK在C不扩大变更，继续只读并由D2 inventory退役；已有runtime column可暂时继续名为`portfolio_id`，但successor Python/API一律称`ledger_scope_id`；
+- retained account只通过immutable `LegacyLocalSimAccountLineageV1(account_id, ledger_scope_id, economic_facts_sha256)`引用既有`LEGACY_PORTFOLIO` scope，scope row自身逐字段不变；new/replay account bundle在同一transaction插入`SUCCESSOR_NATIVE` scope，且`ledger_scope_id=source_identity=account_id`；不更新任何历史order/fill/cash/position/run/outbox行；
+- account create transaction实际为`account + ledger scope + release + binding`，replay create为上述四项再加`replay job`；任何scope/hash/FK/readback冲突整体rollback；
+- runtime composition按account/lineage解析唯一ledger scope，再把该scope传给execution/economic repository；不得调用`PaperTradingV2Repository.get_portfolio`、把旧portfolio row当配置/资金truth，或在缺scope时自动创建Paper row；
+- migration preflight必须枚举2个exact runtime-active FK、另外6个legacy-only Paper FK和MiniQMT binding FK保持不变、所有distinct legacy scope覆盖率、orphan/duplicate/cross-account冲突和锁预算；post-commit readback证明`run/intraday_snapshots`旧FK为零、新FK为2、未纳入约束逐字不变、历史row count/hash不变、每个native account唯一scope、每个retained lineage唯一legacy scope且scope hash不变。rollback仅在无successor native scope/retained lineage引用且约束/row hash可逆时允许，否则fail closed。
+
+该bridge是删除旧Python业务逻辑前的物理兼容层，不授权保留Paper产品route/model/repository。`SIM-LR-D/PR-D2`在源码退役和运行验收后再迁移剩余physical column/table name；历史migration仍保留。
+
 ### 4.6 Control-plane API/UI/MCP contract
 
 新增统一 API 至少包括：
@@ -266,9 +279,105 @@ execution planning 只消费 frozen release/binding、DailySelectionEvidence、T
 - `POST /api/v1/simulation-runtime/localsim/replays`；
 - `POST /api/v1/simulation-runtime/localsim/replays/{id}/cancel`；
 - `POST /api/v1/simulation-runtime/localsim/accounts/{id}/pause|resume|retire`；
+- `POST /api/v1/simulation-runtime/localsim/accounts/bulk-lifecycle`：保留现有批量pause/resume/retire能力，每项必须携带`account_id + expected_version`；
 - account/release/binding/replay/run/ledger 的 read-only GET。
 
 创建请求失败必须整体零写或事务回滚，不得留下只有 portfolio、没有 release/binding 的孤儿记录。UI 不再创建 session 或主动 tick；MCP 只提供统一 read-only monitoring，不调用 readiness POST 或旧 scheduler status。产品router不再公开scheduler `start/stop/tick` mutation；scheduler进程内生命周期只由backend application lifecycle owner管理，保留read-only status/verification/diagnostics。
+
+#### 4.6.1 Product request authority
+
+产品 API 只能接收用户可配置字段，不能让客户端提交或覆盖服务端权威身份。所有 request model 均为 `extra=forbid`，日期使用 `YYYY-MM-DD`，金额进入 service 前按 canonical decimal 规范化；`created_by` 来自当前既有调用身份/固定 application actor，不为本阶段新增 RBAC、审批或人工确认。
+
+`LocalSimAccountCreateRequestV1` 固定包含：
+
+- `account_name`、`package_id`、`initial_capital`；
+- `runtime_profile_version_id`、`daily_strategy_profile_version_id`、`execution_policy_version_id`、`tail_policy_version_id`；
+- `effective_from`、可空 `effective_to`、可空 `created_reason`；
+- 可空 `requested_execution_policy_audit` 只作为未参与执行的审计输入，service 必须覆盖写入 `consulted_for_execution=false`。
+
+客户端不得提交 `manifest_sha256`、`admission_receipt_id`、任何 component SHA-256、`release_id/hash`、`binding_id/hash`、`account_id/hash`、effective execution JSON、broker account、ledger scope 或 lifecycle status/version。router 必须通过 Strategy Package admission、runtime profile、daily/HMM、TWAP execution 和 tail-policy 权威 repository 在一个一致快照内解析这些字段；缺失、退役、跨 package、hash 漂移或非 TWAP effective policy 均 typed fail loud，禁止信任客户端副本、manifest execution policy、旧 portfolio config 或默认策略。
+
+`LocalSimSuccessorReleaseRequestV1` 固定包含 `base_release_id`、`base_binding_id`、四个可配置 profile/policy version id、`effective_from`、可空 reason/audit；服务端读取 account/package/admission/hash/ledger scope，并以 source binding hash CAS 原子关闭旧 window 后插入 successor。单项 `pause|resume|retire` 只接收 `expected_version`；bulk lifecycle包含1..200个exact item并在一个transaction按稳定account id顺序锁定，任一CAS/state冲突整体零更新，禁止部分成功列表冒充成功。不新增 complete、delete、run-day、readiness、session、tick、auto-run 或 scheduler mutation。
+
+#### 4.6.2 Historical replay product command
+
+`LocalSimReplayCreateRequestV1` 固定包含 account create 的用户可配置字段、`start_trade_date`、`end_trade_date` 和服务端可解析的 `historical_source_id`；不能接收 source/calendar SHA-256、day-engine id、cursor、status、failure、live release/binding 或 safe-boundary decision。产品创建必须由新增的 repository transaction 一次提交：
+
+```text
+SimulationAccountV1
+  + SimulationLedgerScopeV1
+  + historical StrategyRuntimeRelease
+  + closed historical SimulationReleaseBinding
+  + LocalSimReplayJobV1
+```
+
+任一 insert/readback/identity/FK 冲突整体 rollback，禁止先提交 account bundle 再保存 job。calendar snapshot、historical source hash、统一 day-engine contract 和 exact completed-day range 全由服务端冻结。创建成功后 replay job owner 自动按 bounded batch 推进；产品不公开 `run_next_batch`、manual tick、mark-ready 或 activate-live mutation。`POST .../cancel` 只接收 `expected_version`，caught-up、live successor 与 safe-boundary activation 均由 lifecycle owner 依据 durable facts 自动推进。
+
+#### 4.6.3 Response, query and error envelope
+
+所有成功写响应使用版本化 envelope，禁止返回旧 `portfolio/session` DTO：
+
+```json
+{
+  "ok": true,
+  "schema_version": "localsim_control_response_v1",
+  "account": {},
+  "ledger_scope": {},
+  "release": {},
+  "binding": {},
+  "replay": null
+}
+```
+
+不同命令只填充实际产生的 entity；entity 使用 §4.4/§4.5.1/§4.7 frozen model 的 JSON representation，保留 `version` 供下一次 CAS。GET 固定包括：
+
+- `/localsim/accounts` 与 `/localsim/accounts/{account_id}`；
+- `/localsim/accounts/{account_id}/releases`、`bindings`、`runs`、`ledger`；
+- `/localsim/replays` 与 `/localsim/replays/{replay_job_id}`；
+- `/localsim/cutover-readiness`、既有 scheduler status/verification 和 platform diagnostics 的 read-only projection。
+
+列表使用稳定 `(created_at, id)` cursor、`limit=1..200` 和 exact account/status/date filters；不以 offset page 或前端拼接旧 portfolio/session 形成第二 query truth。run/ledger 读取现有 committed economic facts，只做 account/lineage scope 投影，不调用 broker、signal、historical provider 或 writer。
+
+错误统一为既有 FastAPI detail envelope：`code/message/context/retryable`。schema/field 为 `422`，不存在为 `404`，CAS、identity、state/window/idempotency 冲突为 `409`，cutover schema/readiness/source 暂不可用为 `503`，确定性损坏保持 typed `409/422`；任何错误均不得返回 `ok=true`、旧 DTO、默认 account/policy、自动重建或 compatibility fallback。
+
+#### 4.6.4 Retained-account inventory and cutover preparation
+
+`LegacyLocalSimAccountInventoryV1` 不是公开 request model。`SIM-LR-C` 源 PR 必须提供 task-owned、可复跑、fail-closed 的 `scripts/prepare_localsim_successor_cutover.py`（最终名称以实现 catalog 为准），模式固定为 `inventory -> preflight -> apply -> readback`：
+
+- `inventory` 只读列出当前统一 Simulation Runtime 仍认领的 LocalSIM account/release/binding/ledger scope、经济事实 hash、in-flight、claim、legacy session/auto-run/sentinel owner；terminal/failed/orphan 不得成为 retained candidate；
+- retained 集合由明确的 exact legacy account id 输入冻结；工具自己从权威 repository 构造 inventory，调用方不能提供 hash、capital、release/binding、status、runtime-owned 或 in-flight 值；
+- `preflight` 验证 B2 production schema与C ledger-scope bridge的comment/FK/index readback、source merge identity、零 legacy writer/claim/in-flight、每个 retained candidate 唯一且经济事实 hash 稳定；
+- `apply` 仅在用户对精确 production target、B2 migration 和 lineage DML 明确授权后执行，并逐 account 调用同一 `LocalSimControlPlaneService.prepare_legacy_lineage` transaction；不复制/更新 economic rows；
+- `readback` 重新计算 candidate、lineage、release/binding、ledger row-count/hash 和 owner inventory，生成不含敏感值的 commit-bound receipt；重复 apply 只能得到 exact same lineage，任何 drift 整体 fail loud。
+
+公开 router 不提供 lineage prepare/activate endpoint。lineage `PREPARED -> ACTIVATION_PENDING_SAFE_BOUNDARY -> ACTIVE` 只由 application lifecycle owner读取服务端 inventory与自动 safe-boundary decision 推进，客户端不能提交 `eligible`、market phase、in-flight 或 writer-claim 事实。
+
+#### 4.6.5 Frontend and shared UI route inventory
+
+唯一 LocalSIM 产品 route 固定为：
+
+- `/simulation/localsim`：account list/create 和 cutover/readiness 摘要；
+- `/simulation/localsim/accounts/{accountId}`：account/release/binding/run 摘要；
+- `/simulation/localsim/accounts/{accountId}/ledger` 与 `/performance`：只读经济事实投影；
+- `/simulation/localsim/replays` 与 `/simulation/localsim/replays/{replayJobId}`：创建、进度、cancel 和自动 live-transition 状态。
+
+UI 不显示或调用 session、manual tick、run-day、readiness POST、auto-run、scheduler start/stop/run-once；运行控制只保留 account lifecycle CAS、successor release 和 replay cancel。LocalSIM pages/client/types 从 `frontend/src/app/paper-v2/{portfolios,running}`、`frontend/src/lib/paper-v2` 迁到 `frontend/src/app/simulation/localsim` 与 `frontend/src/lib/simulation/localsim`，旧 LocalSIM path 不保留 redirect、410 page 或 compatibility import。`paper-v2` 目录下当前承载的 Strategy Package、Selection、HMM、Advisory 和 MiniQMT 页面不在本 PR 偷换业务语义；其 caller 只能改指向新 LocalSIM route，物理命名空间拆除按 `SIM-LR-D/PR-D1` 的完整 inventory 执行。
+
+通用 card/table/error/notice/status 组件迁到不含 Paper product 语义的共享 UI owner，并更新所有现有 caller；不得复制组件留两份。frontend contract test 必须从 network request inventory 直接断言零 `/paper-v2/(portfolios|sessions|replay|auto-run|scheduler)` 和零 `/simulation-runtime/scheduler/(start|stop|tick)` mutation。
+
+#### 4.6.6 MCP, script and application lifecycle
+
+MCP 替换为 `simulation_runtime` read-only monitoring，只暴露 account/replay/run/diagnostics projection；删除 session/scheduler/readiness mutation tool/profile/catalog entry。`scripts/paper_v2_live_validation.py`由新的LocalSIM产品验证脚本取代，使用account/replay/query API且不创建session/manual tick；`paper_v2_coldstart_sanity.py`与`r6_prod_cutover_e2e_wrapper.py`的sentinel mutation能力删除；历史失败清理脚本迁到 successor account/query repository，继续要求 exact account ids、dry-run inventory、保留 package、物理删除授权与 readback，不通过 Paper service 构造业务对象。历史migration helper只作为审计/已执行migration入口处置，不能成为旧产品运行脚本。
+
+`backend/main.py` 删除旧 Paper scheduler shutdown hook；统一 Simulation lifecycle 仍由既有 application owner start/shutdown，不新增公开启动开关。fresh process 构造 `LocalSimCutoverReadinessV1`：schema未应用、retained lineage缺失、经济 hash 漂移、旧 writer/reference 非零时，新 mutation endpoint统一 `503` 且不执行写入，旧 mutation endpoint仍不存在；这是自动技术 fail-closed，不是 feature flag、人工 approval 或旧路径 fallback。
+
+#### 4.6.7 Selection and Strategy Package product seam
+
+现有 `/selection-center/runs/{run_id}/create-paper-portfolio` 与 `SelectionPaperPortfolioController` 是旧产品 mutation caller，必须在 `SIM-LR-C` 同步替换为 `/selection-center/runs/{run_id}/create-localsim-account` 和 simulation-runtime owned controller。新controller先读取既有 successful selection evidence，再调用同一server-resolved LocalSIM account bundle transaction；不得让 Selection service 创建 account、读取 broker/ledger 或重新选择股票。响应返回 account/release/binding和selection link，不返回旧 portfolio/runtime_config DTO。
+
+Selection provenance 不能因切流丢失。C阶段把 Python DTO/repository API 改为 neutral `SelectionSimulationAccountLink`，底层已存在的 `selection.paper_portfolio_link(portfolio_id)` 可在D2 schema retirement前作为物理兼容列保存 `SimulationAccountV1.account_id`，因为该表/列没有Paper portfolio FK；新代码和API不得继续暴露paper/portfolio命名。D2再通过独立DEV-first migration将table/column改为successor命名并保持历史link row identity/readback。Strategy Package usage由 account/package与selection link权威查询得出，不再调用 `mark_paper_portfolio_created` 或写第二份package lifecycle truth。
+
+Strategy Package、Selection、Multi-Alpha页面中“创建LocalSIM”的链接只改到`/simulation/localsim?package_id=...`并保留其已有package/top-k输入；不得迁移或改变这些模块自身的训练、promotion、selection、watchlist、HMM或MiniQMT语义。direct no-drift tests必须覆盖 selection result逐字段不变、package admission/hash不变、创建失败零account/link orphan，以及MiniQMT create route完全不受影响。
 
 ### 4.7 Historical replay and live transition contract
 
@@ -349,8 +458,8 @@ READY_FOR_LIVE
 | `broker/base.py` | broker contract、handle/status DTO | `simulation_execution/broker.py` |
 | `broker/localsim.py` | durable minute runtime、TWAP、ledger effects | `simulation_execution/localsim/*` |
 | `market_data.py` | DailyContextV2、TDX causal minute、historical minute、calendar adapter | `simulation_data/*` |
-| `models.py` | 仍有效的 account/run/ledger query DTO | 各层 contracts；session DTO 删除 |
-| `repository.py` | economic transaction/readback、portfolio query | economic repository + runtime repository/query service |
+| `models.py` | 仍有效的 account/run/ledger query DTO | C迁到各层neutral contracts并让product path零Paper model；session DTO在D1删除 |
+| `repository.py` | economic transaction/readback、portfolio query | C迁出successor product实际使用的economic repository + runtime query service并切断`get_portfolio` truth；D1删除剩余旧实现 |
 | `service.py` | account/release/binding 必要创建语义 | `simulation_runtime/control_plane.py`；manifest policy/session/auto-run 逻辑删除 |
 | `symbol_names.py` | 通用 symbol display enrichment | 独立 read-only market metadata service |
 | `live_dashboard.py` | 有价值的只读 projection | `simulation_runtime/queries.py`；scheduler/session projection 删除 |
@@ -391,7 +500,7 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 | --- | --- | --- | --- | --- |
 | `SIM-LR-A` Layer Foundation | `LR-0..LR-2` | 1 | 建立依赖/route/query/single-writer基线；交付`simulation_data`和`simulation_signal`；迁移共享data DTO；解除Selection Center创建Paper portfolio的反向依赖 | 不迁移经济writer，不开放新产品route，不改当前运行账户 |
 | `SIM-LR-B` Successor Core | `LR-3..LR-5` | 2 | PR-B1交付`simulation_execution/localsim`与唯一economic coordinator/projector；PR-B2交付account/release/binding control plane、现有正常账户lineage、隔离replay、safe-boundary live successor和additive successor schema source/DEV receipt | 不注册新生产create/replay mutation route，不新增dormant UI/MCP，不删除旧产品包；生产DDL/DML仍需精确授权 |
-| `SIM-LR-C` Atomic Product Cutover | `LR-6` | 1 | 在successor schema生产readback和legacy product owner归零后，router/frontend/MCP/scripts/application lifecycle一次切换；删除旧mutation调用和公开scheduler mutation；fresh process只剩唯一LocalSIM product route/writer | 不保留dual route、translator、shadow writer、feature flag或长期410 façade |
+| `SIM-LR-C` Atomic Product Cutover | `LR-6` | 1 | 同PR交付ledger-scope bridge、server-resolved product contract、neutral economic/query composition、preparation/readiness工具，并让router/frontend/MCP/scripts/application lifecycle一次切换；删除旧mutation调用和公开scheduler mutation；source merge后只有在production B2/C schema+lineage readback通过才允许用户重启激活 | 不保留dual route、translator、shadow writer、feature flag、影子Paper portfolio或长期410 façade |
 | `SIM-LR-D` Physical Retirement & Acceptance | `LR-7..LR-9` | 2 | PR-D1物理删除旧Python产品包/router/旧测试并更新ownership/catalog；PR-D2只提交DEV已验证的legacy schema/init退役变更；随后分别完成用户重启、生产授权迁移和正常交易日验收 | 不把源码删除当作DDL授权，不删除历史migration/审计事实，不在正常交易日证据前宣布完成 |
 
 ### 6.1 `SIM-LR-A`：Layer Foundation
@@ -413,14 +522,14 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 1. **PR-B1 — execution/economic owner**：迁移 broker contract、LocalSim durable minute runtime、TWAP、planning、economic transaction、outbox 与 projector；从`simulation_runtime/scheduler.py`移出LocalSIM planning/economic/projection责任；MiniQMT client切换到唯一broker contract owner并运行KERNEL_V2直接回归。合入后仍由既有产品入口调用，不增加第二writer或第二policy truth。
 2. **PR-B2 — control/replay owner**：交付`SimulationAccountV1`、immutable successor release/binding、CAS lifecycle、原子零orphan repository、现有正常LocalSIM的`LegacyLocalSimAccountLineageV1`、隔离replay job/resume/cancel/day cursor和safe-boundary live successor；同PR提交additive successor schema/mapping migration/init source并先在DEV验证transaction/FK/readback/economic-hash unchanged；只交付内部command/query service和纯request/response contract tests，不新增未注册router、未链接UI、MCP tool或其他dormant product surface。PR-B2合入后，生产successor DDL/DML必须另获精确target/migration授权、应用并readback，不能由source merge推定。
 
-退出条件：旧入口与新内部服务只汇合到同一economic coordinator；六个月replay使用独立account/binding/writer lock并可重启恢复；当前运行LocalSIM账户的ledger、资金、持仓、run和锁逐事实不变且lineage映射唯一；successor schema/mapping已有DEV receipt，生产应用/readback若未授权则明确为pending并阻断`SIM-LR-C`而不阻断PR-B2 source merge；仓库不存在提前暴露或无法验收的第二产品表面。
+退出条件：旧入口与新内部服务只汇合到同一economic coordinator；六个月replay使用独立account/binding/writer lock并可重启恢复；当前运行LocalSIM账户的ledger、资金、持仓、run和锁逐事实不变且lineage映射唯一；successor schema/mapping已有DEV receipt，生产应用/readback若未授权则明确为pending并阻断`SIM-LR-C`用户重启/产品激活而不阻断B2或C source merge；仓库不存在提前暴露或无法验收的第二产品表面。
 
 ### 6.3 `SIM-LR-C`：Atomic Product Cutover
 
 该阶段固定一个源 PR，禁止拆成“先加新route、以后再删旧route”：
 
 - 前置只读inventory必须证明旧Paper session/auto-run/sentinel writer、旧scheduler active owner和未归属legacy process reference均为零；当前由统一Simulation Runtime持有的LocalSIM binding/run不属于legacy owner，必须通过`LegacyLocalSimAccountLineageV1`、新repository identity和economic hash/readback保持连续；
-- production successor schema及保留账户lineage mapping必须已按精确授权应用并readback，account/release/binding/replay transaction smoke通过；
+- C 源码可以在生产迁移前合入，但用户重启/产品激活前，production successor schema及保留账户lineage mapping必须已按精确授权应用并readback，account/release/binding/replay transaction smoke通过；若未满足，fresh process 新 mutation 统一 fail-closed 为 `503`，绝不恢复旧route；
 - cutover command只在non-trading safe boundary、零in-flight economic transaction执行；若条件未满足保持`ACTIVATION_PENDING_SAFE_BOUNDARY`并自动重试，不启用新route、不部分切换owner；
 - 注册统一 LocalSIM account/release/binding/replay/lifecycle/query API；
 - frontend创建/配置/运行/回放页面和API一次改用统一control plane，不再创建session或主动tick；
@@ -430,7 +539,9 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 - 新frontend产品route固定为`/simulation/localsim`；通用视觉组件迁往共享UI owner，旧`/paper-v2`business route/API/types不保留redirect、410或compatibility import；
 - fresh-process OpenAPI、frontend route/build manifest、MCP registry、script entry、import graph和writer inventory必须同时证明唯一route/owner。
 
-合入后状态必须明确为`source_merged_pending_user_restart`。用户重启和只读route/runtime identity验证通过前，不进入物理删除阶段；失败只在新路径forward-fix，不恢复旧route。
+源 PR 必须同时交付 §4.5.1 ledger-scope migration、§4.6.4 cutover preparation/readback 工具和 §4.6.6 automatic readiness owner，使顺序可以安全保持为：`source merge -> 精确授权 production B2 DDL + C bridge DDL/lineage DML/readback -> 用户重启 -> fresh-process route/runtime verify`。源码合入本身不授权生产写入，也不允许在 production readback 前建议用户重启。
+
+合入后状态必须按真实前置写为`source_merged_pending_production_cutover_preparation`或`source_merged_pending_user_restart`。只有 production DDL/lineage/readback 已闭合才进入后者；用户重启和只读route/runtime identity验证通过前，不进入物理删除阶段；失败只在新路径forward-fix，不恢复旧route。
 
 ### 6.4 `SIM-LR-D`：Physical Retirement & Acceptance
 
@@ -568,11 +679,11 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 | `F-135` | 数据层独立输出 calendar/selection input/DailyContextV2/current TDX causal minute/historical minute；当前日与历史源严格隔离，盘中零 market SQL/历史 minute read/行情写入 |
 | `F-136` | 信号层只消费 package alpha assets、frozen input 和 runtime profile，只输出 immutable selection/target/rebalance evidence，不创建模拟盘、不读 broker/ledger、不重选补位 |
 | `F-137` | 执行层只消费 frozen release/binding、signal/target、daily context 和 causal minute；TWAP-only、方向数量、T+1、limit/suspend、失败隔离不漂移 |
-| `F-138` | LocalSimEconomicCoordinator 是 state/order/fill/cash/position/mark/receipt/outbox 唯一 writer，projector/read API 无 broker/signal/第二写路径 |
+| `F-138` | LocalSimEconomicCoordinator 是 state/order/fill/cash/position/mark/receipt/outbox 唯一 writer；account/lineage只解析唯一`SimulationLedgerScopeV1`，不读写影子Paper portfolio，projector/read API 无 broker/signal/第二写路径 |
 | `F-139` | StrategyPackage 仅冻结 alpha/model/factor；日频/HMM/risk/fee/tail/runtime variant 与 LocalSIM TWAP snapshot 通过 immutable successor release 配置；requested policy仅进audit metadata，runtime不读manifest policy或硬编码覆盖 |
-| `F-140` | `SimulationAccountV1`与统一control-plane原子创建account+release+binding并提供CAS lifecycle/query API；失败零orphan/双快照，UI/MCP不再创建session或主动tick，产品router不公开scheduler start/stop/tick mutation |
+| `F-140` | `SimulationAccountV1`与统一control-plane按§4.6冻结server-resolved request/response/error/query合同；普通创建原子写account+release+binding，replay创建原子写四实体bundle，失败零orphan/双快照；UI/MCP不再创建session或主动tick，产品router不公开scheduler start/stop/tick mutation |
 | `F-141` | historical replay 使用独立 account/binding/job 和同一日级 engine；六个月追赶、restart resume、safe-boundary live successor、当前运行账户隔离完整 |
-| `F-142` | 产品切流一次完成，新旧路径无生产双写/shadow/translator/fallback；现有正常LocalSIM通过唯一lineage在安全边界延续且经济事实hash不变；cutover后旧mutation route/caller不存在 |
+| `F-142` | 产品切流一次完成，新旧路径无生产双写/shadow/translator/fallback；retained inventory只由服务端权威生成，现有正常LocalSIM通过lineage复用唯一ledger scope且经济事实hash不变，native account不创建影子Paper portfolio；production preparation/readback缺失时新mutation自动503且旧route仍不存在 |
 | `F-143` | §5 所列旧 LocalSIM product files、classes、tests、daemon、POC、gateway 和 startup/shutdown hook 在替代证据闭合后物理删除，不保留 runnable deprecated code |
 | `F-144` | 历史 migration 保留；旧 init schema、session/auto-run/sentinel objects 和无引用字段按 inventory、DEV、授权生产 migration/readback 顺序退役 |
 | `F-145` | import boundary、legacy absence、route uniqueness、query budget、single writer、source isolation 和 no-orphan 具有直接静态/contract tests |
@@ -589,11 +700,11 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 | `F-135` | data contracts、global calendar adapter、DailyContext owner、TDX causal provider、completed-day historical provider | `pytest backend/tests/simulation_data` included in Stage A direct contract matrix `20 passed`; current-day DB rejection and zero-DB TDX assertions pass | stage_a_source_complete | explicitly approved Stage A source boundary; normal trading-day runtime/query receipt remains pending |
 | `F-136` | signal evidence owner、StrategyPackage selection owner、immutable target/rebalance services、Selection/Paper side-effect separation | `pytest backend/tests/simulation_signal/test_target_rebalance_isolation.py`; Selection/StrategyPackage cases included in `337 passed` matrix | stage_a_source_complete | explicitly approved Stage A phased boundary: implementation owner is uniquely `simulation_signal`; an import-only `simulation_runtime.selection` compatibility surface remains temporarily for out-of-scope DEV-onboarding consumers and must be removed by `SIM-LR-D/PR-D1`; unified successor runtime consumption remains pending `SIM-LR-B` scope |
 | `F-137` | `backend/services/simulation_execution/localsim/runtime.py`、`planning.py`、execution-owned models、neutral minute provider | PR #4015 / `6ec349a19`; `pytest backend/tests/simulation_execution`=`66 passed`; lifecycle scheduler与直接execution合计`382 passed, 2 skipped`; Paper v2与MiniQMT current-head CI全绿 | pr_b1_merged | explicitly approved phased gap：PR-B1 source已合入并清理；用户重启与正常交易日证据仍按`SIM-LR-C/D`独立记录 |
-| `F-138` | `backend/services/simulation_execution/localsim/economic.py`、`persistence.py`、`projection.py`、`valuation.py` | PR #4015 / `6ec349a19`; `pytest backend/tests/simulation_execution/test_localsim_economic_transaction.py backend/tests/simulation_execution/test_localsim_projection.py`与current-head Simulation Core CI全绿；scheduler source has zero direct economic/projection transaction or staging call | pr_b1_merged | explicitly approved phased gap：PR-B1唯一writer source已合入并清理；生产DDL/DML、restart和runtime activation仍未执行 |
+| `F-138` | `backend/services/simulation_execution/localsim/economic.py`、`persistence.py`、`projection.py`、`valuation.py`；§4.5.1 C ledger-scope composition | PR #4015 / `6ec349a19`; `pytest backend/tests/simulation_execution/test_localsim_economic_transaction.py backend/tests/simulation_execution/test_localsim_projection.py`与current-head Simulation Core CI全绿；C target `backend/tests/simulation_runtime/test_localsim_ledger_scope_bridge_postgres.py` | pr_b1_merged | explicitly approved phased gap：PR-B1唯一writer source已合入并清理；C仍须迁出neutral repository/query composition并闭合native/retained ledger scope，production DDL/DML、restart和runtime activation仍未执行 |
 | `F-139` | `backend/services/simulation_runtime/localsim_control.py`、`successor_models.py`、`successor_repository.py`、`SIM-LR-B/PR-B2` | `pytest backend/tests/simulation_runtime/test_localsim_control_plane.py`=`9 passed`; account/release/binding原子零orphan、TWAP effective policy、requested V25 audit-only、CAS lifecycle与successor binding window直接覆盖 | pr_b2_source_complete | explicitly approved phased gap：internal command/query与immutable successor source完成；产品API/UI注册留在`SIM-LR-C`，production DDL/DML与runtime未执行 |
-| `F-140` | 同上；additive migration `localsim_successor_core_20260831.sql`及bootstrap owner | `pytest backend/tests/simulation_runtime/test_localsim_successor_schema.py backend/tests/simulation_runtime/test_schema_comments.py`；`python -m nox -s localsim_successor_core_dev_db`=`1 passed`，含migration双次幂等、bootstrap、FK/readback、CAS/replay与测试行零残留 | pr_b2_source_complete | explicitly approved phased gap：内部control plane与DEV schema闭合；统一API/UI/MCP和旧mutation删除仍属于原子`SIM-LR-C`，不得提前暴露第二产品面 |
+| `F-140` | 同上；§4.6 versioned product contract、additive migration `localsim_successor_core_20260831.sql`及bootstrap owner | B2 schema/control证据同前；C target `backend/tests/simulation_runtime/test_localsim_product_control_plane.py`、`test_localsim_replay_product_transaction.py`和frontend request inventory | pr_b2_source_complete | explicitly approved phased gap：内部control plane与DEV schema闭合；C须实现server-resolved authority、replay四实体原子bundle、cursor GET与统一error，不得让router信任客户端hash/inventory或暴露manual replay tick |
 | `F-141` | `backend/services/simulation_runtime/localsim_replay.py`、`successor_repository.py` | `pytest backend/tests/simulation_runtime/test_localsim_replay_live_transition.py`=`5 passed`; 126交易日独立回放、restart resume、失败日精确重试、source/calendar/current-day隔离、atomic live successor与safe-boundary覆盖 | pr_b2_source_complete | explicitly approved phased gap：replay/safe-boundary source完成；真实六个月capacity、用户重启及正常交易日live transition证据仍按`SIM-LR-D`独立验收 |
-| `F-142` | §4.8、§4.8.1、`SIM-LR-C` | target `backend/tests/simulation_architecture/test_localsim_route_uniqueness.py` and lineage economic-hash unchanged receipt | design_ready | explicitly approved design-only stage; cutover/current-account continuation evidence pending |
+| `F-142` | §4.5.1、§4.6.4、§4.8、§4.8.1、`SIM-LR-C` | target `backend/tests/simulation_architecture/test_localsim_route_uniqueness.py`、`backend/tests/simulation_runtime/test_localsim_ledger_scope_bridge_postgres.py`、cutover preparation/readiness PostgreSQL tests和lineage economic-hash unchanged receipt | design_ready | explicitly approved design-only stage; source merge可先于production preparation，但user restart/activation严格后置；缺B2/C schema和lineage readback时新mutation 503且无旧route fallback |
 | `F-143` | §5、`SIM-LR-D/PR-D1` | target `backend/tests/simulation_architecture/test_legacy_localsim_absence.py` | design_ready | explicitly approved design-only stage; physical deletion occurs only after replacement evidence |
 | `F-144` | §4.8、`SIM-LR-D/PR-D2` | target `backend/tests/simulation_runtime/test_localsim_legacy_schema_retirement_postgres.py` | design_ready | explicitly approved design-only stage; production DDL/DML require separate authorization |
 | `F-145` | `backend/tests/simulation_architecture/`、`backend/tests/simulation_data/`、`backend/tests/simulation_signal/`、`simulation_core_l2` direct-plan mapping | `python -m nox -s simulation_core_l2` = `718 passed, 2 skipped` + `63 passed, 1 skipped`; `python -m ruff check`、compileall、`git diff --check` pass locally | stage_a_source_complete | explicitly approved Stage A source boundary; CI receipts bind to final PR head before merge approval |
@@ -665,6 +776,14 @@ fresh-process AST/import、OpenAPI、frontend route/build manifest、MCP registr
 | R20 | PR-B2 writer window、replay隔离与safe-boundary | 发现普通successor若不原子关闭旧open binding会被唯一索引正确拒绝；改为source hash/CAS关闭窗口后插入successor。historical replay binding固定在end date关闭，126交易日cursor可跨重启续跑，source/calendar/current-day mismatch fail closed，live successor与job pending在同一事务 | findings fixed |
 | R21 | PR-B2 state/schema fail-closed完整性 | 增加小写SHA-256、replay cursor/failure/live字段状态一致性；runner绑定`simulation_daily_engine_v1`及historical source identity/hash；migration post-commit验证必需列、9个FK、唯一open-binding index与table comments，禁止同名空壳表冒充成功 | findings fixed |
 | R22 | PR-B2本地fix-point与DESIGN-COMPLIANCE-001 | control=`9 passed`、replay/schema=`10 passed`、Simulation Runtime=`716 passed,3 skipped`、`simulation_core_l2`=`736 passed,3 skipped`加跨模块`63 passed,1 skipped`、DEV plan=`1 passed`、catalog/classifier=`86 passed`、ownership=`21/21`、classifier=`dev_db_required=true`、F2=`16/16,warnings=0`、L0无blocking；无route/UI/MCP、无production DDL/DML、无process control | zero local findings; current-head CI required |
+| R23 | SIM-LR-C API authority与原子性设计差距 | 发现原设计只有endpoint名称，未冻结request/response/error/query；若直接绑定B2 service，客户端可上传权威hash/policy/inventory，且replay account bundle与job分事务会留下orphan。已新增§4.6.1-.3，固定server-resolved authority、四实体replay transaction、CAS/cursor/error合同和零manual tick | findings fixed |
+| R24 | retained lineage、production时序与fail-closed激活 | 发现B2 migration只建schema，lineage preparation无受控产品前置；若要求production mapping先于C source merge则没有已合入工具可执行。已新增§4.6.4/.6：C同PR交付可复跑inventory/preflight/apply/readback工具和automatic readiness；source可先合入，但production DDL/lineage DML/readback严格先于用户重启，缺失时新mutation 503且旧route不存在 | findings fixed |
+| R25 | frontend/MCP/script与跨模块边界 | 发现`paper-v2`前端命名空间同时承载Strategy Package、Selection、HMM、Advisory、MiniQMT，整目录提前删除会扩大业务语义。已冻结C只迁移LocalSIM pages/client/types并更新其caller，通用UI单份迁移；非LocalSIM产品仅改LocalSIM link，完整旧命名空间物理删除仍由D1 exact inventory执行 | findings fixed; final validators and zero-finding review pending |
+| R26 | 现有产品能力与Selection provenance反向审核 | 发现旧UI具有bulk lifecycle，且Selection route/controller/link和Strategy Package `mark_paper_portfolio_created`仍把信号结果绑定旧portfolio；若只实现基础account API会丢功能/provenance并保留旧mutation caller。已补充全事务bulk CAS、neutral selection-account controller/link、旧无FK物理列的限期兼容边界与D2迁移责任，并删除第二份package-created truth | findings fixed; cross-module no-drift tests required |
+| R27 | successor account到economic ledger/FK的可运行性反证 | 发现B1 scheduler仍读取Paper repository，且多个表FK继续指向`paper_v2.portfolio`；新account若无旧row会首笔run失败，若补旧row会形成第二account truth。已新增§4.5.1 `SimulationLedgerScopeV1`：全历史scope回填、runtime FK改指、retained复用、native原子scope、零economic row rewrite，并要求C composition移除Paper account truth读取 | findings fixed; migration/DEV and runtime direct tests required |
+| R28 | ledger-scope migration最小业务影响复核 | 对8个base Paper FK和MiniQMT binding FK逐项分类后，确认successor runtime只需要重定向`run`与`intraday_snapshots`两个active-write FK；其余均属待退役session/config/reset或MiniQMT产品合同。已把migration缩到exact 2 FK，并要求另外约束逐字节不变及D2单独inventory，避免为LocalSIM切流改动MiniQMT/legacy只读schema | findings fixed; exact catalog tests required |
+| R29 | ledger-scope identity与lineage replay审核 | 发现把legacy scope从`LEGACY_READ_ONLY`更新为`SUCCESSOR_RETAINED`会让immutable scope身份/哈希漂移。已固定scope只有`LEGACY_PORTFOLIO`/`SUCCESSOR_NATIVE`两种不可变来源；retained关系只由hashed lineage表达，scope/economic row均不更新；native source/account/scope三identity相等且唯一 | findings fixed; tamper/idempotency tests required |
+| R30 | SIM-LR-C合同修订最终fix-point与DESIGN-COMPLIANCE-001 | 逐项反证server/client authority、普通/replay/bulk transaction、ledger FK、retained/native identity、Selection provenance、TWAP-only、旧route/script/MCP/lifecycle、MiniQMT不漂移和production/restart时序；未发现剩余dual truth、orphan、silent fallback、影子portfolio或新增人工gate。详细F2=`16/16,warnings=0`、父蓝图=`148/148,warnings=0`、L0=`0 findings/0 blocking`、ownership=`2/2`、diff-check通过 | zero findings; design revision merge-ready |
 
 ## 15. 合入条件
 
