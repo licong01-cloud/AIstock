@@ -26,6 +26,8 @@ from backend.services.advisory_model_first.independent_package_alpha_audit_contr
 from backend.services.advisory_model_first.research_control_contracts import EvidenceReferenceV1
 from backend.services.advisory_model_first.strategy_package_batch_prediction import (
     BatchSourcePanels,
+    FACTOR_INPUT_COPY_MODE_COW,
+    FACTOR_INPUT_COPY_MODE_FILE,
     FACTOR_IO_MODE_FILE_BACKED,
     FACTOR_IO_MODE_IN_MEMORY,
     StrategyPackageBatchPredictionRunner,
@@ -249,6 +251,7 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
     def factor_runner(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         counts["factor"] += 1
         virtualize_io = kwargs.pop("virtualize_io", True)
+        kwargs.pop("reusable_factor_values", None)
         if args[2].decision_end == args[3][0]:
             exact_window_day_counts.append(
                 len(args[2].daily.index.get_level_values("datetime").unique())
@@ -260,7 +263,14 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
                 if virtualize_io
                 else FACTOR_IO_MODE_FILE_BACKED
             ),
+            "factor_input_copy_mode": (
+                FACTOR_INPUT_COPY_MODE_COW
+                if virtualize_io
+                else FACTOR_INPUT_COPY_MODE_FILE
+            ),
             "temp_peak_bytes": 0,
+            "factor_calculation_count": len(frame.columns),
+            "factor_reuse_count": 0,
         }
         return frame
 
@@ -291,6 +301,8 @@ def test_batch_runner_reads_once_groups_twice_and_loads_each_model_once(
     assert result.batch_receipt["daily_wsl_process_count"] == 0
     assert result.batch_receipt["daily_db_query_count"] == 0
     assert result.batch_receipt["factor_io_mode"] == FACTOR_IO_MODE_IN_MEMORY
+    assert result.batch_receipt["factor_input_copy_mode"] == FACTOR_INPUT_COPY_MODE_COW
+    assert result.batch_receipt["temp_storage_mode"] == "ENVIRONMENT_LOCAL_EPHEMERAL"
     assert len(result.batch_receipt["factor_resource_receipts"]) == 778
     assert result.batch_receipt["file_backed_parity_factor_group_run_count"] == 2
     assert result.batch_receipt["all_factor_group_run_count"] == 780
@@ -483,6 +495,7 @@ def test_real_factor_batch_uses_one_physical_static_h5_with_hardlink_aliases(
         tmp_path / "temp_file",
         virtualize_io=False,
     )
+    reusable: dict[tuple[str, str], pd.Series] = {}
     features = run_factor_group_batch(
         workspace,
         HASH_A,
@@ -490,9 +503,44 @@ def test_real_factor_batch_uses_one_physical_static_h5_with_hardlink_aliases(
         [date(2025, 4, 22)],
         tmp_path / "temp_memory",
         virtualize_io=True,
+        reusable_factor_values=reusable,
+    )
+    reused = run_factor_group_batch(
+        workspace,
+        HASH_A,
+        source,
+        [date(2025, 4, 22)],
+        tmp_path / "temp_reused",
+        virtualize_io=True,
+        reusable_factor_values=reusable,
+    )
+    drift_workspace = tmp_path / "workspace_drift"
+    drift_workspace.mkdir()
+    drift_source = drift_workspace / "factor_source.py"
+    drift_source.write_text("# causal frozen factor source with different identity\n", encoding="utf-8")
+    (drift_workspace / "factor_order.json").write_text(
+        (workspace / "factor_order.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (drift_workspace / "strategy_package_factor_entry.py").write_text(
+        (workspace / "strategy_package_factor_entry.py")
+        .read_text(encoding="utf-8")
+        .replace(repr(str(factor_source)), repr(str(drift_source))),
+        encoding="utf-8",
+    )
+    drifted = run_factor_group_batch(
+        drift_workspace,
+        HASH_B,
+        source,
+        [date(2025, 4, 22)],
+        tmp_path / "temp_drifted",
+        virtualize_io=True,
+        reusable_factor_values=reusable,
     )
 
     pd.testing.assert_frame_equal(features, file_backed)
+    pd.testing.assert_frame_equal(reused, file_backed)
+    pd.testing.assert_frame_equal(drifted, file_backed)
     assert features.shape == (60, 1)
     assert features["factor_000"].notna().all()
     receipt = features.attrs["factor_resource_receipt"]
@@ -500,7 +548,18 @@ def test_real_factor_batch_uses_one_physical_static_h5_with_hardlink_aliases(
     assert receipt["static_h5_hardlink_alias_count"] == 6
     assert receipt["temp_peak_bytes"] > 0
     assert receipt["factor_io_mode"] == FACTOR_IO_MODE_IN_MEMORY
+    assert receipt["factor_input_copy_mode"] == FACTOR_INPUT_COPY_MODE_COW
+    assert receipt["factor_calculation_count"] == 1
+    assert receipt["factor_reuse_count"] == 0
+    assert reused.attrs["factor_resource_receipt"]["factor_calculation_count"] == 0
+    assert reused.attrs["factor_resource_receipt"]["factor_reuse_count"] == 1
+    assert drifted.attrs["factor_resource_receipt"]["factor_calculation_count"] == 1
+    assert drifted.attrs["factor_resource_receipt"]["factor_reuse_count"] == 0
     assert file_backed.attrs["factor_resource_receipt"]["factor_io_mode"] == FACTOR_IO_MODE_FILE_BACKED
+    assert (
+        file_backed.attrs["factor_resource_receipt"]["factor_input_copy_mode"]
+        == FACTOR_INPUT_COPY_MODE_FILE
+    )
 
 
 def test_virtual_factor_io_restores_pandas_after_exception() -> None:
@@ -508,6 +567,7 @@ def test_virtual_factor_io_restores_pandas_after_exception() -> None:
     original_read_parquet = pd.read_parquet
     original_frame_to_hdf = pd.DataFrame.to_hdf
     original_series_to_hdf = pd.Series.to_hdf
+    original_copy_on_write = bool(pd.options.mode.copy_on_write)
     index = pd.MultiIndex.from_tuples(
         [(pd.Timestamp("2025-04-22"), "000001.SZ")],
         names=["datetime", "instrument"],
@@ -519,12 +579,17 @@ def test_virtual_factor_io_restores_pandas_after_exception() -> None:
         with _virtualized_factor_io(daily=daily, static=static):
             assert pd.read_hdf is not original_read_hdf
             assert pd.read_parquet is not original_read_parquet
+            assert pd.options.mode.copy_on_write is True
+            mutated = pd.read_hdf("daily_pv.h5")
+            mutated.iloc[0, 0] = 9.0
+            assert pd.read_hdf("daily_pv.h5").iloc[0, 0] == 1.0
             raise RuntimeError("forced")
 
     assert pd.read_hdf is original_read_hdf
     assert pd.read_parquet is original_read_parquet
     assert pd.DataFrame.to_hdf is original_frame_to_hdf
     assert pd.Series.to_hdf is original_series_to_hdf
+    assert pd.options.mode.copy_on_write is original_copy_on_write
 
 
 def test_real_closure_parity_rejects_value_drift() -> None:

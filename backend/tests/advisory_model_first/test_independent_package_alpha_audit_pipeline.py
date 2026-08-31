@@ -253,6 +253,8 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
             FACTOR_CLOSURE_50: 260,
         },
         "factor_io_mode": "IN_MEMORY_EQUIVALENT",
+        "factor_input_copy_mode": "PANDAS_COPY_ON_WRITE",
+        "temp_storage_mode": "ENVIRONMENT_LOCAL_EPHEMERAL",
         "static_h5_physical_file_count": 1,
         "static_h5_hardlink_alias_count": 6,
         "primary_decision_batch_count": 386,
@@ -262,6 +264,9 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
         "factor_group_total_run_count": 778,
         "file_backed_parity_factor_group_run_count": 2,
         "all_factor_group_run_count": 780,
+        "factor_calculation_count": 30731,
+        "factor_reuse_count": 10892,
+        "reference_factor_calculation_count": 107,
         "file_backed_parity_receipts": [
             {
                 "closure_sha256": FACTOR_CLOSURE_57,
@@ -284,6 +289,10 @@ def test_bundle_is_zero_trial_immutable_and_exact_retry(tmp_path: Path) -> None:
     assert _valid_batch_execution_receipt(batch_receipt, request=request)
     assert not _valid_batch_execution_receipt(
         {**batch_receipt, "rolling_live_window_semantics": False},
+        request=request,
+    )
+    assert not _valid_batch_execution_receipt(
+        {**batch_receipt, "factor_reuse_count": 10891},
         request=request,
     )
     batch = PackagePredictionBatchResult(

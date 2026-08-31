@@ -55,6 +55,8 @@ REASON_FUTURE_DEPENDENCY = "ADVISORY_PACKAGE_BATCH_FUTURE_DEPENDENCY_DETECTED"
 REASON_LIVE_PARITY = "ADVISORY_PACKAGE_BATCH_LIVE_PARITY_FAILED"
 FACTOR_IO_MODE_IN_MEMORY = "IN_MEMORY_EQUIVALENT"
 FACTOR_IO_MODE_FILE_BACKED = "FILE_BACKED_REFERENCE"
+FACTOR_INPUT_COPY_MODE_COW = "PANDAS_COPY_ON_WRITE"
+FACTOR_INPUT_COPY_MODE_FILE = "FILE_MATERIALIZED"
 
 _STATIC_ALIASES = (
     "daily_basic.h5",
@@ -273,10 +275,17 @@ class StrategyPackageBatchPredictionRunner:
 
         temp_path = Path(temp_root)
         temp_path.mkdir(parents=True, exist_ok=True)
+        environment_temp_root = Path(tempfile.gettempdir()).resolve()
+        try:
+            temp_is_environment_local = temp_path.resolve().is_relative_to(environment_temp_root)
+        except ValueError:
+            temp_is_environment_local = False
         prediction_parts: dict[str, list[pd.DataFrame]] = {arm_id: [] for arm_id in PACKAGE_ARM_IDS}
         coverage_parts: list[pd.DataFrame] = []
         factor_group_primary_count = 0
         factor_group_diagnostic_count = 0
+        factor_calculation_count = 0
+        factor_reuse_count = 0
         packages_by_closure = _packages_by_factor_closure(request.packages)
         temp_peak_bytes = 0
         factor_resource_receipts: list[dict[str, Any]] = []
@@ -291,6 +300,7 @@ class StrategyPackageBatchPredictionRunner:
         for decision_index, decision in enumerate(decisions, start=1):
             active = _pit_members(pit_snapshot, decision.date())
             day_sources: dict[int, BatchSourcePanels] = {}
+            day_factor_caches: dict[int, dict[tuple[str, str], pd.Series]] = {}
             for closure in request.factor_group_closures:
                 group = packages_by_closure[closure]
                 representative = group[0]
@@ -304,12 +314,18 @@ class StrategyPackageBatchPredictionRunner:
                         )
                     )
                 day_source = day_sources[window]
+                factor_kwargs: dict[str, Any] = {}
+                if self._requires_factor_resource_receipt:
+                    factor_kwargs["reusable_factor_values"] = day_factor_caches.setdefault(
+                        window, {}
+                    )
                 features = self._factor_runner(
                     workspaces[representative.arm_id],
                     closure,
                     day_source,
                     [decision.date()],
                     temp_path,
+                    **factor_kwargs,
                 )
                 factor_group_primary_count += 1
                 _validate_feature_matrix(
@@ -329,6 +345,10 @@ class StrategyPackageBatchPredictionRunner:
                         }
                     )
                     factor_resource_receipts.append(resource_receipt)
+                    factor_calculation_count += int(
+                        resource_receipt.get("factor_calculation_count") or 0
+                    )
+                    factor_reuse_count += int(resource_receipt.get("factor_reuse_count") or 0)
                     temp_peak_bytes = max(
                         temp_peak_bytes,
                         int(resource_receipt.get("temp_peak_bytes") or 0),
@@ -345,7 +365,11 @@ class StrategyPackageBatchPredictionRunner:
                     reference_resource = dict(
                         reference.attrs.get("factor_resource_receipt") or {}
                     )
-                    if reference_resource.get("factor_io_mode") != FACTOR_IO_MODE_FILE_BACKED:
+                    if (
+                        reference_resource.get("factor_io_mode") != FACTOR_IO_MODE_FILE_BACKED
+                        or reference_resource.get("factor_input_copy_mode")
+                        != FACTOR_INPUT_COPY_MODE_FILE
+                    ):
                         _raise(
                             "file-backed parity run omitted its reference I/O receipt",
                             REASON_SOURCE_READ_FAILED,
@@ -382,7 +406,7 @@ class StrategyPackageBatchPredictionRunner:
                     prediction_parts[arm.arm_id].append(scored)
                     coverage_parts.append(coverage)
                 del features
-            del day_sources
+            del day_sources, day_factor_caches
             elapsed = time.monotonic() - started
             if elapsed > request.resource_max_wall_seconds:
                 _raise(
@@ -399,6 +423,9 @@ class StrategyPackageBatchPredictionRunner:
         }
 
         diagnostics: list[dict[str, Any]] = []
+        diagnostic_factor_caches: dict[
+            tuple[date, date, int], dict[tuple[str, str], pd.Series]
+        ] = {}
         for closure in request.factor_group_closures:
             group = packages_by_closure[closure]
             representative = group[0]
@@ -415,12 +442,18 @@ class StrategyPackageBatchPredictionRunner:
                         instruments=active,
                     )
                 )
+                factor_kwargs = {}
+                if self._requires_factor_resource_receipt:
+                    factor_kwargs["reusable_factor_values"] = diagnostic_factor_caches.setdefault(
+                        (anchor, diagnostic_cutoff, window), {}
+                    )
                 features = self._factor_runner(
                     workspaces[representative.arm_id],
                     closure,
                     prefix,
                     [anchor],
                     temp_path,
+                    **factor_kwargs,
                 )
                 factor_group_diagnostic_count += 1
                 resource_receipt = dict(features.attrs.get("factor_resource_receipt") or {})
@@ -439,6 +472,10 @@ class StrategyPackageBatchPredictionRunner:
                         }
                     )
                     factor_resource_receipts.append(resource_receipt)
+                    factor_calculation_count += int(
+                        resource_receipt.get("factor_calculation_count") or 0
+                    )
+                    factor_reuse_count += int(resource_receipt.get("factor_reuse_count") or 0)
                     temp_peak_bytes = max(temp_peak_bytes, int(resource_receipt.get("temp_peak_bytes") or 0))
                 for arm in group:
                     replay, _ = self._score_package_features(
@@ -503,6 +540,7 @@ class StrategyPackageBatchPredictionRunner:
         }
         causality_payload["receipt_sha256"] = canonical_json_sha256(causality_payload)
         factor_io_mode: str | None = None
+        factor_input_copy_mode: str | None = None
         if self._requires_factor_resource_receipt:
             expected_resource_receipts = factor_group_primary_count + factor_group_diagnostic_count
             if len(factor_resource_receipts) != expected_resource_receipts:
@@ -522,6 +560,17 @@ class StrategyPackageBatchPredictionRunner:
                     modes=sorted(factor_io_modes),
                 )
             factor_io_mode = FACTOR_IO_MODE_IN_MEMORY
+            factor_input_copy_modes = {
+                str(item.get("factor_input_copy_mode") or "")
+                for item in factor_resource_receipts
+            }
+            if factor_input_copy_modes != {FACTOR_INPUT_COPY_MODE_COW}:
+                _raise(
+                    "formal factor batch did not isolate inputs with pandas copy-on-write",
+                    REASON_SOURCE_READ_FAILED,
+                    modes=sorted(factor_input_copy_modes),
+                )
+            factor_input_copy_mode = FACTOR_INPUT_COPY_MODE_COW
             if len(file_backed_parity_receipts) != len(request.factor_group_closures):
                 _raise(
                     "real closure file-backed parity coverage is incomplete",
@@ -554,6 +603,7 @@ class StrategyPackageBatchPredictionRunner:
             "daily_wsl_process_count": 0,
             "daily_db_query_count": 0,
             "factor_io_mode": factor_io_mode,
+            "factor_input_copy_mode": factor_input_copy_mode,
             "file_backed_parity_factor_group_run_count": len(file_backed_parity_receipts),
             "all_factor_group_run_count": (
                 factor_group_primary_count
@@ -563,9 +613,20 @@ class StrategyPackageBatchPredictionRunner:
             "file_backed_parity_receipts": file_backed_parity_receipts,
             "source_receipts": list(source.source_receipts),
             "factor_resource_receipts": factor_resource_receipts,
+            "factor_calculation_count": factor_calculation_count,
+            "factor_reuse_count": factor_reuse_count,
+            "reference_factor_calculation_count": sum(
+                int(item["reference_resource_receipt"].get("factor_calculation_count") or 0)
+                for item in file_backed_parity_receipts
+            ),
             "prediction_identity_sha256": canonical_json_sha256(prediction_identity),
             "causality_parity_sha256": causality_payload["receipt_sha256"],
             "temp_peak_bytes": temp_peak_bytes,
+            "temp_storage_mode": (
+                "ENVIRONMENT_LOCAL_EPHEMERAL"
+                if temp_is_environment_local
+                else "CALLER_MANAGED"
+            ),
             "wall_seconds": round(time.monotonic() - started, 3),
             "status": "COMPLETE",
         }
@@ -761,9 +822,15 @@ def run_factor_group_batch(
     temp_root: Path,
     *,
     virtualize_io: bool = True,
+    reusable_factor_values: dict[tuple[str, str], pd.Series] | None = None,
 ) -> pd.DataFrame:
     workspace = Path(workspace)
-    order, calculations = _validated_factor_group(
+    if not virtualize_io and reusable_factor_values is not None:
+        _raise(
+            "file-backed reference cannot consume reusable factor values",
+            REASON_ASSET_INVALID,
+        )
+    order, calculations, factor_keys = _validated_factor_group(
         str(workspace.resolve()),
         closure_sha256,
         _sha256_file(workspace / "factor_order.json"),
@@ -790,6 +857,8 @@ def run_factor_group_batch(
     feature_index = base.index.sort_values()
     feature_values = np.empty((len(feature_index), len(order)), dtype="float64")
     factor_temp_peak = 0
+    factor_calculation_count = 0
+    factor_reuse_count = 0
     temp_root = Path(temp_root)
     temp_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f"n2b_factor_{closure_sha256[:8]}_", dir=temp_root) as tmp:
@@ -831,11 +900,28 @@ def run_factor_group_batch(
             with io_context:
                 tempfile.tempdir = str(factor_work_root)
                 os.chdir(root)
-                for column_index, (factor_name, calculation) in enumerate(zip(order, calculations)):
-                    part = calculation()
-                    series = _factor_series(part, factor_name=factor_name)
-                    dates = pd.to_datetime(series.index.get_level_values("datetime")).normalize()
-                    series = series[dates.isin(decisions)]
+                for column_index, (factor_name, calculation, factor_key) in enumerate(
+                    zip(order, calculations, factor_keys)
+                ):
+                    cached = (
+                        reusable_factor_values.get(factor_key)
+                        if reusable_factor_values is not None
+                        else None
+                    )
+                    if cached is None:
+                        part = calculation()
+                        series = _factor_series(part, factor_name=factor_name)
+                        dates = pd.to_datetime(
+                            series.index.get_level_values("datetime")
+                        ).normalize()
+                        series = series[dates.isin(decisions)]
+                        factor_calculation_count += 1
+                        if reusable_factor_values is not None:
+                            reusable_factor_values[factor_key] = series.copy(deep=True)
+                    else:
+                        series = cached.copy(deep=True)
+                        series.name = factor_name
+                        factor_reuse_count += 1
                     feature_values[:, column_index] = series.reindex(feature_index).to_numpy(dtype="float64")
                     factor_temp_peak = max(
                         factor_temp_peak,
@@ -851,8 +937,13 @@ def run_factor_group_batch(
         "temp_peak_bytes": factor_temp_peak,
         "feature_row_count": len(features),
         "feature_count": len(order),
+        "factor_calculation_count": factor_calculation_count,
+        "factor_reuse_count": factor_reuse_count,
         "factor_io_mode": (
             FACTOR_IO_MODE_IN_MEMORY if virtualize_io else FACTOR_IO_MODE_FILE_BACKED
+        ),
+        "factor_input_copy_mode": (
+            FACTOR_INPUT_COPY_MODE_COW if virtualize_io else FACTOR_INPUT_COPY_MODE_FILE
         ),
     }
     return features
@@ -866,6 +957,14 @@ def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noq
     original_read_parquet = pd.read_parquet
     original_frame_to_hdf = pd.DataFrame.to_hdf
     original_series_to_hdf = pd.Series.to_hdf
+    try:
+        original_copy_on_write = bool(pd.options.mode.copy_on_write)
+    except Exception as exc:
+        _raise(
+            "pandas copy-on-write is unavailable for exact virtual factor input isolation",
+            REASON_ASSET_INVALID,
+            error_type=type(exc).__name__,
+        )
     captured_results: dict[Path, pd.DataFrame | pd.Series] = {}
     consumed_results: set[Path] = set()
     clean_daily: pd.DataFrame | None = None
@@ -876,9 +975,9 @@ def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noq
 
     def _subset(frame: pd.DataFrame, columns: Any) -> pd.DataFrame:
         if columns is None:
-            return frame.copy(deep=True)
+            return frame.copy(deep=False)
         selected = [columns] if isinstance(columns, str) else list(columns)
-        return frame.loc[:, selected].copy(deep=True)
+        return frame.loc[:, selected].copy(deep=False)
 
     def _hdf_columns(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Any:
         if len(args) > 1:
@@ -1004,6 +1103,7 @@ def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noq
             return None
         return original_series_to_hdf(series, path_or_buf, *args, **kwargs)
 
+    pd.options.mode.copy_on_write = True
     pd.read_hdf = read_hdf
     pd.read_parquet = read_parquet
     pd.DataFrame.to_hdf = capture_frame
@@ -1015,6 +1115,7 @@ def _virtualized_factor_io(*, daily: pd.DataFrame, static: pd.DataFrame):  # noq
         pd.read_parquet = original_read_parquet
         pd.DataFrame.to_hdf = original_frame_to_hdf
         pd.Series.to_hdf = original_series_to_hdf
+        pd.options.mode.copy_on_write = original_copy_on_write
 
 
 @lru_cache(maxsize=16)
@@ -1024,7 +1125,11 @@ def _validated_factor_group(
     _factor_order_sha256: str,
     _factor_entry_sha256: str,
     virtualize_io: bool,
-) -> tuple[tuple[str, ...], tuple[Callable[[], Any], ...]]:
+) -> tuple[
+    tuple[str, ...],
+    tuple[Callable[[], Any], ...],
+    tuple[tuple[str, str], ...],
+]:
     workspace = Path(workspace_text)
     order = tuple(_factor_order(workspace))
     factor_order_payload = json.loads((workspace / "factor_order.json").read_text(encoding="utf-8"))
@@ -1060,7 +1165,11 @@ def _validated_factor_group(
             expected=len(order),
             actual=len(calculations),
         )
-    return order, calculations
+    factor_keys = tuple(
+        (factor_name, _sha256_file(Path(str(factor_files[factor_name]))))
+        for factor_name in order
+    )
+    return order, calculations, factor_keys
 
 
 def _prepare_static_panel(

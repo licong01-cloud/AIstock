@@ -80,6 +80,7 @@ from backend.services.advisory_model_first.research_control_contracts import (
     build_trial_record,
 )
 from backend.services.advisory_model_first.strategy_package_batch_prediction import (
+    FACTOR_INPUT_COPY_MODE_COW,
     FACTOR_IO_MODE_IN_MEMORY,
     PackagePredictionBatchResult,
     StrategyPackageBatchPredictionRunner,
@@ -1002,12 +1003,13 @@ def run_independent_package_alpha_audit(request_path: str | Path) -> dict[str, A
     progress.stage("source_identity", started, decision_date_count=len(sources["decision_dates"]))
 
     started = time.monotonic()
-    batch = StrategyPackageBatchPredictionRunner().run(
-        request=request,
-        pit_snapshot=sources["pit_snapshot"],
-        decision_dates=sources["decision_dates"],
-        temp_root=Path(request.output_root) / "_temp" / request.request_id,
-    )
+    with tempfile.TemporaryDirectory(prefix=f"aistock_n2b_{request.request_id}_") as batch_temp:
+        batch = StrategyPackageBatchPredictionRunner().run(
+            request=request,
+            pit_snapshot=sources["pit_snapshot"],
+            decision_dates=sources["decision_dates"],
+            temp_root=Path(batch_temp),
+        )
     progress.stage(
         "package_batch_prediction",
         started,
@@ -1781,6 +1783,8 @@ def _valid_batch_execution_receipt(
         and set(windows) == set(request.factor_group_closures)
         and all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in windows.values())
         and receipt.get("factor_io_mode") == FACTOR_IO_MODE_IN_MEMORY
+        and receipt.get("factor_input_copy_mode") == FACTOR_INPUT_COPY_MODE_COW
+        and receipt.get("temp_storage_mode") == "ENVIRONMENT_LOCAL_EPHEMERAL"
         and receipt.get("static_h5_physical_file_count") == 1
         and receipt.get("static_h5_hardlink_alias_count") == 6
         and receipt.get("primary_decision_batch_count") == 386
@@ -1790,6 +1794,9 @@ def _valid_batch_execution_receipt(
         and receipt.get("factor_group_total_run_count") == 778
         and receipt.get("file_backed_parity_factor_group_run_count") == 2
         and receipt.get("all_factor_group_run_count") == 780
+        and receipt.get("factor_calculation_count") == 30731
+        and receipt.get("factor_reuse_count") == 10892
+        and receipt.get("reference_factor_calculation_count") == 107
         and isinstance(receipt.get("file_backed_parity_receipts"), list)
         and len(receipt["file_backed_parity_receipts"]) == 2
         and all(
