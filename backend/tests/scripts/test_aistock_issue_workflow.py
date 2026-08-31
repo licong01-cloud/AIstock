@@ -2007,6 +2007,7 @@ def test_dataset_release_limit_overlay_runtime_targets_only_dataset_worker() -> 
         "backend/services/dataset_release/artifact_ready_build_source.py",
         "backend/services/dataset_release/artifact_ready_source.py",
         "backend/services/dataset_release/build_processor.py",
+        "backend/services/dataset_release/canonical_stock_transformer.py",
         "backend/services/dataset_release/component_artifact_manifest.py",
         "backend/services/dataset_release/component_manifest_producer.py",
         "backend/services/dataset_release/index_sources.py",
