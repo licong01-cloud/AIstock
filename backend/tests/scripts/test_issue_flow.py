@@ -1176,6 +1176,18 @@ def test_ci_workflow_keeps_scratch_targets_outside_checkout_and_semgrep_ignores_
     assert "mapfile -t workflow_test_targets < <(" in runs["Run focused workflow validation tests"]
 
 
+def test_ci_frontend_quality_uses_verified_direct_entrypoints_without_bin_shims() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["ci-verdict"]["steps"]
+    frontend_run = str(next(step for step in steps if step.get("name") == "Run selected frontend quality")["run"])
+
+    assert "node node_modules/typescript/bin/tsc --noEmit --incremental false" in frontend_run
+    assert "node node_modules/next/dist/bin/next lint" in frontend_run
+    assert 'node node_modules/@playwright/test/cli.js test "${module_test_targets[@]}"' in frontend_run
+    assert "node_modules/.bin" not in frontend_run
+    assert "npm run" not in frontend_run
+
+
 def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]

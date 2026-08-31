@@ -242,13 +242,12 @@ jobs:
           FRONTEND_TEST_TARGETS: ${{ steps.classify.outputs.frontend_test_targets }}
         run: |
           command -v node >/dev/null || { echo 'node is not preinstalled on aistock runner' >&2; exit 1; }
-          command -v npm >/dev/null || { echo 'npm is not preinstalled on aistock runner' >&2; exit 1; }
           test -d node_modules || { echo 'frontend/node_modules is not prebuilt; dependency installation is prohibited in CI' >&2; exit 1; }
-          ./node_modules/.bin/tsc --noEmit --incremental false
-          npm run lint
+          node node_modules/typescript/bin/tsc --noEmit --incremental false
+          node node_modules/next/dist/bin/next lint
           if [[ "${FRONTEND_TEST_TARGETS}" != "[]" ]]; then
             mapfile -t module_test_targets < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' | tr -d '\r')
-            npm run test:e2e -- "${module_test_targets[@]}"
+            node node_modules/@playwright/test/cli.js test "${module_test_targets[@]}"
           fi
 
       - name: Run selected TDX Go tests
