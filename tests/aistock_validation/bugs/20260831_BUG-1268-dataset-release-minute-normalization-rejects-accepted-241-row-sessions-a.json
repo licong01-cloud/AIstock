@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1268",
-  "closed_at": null,
+  "closed_at": "2026-08-31T03:48:52.516896Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -49,8 +49,8 @@
   },
   "first_seen_at": "2026-08-31T02:05:05.916008Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1fa27c9191bf986f3879760885e0440b29b78bd0",
+  "fixed_at": "2026-08-31T03:16:28Z",
   "github_issue_number": 4025,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4025",
   "last_seen_at": "2026-08-31T02:05:05.916008Z",
@@ -58,6 +58,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4026",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -80,9 +81,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1268\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1268",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c0fbb4336c969d5a63c124d7de5b9a38b9ae7da9b27af605a50ff45d7f9ba3db",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "1fa27c9191bf986f3879760885e0440b29b78bd0",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-31T03:46:15.644365Z",
+      "mode": "read_only",
+      "observed_identity": "69c2cb5b1304f5f8c9e9df62a40a9dd706339037",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "dbf1c374ea8d85b20507fc57f92ffc18250a11893d5d8f6dc6928fced85f468d",
+      "receipt_sha256": "feee121bf19149dc6c9bddcbc03171424cea256b499133ad141b6e0c8e105731",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "98efd885d404a3f518108638f8aa47adc25e104cc3e8f69184188a85c948dacb",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -92,7 +116,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1268",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c1c6753b8f13992a",
+    "recorded_at": "2026-08-31T03:29:07.497024Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8948ee065a79b73d278cae2c628b10e4dda3489a",
+    "source_merge_commit": "1fa27c9191bf986f3879760885e0440b29b78bd0",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4026",
+    "validation_evidence": [
+      "GitHub PR #4026 required checks -> PASS"
+    ],
+    "validation_evidence_digest": "28e1d0549bb269a3d56c7666f7fb98dbaefb62a4ed57b032386df403c4652294"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -101,6 +146,10 @@
     "fingerprint": "0c7d5b25448834d1fc4fa83c",
     "source_event_id": "FE-20260831-0c7d5b254488"
   },
+  "validation_evidence": [
+    "GitHub PR #4026 required checks -> PASS",
+    "post-restart-verify BUG-1268 worker-scheduler -> PASS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
