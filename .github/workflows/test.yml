@@ -184,8 +184,14 @@ jobs:
         run: |
           command -v semgrep >/dev/null || { echo 'semgrep is not preinstalled on aistock-ci runner' >&2; exit 1; }
           mkdir -p tmp/validation/semgrep
-          if [ -s tmp/validation/ci_change_classifier/changed_files.txt ]; then
-            xargs -a tmp/validation/ci_change_classifier/changed_files.txt semgrep \
+          semgrep_files=()
+          while IFS= read -r path; do
+            if [ -f "${path}" ]; then
+              semgrep_files+=("${path}")
+            fi
+          done < tmp/validation/ci_change_classifier/changed_files.txt
+          if (( ${#semgrep_files[@]} > 0 )); then
+            semgrep "${semgrep_files[@]}" \
               --config .semgrep.yml \
               --json \
               --output tmp/validation/semgrep/semgrep.json
@@ -200,8 +206,7 @@ jobs:
         env:
           BACKEND_SESSIONS: ${{ steps.classify.outputs.backend_sessions }}
         run: |
-          python -c 'import json, os; print("\n".join(json.loads(os.environ["BACKEND_SESSIONS"])))' | tr -d '\r' > backend_sessions.txt
-          mapfile -t backend_sessions < backend_sessions.txt
+          mapfile -t backend_sessions < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["BACKEND_SESSIONS"])))' | tr -d '\r')
           backend_failures=()
           for session in "${backend_sessions[@]}"; do
             if ! python -m nox -s "${session}"; then
@@ -242,8 +247,7 @@ jobs:
           ./node_modules/.bin/tsc --noEmit --incremental false
           npm run lint
           if [[ "${FRONTEND_TEST_TARGETS}" != "[]" ]]; then
-            python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' | tr -d '\r' > module_test_targets.txt
-            mapfile -t module_test_targets < module_test_targets.txt
+            mapfile -t module_test_targets < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' | tr -d '\r')
             npm run test:e2e -- "${module_test_targets[@]}"
           fi
 
@@ -283,8 +287,7 @@ jobs:
           AISTOCK_USER_BACKEND_PROCESS_CONTROL: forbidden
         run: |
           test "${AISTOCK_USER_BACKEND_PROCESS_CONTROL}" = "forbidden"
-          python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' | tr -d '\r' > workflow_test_targets.txt
-          mapfile -t workflow_test_targets < workflow_test_targets.txt
+          mapfile -t workflow_test_targets < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' | tr -d '\r')
           python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider
 
       - name: Enforce CI workflow policy
