@@ -159,6 +159,12 @@ class Tier1LearnabilityResult:
     evidence_reason_codes: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class Tier1FullUniverseOutcomeResult:
+    outcomes: pd.DataFrame
+    coverage: pd.DataFrame
+
+
 class Tier1Progress:
     def __init__(self, *, limit_bytes: int) -> None:
         self.limit_bytes = int(limit_bytes)
@@ -896,6 +902,103 @@ def filter_prediction_frame_to_pit(
     return (
         result[["trade_date", "instrument", "score"]].sort_values(["trade_date", "instrument"]).reset_index(drop=True)
     )
+
+
+def build_tier1_full_universe_outcomes(
+    *,
+    daily: pd.DataFrame,
+    benchmark_daily: pd.DataFrame,
+    suspend_rows: pd.DataFrame,
+    pit_snapshot: FrozenPitSnapshot,
+    trading_calendar: Sequence[pd.Timestamp],
+    decision_dates: Sequence[pd.Timestamp],
+    request: AdvisoryN1Tier1RequestV1,
+) -> Tier1FullUniverseOutcomeResult:
+    """Build the frozen N1 H20 outcome panel once for multi-arm diagnostics.
+
+    The helper deliberately exposes the existing one-date N1 outcome engine;
+    outcomes remain labels and must only be joined after each arm is ranked.
+    """
+
+    # ALGO-COMPLEXITY-001: this deliberately performs one bounded 386-date
+    # pass over the frozen PIT snapshot. Market, benchmark and suspend inputs
+    # are preloaded/batched once; each date emits at most the PIT member count,
+    # and no arm-specific copy or database query occurs inside the loop.
+    calendar = pd.DatetimeIndex(pd.to_datetime(list(trading_calendar))).normalize()
+    decisions = pd.DatetimeIndex(pd.to_datetime(list(decision_dates))).normalize()
+    if decisions.empty or decisions[0].date() != N1_DECISION_START or decisions[-1].date() != N1_DECISION_END:
+        _raise(
+            "N1 full-universe outcome calendar differs from the frozen development window",
+            "ADVISORY_N1_LABEL_CLOCK_INVALID",
+        )
+    positions = {value: index for index, value in enumerate(calendar)}
+    if any(value not in positions for value in decisions):
+        _raise(
+            "one or more N1 decisions are absent from the Qlib calendar",
+            "ADVISORY_N1_LABEL_CLOCK_INVALID",
+        )
+    market = _normalize_market_frame(daily)
+    benchmark_open = _benchmark_series(benchmark_daily, "open")
+    suspended_by_date = _suspend_map(suspend_rows)
+    eligible_by_date = _eligible_symbols_by_date(pit_snapshot, calendar)
+    outcome_chunks: list[pd.DataFrame] = []
+    coverage_rows: list[dict[str, Any]] = []
+    for decision in decisions:
+        outcome = _build_one_date_outcomes(
+            decision=decision,
+            calendar=calendar,
+            positions=positions,
+            eligible_by_date=eligible_by_date,
+            market=market,
+            benchmark_open=benchmark_open,
+            suspended_by_date=suspended_by_date,
+            request=request,
+        )
+        known = outcome["outcome_known"].astype(bool)
+        matured = outcome["outcome_status"].eq("MATURED")
+        known_fraction = float(known.mean()) if len(outcome) else 0.0
+        coverage_rows.append(
+            {
+                "decision_as_of_trade_date": decision,
+                "pit_member_count": len(outcome),
+                "known_outcome_count": int(known.sum()),
+                "matured_outcome_count": int(matured.sum()),
+                "not_entered_count": int(outcome["outcome_status"].isin(_KNOWN_CASH_STATUSES).sum()),
+                "unknown_outcome_count": int((~known).sum()),
+                "known_outcome_fraction": known_fraction,
+                "status": (
+                    "AVAILABLE"
+                    if known_fraction >= request.outcome_policy.minimum_full_universe_known_fraction
+                    and int(matured.sum()) >= request.outcome_policy.winner_count
+                    else "DATA_UNAVAILABLE"
+                ),
+            }
+        )
+        outcome_chunks.append(outcome)
+    return Tier1FullUniverseOutcomeResult(
+        outcomes=pd.concat(outcome_chunks, ignore_index=True)
+        .sort_values(["decision_as_of_trade_date", "instrument"])
+        .reset_index(drop=True),
+        coverage=pd.DataFrame(coverage_rows).sort_values("decision_as_of_trade_date").reset_index(drop=True),
+    )
+
+
+def build_tier1_benchmark_regimes(
+    benchmark_daily: pd.DataFrame,
+    decisions: Sequence[pd.Timestamp],
+) -> dict[pd.Timestamp, str]:
+    """Expose N1's frozen T-visible regime classification for diagnostics."""
+
+    return _benchmark_regimes(
+        benchmark_daily,
+        pd.DatetimeIndex(pd.to_datetime(list(decisions))).normalize(),
+    )
+
+
+def load_verified_n1_sources(request: AdvisoryN1Tier1RequestV1) -> dict[str, Any]:
+    """Public read-only adapter for diagnostics bound to the exact N1 request."""
+
+    return _load_and_verify_n1_sources(request)
 
 
 def build_tier1_outcomes_and_oracle(
@@ -2724,14 +2827,18 @@ def _raise(message: str, reason_code: str, **context: Any) -> None:
 __all__ = [
     "N1_LEARNABILITY_EXPERIMENT_ID",
     "N1_ORACLE_EXPERIMENT_ID",
+    "Tier1FullUniverseOutcomeResult",
     "Tier1LearnabilityResult",
     "Tier1OracleResult",
     "authorize_n1_development_access",
+    "build_tier1_benchmark_regimes",
+    "build_tier1_full_universe_outcomes",
     "build_quadrant_result",
     "build_tier1_outcomes_and_oracle",
     "filter_prediction_frame_to_pit",
     "freeze_canonical_pit_snapshot",
     "infer_daily_lift",
+    "load_verified_n1_sources",
     "prepare_n1_tier1_request",
     "run_fixed_learnability_audit",
 ]

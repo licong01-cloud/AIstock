@@ -16,8 +16,9 @@ rules:
       - scripts/advisory_selection_prior_residual_prepare_request.py
       - scripts/advisory_turnover_constrained_utility_prepare_request.py
       - scripts/advisory_meta_label_prepare_request.py
-        - scripts/advisory_n0_research_control.py
-        - scripts/advisory_n1_tier1_oracle_learnability.py
+      - scripts/advisory_n0_research_control.py
+      - scripts/advisory_n1_tier1_oracle_learnability.py
+      - scripts/advisory_strategy_package_alpha_audit.py
       - scripts/advisory_publish_program_model_descriptor.py
       - scripts/advisory_outcome_calibration_prepare_request.py
       - scripts/advisory_outcome_calibration_train_wsl.py
@@ -44,8 +45,9 @@ rules:
       - docs/architecture/advisory_p0c_policy_episode_cpcv_f2_design_*.md
       - docs/architecture/advisory_p0d_short_rebound_meta_label_f2_design_*.md
       - docs/architecture/advisory_p0i_grouped_rank_return_head_f2_design_*.md
-        - docs/architecture/advisory_n0_research_control_f2_detailed_design_*.md
-        - docs/architecture/advisory_n1_tier1_oracle_learnability_f2_detailed_design_*.md
+      - docs/architecture/advisory_n0_research_control_f2_detailed_design_*.md
+      - docs/architecture/advisory_n1_tier1_oracle_learnability_f2_detailed_design_*.md
+      - docs/architecture/advisory_strategy_package_three_arm_alpha_audit_f2_detailed_design_*.md
     primary_module: advisory.model_first
     impact_modules: []
     layer: data_pipeline

@@ -226,6 +226,7 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/advisory_p0l_build_training_request.py": ("advisory_modeling_backend",),
     "scripts/wsl/advisory_p0l_train.py": ("advisory_modeling_backend",),
     "scripts/advisory_n1_tier1_oracle_learnability.py": ("advisory_modeling_backend",),
+    "scripts/advisory_strategy_package_alpha_audit.py": ("advisory_modeling_backend",),
 }
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
 FRONTEND_FILES = {
