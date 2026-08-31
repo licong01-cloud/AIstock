@@ -120,8 +120,8 @@
   },
   "first_seen_at": "2026-08-31T05:13:02.130921Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "67dd9916ea24116a9d02af9bde22c676c1a389fd",
+  "fixed_at": "2026-08-31T07:07:06Z",
   "github_issue_number": 4038,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4038",
   "last_seen_at": "2026-08-31T05:13:02.130921Z",
@@ -129,6 +129,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4052",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -151,6 +152,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -162,7 +164,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1272",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e835a2ce48c3f238",
+    "recorded_at": "2026-08-31T07:11:10.548862Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d1af0fc190ae9a93ffb6afd73edb3a65c59a0b83",
+    "source_merge_commit": "67dd9916ea24116a9d02af9bde22c676c1a389fd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4052",
+    "validation_evidence": [
+      "PR #4052 required checks all passed at head d1af0fc190ae9a93ffb6afd73edb3a65c59a0b83"
+    ],
+    "validation_evidence_digest": "941bb4a6923b1a5611e0105e4ea9e805282e322b9dcd57f58ba2e76aed8f6f2f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -171,6 +194,9 @@
     "fingerprint": "df19242d2e72b28eb1b52888",
     "source_event_id": "FE-20260831-df19242d2e72"
   },
+  "validation_evidence": [
+    "PR #4052 required checks all passed at head d1af0fc190ae9a93ffb6afd73edb3a65c59a0b83"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
