@@ -17006,6 +17006,18 @@ def test_sync_github_issue_after_close_comment_uses_persisted_not_completed(
 
     def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
         calls.append(args)
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "state": "CLOSED",
+                        "labels": [{"name": "status:fixed"}],
+                    }
+                ),
+                "stderr": "",
+                "returncode": 0,
+            }
         return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
 
     monkeypatch.setattr(workflow, "_run_command", fake_run)
