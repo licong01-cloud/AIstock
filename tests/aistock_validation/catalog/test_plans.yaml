@@ -1138,6 +1138,18 @@ plans:
     runner_enabled: false
     max_duration_seconds: 300
     evidence_kinds: [pytest, ddl_idempotency, catalog_integrity]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 300
+    evidence_policy:
+      required_files: [tests/aistock_validation/history/simulation-runtime/<validation_run_id>.md]
+      required_fields: [validation_run_id, final_head_commit, ddl_idempotency, transaction_readback, cleanup_readback, production_gates]
+      artifact_retention_days: 180
+      max_log_excerpt_chars: 6000
     resource_policy: existing_dev_db
   - plan_key: miniqmt_execution_runtime_l2
     title: Canonical MiniQMT event-loop runtime and durable tick-driver validation

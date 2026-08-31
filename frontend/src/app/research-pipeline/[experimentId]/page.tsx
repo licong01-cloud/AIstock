@@ -4,12 +4,12 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
-import MetricCard from "@/components/paper-v2/MetricCard";
-import PaperTable from "@/components/paper-v2/PaperTable";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
+import ErrorPanel from "@/components/trading-console/ErrorPanel";
+import JsonPanel from "@/components/trading-console/JsonPanel";
+import MetricCard from "@/components/trading-console/MetricCard";
+import PaperTable from "@/components/trading-console/PaperTable";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
 import { formatCompact, formatNumber, shortHash } from "@/lib/paper-v2/format";
 import { qeArchiveApi, type ArchiveSourceStatus } from "@/lib/qe-archive/api";
 import {

@@ -18420,13 +18420,13 @@ def test_scheduler_rejects_stale_pit_cutoff_selection_evidence_for_trade_date():
     assert context["expected_cutoff_date"] == "2026-05-20"
 
 
-def test_scheduler_status_reports_provider_and_controlled_tick_capability():
+def test_scheduler_status_reports_provider_without_public_tick_capability():
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
     scheduler = SimulationLifecycleScheduler(context_provider=ProductionSimulationRunContextProvider())
     status = scheduler.status()
 
-    assert status["manual_tick_endpoint_enabled"] is True
+    assert status["manual_tick_endpoint_enabled"] is False
     assert status["context_provider_mode"] == "production"
     assert status["context_provider"]["miniqmt_preview_enabled"] is True
     assert status["default_submit"] is False

@@ -116,6 +116,7 @@ from .lifecycle import (
     scheduler_now,
     scheduler_time,
 )
+from .localsim_dependencies import build_localsim_replay_lifecycle_owner
 from .models import (
     ExecutionPlan,
     LocalSimEconomicReceiptV1,
@@ -3041,7 +3042,7 @@ class SimulationLifecycleScheduler:
             "default_submit": False,
             "approval_states": [state.value for state in DEFAULT_SCHEDULER_SIM_BINDING_STATES],
             "sim_binding_selection_policy": "all_non_retired",
-            "manual_tick_endpoint_enabled": True,
+            "manual_tick_endpoint_enabled": False,
             "scheduler_control_api_enabled": False,
             "context_provider": provider_status,
             "context_provider_mode": provider_status.get("provider_mode"),
@@ -15359,11 +15360,13 @@ class SimulationLifecycleBackgroundScheduler:
         trading_calendar_service: Any | None = None,
         tca_eod_observation_hook: TcaEodObservationHook | None = None,
         tca_observation_metrics_emitter: TcaObservationMetricsEmitter | None = None,
+        localsim_replay_lifecycle_owner: Any | None = None,
     ) -> None:
         self.lifecycle_scheduler = lifecycle_scheduler or SimulationLifecycleScheduler()
         self._trading_calendar_service = trading_calendar_service or TradingCalendarStatusService()
         self._tca_eod_observation_hook = tca_eod_observation_hook or TcaEodObservationHook()
         self._tca_observation_metrics_emitter = tca_observation_metrics_emitter or TcaObservationMetricsEmitter()
+        self._localsim_replay_lifecycle_owner = localsim_replay_lifecycle_owner
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
@@ -15456,8 +15459,8 @@ class SimulationLifecycleBackgroundScheduler:
             "autostart": running,
             "running": running,
             "thread_alive": thread_alive,
-            "scheduler_control_api_enabled": True,
-            "manual_tick_endpoint_enabled": True,
+            "scheduler_control_api_enabled": False,
+            "manual_tick_endpoint_enabled": False,
             "interval_seconds": self._interval_seconds,
             "default_submit": self._default_submit,
             "data_source": self._data_source,
@@ -15468,6 +15471,7 @@ class SimulationLifecycleBackgroundScheduler:
             "last_blocking_result": last_blocking_result,
             "scheduler_loop_health": scheduler_loop_health,
             "trading_calendar_policy": self._trading_calendar_policy(),
+            "localsim_replay_lifecycle_owner_enabled": self._localsim_replay_lifecycle_owner is not None,
         }
 
     def run_once(self, *, as_of_time: datetime | None = None) -> dict[str, Any]:
@@ -15489,6 +15493,20 @@ class SimulationLifecycleBackgroundScheduler:
             "errors": [],
             "alerts": [],
         }
+        if self._localsim_replay_lifecycle_owner is not None:
+            try:
+                result["localsim_replay_lifecycle"] = self._localsim_replay_lifecycle_owner.tick(
+                    as_of_time=now
+                )
+            except Exception as exc:
+                payload = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "context": getattr(exc, "context", None),
+                    "stage": "LOCALSIM_REPLAY_LIFECYCLE",
+                }
+                result["errors"].append(payload)
+                logger.warning("LocalSIM replay lifecycle tick failed: %s", payload)
         try:
             calendar_status = self._trading_day_status(trade_date=trade_date)
         except DataUnavailableError as exc:
@@ -16069,6 +16087,12 @@ class SimulationLifecycleBackgroundScheduler:
         return raw in {"1", "true", "yes", "y", "on"}
 
 
+_background_trading_calendar_service = TradingCalendarStatusService()
 simulation_lifecycle_background_scheduler = SimulationLifecycleBackgroundScheduler(
-    lifecycle_scheduler=simulation_lifecycle_scheduler
+    lifecycle_scheduler=simulation_lifecycle_scheduler,
+    trading_calendar_service=_background_trading_calendar_service,
+    localsim_replay_lifecycle_owner=build_localsim_replay_lifecycle_owner(
+        lifecycle_scheduler=simulation_lifecycle_scheduler,
+        trading_calendar_service=_background_trading_calendar_service,
+    ),
 )

@@ -1198,11 +1198,13 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "--attach-frontend-only" in attach_step["run"]
     assert '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in attach_step["run"]
     frontend_runs = str(next(step for step in verdict["steps"] if step.get("id") == "frontend_validation")["run"])
-    assert "node_modules/.bin/tsc" in frontend_runs
-    assert "npm run lint" in frontend_runs
+    assert "node node_modules/typescript/bin/tsc --noEmit --incremental false" in frontend_runs
+    assert "node node_modules/next/dist/bin/next lint" in frontend_runs
     assert "npx playwright install --with-deps chromium" not in frontend_runs
     assert "FRONTEND_TEST_TARGETS" in frontend_runs
-    assert 'npm run test:e2e -- "${module_test_targets[@]}"' in frontend_runs
+    assert 'node node_modules/@playwright/test/cli.js test "${module_test_targets[@]}"' in frontend_runs
+    assert "node_modules/.bin" not in frontend_runs
+    assert "npm run" not in frontend_runs
     go_runs = str(next(step for step in verdict["steps"] if step.get("id") == "go_validation")["run"])
     assert "go test ./..." in go_runs
     prompt_eval_run_steps = str(next(step for step in verdict["steps"] if step.get("id") == "prompt_validation")["run"])
@@ -1458,7 +1460,7 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert direct_analysis["env"]["CODEQL_LANGUAGES"] == "${{ steps.fast_lane.outputs.languages }}"
     assert direct_analysis["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
     direct_run = direct_analysis["run"]
-    assert "$languages = @($env:CODEQL_LANGUAGES | ConvertFrom-Json)" in direct_run
+    assert "[string[]]$languages = ($env:CODEQL_LANGUAGES | ConvertFrom-Json)" in direct_run
     assert "foreach ($language in $languages)" in direct_run
     assert "database create" in direct_run
     assert '"--build-mode=none"' in direct_run

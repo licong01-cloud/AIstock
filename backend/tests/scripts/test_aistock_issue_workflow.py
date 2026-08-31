@@ -246,6 +246,13 @@ def _write_repo_client_entrypoints(root: Path) -> None:
     (root / ".claude" / "commands").mkdir(parents=True)
     for _key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
         (root / ".claude" / "commands" / command_name).write_text("", encoding="utf-8")
+    startup_router = root / workflow.CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE
+    startup_router.write_text(
+        f"{workflow.CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN}\n"
+        "AIstock requests use the canonical task router.\n"
+        f"{workflow.CLIENT_CLAUDE_STARTUP_ROUTER_END}\n",
+        encoding="utf-8",
+    )
 
 
 def test_git_subprocess_env_unsets_powershell_shell_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -6612,6 +6619,12 @@ def test_doctor_reports_ready_when_client_entries_exist(
     (claude_home / "commands").mkdir(parents=True)
     for _key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
         (claude_home / "commands" / command_name).write_text("", encoding="utf-8")
+    (claude_home / "CLAUDE.md").write_text(
+        (isolated_workflow_root / workflow.CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE).read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
@@ -7080,6 +7093,13 @@ def test_doctor_reports_stale_global_skill_manifest(
     (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
     for key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
         (isolated_workflow_root / ".claude" / "commands" / command_name).write_text(f"repo {key} command", encoding="utf-8")
+    startup_router = isolated_workflow_root / workflow.CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE
+    startup_router.write_text(
+        f"{workflow.CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN}\n"
+        "Route AIstock requests.\n"
+        f"{workflow.CLIENT_CLAUDE_STARTUP_ROUTER_END}\n",
+        encoding="utf-8",
+    )
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
@@ -7094,6 +7114,7 @@ def test_doctor_reports_stale_global_skill_manifest(
     (claude_home / "commands").mkdir(parents=True)
     for key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
         (claude_home / "commands" / command_name).write_text(f"repo {key} command", encoding="utf-8")
+    (claude_home / "CLAUDE.md").write_text(startup_router.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
@@ -8790,8 +8811,17 @@ def test_install_client_plan_can_copy_global_codex_skill(
     claude.mkdir(parents=True)
     for key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
         (claude / command_name).write_text(f"{key} command", encoding="utf-8")
+    startup_router = isolated_workflow_root / workflow.CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE
+    startup_router.write_text(
+        f"{workflow.CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN}\n"
+        "Route AIstock requests from every working directory.\n"
+        f"{workflow.CLIENT_CLAUDE_STARTUP_ROUTER_END}\n",
+        encoding="utf-8",
+    )
     codex_home = isolated_workflow_root / "codex_home"
     claude_home = isolated_workflow_root / "claude_home"
+    (claude_home / "CLAUDE.md").parent.mkdir(parents=True)
+    (claude_home / "CLAUDE.md").write_text("@RTK.md\n\nUser-owned instruction.\n", encoding="utf-8")
 
     dry = workflow.build_client_install_plan(codex_home=str(codex_home), claude_home=str(claude_home))
     assert dry["workflow_gate"] == "ready_for_install"
@@ -8807,6 +8837,11 @@ def test_install_client_plan_can_copy_global_codex_skill(
     assert applied["client_manifest_after"]["codex_router_skill_status"] == "current"
     assert applied["client_manifest_after"]["claude_feature_command_status"] == "current"
     assert applied["client_manifest_after"]["claude_router_command_status"] == "current"
+    startup_memory = (claude_home / "CLAUDE.md").read_text(encoding="utf-8")
+    assert startup_memory.startswith("@RTK.md\n\nUser-owned instruction.\n")
+    assert startup_memory.count(workflow.CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN) == 1
+    assert startup_memory.count(workflow.CLIENT_CLAUDE_STARTUP_ROUTER_END) == 1
+    assert applied["client_manifest_after"]["claude_entries"]["startup_router"]["status"] == "current"
 
     isolated_codex_home = isolated_workflow_root / "official_codex_home"
     untouched_claude_home = isolated_workflow_root / "untouched_claude_home"
@@ -8823,6 +8858,99 @@ def test_install_client_plan_can_copy_global_codex_skill(
     assert codex_only["install_claude"] is False
     assert sentinel.read_text(encoding="utf-8") == "keep"
     assert not (untouched_claude_home / "commands" / "fix-aistock-issue.md").exists()
+
+
+def test_install_client_startup_router_is_idempotent_and_preserves_user_memory(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    claude_home = isolated_workflow_root / "startup_claude_home"
+    startup_memory = claude_home / "CLAUDE.md"
+    startup_memory.parent.mkdir(parents=True)
+    startup_memory.write_text("@RTK.md\n\nKeep this user note.\n", encoding="utf-8")
+
+    first = workflow.build_client_install_plan(
+        apply=True,
+        claude_home=str(claude_home),
+        install_codex=False,
+        selected_lane="issue",
+    )
+    first_text = startup_memory.read_text(encoding="utf-8")
+
+    assert first["workflow_gate"] == "installed"
+    assert first_text.startswith("@RTK.md\n\nKeep this user note.\n")
+    assert first_text.count(workflow.CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN) == 1
+    assert first_text.count(workflow.CLIENT_CLAUDE_STARTUP_ROUTER_END) == 1
+    assert any(item["lane"] == "startup_router" for item in first["installed"])
+    assert first["client_manifest_after"]["claude_entries"]["startup_router"]["status"] == "current"
+
+    second = workflow.build_client_install_plan(
+        apply=True,
+        claude_home=str(claude_home),
+        install_codex=False,
+        selected_lane="issue",
+    )
+
+    assert startup_memory.read_text(encoding="utf-8") == first_text
+    assert second["installed_count"] == 0
+    assert second["skipped_current_count"] == 3
+    assert any(item["lane"] == "startup_router" for item in second["skipped_current"])
+
+
+def test_client_lane_detection_routes_global_claude_memory_source_to_router() -> None:
+    assert workflow._client_lanes_for_changed_files(
+        [workflow.CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE.as_posix()]
+    ) == ["router"]
+
+
+def test_bug_763_global_claude_router_is_conditional_and_references_single_authority() -> None:
+    text = (workflow.REPO_ROOT / workflow.CLIENT_CLAUDE_STARTUP_ROUTER_SOURCE).read_text(
+        encoding="utf-8"
+    )
+
+    assert text.count(workflow.CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN) == 1
+    assert text.count(workflow.CLIENT_CLAUDE_STARTUP_ROUTER_END) == 1
+    assert "only when the user's request explicitly concerns AIstock" in text
+    assert "For every other request, ignore this block" in text
+    assert r"F:\Dev\AIstock\.claude\commands\aistock-task-router.md" in text
+    assert "aistock_development_standard_v1.5_20260523.md" in text
+    assert "sole development authority" in text
+
+
+@pytest.mark.parametrize("marker_layout", ["missing_end", "reversed"])
+def test_install_client_rejects_malformed_startup_router_without_overwrite(
+    isolated_workflow_root: Path,
+    marker_layout: str,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    claude_home = isolated_workflow_root / "malformed_claude_home"
+    startup_memory = claude_home / "CLAUDE.md"
+    startup_memory.parent.mkdir(parents=True)
+    if marker_layout == "missing_end":
+        malformed = f"User content\n{workflow.CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN}\nmissing end\n"
+    else:
+        malformed = (
+            f"User content\n{workflow.CLIENT_CLAUDE_STARTUP_ROUTER_END}\n"
+            f"{workflow.CLIENT_CLAUDE_STARTUP_ROUTER_BEGIN}\n"
+        )
+    startup_memory.write_text(malformed, encoding="utf-8")
+
+    dry = workflow.build_client_install_plan(
+        claude_home=str(claude_home),
+        install_codex=False,
+        selected_lane="issue",
+    )
+
+    assert dry["workflow_gate"] == "blocked"
+    assert any("invalid AIstock managed-router block" in item for item in dry["blocking"])
+    with pytest.raises(workflow.WorkflowError, match="invalid AIstock managed-router block"):
+        workflow.build_client_install_plan(
+            apply=True,
+            claude_home=str(claude_home),
+            install_codex=False,
+            selected_lane="issue",
+        )
+    assert startup_memory.read_text(encoding="utf-8") == malformed
 
 
 def test_verify_clients_workflow_only_checks_every_lane(
@@ -8855,9 +8983,44 @@ def test_verify_clients_workflow_only_checks_every_lane(
     assert result == 0
     assert payload["workflow_gate"] == "ready"
     assert len(payload["client_manifest"]["codex_entries"]) == len(workflow.CLIENT_CODEX_SKILLS)
-    assert len(payload["client_manifest"]["claude_entries"]) == len(workflow.CLIENT_CLAUDE_COMMANDS)
+    assert len(payload["client_manifest"]["claude_entries"]) == len(workflow.CLIENT_CLAUDE_COMMANDS) + 1
     assert all(item["status"] == "current" for item in payload["client_manifest"]["codex_entries"].values())
     assert all(item["status"] == "current" for item in payload["client_manifest"]["claude_entries"].values())
+
+
+def test_verify_clients_selected_lane_requires_claude_startup_router(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    claude_home = isolated_workflow_root / "missing_startup_claude_home"
+    workflow.build_client_install_plan(
+        apply=True,
+        claude_home=str(claude_home),
+        install_codex=False,
+        selected_lane="issue",
+    )
+    (claude_home / "CLAUDE.md").write_text("@RTK.md\n", encoding="utf-8")
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--selected-lane",
+            "issue",
+            "--skip-codex",
+            "--claude-home",
+            str(claude_home),
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 2
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["blocking"] == ["claude lane startup_router is missing_global"]
+    assert payload["remediation"]["action"] == "request_single_owner_sync"
 
 
 def test_verify_clients_selected_lane_warns_for_unrelated_stale_entry(
@@ -11656,6 +11819,238 @@ def test_close_sync_pr_commit_reuses_existing_branch_pr_when_worktree_is_clean(
     assert payload["pr_url"] == "https://github.example/pull/299"
 
 
+def test_close_sync_pr_commit_recovers_unpushed_clean_commit(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    head = "a" * 40
+    remote_heads = iter([None, head])
+    calls: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {
+            "commit": head,
+            "changed_files": [bug_file],
+            "merge_base": "b" * 40,
+            "ahead_of_merge_base": 1,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_remote_close_sync_branch_head",
+        lambda _branch, root: next(remote_heads),
+    )
+    monkeypatch.setattr(workflow, "_open_pr_for_branch", lambda _branch, **_kwargs: None)
+    monkeypatch.setattr(
+        workflow,
+        "_create_pr_with_transport_fallback",
+        lambda **_kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "https://github.com/licong01-cloud/AIstock/pull/299",
+            "stderr": "",
+        },
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": bug_file,
+            "merged_pr": "https://github.example/pull/199",
+            "merge_commit": "merge123",
+        },
+        validation_evidence=["targeted test -> passed"],
+    )
+
+    assert payload["workflow_gate"] == "pr_opened"
+    assert payload["reason"] == "recovered_unpushed_close_sync_commit"
+    assert payload["commit"] == head
+    assert ["git", "push", "-u", "origin", "chore/BUG-199-close-sync"] in calls
+
+
+def test_close_sync_pr_commit_recovers_pushed_commit_without_duplicate_pr(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    head = "a" * 40
+    calls: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {"commit": head, "changed_files": [bug_file], "merge_base": "b" * 40},
+    )
+    monkeypatch.setattr(workflow, "_remote_close_sync_branch_head", lambda _branch, root: head)
+    monkeypatch.setattr(
+        workflow,
+        "_open_pr_for_branch",
+        lambda _branch, **_kwargs: {
+            "number": 299,
+            "url": "https://github.example/pull/299",
+            "headRefName": "chore/BUG-199-close-sync",
+            "headRefOid": head,
+        },
+    )
+    monkeypatch.setattr(workflow, "_run_command", lambda args, **_kwargs: calls.append(args) or {})
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": bug_file,
+        },
+        validation_evidence=["targeted test -> passed"],
+    )
+
+    assert payload["reason"] == "recovered_existing_close_sync_commit_and_pr"
+    assert payload["pr_url"] == "https://github.example/pull/299"
+    assert not any(args[:2] == ["git", "push"] for args in calls)
+
+
+def test_close_sync_pr_commit_recovery_fails_closed_on_remote_sha_mismatch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {"commit": "a" * 40, "changed_files": [bug_file], "merge_base": "c" * 40},
+    )
+    monkeypatch.setattr(workflow, "_remote_close_sync_branch_head", lambda _branch, root: "b" * 40)
+    monkeypatch.setattr(workflow, "_is_single_commit_fast_forward", lambda **_kwargs: False)
+
+    with pytest.raises(workflow.WorkflowError, match="remote branch diverges"):
+        workflow._maybe_commit_and_pr_close_sync(
+            bug_id="BUG-199",
+            close_sync={
+                "registry_root": str(registry),
+                "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+                "updated_bug_json": bug_file,
+            },
+            validation_evidence=["targeted test -> passed"],
+        )
+
+
+def test_close_sync_pr_commit_recovers_one_commit_ahead_of_existing_remote(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_file = "tests/aistock_validation/bugs/bug199.json"
+    _write_json(registry / bug_file, _bug(status="fixed"))
+    old_head = "b" * 40
+    head = "a" * 40
+    remote_heads = iter([old_head, head])
+    calls: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_close_sync_changed_files", lambda _close_sync: [])
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_inspect_pending_close_sync_commit",
+        lambda **_kwargs: {
+            "commit": head,
+            "changed_files": [bug_file],
+            "merge_base": "c" * 40,
+            "ahead_of_merge_base": 2,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_remote_close_sync_branch_head",
+        lambda _branch, root: next(remote_heads),
+    )
+    monkeypatch.setattr(workflow, "_is_single_commit_fast_forward", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        workflow,
+        "_open_pr_for_branch",
+        lambda _branch, **_kwargs: {
+            "number": 299,
+            "url": "https://github.example/pull/299",
+            "headRefOid": head,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, **_kwargs: calls.append(args)
+        or {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": bug_file,
+        },
+        validation_evidence=["targeted test -> passed"],
+    )
+
+    assert payload["reason"] == "recovered_existing_close_sync_commit_and_pr"
+    assert ["git", "push", "-u", "origin", "chore/BUG-199-close-sync"] in calls
+
+
+def test_close_sync_commit_inspection_rejects_unrelated_file(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = "a" * 40
+    base = "b" * 40
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        stdout_by_args = {
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): "chore/BUG-199-close-sync",
+            ("git", "rev-parse", "HEAD"): head,
+            ("git", "merge-base", "HEAD", "origin/main"): base,
+            ("git", "rev-list", "--count", f"{base}..HEAD"): "1",
+            ("git", "rev-list", "--parents", "-n", "1", "HEAD"): f"{head} {base}",
+            ("git", "show", "-s", "--format=%s", "HEAD"): "chore(issue): close-sync BUG-199 after merge",
+            ("git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"): (
+                "tests/aistock_validation/bugs/bug199.json\nscripts/unrelated.py"
+            ),
+        }
+        return {
+            "ok": tuple(args) in stdout_by_args,
+            "returncode": 0,
+            "stdout": stdout_by_args.get(tuple(args), ""),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="files differ"):
+        workflow._inspect_pending_close_sync_commit(
+            root=isolated_workflow_root,
+            branch="chore/BUG-199-close-sync",
+            expected_subject="chore(issue): close-sync BUG-199 after merge",
+            expected_files=["tests/aistock_validation/bugs/bug199.json"],
+        )
+
+
 def test_close_sync_pr_commit_blocks_unexpected_dirty_files(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -13173,6 +13568,7 @@ def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
         _bug(status="in_progress", fix_commit=None, pr_url=None),
     )
     close_sync_calls: list[dict[str, Any]] = []
+    compensated: list[tuple[int, bool]] = []
 
     monkeypatch.setattr(
         workflow,
@@ -13208,6 +13604,14 @@ def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
             ],
         },
     )
+    monkeypatch.setattr(
+        workflow,
+        "_sync_closed_issue_status_labels",
+        lambda issue_number, *, require_closed: (
+            compensated.append((issue_number, require_closed))
+            or {"ok": True, "verified": True}
+        ),
+    )
 
     def fail_close_sync(**kwargs: Any) -> dict[str, Any]:
         close_sync_calls.append(kwargs)
@@ -13233,6 +13637,7 @@ def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
     )
 
     assert close_sync_calls == []
+    assert compensated == [(199, True)]
     assert payload["close_sync"]["workflow_gate"] == "already_close_synced"
     assert payload["close_sync"]["snapshot_source"] == "origin_main_ref"
     assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
@@ -14548,7 +14953,17 @@ def test_remote_branch_delete_is_sha_lease_bound(
     sha = "a" * 40
     remote_ref = f"{sha}\trefs/heads/{branch}"
     executed: list[list[str]] = []
-    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: remote_ref)
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": remote_ref,
+            "stderr": "",
+            "attempts": 1,
+        },
+    )
     monkeypatch.setattr(
         workflow,
         "_execute_checked",
@@ -14581,7 +14996,17 @@ def test_remote_branch_delete_stops_on_sha_drift(
     branch = "bug/BUG-199-workflow"
     expected = f"{'a' * 40}\trefs/heads/{branch}"
     observed = f"{'b' * 40}\trefs/heads/{branch}"
-    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: observed)
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": observed,
+            "stderr": "",
+            "attempts": 1,
+        },
+    )
     monkeypatch.setattr(
         workflow,
         "_execute_checked",
@@ -14589,6 +15014,72 @@ def test_remote_branch_delete_stops_on_sha_drift(
     )
 
     with pytest.raises(workflow.WorkflowError, match="changed after cleanup preflight"):
+        workflow._delete_remote_branch_with_lease(
+            root=isolated_workflow_root,
+            branch=branch,
+            expected_remote_ref=expected,
+        )
+
+
+def test_remote_branch_delete_converges_when_branch_is_already_absent(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    expected = f"{'a' * 40}\trefs/heads/{branch}"
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "attempts": 2,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda *args, **kwargs: pytest.fail("an already-absent remote branch must not be deleted again"),
+    )
+
+    result = workflow._delete_remote_branch_with_lease(
+        root=isolated_workflow_root,
+        branch=branch,
+        expected_remote_ref=expected,
+    )
+
+    assert result["ok"] is True
+    assert result["already_absent"] is True
+    assert result["expected_sha"] == "a" * 40
+    assert result["readback_attempts"] == 2
+
+
+def test_remote_branch_delete_does_not_treat_transport_failure_as_absent(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    expected = f"{'a' * 40}\trefs/heads/{branch}"
+    monkeypatch.setattr(
+        workflow,
+        "_run_transport_read_with_retry",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "schannel: SSL/TLS connection failed",
+            "attempts": 2,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda *args, **kwargs: pytest.fail("remote delete must not run after a transport failure"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="SSL/TLS connection failed"):
         workflow._delete_remote_branch_with_lease(
             root=isolated_workflow_root,
             branch=branch,
@@ -16692,8 +17183,11 @@ def test_submit_bug_ui_intake_hints_fill_scope_labels_and_compact_output(
     assert payload["ui_intake_hints"]["ui_route"] == "/paper-v2/advisory"
     assert payload["ui_intake_hints"]["reproduce_required"] is True
     assert "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts" in record["allowed_write_scope"]
-    assert "frontend_tsc" in record["required_verification"]
-    assert "paper_v2_ui" in record["required_verification"]
+    assert "frontend_type_lint" in record["required_verification"]
+    assert "watchlist_backend" in record["required_verification"]
+    assert "paper_v2_backend" in record["required_verification"]
+    assert "frontend_tsc" not in record["required_verification"]
+    assert not any("/" in plan or "\\" in plan for plan in record["required_verification"])
     assert payload["github_issue_labels"] == ["aistock:bug", "bug", "P1", "severity:p1", "module:paper_v2", "status:open", "paper-v2"]
     body = workflow._render_github_issue_body(record, {"candidate_id": "IC-test"})
     assert "## UI Intake Hints" in body
