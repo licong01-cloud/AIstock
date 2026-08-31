@@ -229,19 +229,16 @@ def test_close_sync_quality_skip_is_branch_scoped_before_runner_allocation() -> 
     import yaml
 
     expected = "startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')"
-    workflow_jobs = {
-        "pr-quality.yml": "pr-quality",
-        "semgrep.yml": "semgrep",
-        "codeql.yml": "codeql-verdict",
-    }
-    for workflow_name, job_name in workflow_jobs.items():
-        text = Path(".github/workflows", workflow_name).read_text(encoding="utf-8")
-        workflow = yaml.safe_load(text)
-        pull_request = workflow[True]["pull_request"]
-        assert "paths-ignore" not in pull_request
-        job_if = str(workflow["jobs"][job_name]["if"])
-        assert "github.event_name != 'pull_request'" in job_if
-        assert expected in job_if
+    for workflow_name in ("pr-quality.yml", "semgrep.yml"):
+        workflow = yaml.safe_load(Path(".github/workflows", workflow_name).read_text(encoding="utf-8"))
+        assert set(workflow[True]) == {"workflow_dispatch"}
+
+    codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
+    pull_request = codeql[True]["pull_request"]
+    assert "paths-ignore" not in pull_request
+    job_if = str(codeql["jobs"]["codeql-verdict"]["if"])
+    assert "github.event_name != 'pull_request'" in job_if
+    assert expected in job_if
 
 
 def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -> None:
