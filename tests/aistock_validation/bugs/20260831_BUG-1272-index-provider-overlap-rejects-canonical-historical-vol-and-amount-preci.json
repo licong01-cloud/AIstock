@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1272",
-  "closed_at": null,
+  "closed_at": "2026-08-31T07:22:28.427308Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -120,8 +120,8 @@
   },
   "first_seen_at": "2026-08-31T05:13:02.130921Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "67dd9916ea24116a9d02af9bde22c676c1a389fd",
+  "fixed_at": "2026-08-31T07:07:06Z",
   "github_issue_number": 4038,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4038",
   "last_seen_at": "2026-08-31T05:13:02.130921Z",
@@ -129,6 +129,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4052",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -150,9 +151,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1272\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1272",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "7415827948e88073ac34042eae7a357e0ae0ffcaac90706e1bd5720386262666",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "67dd9916ea24116a9d02af9bde22c676c1a389fd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-31T07:18:49.960974Z",
+      "mode": "read_only",
+      "observed_identity": "23a30c098b95cbcb99ffe9e49bdedc98c9ec2a83",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c5d801bdf7e6ee538785e8746c5a1e52507f50861af5f87ff9dfe4e7785e22f5",
+      "receipt_sha256": "83ff7f290816637051b8338fe64dfea4395ee6de85be99c36e01cd8cc6395a38",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7b48c775d9aec53fa1efcd36c069966c8198d5e7ce43d2ab66f8c81e3869f698",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -162,7 +186,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1272",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e835a2ce48c3f238",
+    "recorded_at": "2026-08-31T07:11:10.548862Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d1af0fc190ae9a93ffb6afd73edb3a65c59a0b83",
+    "source_merge_commit": "67dd9916ea24116a9d02af9bde22c676c1a389fd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4052",
+    "validation_evidence": [
+      "PR #4052 required checks all passed at head d1af0fc190ae9a93ffb6afd73edb3a65c59a0b83"
+    ],
+    "validation_evidence_digest": "941bb4a6923b1a5611e0105e4ea9e805282e322b9dcd57f58ba2e76aed8f6f2f"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -171,6 +216,10 @@
     "fingerprint": "df19242d2e72b28eb1b52888",
     "source_event_id": "FE-20260831-df19242d2e72"
   },
+  "validation_evidence": [
+    "PR #4052 required checks all passed at head d1af0fc190ae9a93ffb6afd73edb3a65c59a0b83",
+    "PR #4052 required checks passed; worker-scheduler post-restart verify passed for 67dd9916ea24116a9d02af9bde22c676c1a389fd"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
