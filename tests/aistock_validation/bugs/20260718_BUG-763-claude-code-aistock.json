@@ -1,9 +1,11 @@
 {
   "actual": "用户级启动提示没有AIstock条件路由，必须依赖手工显式调用命令。",
   "allowed_write_scope": [
-    "C:\\Users\\lc999\\.claude\\CLAUDE.md",
-    "tests/aistock_validation/bugs/20260718_BUG-763-claude-code-aistock.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ".claude/commands/aistock-global-router.md",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260718_BUG-763-claude-code-aistock.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-763",
@@ -35,7 +37,8 @@
   "module": "validation",
   "non_goals": [
     "Do not restart production runtime services without explicit approval.",
-    "Do not modify Claude settings, credentials, MCP configuration, permissions, or the official isolated Claude profile."
+    "Do not modify Claude settings, credentials, MCP configuration, or permissions.",
+    "Do not overwrite user-owned Claude startup memory outside the exact AIstock managed-router block."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
