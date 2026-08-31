@@ -2,9 +2,7 @@
   "actual": "qe_hmm_full_v2 sample submission dss_f0b22d1d1245493fedba4644044a070f completed source freeze but terminated DATASET_RELEASE_IDENTITY_CONFLICT. Exact read-only reproduction shows _source_snapshot_catalog_spec binds raw source_content/source_provenance roots while the source probe correctly binds artifact-ready effective roots; _validate_source_snapshot_catalog incorrectly requires both identities to be equal. Preserve raw catalog roots for reuse, validate the raw-to-effective artifact-ready authority link fail-closed, add divergent-root RED-GREEN regression, and keep production activation/DDL/DML at noop.",
   "allowed_write_scope": [
     "backend/services/dataset_release/resolution.py",
-    "backend/services/dataset_release/resolution_processor.py",
     "backend/tests/dataset_release/test_resolution.py",
-    "backend/tests/dataset_release/test_resolution_processor.py",
     "tests/aistock_validation/bugs/20260831_BUG-1282-dataset-release-source-catalog-rejects-artifact-ready-effective-roots.json"
   ],
   "assigned_agent": null,
@@ -31,17 +29,13 @@
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/resolution.py",
-      "backend/services/dataset_release/resolution_processor.py",
-      "backend/tests/dataset_release/test_resolution.py",
-      "backend/tests/dataset_release/test_resolution_processor.py"
+      "backend/tests/dataset_release/test_resolution.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/resolution.py",
-        "backend/services/dataset_release/resolution_processor.py",
-        "backend/tests/dataset_release/test_resolution.py",
-        "backend/tests/dataset_release/test_resolution_processor.py"
+        "backend/tests/dataset_release/test_resolution.py"
       ],
       "impacted_modules": [
         "qlib_data",
@@ -62,29 +56,7 @@
           "rule_id": "qlib_monthly_dataset_release"
         },
         {
-          "file": "backend/services/dataset_release/resolution_processor.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
           "file": "backend/tests/dataset_release/test_resolution.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_resolution_processor.py",
           "impact_modules": [
             "qe.core",
             "local_data",
@@ -100,24 +72,18 @@
       ],
       "suggested_scope": [
         "backend/services/dataset_release/resolution.py",
-        "backend/services/dataset_release/resolution_processor.py",
-        "backend/tests/dataset_release/test_resolution.py",
-        "backend/tests/dataset_release/test_resolution_processor.py"
+        "backend/tests/dataset_release/test_resolution.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/services/dataset_release/resolution.py",
-      "backend/services/dataset_release/resolution_processor.py",
-      "backend/tests/dataset_release/test_resolution.py",
-      "backend/tests/dataset_release/test_resolution_processor.py"
+      "backend/tests/dataset_release/test_resolution.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/dataset_release/resolution.py",
-      "backend/services/dataset_release/resolution_processor.py",
-      "backend/tests/dataset_release/test_resolution.py",
-      "backend/tests/dataset_release/test_resolution_processor.py"
+      "backend/tests/dataset_release/test_resolution.py"
     ]
   },
   "first_seen_at": "2026-08-31T10:32:57.804003Z",
@@ -143,17 +109,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process imported ResolutionService and validated the immutable raw-to-effective source authority contract; no database, dataset, or process side effect.",
+      "fresh Python process imported ResolutionService: BUG1282_FRESH_PROCESS_IMPORT_OK",
+      "fresh Python process imported ResolutionService -> passed (BUG1282_FRESH_PROCESS_IMPORT_OK)",
+      "fresh Python process imported ResolutionService and validated actual source receipt authority -> passed (BUG1282_ACTUAL_RECEIPT_AUTHORITY_OK)"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
