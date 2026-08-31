@@ -84,6 +84,7 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "pr_ci_no_external_artifact_action_dependency" in evidence
     assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
     assert evidence["pr_ci_workflow_validation_reuses_ci_verdict_runner"] is True
+    assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is True
     assert evidence["codeql_reuses_single_security_runner_allocation"] is True
     assert "pr_workflows_no_external_report_action_dependency" in evidence
     assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
@@ -95,6 +96,18 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert evidence["bounded_dual_runner_roles"] is True
     assert evidence["policy_evidence_remains_one_scanner_step"] is True
     assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
+
+
+def test_pr_ci_frontend_dependency_attach_cannot_be_removed(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace("            --attach-frontend-only `\n", "", 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is False
 
 
 def test_linux_runner_exception_is_bounded_to_close_sync_metadata(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ env:
   PYTHONIOENCODING: utf-8
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
+  AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
 
 permissions:
   contents: read
@@ -193,6 +194,18 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
+
+      - name: Attach lockfile-matched prebuilt frontend dependencies
+        shell: powershell
+        run: |
+          python ../scripts/ci/prepare_self_hosted_workspace.py `
+            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --dest "${env:GITHUB_WORKSPACE}" `
+            --expected-commit "${env:GITHUB_SHA}" `
+            --repo "${env:GITHUB_REPOSITORY}" `
+            --frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules" `
+            --attach-frontend-only `
+            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: Verify prebuilt frontend toolchain
         shell: powershell
