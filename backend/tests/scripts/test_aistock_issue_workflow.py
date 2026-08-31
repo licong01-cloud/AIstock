@@ -13405,6 +13405,7 @@ def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
         _bug(status="in_progress", fix_commit=None, pr_url=None),
     )
     close_sync_calls: list[dict[str, Any]] = []
+    compensated: list[tuple[int, bool]] = []
 
     monkeypatch.setattr(
         workflow,
@@ -13440,6 +13441,14 @@ def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
             ],
         },
     )
+    monkeypatch.setattr(
+        workflow,
+        "_sync_closed_issue_status_labels",
+        lambda issue_number, *, require_closed: (
+            compensated.append((issue_number, require_closed))
+            or {"ok": True, "verified": True}
+        ),
+    )
 
     def fail_close_sync(**kwargs: Any) -> dict[str, Any]:
         close_sync_calls.append(kwargs)
@@ -13465,6 +13474,7 @@ def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
     )
 
     assert close_sync_calls == []
+    assert compensated == [(199, True)]
     assert payload["close_sync"]["workflow_gate"] == "already_close_synced"
     assert payload["close_sync"]["snapshot_source"] == "origin_main_ref"
     assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
