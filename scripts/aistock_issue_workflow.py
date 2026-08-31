@@ -6625,6 +6625,66 @@ def _load_github_issue(issue_number: int | str) -> dict[str, Any]:
     return payload
 
 
+def _rest_pr_search_for_bug(bug_id: str, *, state: str) -> list[dict[str, Any]]:
+    """Read BUG-specific PR state through REST without scanning repository history."""
+    if state not in {"open", "merged"}:
+        raise WorkflowError(f"unsupported PR search state: {state}")
+    qualifier = "is:open" if state == "open" else "is:merged"
+    query = f"repo:{GITHUB_REPO} is:pr {qualifier} {bug_id} in:title,body"
+    search = _run_transport_read_with_retry(
+        ["gh", "api", "--method", "GET", "search/issues", "-f", f"q={query}", "-f", "per_page=20"],
+        cwd=REPO_ROOT,
+        timeout=60,
+        attempts=2,
+    )
+    if not search.get("ok"):
+        detail = search.get("stderr") or search.get("stdout") or "unknown REST search error"
+        raise WorkflowError(f"cannot search {state} PRs through REST: {detail}")
+    try:
+        payload = json.loads(str(search.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"cannot parse {state} PR REST search: {exc}") from exc
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        raise WorkflowError(f"{state} PR REST search returned an invalid item list")
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        number = int(item.get("number") or 0) if isinstance(item, dict) else 0
+        if not number:
+            continue
+        detail = _run_transport_read_with_retry(
+            ["gh", "api", f"repos/{GITHUB_REPO}/pulls/{number}"],
+            cwd=REPO_ROOT,
+            timeout=60,
+            attempts=2,
+        )
+        if not detail.get("ok"):
+            message = detail.get("stderr") or detail.get("stdout") or "unknown REST PR detail error"
+            raise WorkflowError(f"cannot read PR #{number} through REST: {message}")
+        try:
+            pr = json.loads(str(detail.get("stdout") or "{}"))
+        except json.JSONDecodeError as exc:
+            raise WorkflowError(f"cannot parse PR #{number} REST readback: {exc}") from exc
+        if not isinstance(pr, dict):
+            raise WorkflowError(f"PR #{number} REST readback is not an object")
+        if state == "merged" and not pr.get("merged_at"):
+            continue
+        head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+        rows.append(
+            {
+                "number": pr.get("number"),
+                "title": pr.get("title"),
+                "url": pr.get("html_url"),
+                "headRefName": head.get("ref"),
+                "headRefOid": head.get("sha"),
+                "mergedAt": pr.get("merged_at"),
+                "body": pr.get("body"),
+                "source": "github_rest_search",
+            }
+        )
+    return rows
+
+
 def _stale_pr_check_for_bug(bug_id: str) -> dict[str, Any]:
     if not (REPO_ROOT / ".git").exists():
         return {"status": "skipped_no_git_checkout", "open_prs": [], "merged_prs": []}
@@ -6666,30 +6726,39 @@ def _stale_pr_check_for_bug(bug_id: str) -> dict[str, Any]:
         cwd=REPO_ROOT,
         timeout=20,
     )
-    if not result_open.get("ok") and not result_merged.get("ok"):
-        return {
-            "status": "unavailable",
-            "open_prs": [],
-            "merged_prs": [],
-            "error": result_open.get("stderr") or result_merged.get("stderr") or "gh pr list failed",
-        }
-
-    def parse(result: dict[str, Any]) -> list[dict[str, Any]]:
+    def parse(result: dict[str, Any]) -> list[dict[str, Any]] | None:
         if not result.get("ok"):
-            return []
+            return None
         try:
             data = json.loads(str(result.get("stdout") or "[]"))
         except json.JSONDecodeError:
-            return []
-        return data if isinstance(data, list) else []
+            return None
+        return data if isinstance(data, list) else None
 
     open_prs = parse(result_open)
     merged_prs = parse(result_merged)
+    fallback_states: list[str] = []
+    try:
+        if open_prs is None:
+            open_prs = _rest_pr_search_for_bug(bug_id, state="open")
+            fallback_states.append("open")
+        if merged_prs is None:
+            merged_prs = _rest_pr_search_for_bug(bug_id, state="merged")
+            fallback_states.append("merged")
+    except WorkflowError as exc:
+        return {
+            "status": "unavailable",
+            "open_prs": open_prs or [],
+            "merged_prs": merged_prs or [],
+            "error": str(exc),
+            "fallback_states": fallback_states,
+        }
     cleanup_needed = bool(open_prs and merged_prs)
     return {
         "status": "cleanup_recommended" if cleanup_needed else "checked",
         "open_prs": open_prs,
         "merged_prs": merged_prs,
+        "fallback_states": fallback_states,
         "cleanup_plan": [
             "inspect open registry-only PRs for this BUG",
             "close stale registry-only PR if a merged fix PR already resolved the BUG",
@@ -15795,14 +15864,13 @@ def _open_pr_for_branch(branch: str, *, root: Path) -> dict[str, Any] | None:
         timeout=60,
     )
     if not existing.get("ok"):
-        message = f"{existing.get('stdout')}\n{existing.get('stderr')}"
-        if _looks_like_github_transport_failure(message):
-            return _rest_open_pr_for_branch(branch, root=root)
-        return None
+        return _rest_open_pr_for_branch(branch, root=root)
     try:
         rows = json.loads(str(existing.get("stdout") or "[]"))
     except json.JSONDecodeError:
-        return None
+        return _rest_open_pr_for_branch(branch, root=root)
+    if not isinstance(rows, list):
+        return _rest_open_pr_for_branch(branch, root=root)
     return rows[0] if isinstance(rows, list) and rows else None
 
 
@@ -15832,7 +15900,7 @@ def _maybe_commit_and_pr_close_sync(
             + ", ".join(unexpected_dirty[:10])
         )
     existing_pr = _open_pr_for_branch(branch, root=root)
-    if existing_pr:
+    if existing_pr and not dirty:
         return {
             "workflow_gate": "pr_opened",
             "reason": "existing_open_close_sync_pr_for_branch",
@@ -15864,6 +15932,34 @@ def _maybe_commit_and_pr_close_sync(
     actions.append({"command": f"git push -u origin {branch}", "result": push})
     if not push.get("ok"):
         raise WorkflowError(push.get("stderr") or push.get("stdout") or "close-sync git push failed")
+
+    if existing_pr:
+        result = {
+            "workflow_gate": "pr_opened",
+            "reason": "updated_existing_open_close_sync_pr",
+            "root": str(root),
+            "branch": branch,
+            "changed_files": changed_files,
+            "actions": actions,
+            "commit": expected_head,
+            "pr_url": existing_pr.get("url"),
+            "open_pr": existing_pr,
+            "duration_seconds": round(time.monotonic() - started, 3),
+        }
+        _append_event(
+            bug_id,
+            event="close_sync_existing_pr_updated",
+            state="close_synced",
+            root=root,
+            duration_seconds=result["duration_seconds"],
+            evidence={
+                "branch": branch,
+                "commit": expected_head,
+                "pr_url": existing_pr.get("url"),
+                "changed_files": changed_files,
+            },
+        )
+        return result
 
     body_path = root / WORKFLOW_ROOT / label / "close-sync-pr-body.md"
     status_rows: list[str] = []
@@ -15984,8 +16080,35 @@ def _attach_source_merge_receipts_to_close_sync(
             runtime_contract=runtime_contract,
             production_gates=production_gates or close_sync.get("production_gates"),
         )
-        record["source_merge_receipt"] = receipt
-        _write_json(target, record)
+        existing_receipt = record.get("source_merge_receipt")
+        if isinstance(existing_receipt, dict):
+            profile = _source_merge_receipt_profile(
+                existing_receipt,
+                bug_id=bug_id or str(record.get("bug_id") or ""),
+                source_pr_url=str(close_sync.get("merged_pr") or ""),
+                merge_commit=merge_commit,
+            )
+            if profile.get("status") != "valid":
+                raise WorkflowError(
+                    "existing source merge receipt is invalid: "
+                    + "; ".join(flow._as_list(profile.get("blocking")))
+                )
+            immutable_keys = (
+                "bug_id",
+                "source_pr_url",
+                "source_head_oid",
+                "source_merge_commit",
+                "runtime_contract_digest",
+                "runtime_verification",
+                "runtime_identity_match",
+                "production_gates",
+            )
+            if any(existing_receipt.get(key) != receipt.get(key) for key in immutable_keys):
+                raise WorkflowError("existing source merge receipt immutable identity differs from the retry input")
+            receipt = existing_receipt
+        if record.get("source_merge_receipt") != receipt:
+            record["source_merge_receipt"] = receipt
+            _write_json(target, record)
         receipts[receipt["bug_id"]] = receipt
     close_sync["source_merge_receipts"] = receipts
     if len(receipts) == 1:
@@ -16309,6 +16432,11 @@ def _close_sync_pr_in_progress_marker(
 ) -> dict[str, Any] | None:
     """Return an existing close-sync PR marker even before BUG JSON reaches origin/main."""
     stale = _stale_pr_check_for_bug(bug_id)
+    if stale.get("status") == "unavailable":
+        raise WorkflowError(
+            "cannot verify whether a close-sync PR already exists; refusing duplicate creation: "
+            + str(stale.get("error") or "GitHub PR state unavailable")
+        )
     source_pr_number = _pr_number_from_url(source_pr_url)
     open_close_sync_prs = [
         item
@@ -17591,8 +17719,18 @@ def build_close_sync_plan(
             if runtime_pending
             else (_utc_now() if runtime_contract.get("backend_restart_required") else closed_at)
         )
-        durable_validation_evidence = flow._unique_strings(
-            [*flow._as_list(record.get("validation_evidence")), *evidence]
+        already_fixed_for_source = (
+            str(record.get("status") or "").strip().lower() in {"fixed", "verified"}
+            and str(record.get("pr_url") or "").strip() == str(pr_url or "").strip()
+            and (
+                not merge_commit
+                or str(record.get("fix_commit") or "").strip() == str(merge_commit).strip()
+            )
+        )
+        durable_validation_evidence = (
+            flow._as_list(record.get("validation_evidence"))
+            if already_fixed_for_source
+            else flow._unique_strings([*flow._as_list(record.get("validation_evidence")), *evidence])
         )
         updated.update(
             {
@@ -17827,14 +17965,24 @@ def build_close_sync_batch_plan(
     github_syncs: dict[str, Any] = {}
     for item, record, source_path, _missing in target_pairs:
         updated = dict(record)
-        durable_validation_evidence = flow._unique_strings(
-            [*flow._as_list(record.get("validation_evidence")), *evidence]
+        already_fixed_for_source = (
+            str(record.get("status") or "").strip().lower() in {"fixed", "verified"}
+            and str(record.get("pr_url") or "").strip() == str(pr_url or "").strip()
+            and (
+                not merge_commit
+                or str(record.get("fix_commit") or "").strip() == str(merge_commit).strip()
+            )
+        )
+        durable_validation_evidence = (
+            flow._as_list(record.get("validation_evidence"))
+            if already_fixed_for_source
+            else flow._unique_strings([*flow._as_list(record.get("validation_evidence")), *evidence])
         )
         updated.update(
             {
                 "status": "fixed",
                 "closed_at": closed_at,
-                "fixed_at": _utc_now(),
+                "fixed_at": record.get("fixed_at") or closed_at or _utc_now(),
                 "fix_commit": merge_commit,
                 "pr_url": pr_url,
                 "validation_evidence": durable_validation_evidence,
