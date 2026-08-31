@@ -139,6 +139,12 @@ _COMPONENT_DATASETS: Mapping[Component, tuple[str, ...]] = {
 }
 
 
+def _tdx_observation_date() -> date:
+    """Return the Shanghai date that bounds TDX's recent-N minute history."""
+
+    return datetime.now(CHINA_TZ).date()
+
+
 class ArtifactReadySourceError(DatasetReleaseError):
     code = "BLOCKED_ARTIFACT_READY_SOURCE_INVALID"
 
@@ -2241,21 +2247,42 @@ class ArtifactReadySourceBuilder:
         suspended: frozenset[tuple[str, date]],
         total: dict[str, int],
         derived_refs: list[CASRef],
+        allowed_codes: frozenset[str],
+        trading_dates: frozenset[date],
+        partition_start: date,
+        partition_end: date,
     ) -> tuple[
         dict[tuple[str, date], dict[str, Any]],
         dict[str, list[tuple[MinuteGap, Sequence[Mapping[str, Any]]]]],
+        Mapping[str, int],
     ]:
         coverage_by_key: dict[tuple[str, date], dict[str, Any]] = {}
         gaps_by_code: dict[
             str,
             list[tuple[MinuteGap, Sequence[Mapping[str, Any]]]],
         ] = {}
+        excluded = {"pit_excluded_stock_days": 0, "pit_excluded_rows": 0}
+
+        def exclude_outside_pit(
+            item: tuple[tuple[str, date], Sequence[Mapping[str, Any]]],
+        ) -> None:
+            key, rows = item
+            if key[0] not in allowed_codes:
+                raise ArtifactReadyCoverageIncomplete("minute partition contains a code outside its bucket")
+            if not partition_start <= key[1] <= partition_end:
+                raise ArtifactReadyCoverageIncomplete("minute partition contains a date outside its partition")
+            if key[1] not in trading_dates:
+                raise ArtifactReadyCoverageIncomplete("minute partition contains a date outside the frozen trading calendar")
+            excluded["pit_excluded_stock_days"] += 1
+            excluded["pit_excluded_rows"] += len(rows)
+
         with _managed_partition_rows(view, descriptor) as partition_rows:
             observed = _group_minute_rows(partition_rows)
             observed_item = next(observed, None)
             for key in expected:
                 while observed_item is not None and observed_item[0] < key:
-                    raise ArtifactReadyCoverageIncomplete("minute partition contains a row outside PIT/calendar scope")
+                    exclude_outside_pit(observed_item)
+                    observed_item = next(observed, None)
                 rows: Sequence[Mapping[str, Any]] = ()
                 if observed_item is not None and observed_item[0] == key:
                     rows = observed_item[1]
@@ -2325,9 +2352,12 @@ class ArtifactReadySourceBuilder:
                     total["database_complete"] += 1
                 else:
                     gaps_by_code.setdefault(key[0], []).append((gap, rows))
-            if observed_item is not None:
-                raise ArtifactReadyCoverageIncomplete("minute partition contains rows outside expected coverage")
-        return coverage_by_key, gaps_by_code
+            while observed_item is not None:
+                exclude_outside_pit(observed_item)
+                observed_item = next(observed, None)
+        total["pit_excluded_stock_days"] += excluded["pit_excluded_stock_days"]
+        total["pit_excluded_rows"] += excluded["pit_excluded_rows"]
+        return coverage_by_key, gaps_by_code, excluded
 
     def _minute_entries(
         self,
@@ -2349,13 +2379,21 @@ class ArtifactReadySourceBuilder:
         provider_refs: list[CASRef] = []
         derived_refs: list[CASRef] = []
         entries: list[Mapping[str, Any]] = []
-        total = {"expected_days": 0, "database_complete": 0, "provider_filled": 0, "suspended_full_day": 0}
+        total = {
+            "expected_days": 0,
+            "database_complete": 0,
+            "provider_filled": 0,
+            "suspended_full_day": 0,
+            "pit_excluded_stock_days": 0,
+            "pit_excluded_rows": 0,
+        }
         eligibility = _MinuteEligibilityIndex.build(
             trading_dates=trading_dates,
             spans=snapshot.pit_snapshot.spans,
             minute_start_date=self.profile.minute_start_date,
             bucket_count=self.profile.minute_code_bucket_count,
         )
+        frozen_trading_dates = frozenset(trading_dates)
         for descriptor in descriptors:
             match = _MINUTE_PARTITION.fullmatch(str(descriptor.get("partition_key", "")))
             if match is None:
@@ -2370,13 +2408,17 @@ class ArtifactReadySourceBuilder:
                     end=end,
                 )
             )
-            coverage_by_key, gaps_by_code = self._scan_minute_database_partition(
+            coverage_by_key, gaps_by_code, excluded = self._scan_minute_database_partition(
                 view,
                 descriptor,
                 expected=expected,
                 suspended=suspended,
                 total=total,
                 derived_refs=derived_refs,
+                allowed_codes=frozenset(eligibility.bucket_codes.get(bucket, ())),
+                trading_dates=frozen_trading_dates,
+                partition_start=start,
+                partition_end=end,
             )
             for code in sorted(gaps_by_code):
                 requests = gaps_by_code[code]
@@ -2531,6 +2573,7 @@ class ArtifactReadySourceBuilder:
                     "database_complete": sum(item["status"] == "DATABASE_COMPLETE" for item in coverage),
                     "provider_filled": sum(item["status"] == "PROVIDER_FILLED" for item in coverage),
                     "suspended_full_day": sum(item["status"] == "SUSPENDED_FULL_DAY" for item in coverage),
+                    **excluded,
                 },
                 "safety": dict(_ZERO_SAFETY),
             }
@@ -2864,9 +2907,11 @@ class ArtifactReadySourceBuilder:
             import requests
         except ImportError as exc:
             raise ArtifactReadyProviderTerminal("TDX HTTP client is unavailable") from exc
-        requested_bars = ((end - start).days + 1) * 240
-        if requested_bars > MAX_TDX_WINDOW_BARS:
-            raise ArtifactReadyProviderTerminal("TDX minute window exceeds bound")
+        observation_date = max(end, _tdx_observation_date())
+        requested_bars = min(
+            MAX_TDX_WINDOW_BARS,
+            max(240, ((observation_date - start).days + 1) * 240),
+        )
         session = requests.Session()
         session.trust_env = False
         try:
@@ -2875,7 +2920,7 @@ class ArtifactReadySourceBuilder:
                 params={
                     "code": ts_code.split(".", 1)[0],
                     "type": "minute1",
-                    "limit": max(240, requested_bars),
+                    "limit": requested_bars,
                 },
                 timeout=(3.05, 30.0),
                 allow_redirects=False,
