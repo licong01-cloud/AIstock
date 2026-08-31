@@ -183,6 +183,9 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
     for name, train_start, train_end, validation_start, validation_end in subject.RL1_FOLD_BOUNDARIES:
         train = [day for day in calendar if train_start <= day <= train_end]
         validation = [day for day in calendar if validation_start <= day <= validation_end]
+        rolling = train[-subject.RL1_ROLLING_WINDOW_OPEN_DAYS :]
+        rolling_start_index = len(train) - subject.RL1_ROLLING_WINDOW_OPEN_DAYS
+        warmup = train[max(0, rolling_start_index - subject.RL1_FEATURE_WARMUP_OPEN_DAYS) : rolling_start_index]
         fold_rows.append(
             {
                 "fold": name,
@@ -190,8 +193,18 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
                 "train_end": train_end.isoformat(),
                 "validation_start": validation_start.isoformat(),
                 "validation_end": validation_end.isoformat(),
+                "validation_first_trading_date": validation[0].isoformat(),
+                "eligibility_feature_cutoff_date": train[-1].isoformat(),
                 "train_trading_day_count": len(train),
                 "train_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in train]),
+                "ridge_train_start": rolling[0].isoformat(),
+                "ridge_train_end": rolling[-1].isoformat(),
+                "ridge_train_trading_day_count": len(rolling),
+                "ridge_train_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in rolling]),
+                "feature_warmup_start": warmup[0].isoformat() if warmup else None,
+                "feature_warmup_end": warmup[-1].isoformat() if warmup else None,
+                "feature_warmup_trading_day_count": len(warmup),
+                "feature_warmup_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in warmup]),
                 "validation_trading_day_count": len(validation),
                 "validation_date_set_sha256": subject.canonical_sha256([day.isoformat() for day in validation]),
             }
@@ -236,6 +249,14 @@ def _rl1_request(commit: str = "a" * 40, artifact_root: Path | None = None) -> d
             "end": subject.RL1_DEVELOPMENT_END.isoformat(),
             "trading_day_count": len(calendar),
             "date_set_sha256": subject.canonical_sha256([day.isoformat() for day in calendar]),
+        },
+        "ridge_training_contract": {
+            "ridge_train_scope": "fixed_rolling_canonical_open_days",
+            "rolling_window_open_days": 252,
+            "feature_warmup_max_open_days": 120,
+            "market_train_scope": "anchored_expanding",
+            "window_search_performed": False,
+            "validation_outcome_accessed_for_window": False,
         },
         "folds": fold_rows,
         "new_holdout": {
@@ -314,7 +335,61 @@ def _stage_receipt(component: str, *, selected_alpha: float | None = None) -> di
 
 def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, object]:
     request_identity = subject._c012_rl1_request_identity(request, producer)
-    folds = [_stage_receipt(f"fold-{index}") for index in range(1, 6)]
+    eligibility_authority_sha256 = subject.canonical_sha256(
+        {
+            "source_sha256": request_identity["source_sha256"],
+            "input_identity": request_identity["input_identity"],
+            "c010_formal_evidence": request_identity["c010_formal_evidence"],
+        }
+    )
+    canonical_codes = [f"801{index:03d}.SI" for index in range(1, 32)]
+    folds: list[dict[str, object]] = []
+    for authority in request["folds"]:
+        eligibility_body = {
+            "schema_version": "hmm_risk_rotation_l1_historical_eligibility_v1",
+            "contract_version": subject.RL1_CONTRACT_VERSION,
+            "fold": authority["fold"],
+            "authority_date": authority["validation_first_trading_date"],
+            "feature_cutoff_date": authority["eligibility_feature_cutoff_date"],
+            "authority_basis": "validation_first_canonical_trading_date_t_minus_1_pit_features",
+            "authority_sha256": eligibility_authority_sha256,
+            "validation_outcome_accessed": False,
+            "metric_accessed": False,
+            "validation_feature_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+            "validation_target_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+            "canonical_sector_count": 31,
+            "canonical_sector_codes": canonical_codes,
+            "canonical_sector_sha256": subject.canonical_sha256(canonical_codes),
+            "eligible_sector_count": 31,
+            "eligible_sector_codes": canonical_codes,
+            "eligible_sector_sha256": subject.canonical_sha256(canonical_codes),
+            "historical_structural_eligibility_ratio": 1.0,
+            "ineligible_sector_count": 0,
+            "ineligible_sectors": [],
+            "ineligible_sector_sha256": subject.canonical_sha256([]),
+            "daily_minimum_available_count": 28,
+        }
+        eligibility = {**eligibility_body, "receipt_sha256": subject.canonical_sha256(eligibility_body)}
+        coverage_body = {
+            "coverage_accepted": True,
+            "eligibility_receipt_sha256": eligibility["receipt_sha256"],
+            "canonical_sector_count": 31,
+            "eligible_sector_count": 31,
+        }
+        coverage = {**coverage_body, "receipt_sha256": subject.canonical_sha256(coverage_body)}
+        fold_body = {
+            "fold": authority["fold"],
+            "ridge_train_start": authority["ridge_train_start"],
+            "ridge_train_end": authority["ridge_train_end"],
+            "ridge_train_trading_day_count": authority["ridge_train_trading_day_count"],
+            "ridge_train_date_set_sha256": authority["ridge_train_date_set_sha256"],
+            "eligibility_feature_cutoff_date": authority["eligibility_feature_cutoff_date"],
+            "feature_warmup_trading_day_count": authority["feature_warmup_trading_day_count"],
+            "feature_warmup_date_set_sha256": authority["feature_warmup_date_set_sha256"],
+            "historical_eligibility": eligibility,
+            "replay_coverage": coverage,
+        }
+        folds.append({**fold_body, "receipt_sha256": subject.canonical_sha256(fold_body)})
     attempts = [{"fit": index} for index in range(12)]
     acceptance_body = {"component": "development", "accepted": True}
     coverage_body = {
@@ -337,6 +412,7 @@ def _rl1_child_payload(request: dict[str, object], producer: str) -> dict[str, o
         "development_start": subject.RL1_DEVELOPMENT_START.isoformat(),
         "development_end": subject.RL1_DEVELOPMENT_END.isoformat(),
         "development_trading_day_count": len(_rl1_calendar()),
+        "ridge_training_contract": request["ridge_training_contract"],
         "folds": folds,
         "fold_receipt_sha256s": [item["receipt_sha256"] for item in folds],
         "development_acceptance": {
@@ -1415,9 +1491,14 @@ def test_c012_rl1_request_freezes_exact_parameters_folds_and_new_holdout() -> No
     request = _rl1_request()
     identity = subject.validate_c012_rl1_static_request(request)
 
-    assert identity["contract_version"] == "C-012-RL1-HR1-D1-D6"
+    assert identity["contract_version"] == "C-012-RL1-RW1-D1-D6"
+    assert identity["ridge_training_contract"]["rolling_window_open_days"] == 252
+    assert identity["ridge_training_contract"]["window_search_performed"] is False
     assert identity["fixed_ridge_parameters"]["alpha"] == 100.0
     assert len(identity["folds"]) == 5
+    assert all(item["ridge_train_trading_day_count"] == 252 for item in identity["folds"])
+    assert all(item["feature_warmup_trading_day_count"] <= 120 for item in identity["folds"])
+    assert all(item["ridge_train_end"] == item["train_end"] for item in identity["folds"])
     assert identity["new_holdout"] == {
         "state_start": "2026-04-01",
         "state_end": "2026-09-30",
@@ -1433,6 +1514,18 @@ def test_c012_rl1_request_freezes_exact_parameters_folds_and_new_holdout() -> No
     with pytest.raises(subject.RidgeCandidateError) as captured:
         subject.validate_c012_rl1_static_request(drift)
     assert captured.value.reason_code == subject.REASON_RL1_INPUT
+
+    window_drift = dict(request)
+    window_drift["ridge_training_contract"] = {
+        **request["ridge_training_contract"],
+        "rolling_window_open_days": 126,
+    }
+    window_drift["request_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in window_drift.items() if key != "request_sha256"}
+    )
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject.validate_c012_rl1_static_request(window_drift)
+    assert captured.value.reason_code == subject.REASON_RL1_ROLLING_WINDOW
 
 
 def _rl1_metric_fold(index: int, *, rank_ic: float = 0.03, spread: float = 0.004) -> dict[str, object]:
@@ -1532,6 +1625,152 @@ def test_c012_rl1_replay_coverage_uses_full_state_date_and_sector_denominators()
     assert insufficient["minimum_sector_coverage_ratio"] == 0.0
 
 
+def test_c012_rw1_eligibility_is_frozen_before_validation_outcomes_and_caps_full_coverage() -> None:
+    feature_cutoff = date(2024, 3, 14)
+    dates = (date(2024, 3, 15), date(2024, 3, 18))
+    codes = tuple(f"L1-{index:02d}" for index in range(31))
+    panel = _panel(list(codes), [feature_cutoff, *dates])
+    panel.loc[(pd.Timestamp(feature_cutoff), codes[0]), subject.RELATIVE_FEATURES[0]] = np.nan
+    fold = {
+        "fold": "fold-2",
+        "validation_first_trading_date": dates[0],
+        "eligibility_feature_cutoff_date": feature_cutoff,
+    }
+
+    eligibility = subject._c012_rw1_fold_eligibility(panel, fold=fold, authority_sha256="a" * 64)
+
+    assert eligibility["validation_outcome_accessed"] is False
+    assert eligibility["authority_date"] == dates[0].isoformat()
+    assert eligibility["feature_cutoff_date"] == feature_cutoff.isoformat()
+    assert eligibility["eligible_sector_count"] == 30
+    assert eligibility["ineligible_sector_count"] == 1
+    assert eligibility["ineligible_sectors"][0]["sector_code"] == codes[0]
+    assert eligibility["ineligible_sectors"][0]["reason_code"] == subject.REASON_RL1_HISTORICAL_INELIGIBLE
+    assert codes[0] not in eligibility["eligible_sector_codes"]
+    assert math.isfinite(float(panel.loc[(pd.Timestamp(dates[0]), codes[0]), subject.RELATIVE_FEATURES[0]]))
+
+    eligible = tuple(eligibility["eligible_sector_codes"])
+    states = {(code, day): "neutral" for code in eligible for day in dates}
+    targets = subject.TargetRows(
+        "L1",
+        dates[0],
+        dates[-1],
+        dates,
+        {(code, day): 0.0 for code in eligible for day in dates},
+        {},
+    )
+    coverage = subject._c012_rl1_fold_replay_coverage(
+        fold="fold-2",
+        validation_dates=dates,
+        canonical_codes=codes,
+        eligibility=eligibility,
+        states=states,
+        targets=targets,
+    )
+
+    assert coverage["coverage_status"] == "COVERAGE_AVAILABLE"
+    assert coverage["coverage_accepted"] is True
+    assert coverage["canonical_sector_count"] == 31
+    assert coverage["eligible_sector_count"] == 30
+    assert coverage["structurally_ineligible_sector_count"] == 1
+    assert coverage["historical_structural_eligibility_ratio"] == 30 / 31
+    assert coverage["eligibility_receipt_sha256"] == eligibility["receipt_sha256"]
+
+
+def test_c012_rw1_eligibility_below_fixed_28_sector_minimum_fails_closed() -> None:
+    day = date(2024, 3, 15)
+    feature_cutoff = date(2024, 3, 14)
+    codes = tuple(f"L1-{index:02d}" for index in range(31))
+    panel = _panel(list(codes), [feature_cutoff, day])
+    for code in codes[:4]:
+        panel.loc[(pd.Timestamp(feature_cutoff), code), subject.RELATIVE_FEATURES[0]] = np.nan
+
+    with pytest.raises(subject.RidgeCandidateError) as captured:
+        subject._c012_rw1_fold_eligibility(
+            panel,
+            fold={
+                "fold": "fold-2",
+                "validation_first_trading_date": day,
+                "eligibility_feature_cutoff_date": feature_cutoff,
+            },
+            authority_sha256="a" * 64,
+        )
+
+    assert captured.value.reason_code == subject.REASON_RL1_COVERAGE
+    assert captured.value.stage == "coverage"
+    assert captured.value.evidence["eligibility"]["eligible_sector_count"] == 27
+
+
+def test_c012_rw1_target_projection_preserves_canonical_centered_values() -> None:
+    day = date(2024, 3, 15)
+    codes = tuple(f"L1-{index:02d}" for index in range(31))
+    values = {(code, day): float(index - 15) for index, code in enumerate(codes)}
+    parent_body = {"schema_version": "hmm_risk_rotation_target_rows_v1", "target_rows_sha256": "a" * 64}
+    parent = subject.TargetRows(
+        "L1",
+        day,
+        day,
+        (day,),
+        values,
+        {**parent_body, "receipt_sha256": subject.canonical_sha256(parent_body)},
+    )
+
+    projected = subject._project_target_rows_to_eligible_codes(parent, codes[1:])
+
+    assert projected.values == {key: value for key, value in values.items() if key[0] != codes[0]}
+    assert projected.receipt["target_formula_recomputed"] is False
+    assert projected.receipt["parent_target_receipt_sha256"] == parent.receipt["receipt_sha256"]
+    assert projected.values[(codes[1], day)] == -14.0
+
+
+def test_c012_rw1_feature_projection_preserves_canonical_relative_values() -> None:
+    day = date(2024, 3, 15)
+    codes = tuple(f"L1-{index:02d}" for index in range(31))
+    feature_count = len(subject.RELATIVE_FEATURES)
+    preprocessor = jump_subject.Preprocessor(
+        feature_names=subject.RELATIVE_FEATURES,
+        lower=(-100.0,) * feature_count,
+        upper=(100.0,) * feature_count,
+        mean=(0.0,) * feature_count,
+        std=(1.0,) * feature_count,
+        valid_row_count=31,
+        valid_identity_sha256="a" * 64,
+    )
+    sequences = tuple(
+        jump_subject.SequenceData(
+            key=code,
+            dates=(day,),
+            ordinals=(0,),
+            values=np.full((1, feature_count), float(index - 15), dtype=np.float64),
+        )
+        for index, code in enumerate(codes)
+    )
+    component = jump_subject.PreparedComponent(
+        component="L1_ridge",
+        level="L1",
+        feature_names=subject.RELATIVE_FEATURES,
+        expected_sector_count=31,
+        minimum_daily_count=28,
+        canonical_codes=codes,
+        sequences=sequences,
+        preprocessor=preprocessor,
+        unavailable_items=(),
+        valid_row_count=31,
+        valid_identity_sha256="b" * 64,
+    )
+
+    projected = subject._project_prepared_component_to_eligible_codes(
+        component,
+        codes[1:],
+        minimum_daily_count=28,
+    )
+
+    assert projected.canonical_codes == codes[1:]
+    assert projected.valid_row_count == 30
+    assert np.array_equal(projected.sequences[0].values, sequences[1].values)
+    assert float(np.median([item.values[0, 0] for item in projected.sequences])) == 0.5
+
+
 def test_c012_rl1_request_builder_freezes_loaded_input_authority(tmp_path: Path) -> None:
     calendar = _rl1_calendar()
 
@@ -1583,6 +1822,32 @@ def test_c012_rl1_fold_calendar_uses_frozen_trading_dates_when_calendar_boundary
     assert folds[-1]["validation_start"] == date(2025, 10, 1)
     assert folds[-1]["validation_end"] == date(2026, 3, 31)
     assert folds[-1]["validation_days"] == 116
+
+
+def test_c012_rw1_fold_preparation_uses_only_last_252_train_days() -> None:
+    calendar = _rl1_calendar()
+    request = _rl1_request()
+    fold = subject._c012_rl1_folds(tuple(calendar), request)[0]
+    codes = [f"L1-{index:02d}" for index in range(31)]
+    panel = _panel(codes, calendar)
+
+    train, train_target, validation, validation_target, eligibility = subject._prepare_c012_rw1_fold(
+        panel,
+        _benchmark(calendar),
+        tuple(calendar),
+        fold=fold,
+        authority_sha256="a" * 64,
+    )
+
+    assert train_target.start == fold["ridge_train_start"]
+    assert train_target.end == fold["ridge_train_end"]
+    assert len({day for sequence in train.sequences for day in sequence.dates}) == 252
+    assert min(day for sequence in train.sequences for day in sequence.dates) == fold["ridge_train_start"]
+    assert eligibility["eligible_sector_count"] == 31
+    assert eligibility["authority_date"] == fold["validation_first_trading_date"].isoformat()
+    assert eligibility["feature_cutoff_date"] == fold["eligibility_feature_cutoff_date"].isoformat()
+    assert validation.canonical_codes == tuple(codes)
+    assert validation_target.start == fold["validation_start"]
 
 
 def test_ridge_calendar_slice_accepts_non_trading_boundary_and_rejects_count_drift() -> None:
@@ -1773,6 +2038,14 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
         },
     }
     _bind_rl1_request_inputs(request, inputs)
+    request_identity = subject._c012_rl1_request_identity(request, "a" * 40)
+    eligibility_authority_sha256 = subject.canonical_sha256(
+        {
+            "source_sha256": request_identity["source_sha256"],
+            "input_identity": request_identity["input_identity"],
+            "c010_formal_evidence": request_identity["c010_formal_evidence"],
+        }
+    )
     attempts_by_market: list[dict[str, object]] = []
 
     def fake_market(*args: object, **kwargs: object) -> subject.MarketConditioningFold:
@@ -1804,10 +2077,40 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
     dummy_target = subject.TargetRows("L1", date(2024, 1, 2), date(2024, 1, 2), (), {}, {})
     dummy_component = _prepared_relative_component(np.ones((2, len(subject.RELATIVE_FEATURES))))
     monkeypatch.setattr(subject, "_component_panel", lambda *args, **kwargs: pd.DataFrame())
+
+    def fake_prepare(*args: object, **kwargs: object) -> tuple[object, ...]:
+        fold = kwargs["fold"]
+        canonical_codes = [f"L1-{index:02d}" for index in range(31)]
+        body = {
+            "contract_version": subject.RL1_CONTRACT_VERSION,
+            "fold": fold["fold"],
+            "authority_date": fold["validation_first_trading_date"].isoformat(),
+            "feature_cutoff_date": fold["eligibility_feature_cutoff_date"].isoformat(),
+            "authority_basis": "validation_first_canonical_trading_date_t_minus_1_pit_features",
+            "authority_sha256": eligibility_authority_sha256,
+            "validation_outcome_accessed": False,
+            "metric_accessed": False,
+            "validation_feature_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+            "validation_target_cross_section_denominator": "canonical_L1_31_before_eligibility_projection",
+            "canonical_sector_count": 31,
+            "canonical_sector_codes": canonical_codes,
+            "canonical_sector_sha256": subject.canonical_sha256(canonical_codes),
+            "eligible_sector_count": 31,
+            "eligible_sector_codes": canonical_codes,
+            "eligible_sector_sha256": subject.canonical_sha256(canonical_codes),
+            "historical_structural_eligibility_ratio": 1.0,
+            "ineligible_sector_count": 0,
+            "ineligible_sectors": [],
+            "ineligible_sector_sha256": subject.canonical_sha256([]),
+            "daily_minimum_available_count": 28,
+        }
+        eligibility = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+        return dummy_component, dummy_target, dummy_component, dummy_target, eligibility
+
     monkeypatch.setattr(
         subject,
-        "_prepare_fold",
-        lambda *args, **kwargs: (dummy_component, dummy_target, dummy_component, dummy_target),
+        "_prepare_c012_rw1_fold",
+        fake_prepare,
     )
     conditioning_abstention_flags: list[bool] = []
 
@@ -1836,15 +2139,18 @@ def test_c012_rl1_process_runs_exact_twelve_fits_without_selection(monkeypatch: 
         "coverage_status": "FULL_COVERAGE",
         "coverage_accepted": True,
     }
-    monkeypatch.setattr(
-        subject,
-        "_c012_rl1_fold_replay_coverage",
-        lambda **kwargs: {
+
+    def fake_fold_coverage(**kwargs: object) -> dict[str, object]:
+        body = {
             **fold_coverage_body,
             "fold": kwargs["fold"],
-            "receipt_sha256": subject.canonical_sha256({**fold_coverage_body, "fold": kwargs["fold"]}),
-        },
-    )
+            "eligibility_receipt_sha256": kwargs["eligibility"]["receipt_sha256"],
+            "canonical_sector_count": 31,
+            "eligible_sector_count": 31,
+        }
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    monkeypatch.setattr(subject, "_c012_rl1_fold_replay_coverage", fake_fold_coverage)
     replay_coverage_body = {
         "validation_basis": "HISTORICAL_CAUSAL_WALK_FORWARD",
         "coverage_status": "FULL_COVERAGE",
@@ -2313,6 +2619,41 @@ def test_c012_rl1_closure_rejects_self_hashed_extra_child_or_payload_authority()
             child(1, extra_payload), child(2, extra_payload), request=request, producer_commit=producer
         )
     assert payload_error.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
+
+    rolling_drift = json.loads(json.dumps(payload))
+    first_fold = rolling_drift["folds"][0]
+    first_fold["ridge_train_start"] = "2020-01-01"
+    first_fold["receipt_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in first_fold.items() if key != "receipt_sha256"}
+    )
+    rolling_drift["fold_receipt_sha256s"][0] = first_fold["receipt_sha256"]
+    with pytest.raises(subject.RidgeCandidateError) as rolling_error:
+        subject.close_c012_rl1_candidate_children(
+            child(1, rolling_drift), child(2, rolling_drift), request=request, producer_commit=producer
+        )
+    assert rolling_error.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
+
+    authority_drift = json.loads(json.dumps(payload))
+    authority_fold = authority_drift["folds"][0]
+    eligibility = authority_fold["historical_eligibility"]
+    eligibility["authority_sha256"] = "0" * 64
+    eligibility["receipt_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in eligibility.items() if key != "receipt_sha256"}
+    )
+    coverage = authority_fold["replay_coverage"]
+    coverage["eligibility_receipt_sha256"] = eligibility["receipt_sha256"]
+    coverage["receipt_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in coverage.items() if key != "receipt_sha256"}
+    )
+    authority_fold["receipt_sha256"] = subject.canonical_sha256(
+        {key: value for key, value in authority_fold.items() if key != "receipt_sha256"}
+    )
+    authority_drift["fold_receipt_sha256s"][0] = authority_fold["receipt_sha256"]
+    with pytest.raises(subject.RidgeCandidateError) as authority_error:
+        subject.close_c012_rl1_candidate_children(
+            child(1, authority_drift), child(2, authority_drift), request=request, producer_commit=producer
+        )
+    assert authority_error.value.reason_code == subject.REASON_RL1_REPRODUCIBILITY
 
 
 def test_c012_rl1_replay_artifacts_close_core_component_bundle_and_final_acceptance() -> None:
