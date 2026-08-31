@@ -380,8 +380,12 @@ def test_compute_identity_detects_uncommitted_files(tmp_path) -> None:
 
 
 def test_git_command_translates_windows_linked_worktree_for_wsl(tmp_path, monkeypatch) -> None:
+    drive = "X"
+    relative_git_dir = "unit-repo/.git/worktrees/advisory-n2"
+    windows_git_dir = f"{drive}:/{relative_git_dir}"
+    translated_git_dir = f"/mnt/{drive.lower()}/{relative_git_dir}"
     (tmp_path / ".git").write_text(
-        "gitdir: F:/Dev/AIstock/.git/worktrees/advisory-n2\n",
+        f"gitdir: {windows_git_dir}\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -393,10 +397,10 @@ def test_git_command_translates_windows_linked_worktree_for_wsl(tmp_path, monkey
         assert command == [
             "wslpath",
             "-u",
-            "F:/Dev/AIstock/.git/worktrees/advisory-n2",
+            windows_git_dir,
         ]
         assert kwargs == {"check": True, "capture_output": True, "text": True}
-        return subprocess.CompletedProcess(command, 0, stdout="/mnt/f/Dev/AIstock/.git/worktrees/advisory-n2\n")
+        return subprocess.CompletedProcess(command, 0, stdout=f"{translated_git_dir}\n")
 
     monkeypatch.setattr(
         "backend.services.advisory_model_first.alpha_signal_audit_pipeline.subprocess.run",
@@ -412,6 +416,6 @@ def test_git_command_translates_windows_linked_worktree_for_wsl(tmp_path, monkey
         "core.fileMode=false",
         "-c",
         "core.autocrlf=true",
-        "--git-dir=/mnt/f/Dev/AIstock/.git/worktrees/advisory-n2",
+        f"--git-dir={translated_git_dir}",
         f"--work-tree={tmp_path.resolve()}",
     ]

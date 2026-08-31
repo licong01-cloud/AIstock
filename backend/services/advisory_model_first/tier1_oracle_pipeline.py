@@ -976,9 +976,9 @@ def build_tier1_full_universe_outcomes(
         )
         outcome_chunks.append(outcome)
     return Tier1FullUniverseOutcomeResult(
-        outcomes=pd.concat(outcome_chunks, ignore_index=True).sort_values(
-            ["decision_as_of_trade_date", "instrument"]
-        ).reset_index(drop=True),
+        outcomes=pd.concat(outcome_chunks, ignore_index=True)
+        .sort_values(["decision_as_of_trade_date", "instrument"])
+        .reset_index(drop=True),
         coverage=pd.DataFrame(coverage_rows).sort_values("decision_as_of_trade_date").reset_index(drop=True),
     )
 

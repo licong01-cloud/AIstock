@@ -1,13 +1,13 @@
-# AIstock Advisory StrategyPackage 三臂 Alpha 信号审计 F2 详细设计 v1.0
+# AIstock Advisory StrategyPackage 三臂 Alpha 信号审计 F2 详细设计 v1.1
 
 - 日期：2026-08-31
 - Feature tier：F2
-- 当前状态：`LOCAL_IMPLEMENTED_REVIEWED_COMMITTED_COMPUTE_PENDING`
+- 当前状态：`FORMAL_COMPLETE_NAVIGATION_ONLY_SOURCE_PR_PENDING`
 - 业务归属：Selection Center / Advisory / StrategyPackage / QE Research
 - 目标合同：`ALPHA_RANKING`
 - 研究类型：`ORACLE_DIAGNOSTIC`
 - 证据用途：`NAVIGATION_ONLY`
-- 前置依赖：PR #4014（N1 Tier-1 oracle 与固定 learnability audit）
+- 前置依赖：PR #4014（N1 Tier-1 oracle 与固定 learnability audit）已合入，merge commit `cfc490a1794ea58abcf8825a6f2140ddb37a05fe`
 
 ## 1. Background / 当前事实
 
@@ -296,7 +296,19 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 6. 单元/集成测试、多轮审核修复；
 7. 绑定已提交 compute commit 后执行 WSL 正式诊断。
 
-2026-08-31 checkpoint：阶段1-6已在task worktree实现；定向与模块门禁合计覆盖600项通过、16项跳过，L0无P0/P1阻断，F2 validator 15/15、ownership 11/11。阶段7尚未执行，因为正式request与compute都拒绝dirty worktree；提交/推送未获本轮授权，故没有三臂科学结果、registry新行或route刷新，不得把本地实现状态写成正式诊断完成。
+2026-08-31 formal checkpoint：阶段1-7均已完成。N2源码先重放到最新`origin/main`并通过81项定向回归；正式启动暴露Windows linked worktree在WSL下无法读取Git身份的缺口后，修复为显式翻译`.git`指针并按Windows checkout规则检查dirty状态，新增回归并在真实WSL中验证只识别实际修改文件。修复后的82项定向测试、完整`advisory_modeling_backend` 601项通过/16项跳过、F2 validator 15/15、Ruff、format、compile和diff check均通过；2条warning均为既有sklearn `penalty`弃用提示。clean compute commit为`30a8a74eb014eeb4d52cf83923d5be6de9b9df1d`。
+
+正式request为`advalpha3req_e7295a31a4e1953e9048cec5`，semantic SHA256 `e7295a31a4e1953e9048cec5cfa7dc3647a4abcee01430172db7c269731a1600`；不可变bundle为`6784df1abe1dcbb802220d03db70674638eda18b5001c2e022fc099c6bb3e9cd`，inspect=`VALID`，同request exact retry=`EXISTING_BUNDLE`且registry duplicate no-op。正式运行70.861秒、peak RSS 2,588,618,752 bytes，386个决策日、共同signal outcome 1,710,301行、三臂Top50 57,900行；parent ranking与N1为`MATCHED_EXACT_KEYS_AND_1E12_SCORES`，sealed holdout未读，trial计数固定为0。
+
+正式导航结果：
+
+| arm | matured RankIC mean / 95% block CI | Top5 H20净超额均值 / 95% block CI | Top20/40/50全市场赢家召回 |
+|---|---|---|---|
+| `LSTM_ONLY` | `0.11677` / `[0.07558, 0.16157]` | `397.89 bps` / `[154.35, 645.75]` | `0.570% / 1.399% / 1.606%` |
+| `FUNDGROWTH_ONLY` | `0.05628` / `[0.02900, 0.08186]` | `245.73 bps` / `[44.24, 459.26]` | `0.259% / 1.140% / 1.295%` |
+| `IC_WEIGHTED_PARENT` | `0.12284` / `[0.07770, 0.16771]` | `446.52 bps` / `[227.45, 682.15]` | `0.881% / 1.606% / 1.762%` |
+
+父包相对FUND腿的RankIC增量为`+0.06656`、95%区间`[0.03812, 0.09431]`，Top5增量为`+200.79 bps`、区间`[69.26, 334.43]`；相对LSTM腿的RankIC增量仅`+0.00607`、区间`[-0.00223, 0.01484]`，Top5增量`+48.63 bps`、区间`[-103.99, 186.53]`，均跨0。父包与LSTM score相关为Pearson `0.9314`/Spearman `0.9013`；LSTM与FUND仅`0.1781/0.1859`。结论是现有Alpha主要由LSTM腿贡献，FUND腿较弱但提供不同信息，固定IC组合尚无确认性证据稳定优于LSTM单腿；父包Top50召回虽为随机期望的`1.75×`，绝对召回仍仅`1.762%`。这些结果只用于后续StrategyPackage/Entry/Exit/QE路由，不支持改权重、激活或生产替换。
 
 ## 11. Verification Plan
 
@@ -352,21 +364,21 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-206 | `alpha_signal_audit_contracts.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_contracts.py` | LOCAL_IMPLEMENTED_REVIEW_PASS | none |
-| F-207 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；真实 N1 prepare smoke | LOCAL_REVIEW_PASS | none |
-| F-208 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` common/own coverage | LOCAL_REVIEW_PASS | none |
-| F-209 | `tier1_oracle_pipeline.py`; `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` N1 outcome回归 | LOCAL_REVIEW_PASS | none |
-| F-210 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` IC/bucket/block tests | LOCAL_REVIEW_PASS | none |
-| F-211 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` recall/Top5/oracle tests | LOCAL_REVIEW_PASS | none |
-| F-212 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` pairwise/overlap/churn tests | LOCAL_REVIEW_PASS | none |
-| F-213 | `alpha_signal_audit_contracts.py`; `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` regime/quarter/future poison | LOCAL_REVIEW_PASS | none |
-| F-214 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` authorization/dirty/flags | LOCAL_REVIEW_PASS | none |
-| F-215 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` parity正负测试 | LOCAL_REVIEW_PASS | none |
-| F-216 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` immutable/exact retry | LOCAL_REVIEW_PASS | none |
-| F-217 | `alpha_signal_audit_pipeline.py`; existing `research_control.py` | `backend/tests/advisory_model_first/test_research_trial_registry.py`；`backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` | LOCAL_REVIEW_PASS | none |
-| F-218 | `scripts/advisory_strategy_package_alpha_audit.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；artifact: WSL frozen spike console receipts | LOCAL_REVIEW_PASS | none |
+| F-206 | `alpha_signal_audit_contracts.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_contracts.py`；82项定向回归；formal manifest `F:/Dev/AIstock_model_artifacts/advisory_n2_strategy_package_alpha_audit_20260831/alpha_signal_audit_bundles/6784df1abe1dcbb802220d03db70674638eda18b5001c2e022fc099c6bb3e9cd/manifest.json` | FORMAL_NAVIGATION_VERIFIED | none |
+| F-207 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；formal `source_identity_receipt.json` | FORMAL_NAVIGATION_VERIFIED | none |
+| F-208 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；formal `coverage_daily.parquet` 386日、共同1,710,301行 | FORMAL_NAVIGATION_VERIFIED | none |
+| F-209 | `tier1_oracle_pipeline.py`; `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；formal `full_universe_signal_outcomes.parquet`最大exit=`2026-03-10` | FORMAL_NAVIGATION_VERIFIED | none |
+| F-210 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；formal `signal_metrics_daily.parquet`、`arm_summary.json` | FORMAL_NAVIGATION_VERIFIED | none |
+| F-211 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；formal `arm_recall_daily.parquet`、`arm_top5_daily.parquet`、`arm_oracle_daily.parquet` | FORMAL_NAVIGATION_VERIFIED | none |
+| F-212 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；formal `pairwise_summary.json`固定三组pair | FORMAL_NAVIGATION_VERIFIED | none |
+| F-213 | `alpha_signal_audit_contracts.py`; `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` future poison；formal `regime_quarter_summary.parquet` 108行 | FORMAL_NAVIGATION_VERIFIED | none |
+| F-214 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；formal `audit_receipt.json`中sealed=false、trial=0、activated=false | FORMAL_NAVIGATION_VERIFIED | none |
+| F-215 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` parity正负测试；formal `source_identity_receipt.json`为`MATCHED_EXACT_KEYS_AND_1E12_SCORES` | FORMAL_NAVIGATION_VERIFIED | none |
+| F-216 | `alpha_signal_audit_pipeline.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；CLI inspect=`VALID`、exact retry=`EXISTING_BUNDLE` | FORMAL_NAVIGATION_VERIFIED | none |
+| F-217 | `alpha_signal_audit_pipeline.py`; existing `research_control.py` | `backend/tests/advisory_model_first/test_research_trial_registry.py`；formal `registry_record.json` entry `advtrial_026f61cc...` | FORMAL_NAVIGATION_VERIFIED | none |
+| F-218 | `scripts/advisory_strategy_package_alpha_audit.py` | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py`；formal `resource_report.json`记录WSL `rdagent-gpu`、70.861秒、peak RSS 2,588,618,752 bytes | FORMAL_NAVIGATION_VERIFIED | none |
 | F-219 | no production surface | artifact: manifest false flags；`tmp/validation/guardrails/verify_skill_l0_paths.json` | VERIFIED_NOOP | none |
-| F-220 | task-scoped stacked branch | artifact: merge-base=`1acecacb...`（PR #4014 head） | DEPENDENCY_READY | none |
+| F-220 | task-scoped branch rebased onto merged N1 | `backend/tests/advisory_model_first/test_alpha_signal_audit_pipeline.py` source identity；formal `source_identity_receipt.json`；PR #4014 merge `cfc490a1...`；compute `30a8a74e...` | MERGED_DEPENDENCY_VERIFIED | none |
 
 ## 14. Risks / failure modes
 
@@ -380,14 +392,14 @@ docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 | 最好季度被当作主结论 | 取样偏差 | 全窗口主结论，季度只描述，固定 regime/block |
 | 高相关两腿被误当正交 | 组合价值夸大 | score/result correlation + paired marginal delta |
 | 复用私有 N1 逻辑漂移 | outcome 口径分叉 | 暴露单一公共 helper，并保留 N1 回归 parity |
-| #4014 未合入 | 新任务无法独立落主线 | 保持 stacked dependency；不修改 #4014，合入状态单独报告 |
+| #4014 依赖漂移 | N1语义与正式结果分叉 | 已合入merge commit单独记录；N2 source/result仍以自身PR交付 |
 | 诊断重新平台化 | 延误模型演进 | 仅两个模块、一个 CLI、JSON/Parquet bundle；无 UI/DB/scheduler |
 
 ## 15. Rollout / rollback
 
 - rollout 只新增离线 research source、文档和 task artifact；不触碰运行时。
-- 源码未合入前，结果最多是开发窗口 navigation evidence；不能声称生产交付。
-- #4014 先于本任务合入；本任务后续在最新 main 上重放/重基，科学 request identity 不通过静默改写保持。
+- 源码未合入前，正式结果仍只是开发窗口 navigation evidence；不能声称生产交付、模型激活或sealed OOS。
+- #4014 已先于本任务合入；N2已在最新main上重放并以独立clean compute commit运行，科学request identity不通过静默改写保持。
 - rollback 为 revert source PR；不可变 artifact 与 registry 历史保留，以新 lineage 纠错，不覆盖旧结果。
 
 ## 16. Production gates
@@ -407,3 +419,5 @@ client_install = noop
 2. 禁止静默错误：缺腿、缺日期、重复、非有限 score、unknown outcome、identity drift 与统计欠覆盖均 typed 失败或显式状态，不返回伪零值。
 3. 禁止改变业务逻辑：不改父包、权重、Selection、成本、PIT、持有期或其他运行时语义。
 4. 禁止私增门禁：审计结果只导航，不新增人工审批、激活阈值或方向关闭规则；负结果与不确定结果均为合法输出。
+
+2026-08-31正式复核：四项均有直接证据。15项acceptance row均由bundle文件与测试闭合，不以源码存在代替结果；WSL Git身份缺口先以typed failure暴露、修复后仍能识别真实dirty文件，outcome缺失/停牌/不可执行均保留typed status；父包ranking与N1按keys和`1e-12`分数精确一致，权重、PIT、成本和H20时钟未变；registry记录保持0 trial且route仍为`N2_ENTRY_EXIT_QE_PREPARATION`，没有新增审批、激活阈值或运行时阻断。
