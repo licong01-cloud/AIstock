@@ -78,6 +78,7 @@ targets:
       - backend/services/dataset_release/artifact_ready_source.py
       - backend/services/dataset_release/build_processor.py
       - backend/services/dataset_release/canonical_stock_transformer.py
+      - backend/services/dataset_release/index_contract.py
       - backend/services/dataset_release/index_sources.py
       - backend/services/dataset_release/minute_overlay.py
       - backend/services/dataset_release/process_liveness.py
@@ -114,6 +115,7 @@ targets:
           - backend/services/dataset_release/artifact_ready_source.py
           - backend/services/dataset_release/build_processor.py
           - backend/services/dataset_release/canonical_stock_transformer.py
+          - backend/services/dataset_release/index_contract.py
           - backend/services/dataset_release/index_sources.py
           - backend/services/dataset_release/minute_overlay.py
           - backend/services/dataset_release/process_liveness.py
