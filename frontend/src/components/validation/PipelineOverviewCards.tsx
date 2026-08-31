@@ -1,6 +1,6 @@
-import MetricCard from "@/components/paper-v2/MetricCard";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
+import MetricCard from "@/components/trading-console/MetricCard";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
 import {
   type JsonObject,
   type ValidationAutomationSummary,

@@ -2938,12 +2938,12 @@ def test_selection_center_creates_single_package_paper_portfolio_with_trace_link
     link = result["link"]
     assert portfolio.package_id == manifest.package_id
     assert link.run_id == run.run_id
-    assert link.portfolio_id == portfolio.portfolio_id
+    assert link.simulation_account_id == portfolio.portfolio_id
     assert result["paper_runtime_config"]["selection_source"]["run_id"] == run.run_id
     assert result["paper_runtime_config"]["selection_source"]["candidate_count"] == 1
     assert "selection_scores" not in result["paper_runtime_config"]
     assert package_repo.get(manifest.package_id).paper_portfolio_count == 1
-    assert controller.list_links(run.run_id)[0].portfolio_id == portfolio.portfolio_id
+    assert controller.list_links(run.run_id)[0].simulation_account_id == portfolio.portfolio_id
 
 
 def test_selection_center_creates_paper_portfolio_after_default_pit_binding_finalization() -> None:

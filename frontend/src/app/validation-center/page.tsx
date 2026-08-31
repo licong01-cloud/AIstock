@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import MetricCard from "@/components/paper-v2/MetricCard";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
+import MetricCard from "@/components/trading-console/MetricCard";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
 import GitHubIssuesPanel from "@/components/validation/GitHubIssuesPanel";
 import PipelineOverviewCards from "@/components/validation/PipelineOverviewCards";
 import {
