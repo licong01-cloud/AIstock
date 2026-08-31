@@ -1292,14 +1292,17 @@ def _model_closure(manifest: Any) -> str:
 
 
 def _workspace_descriptors(root: Path) -> tuple[WorkspaceFileDescriptorV1, ...]:
+    files = sorted(
+        (path for path in root.rglob("*") if path.is_file()),
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
     descriptors = tuple(
         WorkspaceFileDescriptorV1(
             relative_path=path.relative_to(root).as_posix(),
             sha256=sha256_file(path),
             size_bytes=path.stat().st_size,
         )
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
+        for path in files
     )
     if not descriptors:
         _raise("prepared package workspace is empty", REASON_ROSTER_INVALID)

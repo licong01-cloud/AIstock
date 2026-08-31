@@ -426,6 +426,9 @@ def test_package_freeze_uses_only_package_owned_source_and_self_contains_factor_
     ]
     assert tuple(item.package_id for item in arms) == PACKAGE_IDS
     for arm in arms:
+        assert tuple(item.relative_path for item in arm.workspace_files) == tuple(
+            sorted(item.relative_path for item in arm.workspace_files)
+        )
         described = {item.relative_path for item in arm.workspace_files}
         assert any(path.startswith("frozen_factor_sources/") for path in described)
         entry = (pipeline._local_path(arm.workspace_root) / "strategy_package_factor_entry.py").read_text(
