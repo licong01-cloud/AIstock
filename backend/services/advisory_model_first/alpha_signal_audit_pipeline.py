@@ -1710,12 +1710,55 @@ def _evidence_reference(path: Path, *, declared_uri: str, role: str) -> Evidence
     )
 
 
+def _running_on_posix() -> bool:
+    return os.name != "nt"
+
+
+def _git_command_for_worktree(repository_root: Path) -> tuple[list[str], Path]:
+    root = repository_root.resolve()
+    pointer = root / ".git"
+    if not pointer.is_file():
+        return ["git", "-C", str(root)], root
+
+    raw = pointer.read_text(encoding="utf-8").strip()
+    if not raw.startswith("gitdir: "):
+        _raise(
+            "alpha audit repository .git pointer is invalid",
+            "ADVISORY_ALPHA_AUDIT_REQUEST_INVALID",
+            repository_root=str(root),
+        )
+    git_dir = raw.removeprefix("gitdir: ").strip()
+    command = ["git"]
+    if _running_on_posix() and ":/" in git_dir:
+        try:
+            git_dir = subprocess.run(
+                ["wslpath", "-u", git_dir],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            _raise(
+                "alpha audit could not translate the worktree git directory",
+                "ADVISORY_ALPHA_AUDIT_REQUEST_INVALID",
+                error_type=type(exc).__name__,
+                repository_root=str(root),
+            )
+        # The linked checkout was materialized by Windows Git. Match its
+        # checkout normalization so Linux Git does not report the entire CRLF
+        # worktree as dirty while still detecting real tracked/untracked edits.
+        command.extend(["-c", "core.fileMode=false", "-c", "core.autocrlf=true"])
+    command.extend([f"--git-dir={git_dir}", f"--work-tree={root}"])
+    return command, root
+
+
 def _git_commit(repository_root: Path) -> str:
+    command, root = _git_command_for_worktree(repository_root)
     try:
         commit = (
             subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repository_root,
+                [*command, "rev-parse", "HEAD"],
+                cwd=root,
                 check=True,
                 capture_output=True,
                 text=True,
@@ -1739,10 +1782,11 @@ def _git_commit(repository_root: Path) -> str:
 
 
 def _git_dirty_paths(repository_root: Path) -> list[str]:
+    command, root = _git_command_for_worktree(repository_root)
     try:
         output = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=repository_root,
+            [*command, "status", "--porcelain", "--untracked-files=all"],
+            cwd=root,
             check=True,
             capture_output=True,
             text=True,

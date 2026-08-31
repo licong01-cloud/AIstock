@@ -17,6 +17,7 @@ from backend.services.advisory_model_first.alpha_signal_audit_contracts import (
 )
 from backend.services.advisory_model_first.alpha_signal_audit_pipeline import (
     AlphaAuditMetricResult,
+    _git_command_for_worktree,
     _git_dirty_paths,
     _publish_bundle,
     _read_bundle,
@@ -376,3 +377,41 @@ def test_compute_identity_detects_uncommitted_files(tmp_path) -> None:
 
     tracked.write_text("dirty\n", encoding="utf-8")
     assert _git_dirty_paths(tmp_path) == ["tracked.txt"]
+
+
+def test_git_command_translates_windows_linked_worktree_for_wsl(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".git").write_text(
+        "gitdir: F:/Dev/AIstock/.git/worktrees/advisory-n2\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "backend.services.advisory_model_first.alpha_signal_audit_pipeline._running_on_posix",
+        lambda: True,
+    )
+
+    def fake_run(command, **kwargs):
+        assert command == [
+            "wslpath",
+            "-u",
+            "F:/Dev/AIstock/.git/worktrees/advisory-n2",
+        ]
+        assert kwargs == {"check": True, "capture_output": True, "text": True}
+        return subprocess.CompletedProcess(command, 0, stdout="/mnt/f/Dev/AIstock/.git/worktrees/advisory-n2\n")
+
+    monkeypatch.setattr(
+        "backend.services.advisory_model_first.alpha_signal_audit_pipeline.subprocess.run",
+        fake_run,
+    )
+
+    command, root = _git_command_for_worktree(tmp_path)
+
+    assert root == tmp_path.resolve()
+    assert command == [
+        "git",
+        "-c",
+        "core.fileMode=false",
+        "-c",
+        "core.autocrlf=true",
+        "--git-dir=/mnt/f/Dev/AIstock/.git/worktrees/advisory-n2",
+        f"--work-tree={tmp_path.resolve()}",
+    ]
