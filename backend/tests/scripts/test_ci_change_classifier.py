@@ -1150,49 +1150,12 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
 
-    assert jobs["classify-changes"]["outputs"]["workflow_validation_required"].endswith(
-        "steps.classify.outputs.workflow_validation_required }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["workflow_test_targets"].endswith(
-        "steps.classify.outputs.workflow_test_targets }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["prompt_evaluation_required"].endswith(
-        "steps.classify.outputs.prompt_evaluation_required }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["backend_sessions"].endswith(
-        "steps.classify.outputs.backend_sessions }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["dev_db_required"].endswith("steps.classify.outputs.dev_db_required }}")
-    assert jobs["classify-changes"]["outputs"]["dev_db_plan_keys"].endswith(
-        "steps.classify.outputs.dev_db_plan_keys }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["runner_kind"].endswith("steps.classify.outputs.runner_kind }}")
-    assert jobs["classify-changes"]["outputs"]["environment_fingerprint_ref"].endswith(
-        "steps.classify.outputs.environment_fingerprint_ref }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["install_forbidden"].endswith(
-        "steps.classify.outputs.install_forbidden }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["frontend_required"].endswith(
-        "steps.classify.outputs.frontend_required }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["frontend_test_targets"].endswith(
-        "steps.classify.outputs.frontend_test_targets }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["catalog_validation_required"].endswith(
-        "steps.classify.outputs.catalog_validation_required }}"
-    )
-    assert jobs["classify-changes"]["outputs"]["go_required"].endswith("steps.classify.outputs.go_required }}")
-    assert jobs["backend-tests"]["if"] == "needs.classify-changes.outputs.backend_required != 'false'"
-    assert (
-        jobs["backend-tests"]["strategy"]["matrix"]["session"]
-        == "${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}"
-    )
-    assert "workflow-validation-tests" not in jobs
+    assert set(jobs) == {"ci-verdict"}
     verdict = jobs["ci-verdict"]
     workflow_condition = (
-        "needs.classify-changes.outputs.workflow_validation_required == 'true' && "
-        "needs.classify-changes.outputs.workflow_test_targets != '[]'"
+        "always() && steps.classify.outcome == 'success' && "
+        "steps.classify.outputs.workflow_validation_required == 'true' && "
+        "steps.classify.outputs.workflow_test_targets != '[]'"
     )
     workflow_validation = next(step for step in verdict["steps"] if step.get("id") == "workflow_validation")
     workflow_policy = next(step for step in verdict["steps"] if step.get("id") == "workflow_policy")
@@ -1202,19 +1165,15 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "WORKFLOW_TEST_TARGETS" in workflow_runs
     assert 'python -m pytest "${workflow_test_targets[@]}"' in workflow_runs
     assert "backend/tests/scripts/test_llm_provider_adapter.py \\" not in workflow_runs
-    assert jobs["frontend-quality"]["if"] == "needs.classify-changes.outputs.frontend_required == 'true'"
-    frontend_runs = "\n".join(str(step.get("run", "")) for step in jobs["frontend-quality"]["steps"])
+    frontend_runs = str(next(step for step in verdict["steps"] if step.get("id") == "frontend_validation")["run"])
     assert "node_modules/.bin/tsc" in frontend_runs
     assert "npm run lint" in frontend_runs
     assert "npx playwright install --with-deps chromium" not in frontend_runs
     assert "FRONTEND_TEST_TARGETS" in frontend_runs
     assert 'npm run test:e2e -- "${module_test_targets[@]}"' in frontend_runs
-    assert jobs["tdx-go-tests"]["if"] == "needs.classify-changes.outputs.go_required == 'true'"
-    go_runs = "\n".join(str(step.get("run", "")) for step in jobs["tdx-go-tests"]["steps"])
+    go_runs = str(next(step for step in verdict["steps"] if step.get("id") == "go_validation")["run"])
     assert "go test ./..." in go_runs
-    prompt_eval = jobs["prompt-evaluation"]
-    assert prompt_eval["if"] == "needs.classify-changes.outputs.prompt_evaluation_required == 'true'"
-    prompt_eval_run_steps = "\n".join(str(step.get("run", "")) for step in prompt_eval["steps"])
+    prompt_eval_run_steps = str(next(step for step in verdict["steps"] if step.get("id") == "prompt_validation")["run"])
     assert "scripts/llm_provider_adapter.py --json prompt-evaluation" in prompt_eval_run_steps
     assert "failure-bug-register" not in jobs
     assert "actions/upload-artifact@" not in Path(".github/workflows/test.yml").read_text(encoding="utf-8")
@@ -1225,15 +1184,16 @@ def test_github_backend_lane_uses_prebuilt_windows_environment_without_database_
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
-    backend = workflow["jobs"]["backend-tests"]
-    assert backend["runs-on"] == ["self-hosted", "Windows", "aistock-ci"]
-    assert "services" not in backend
-    steps = backend["steps"]
-    assert any(step.get("name") == "Verify AIstock-CI environment" for step in steps)
+    verdict = workflow["jobs"]["ci-verdict"]
+    assert "aistock-ci" in verdict["runs-on"]
+    assert "services" not in verdict
+    steps = verdict["steps"]
+    assert any(step.get("name") == "Verify prebuilt AIstock-CI environment" for step in steps)
     runs = "\n".join(str(step.get("run", "")) for step in steps)
     assert "pip install" not in runs
     assert "conda install" not in runs
     assert "scripts/ci_environment_verify.py" in runs
+    assert 'python -m nox -s "${session}"' in runs
 
 
 def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
@@ -1242,27 +1202,16 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     verdict = jobs["ci-verdict"]
-    expected_needs = {
-        "classify-changes",
-        "backend-tests",
-        "frontend-quality",
-        "tdx-go-tests",
-        "prompt-evaluation",
-    }
-
     close_sync_expression = "startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')"
-    classifier = jobs["classify-changes"]
-    assert close_sync_expression in classifier["name"]
-    assert "'CI verdict'" in classifier["name"]
-    assert "ubuntu-latest" in classifier["runs-on"]
-    classify_step = next(step for step in classifier["steps"] if step.get("id") == "classify")
+    assert set(jobs) == {"ci-verdict"}
+    assert verdict["name"] == "CI verdict"
+    assert close_sync_expression in verdict["runs-on"]
+    assert "ubuntu-latest" in verdict["runs-on"]
+    classify_step = next(step for step in verdict["steps"] if step.get("id") == "classify")
     assert "scripts/bug_registry_metadata_check.py" in classify_step["run"]
     assert "runner_kind=github_hosted_metadata" in classify_step["run"]
     assert "close_sync_metadata_only=true" in classify_step["run"]
-    assert "CI verdict (standard lane skipped)" in verdict["name"]
-    assert close_sync_expression in verdict["if"]
-    assert "always()" in verdict["if"]
-    assert set(verdict["needs"]) == expected_needs
+    assert "needs" not in verdict
     verdict_step = next(
         step for step in verdict["steps"] if step.get("name") == "Require every selected CI lane to pass"
     )
@@ -1274,7 +1223,6 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert verdict_step["env"]["WORKFLOW_POLICY_RESULT"] == "${{ steps.workflow_policy.outcome }}"
     assert "workflow_validation=${WORKFLOW_TEST_RESULT}" in run
     assert "workflow_policy=${WORKFLOW_POLICY_RESULT}" in run
-    assert "failure-bug-register" not in verdict["needs"]
     assert "REGISTRAR_RESULT" not in verdict_step.get("env", {})
     assert '"registrar:' not in run
     assert 'result" != "success"' in run
@@ -1283,7 +1231,7 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert "The failed job logs are the authoritative PR evidence" in run
     assert "failure-bug-register" not in jobs
 
-    classify_steps = jobs["classify-changes"]["steps"]
+    classify_steps = verdict["steps"]
     assert any(step.get("name") == "Classify CI lane" for step in classify_steps)
 
 
@@ -1294,7 +1242,7 @@ def test_classification_job_reuses_one_checkout_for_static_and_registry_gates() 
     jobs = workflow["jobs"]
     assert "static-gate" not in jobs
     assert "docs-lite" not in jobs
-    static_gate_steps = jobs["classify-changes"]["steps"]
+    static_gate_steps = jobs["ci-verdict"]["steps"]
     assert sum("actions/checkout@" in str(step.get("uses") or "") for step in static_gate_steps) == 1
     assert sum(step.get("name") == "Verify prebuilt AIstock-CI environment" for step in static_gate_steps) == 1
     classify_step = next(step for step in static_gate_steps if step.get("id") == "classify")
@@ -1578,7 +1526,7 @@ def test_classifier_uses_prebuilt_tooling_without_install_steps() -> None:
     import yaml
 
     workflows = {
-        ".github/workflows/test.yml": ("classify-changes", "Classify CI lane"),
+        ".github/workflows/test.yml": ("ci-verdict", "Classify CI lane"),
         ".github/workflows/pr-quality.yml": ("pr-quality", "Detect PR quality lane"),
         ".github/workflows/codeql.yml": ("codeql-verdict", "Detect CodeQL fast lane"),
         ".github/workflows/semgrep.yml": ("semgrep", "Detect Semgrep fast lane"),
