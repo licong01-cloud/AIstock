@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -175,13 +175,9 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/ci_changed_files.py": ("backend/tests/scripts/test_ci_changed_files.py",),
     "scripts/ci_environment_verify.py": ("backend/tests/scripts/test_ci_environment_verify.py",),
     "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
-    "scripts/ci/prepare_self_hosted_workspace.py": (
-        "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
-    ),
+    "scripts/ci/prepare_self_hosted_workspace.py": ("backend/tests/scripts/test_prepare_self_hosted_workspace.py",),
     "scripts/ci_workflow_policy_scan.py": ("backend/tests/scripts/test_ci_workflow_policy_scan.py",),
-    "scripts/configure_aistock_github_runner.ps1": (
-        "backend/tests/scripts/test_configure_aistock_github_runner.py",
-    ),
+    "scripts/configure_aistock_github_runner.ps1": ("backend/tests/scripts/test_configure_aistock_github_runner.py",),
     "scripts/code_intelligence_adapter.py": ("backend/tests/scripts/test_code_intelligence_adapter.py",),
     "scripts/issue_flow.py": (
         "backend/tests/scripts/test_issue_flow.py",
@@ -191,12 +187,8 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/nightly_session_runner.py": ("backend/tests/scripts/test_nightly_session_runner.py",),
     "scripts/nightly_adaptive_scheduler.py": ("backend/tests/scripts/test_nightly_adaptive_scheduler.py",),
     "scripts/nightly_design_drift_audit.py": ("backend/tests/scripts/test_nightly_design_drift_audit.py",),
-    "scripts/nightly_silent_degradation_audit.py": (
-        "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
-    ),
-    "scripts/validate_changed_requirements.py": (
-        "backend/tests/scripts/test_validate_changed_requirements.py",
-    ),
+    "scripts/nightly_silent_degradation_audit.py": ("backend/tests/scripts/test_nightly_silent_degradation_audit.py",),
+    "scripts/validate_changed_requirements.py": ("backend/tests/scripts/test_validate_changed_requirements.py",),
     "noxfile.py": ("backend/tests/test_noxfile_validation_env.py",),
 }
 WORKFLOW_AUTHORITY_PREFIXES = (".codex/skills/", ".claude/commands/")
@@ -233,6 +225,7 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/wsl/advisory_p0k_train.py": ("advisory_modeling_backend",),
     "scripts/advisory_p0l_build_training_request.py": ("advisory_modeling_backend",),
     "scripts/wsl/advisory_p0l_train.py": ("advisory_modeling_backend",),
+    "scripts/advisory_n1_tier1_oracle_learnability.py": ("advisory_modeling_backend",),
 }
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
 FRONTEND_FILES = {
@@ -638,9 +631,7 @@ def classify_changed_files(
         reasons.append("only close-sync BUG JSON metadata changed; backend matrix can be skipped")
 
     workflow_fast_files = [
-        path
-        for path in non_bug_registry_files
-        if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
+        path for path in non_bug_registry_files if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
     ]
     workflow_test_targets = _workflow_test_targets(workflow_fast_files)
     frontend_files = [path for path in non_bug_registry_files if _is_frontend_path(path)]
@@ -662,8 +653,7 @@ def classify_changed_files(
     unmapped_code_files = catalog_selection["unmapped_code_files"]
     if unmapped_code_files:
         blocking.append(
-            "unmapped executable code must declare a direct CI test mapping: "
-            + ", ".join(unmapped_code_files)
+            "unmapped executable code must declare a direct CI test mapping: " + ", ".join(unmapped_code_files)
         )
 
     workflow_validation_required = bool(workflow_test_targets)
@@ -679,13 +669,19 @@ def classify_changed_files(
         and not go_files
     )
     if workflow_validation_only:
-        reasons.append("only workflow/validation fast-lane files changed; run focused workflow validation instead of backend matrix")
+        reasons.append(
+            "only workflow/validation fast-lane files changed; run focused workflow validation instead of backend matrix"
+        )
     if docs_lite_only:
-        reasons.append(f"only ordinary documentation files changed; {docs_fast_tier or 'docs_fast'} uses diff/version-change review only")
+        reasons.append(
+            f"only ordinary documentation files changed; {docs_fast_tier or 'docs_fast'} uses diff/version-change review only"
+        )
     if docs_controlled_required:
         reasons.append("controlled documentation or client instructions changed; keep normal workflow guardrails")
     elif docs_only:
-        reasons.append("documentation files changed but include standards or agent instructions; keep normal guardrails")
+        reasons.append(
+            "documentation files changed but include standards or agent instructions; keep normal guardrails"
+        )
     if prompt_evaluation_files:
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
     if backend_sessions:
@@ -837,37 +833,45 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     args = parser.parse_args(argv)
 
-    payload = classify_changed_files(_load_changed_files(args), repo_root=Path(args.repo_root), added_files=args.added_file)
+    payload = classify_changed_files(
+        _load_changed_files(args), repo_root=Path(args.repo_root), added_files=args.added_file
+    )
     if args.output_json:
         _write_json(Path(args.output_json), payload)
     if args.github_output:
         _write_github_output(args.github_output, payload)
-    print(json.dumps({
-        "workflow_gate": payload["workflow_gate"],
-        "classification": payload["classification"],
-        "backend_required": payload["backend_required"],
-        "backend_sessions": payload["backend_sessions"],
-        "dev_db_required": payload["dev_db_required"],
-        "dev_db_plan_keys": payload["dev_db_plan_keys"],
-        "runner_kind": payload["runner_kind"],
-        "plan_routing": payload["plan_routing"],
-        "environment_fingerprint_ref": payload["environment_fingerprint_ref"],
-        "install_forbidden": payload["install_forbidden"],
-        "frontend_required": payload["frontend_required"],
-        "frontend_test_targets": payload["frontend_test_targets"],
-        "go_required": payload["go_required"],
-        "unmapped_code_files": payload["unmapped_code_files"],
-        "workflow_validation_required": payload["workflow_validation_required"],
-        "workflow_test_targets": payload["workflow_test_targets"],
-        "docs_lite_required": payload["docs_lite_required"],
-        "docs_fast_required": payload["docs_fast_required"],
-        "docs_fast_tier": payload["docs_fast_tier"],
-        "docs_controlled_required": payload["docs_controlled_required"],
-        "static_gate_required": payload["static_gate_required"],
-        "catalog_validation_required": payload["catalog_validation_required"],
-        "prompt_evaluation_required": payload["prompt_evaluation_required"],
-        "changed_file_count": payload["changed_file_count"],
-    }, ensure_ascii=False, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "workflow_gate": payload["workflow_gate"],
+                "classification": payload["classification"],
+                "backend_required": payload["backend_required"],
+                "backend_sessions": payload["backend_sessions"],
+                "dev_db_required": payload["dev_db_required"],
+                "dev_db_plan_keys": payload["dev_db_plan_keys"],
+                "runner_kind": payload["runner_kind"],
+                "plan_routing": payload["plan_routing"],
+                "environment_fingerprint_ref": payload["environment_fingerprint_ref"],
+                "install_forbidden": payload["install_forbidden"],
+                "frontend_required": payload["frontend_required"],
+                "frontend_test_targets": payload["frontend_test_targets"],
+                "go_required": payload["go_required"],
+                "unmapped_code_files": payload["unmapped_code_files"],
+                "workflow_validation_required": payload["workflow_validation_required"],
+                "workflow_test_targets": payload["workflow_test_targets"],
+                "docs_lite_required": payload["docs_lite_required"],
+                "docs_fast_required": payload["docs_fast_required"],
+                "docs_fast_tier": payload["docs_fast_tier"],
+                "docs_controlled_required": payload["docs_controlled_required"],
+                "static_gate_required": payload["static_gate_required"],
+                "catalog_validation_required": payload["catalog_validation_required"],
+                "prompt_evaluation_required": payload["prompt_evaluation_required"],
+                "changed_file_count": payload["changed_file_count"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
     return 2 if payload["workflow_gate"] == "blocked" else 0
 
 

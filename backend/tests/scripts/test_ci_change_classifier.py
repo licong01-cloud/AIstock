@@ -155,8 +155,7 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert advisory_payload["environment_fingerprint_ref"] == "AIstock-CI"
     assert advisory_payload["install_forbidden"] is True
     advisory_routing = next(
-        item for item in advisory_payload["plan_routing"]
-        if item["plan_key"] == "advisory_dev_input_onboarding_backend"
+        item for item in advisory_payload["plan_routing"] if item["plan_key"] == "advisory_dev_input_onboarding_backend"
     )
     assert advisory_routing == {
         "plan_key": "advisory_dev_input_onboarding_backend",
@@ -192,6 +191,16 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert p0l_payload["backend_sessions"] == ["advisory_modeling_backend"]
     assert p0l_payload["dev_db_required"] is False
     assert p0l_payload["unmapped_code_files"] == []
+
+    n1_payload = classifier.classify_changed_files(
+        ["scripts/advisory_n1_tier1_oracle_learnability.py"],
+        repo_root=tmp_path,
+    )
+    assert n1_payload["classification"] == "targeted_ci_required"
+    assert n1_payload["backend_required"] is True
+    assert n1_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert n1_payload["dev_db_required"] is False
+    assert n1_payload["unmapped_code_files"] == []
 
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
@@ -642,9 +651,7 @@ def test_workflow_fast_contract_test_has_direct_self_mapping(tmp_path: Path) -> 
 
     assert payload["workflow_gate"] == "passed"
     assert payload["unmapped_code_files"] == []
-    assert payload["workflow_test_targets"] == [
-        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
-    ]
+    assert payload["workflow_test_targets"] == ["backend/tests/scripts/test_aistock_issue_workflow_fast.py"]
 
 
 def test_ci_environment_and_policy_scripts_use_direct_workflow_tests(tmp_path: Path) -> None:
@@ -1155,15 +1162,11 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert jobs["classify-changes"]["outputs"]["backend_sessions"].endswith(
         "steps.classify.outputs.backend_sessions }}"
     )
-    assert jobs["classify-changes"]["outputs"]["dev_db_required"].endswith(
-        "steps.classify.outputs.dev_db_required }}"
-    )
+    assert jobs["classify-changes"]["outputs"]["dev_db_required"].endswith("steps.classify.outputs.dev_db_required }}")
     assert jobs["classify-changes"]["outputs"]["dev_db_plan_keys"].endswith(
         "steps.classify.outputs.dev_db_plan_keys }}"
     )
-    assert jobs["classify-changes"]["outputs"]["runner_kind"].endswith(
-        "steps.classify.outputs.runner_kind }}"
-    )
+    assert jobs["classify-changes"]["outputs"]["runner_kind"].endswith("steps.classify.outputs.runner_kind }}")
     assert jobs["classify-changes"]["outputs"]["environment_fingerprint_ref"].endswith(
         "steps.classify.outputs.environment_fingerprint_ref }}"
     )
@@ -1260,15 +1263,17 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert close_sync_expression in verdict["if"]
     assert "always()" in verdict["if"]
     assert set(verdict["needs"]) == expected_needs
-    verdict_step = next(step for step in verdict["steps"] if step.get("name") == "Require every selected CI lane to pass")
+    verdict_step = next(
+        step for step in verdict["steps"] if step.get("name") == "Require every selected CI lane to pass"
+    )
     run = str(verdict_step["run"])
     assert 'failures+=("classify_static=${CLASSIFY_RESULT}")' in run
     for lane in ("backend", "frontend", "go", "prompt"):
         assert f'"{lane}:${{{lane.upper() if lane != "go" else "GO"}_RESULT}}"' in run
     assert verdict_step["env"]["WORKFLOW_TEST_RESULT"] == "${{ steps.workflow_validation.outcome }}"
     assert verdict_step["env"]["WORKFLOW_POLICY_RESULT"] == "${{ steps.workflow_policy.outcome }}"
-    assert 'workflow_validation=${WORKFLOW_TEST_RESULT}' in run
-    assert 'workflow_policy=${WORKFLOW_POLICY_RESULT}' in run
+    assert "workflow_validation=${WORKFLOW_TEST_RESULT}" in run
+    assert "workflow_policy=${WORKFLOW_POLICY_RESULT}" in run
     assert "failure-bug-register" not in verdict["needs"]
     assert "REGISTRAR_RESULT" not in verdict_step.get("env", {})
     assert '"registrar:' not in run
@@ -1303,12 +1308,16 @@ def test_classification_job_reuses_one_checkout_for_static_and_registry_gates() 
         if isinstance(step, dict) and str(step.get("name") or "").startswith("nox -s ")
     ]
     assert nox_steps
-    assert all("steps.classify.outputs.close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps)
+    assert all(
+        "steps.classify.outputs.close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps
+    )
     l0_step = next(step for step in nox_steps if step.get("name") == "nox -s l0 -- changed files")
     assert "tmp/validation/ci_change_classifier/changed_files.txt" in l0_step["run"]
     assert 'if [ -e "${path}" ]' in l0_step["run"]
     assert 'python -m nox -s l0 -- "${changed_files[@]}"' in l0_step["run"]
-    assert not any(str(step.get("name") or "").startswith("Build static-gate changed-file") for step in static_gate_steps)
+    assert not any(
+        str(step.get("name") or "").startswith("Build static-gate changed-file") for step in static_gate_steps
+    )
 
     catalog_steps = [
         step
@@ -1316,7 +1325,10 @@ def test_classification_job_reuses_one_checkout_for_static_and_registry_gates() 
         if step.get("name") in {"nox -s validation_module_registry_l0", "nox -s validation_catalog_integrity"}
     ]
     assert len(catalog_steps) == 2
-    assert all("steps.classify.outputs.catalog_validation_required == 'true'" in str(step.get("if") or "") for step in catalog_steps)
+    assert all(
+        "steps.classify.outputs.catalog_validation_required == 'true'" in str(step.get("if") or "")
+        for step in catalog_steps
+    )
 
 
 def test_catalog_change_uses_catalog_gate_without_workflow_suite(tmp_path: Path) -> None:
@@ -1421,9 +1433,7 @@ def test_pr_quality_proves_merge_base_and_boundedly_deepens_exact_pr_refs() -> N
     assert "--prepare-pr-merge-base-only" in run
     assert '--base-sha "${BASE_SHA}"' in run
     assert '--checkout-ref "${CHECKOUT_REF}"' in run
-    assert run.index("--prepare-pr-merge-base-only") < run.index(
-        'git diff --name-only "${BASE_COMMIT}...HEAD"'
-    )
+    assert run.index("--prepare-pr-merge-base-only") < run.index('git diff --name-only "${BASE_COMMIT}...HEAD"')
 
 
 def test_codeql_selects_only_changed_languages() -> None:
@@ -1435,9 +1445,7 @@ def test_codeql_selects_only_changed_languages() -> None:
     verdict = jobs["codeql-verdict"]
     verdict_steps = verdict["steps"]
     prepare_steps = [
-        step
-        for step in verdict_steps
-        if step.get("name") == "Prepare exact local workspace (no remote actions)"
+        step for step in verdict_steps if step.get("name") == "Prepare exact local workspace (no remote actions)"
     ]
 
     assert verdict["name"] == "CodeQL verdict"
@@ -1610,9 +1618,7 @@ def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
 
 
 def test_javascript_actions_use_native_node24_major_versions() -> None:
-    combined = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted(Path(".github/workflows").glob("*.yml"))
-    )
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in sorted(Path(".github/workflows").glob("*.yml")))
     expected = {
         "actions/checkout@": "actions/checkout@v7",
         "actions/upload-artifact@": "actions/upload-artifact@v7",
@@ -1621,9 +1627,7 @@ def test_javascript_actions_use_native_node24_major_versions() -> None:
     }
     for prefix, expected_ref in expected.items():
         refs = {
-            line.strip().removeprefix("- ").removeprefix("uses: ")
-            for line in combined.splitlines()
-            if prefix in line
+            line.strip().removeprefix("- ").removeprefix("uses: ") for line in combined.splitlines() if prefix in line
         }
         assert refs == {expected_ref}
 
@@ -1642,6 +1646,7 @@ def test_merge_quality_workflows_publish_context_for_pure_bug_registry_changes()
 
     issue_link_text = Path(".github/workflows/issue-auto-link.yml").read_text(encoding="utf-8")
     assert "- 'tests/aistock_validation/bugs/**'" in issue_link_text
+
 
 def test_allocator_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
     allocator = tmp_path / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
