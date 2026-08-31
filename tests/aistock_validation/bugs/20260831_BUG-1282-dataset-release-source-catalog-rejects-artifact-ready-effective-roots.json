@@ -115,7 +115,8 @@
       "Fresh Python process imported ResolutionService and validated the immutable raw-to-effective source authority contract; no database, dataset, or process side effect.",
       "fresh Python process imported ResolutionService: BUG1282_FRESH_PROCESS_IMPORT_OK",
       "fresh Python process imported ResolutionService -> passed (BUG1282_FRESH_PROCESS_IMPORT_OK)",
-      "fresh Python process imported ResolutionService and validated actual source receipt authority -> passed (BUG1282_ACTUAL_RECEIPT_AUTHORITY_OK)"
+      "fresh Python process imported ResolutionService and validated actual source receipt authority -> passed (BUG1282_ACTUAL_RECEIPT_AUTHORITY_OK)",
+      "python -c import ResolutionService -> passed (BUG1282_FINAL_HEAD_FRESH_IMPORT_OK)"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
