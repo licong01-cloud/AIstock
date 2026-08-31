@@ -1,0 +1,29 @@
+nox > Running session qe_long_trend_phase4_ui
+nox > python scripts/aistock_validate.py ports --allow-occupied 3012
+127.0.0.1:3012 free
+nox > node node_modules/typescript/bin/tsc --noEmit --incremental false
+nox > node node_modules/@playwright/test/cli.js test tests/quantevolver/qe_long_trend_evaluation.spec.ts --project chromium --timeout 120000 --output ../tmp/playwright-results-f014-phase4
+
+Running 4 tests using 1 worker
+
+  ✓  1 [chromium] › tests\quantevolver\qe_long_trend_evaluation.spec.ts:6:5 › completed QE Loop restores long-trend DB state and posts the single idempotent action (2.8s)
+  ✓  2 [chromium] › tests\quantevolver\qe_long_trend_evaluation.spec.ts:240:5 › new QE task sends only the immutable registered long-trend profile (1.1s)
+[2m[WebServer] [22m [33m[1m⚠[22m[39m ./src/app/paper-v2/paper-v2.css.webpack[javascript/auto]!=!./node_modules/next/dist/build/webpack/loaders/css-loader/src/index.js??ruleSet[1].rules[13].oneOf[12].use[2]!./node_modules/next/dist/build/webpack/loaders/postcss-loader/src/index.js??ruleSet[1].rules[13].oneOf[12].use[3]!./src/app/paper-v2/paper-v2.css
+[2m[WebServer] [22mWarning
+[2m[WebServer] [22m
+[2m[WebServer] [22m(737:32) autoprefixer: end value has mixed support, consider using flex-end instead
+[2m[WebServer] [22m
+[2m[WebServer] [22mImport trace for requested module:
+[2m[WebServer] [22m./src/app/paper-v2/paper-v2.css.webpack[javascript/auto]!=!./node_modules/next/dist/build/webpack/loaders/css-loader/src/index.js??ruleSet[1].rules[13].oneOf[12].use[2]!./node_modules/next/dist/build/webpack/loaders/postcss-loader/src/index.js??ruleSet[1].rules[13].oneOf[12].use[3]!./src/app/paper-v2/paper-v2.css
+[2m[WebServer] [22m./src/app/paper-v2/paper-v2.css
+  ✓  3 [chromium] › tests\quantevolver\qe_long_trend_evaluation.spec.ts:301:5 › QE Archive uses business search selectors, one outcome vintage and readable evidence (1.8s)
+  -  4 [chromium] › tests\quantevolver\qe_long_trend_evaluation.spec.ts:420:5 › live QE Archive UI reads the materialized F-014 canary without writes
+
+  1 skipped
+  3 passed (31.7s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m
+nox > Session qe_long_trend_phase4_ui was successful in a minute.

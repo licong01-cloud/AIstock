@@ -277,6 +277,22 @@ def test_task_identity_allows_distinct_run_scenarios_and_keeps_original_defaults
     assert repository.runs[second["run_id"]]["backtest_config_json"]["topk"] == 50
 
 
+def test_committed_submission_notifies_process_local_orchestrator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeDurableRepository()
+    notifications: list[str] = []
+    monkeypatch.setattr(
+        "backend.services.multi_alpha.durable_submission.notify_durable_orchestrator",
+        lambda: notifications.append("committed"),
+    )
+
+    result = _service(repository).submit(_payload())
+
+    assert result["run_id"] in repository.runs
+    assert notifications == ["committed"]
+
+
 def test_submission_freezes_explicit_prediction_task_selection_in_request_identity() -> None:
     repository = FakeDurableRepository()
     service = _service(repository)

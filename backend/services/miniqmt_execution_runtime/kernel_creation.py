@@ -4,14 +4,25 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from backend.execution_algos.vnpy_compat.facade_adapter import VnpyFacadeBackedPluginAdapterV1
+from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeAuthorityInputV2,
+    VnpyFacadeConformanceAuthorityV2,
+    VnpyFacadeInitializationInputV2,
+)
+
 from .kernel_delivery import (
     KernelAlgoCreationRequestV1,
+    KernelAlgoCreationRequestV2,
     KernelAlgoStartWriteBundleV1,
     KernelPluginInvocationError,
     invoke_plugin_initialize_v1,
     resolve_plugin_for_restore_v1,
+    validate_vnpy_facade_k6_product_command_trace_v1,
+    validate_vnpy_facade_k2_shadow_command_authority_v1,
 )
 from .kernel_materializer import materialize_applied_transition_v1, materialize_failure_transition_v1
+from .full_five_catalog_authority import FULL_FIVE_ALGO_CODES_V1, build_hot_full_five_catalog_authority_v1
 from .plugin_canonical import thaw_json_v1
 from .plugin_contracts import (
     AlgoDeliveryPersistenceV1,
@@ -28,6 +39,7 @@ from .plugin_contracts import (
     ExecutionProjectionRefV1,
     GatewayCapabilityCatalogV1,
     KernelProjectionTypeV1,
+    KernelCommandLifecycleProjectionV1,
     RuntimeEventEnvelopeV2,
     _algo_instance_id_v2,
     stable_exception_reason_code_v1,
@@ -51,6 +63,19 @@ class KernelAlgoCreationRepositoryV1(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class KernelAlgoCreationRepositoryV2(Protocol):
+    def initialize_product_algo_atomic_v3(
+        self,
+        *,
+        runtime_id: str,
+        worker_incarnation_id: str,
+        event_key_sha256: str,
+        creation_authority: KernelAlgoCreationRequestV2,
+        creation_binding: VnpyFacadeAuthorityInputV2,
+        bundle_builder: Any,
+    ) -> dict[str, Any]: ...
+
+
 class KernelAlgoCreationCoordinatorV1:
     def __init__(
         self,
@@ -58,6 +83,7 @@ class KernelAlgoCreationCoordinatorV1:
         repository: KernelAlgoCreationRepositoryV1,
         catalog_runtime: PluginCatalogRuntimeV2,
         gateway_catalog: GatewayCapabilityCatalogV1,
+        facade_authority: VnpyFacadeConformanceAuthorityV2 | None = None,
     ) -> None:
         self._repository = repository
         self._catalog_runtime = catalog_runtime
@@ -67,11 +93,28 @@ class KernelAlgoCreationCoordinatorV1:
         self._gateway_catalog = GatewayCapabilityCatalogV1.model_validate(
             gateway_catalog.model_dump(mode="python"), strict=True
         )
+        if facade_authority is not None and not isinstance(facade_authority, VnpyFacadeConformanceAuthorityV2):
+            raise TypeError("facade_authority must be VnpyFacadeConformanceAuthorityV2 or None")
+        self._facade_authority = facade_authority
 
     def create(self, request: KernelAlgoCreationRequestV1) -> dict[str, Any]:
-        if not isinstance(request, KernelAlgoCreationRequestV1):
+        if type(request) is not KernelAlgoCreationRequestV1:
             raise TypeError("request must be KernelAlgoCreationRequestV1")
+        return self._create(request, final_product_route=False)
+
+    def _create(
+        self,
+        request: KernelAlgoCreationRequestV1 | KernelAlgoCreationRequestV2,
+        *,
+        final_product_route: bool,
+    ) -> dict[str, Any]:
         request.validate_hashes_v1()
+        if final_product_route:
+            if type(request) is not KernelAlgoCreationRequestV2:
+                raise TypeError("final product creation requires KernelAlgoCreationRequestV2")
+            request.validate_hashes_v2()
+        elif type(request) is not KernelAlgoCreationRequestV1:
+            raise TypeError("shadow creation requires an exact KernelAlgoCreationRequestV1")
         try:
             plugin_key = self._catalog_runtime.plugin_key_for_new_instance(request.algo_code)
             descriptor = self._catalog_runtime.descriptor_for_restore(plugin_key)
@@ -106,6 +149,34 @@ class KernelAlgoCreationCoordinatorV1:
                 },
                 broker_called=False,
             )
+        product_creation_binding: VnpyFacadeAuthorityInputV2 | None = None
+        if final_product_route:
+            if self._facade_authority is None:
+                raise KernelPluginInvocationError(
+                    "MINIQMT_K6_PRODUCT_FACADE_AUTHORITY_INVALID",
+                    "final product creation requires sealed full-five conformance authority",
+                    context={"algo_code": request.algo_code},
+                    broker_called=False,
+                )
+            k1_receipts = tuple(
+                item for item in self._catalog_snapshot.pinned_compatibility_receipts if item.plugin_key == plugin_key
+            )
+            if len(k1_receipts) != 1:
+                raise KernelPluginInvocationError(
+                    "MINIQMT_K6_PRODUCT_COMPATIBILITY_AUTHORITY_INVALID",
+                    "final product creation requires one exact pinned compatibility receipt",
+                    context={"plugin_key": plugin_key.canonical_payload_v1()},
+                    broker_called=False,
+                )
+            product_creation_binding = VnpyFacadeAuthorityInputV2.create(
+                conformance_authority=self._facade_authority,
+                plugin_catalog_snapshot=self._catalog_snapshot,
+                gateway_capability_catalog=self._gateway_catalog,
+                plugin_key=plugin_key,
+                manifest=descriptor.manifest,
+                pinned_compatibility_receipt=k1_receipts[0],
+                route_compatibility_receipt=route_receipt,
+            )
         manifest = descriptor.manifest
         route_projection_ref = ExecutionProjectionRefV1.create(
             projection_type=KernelProjectionTypeV1.ROUTE_COMPATIBILITY,
@@ -133,6 +204,40 @@ class KernelAlgoCreationCoordinatorV1:
         )
 
         def build_event(sequence: int) -> RuntimeEventEnvelopeV2:
+            payload: dict[str, Any] = {
+                "parent_intent_id": request.parent_intent_id,
+                "strategy_slot_id": request.strategy_slot_id,
+                "target_quantity": request.parent_quantity,
+                "execution_plan_id": request.execution_plan_id,
+                "execution_plan_sha256": request.execution_plan_sha256,
+                "release_id": request.release_id,
+                "release_sha256": request.release_sha256,
+                "policy_id": request.policy_id,
+                "policy_sha256": request.policy_sha256,
+                "gateway_capability_catalog": self._gateway_catalog.model_dump(mode="json"),
+                "plugin_catalog_sha256": self._catalog_snapshot.catalog_sha256,
+            }
+            if final_product_route:
+                assert type(request) is KernelAlgoCreationRequestV2
+                payload.update(
+                    {
+                        "plugin_route_compatibility_receipt_sha256": route_receipt.receipt_sha256,
+                        "plugin_route_compatibility_receipt": route_receipt.model_dump(mode="json"),
+                        "product_route_cutover_receipt_sha256": request.product_route_cutover_receipt_sha256,
+                        "product_route_owner_sha256": request.product_route_owner_sha256,
+                        "product_route_epoch": request.product_route_epoch,
+                        "effective_new_instance_sequence": request.effective_new_instance_sequence,
+                        "binding_id": request.binding_id,
+                        "creation_request_sha256": request.creation_request_sha256,
+                    }
+                )
+            else:
+                payload.update(
+                    {
+                        "route_receipt_sha256": route_receipt.receipt_sha256,
+                        "route_compatibility_receipt": route_receipt.model_dump(mode="json"),
+                    }
+                )
             return RuntimeEventEnvelopeV2.create(
                 runtime_id=request.runtime_id,
                 sequence=sequence,
@@ -141,22 +246,8 @@ class KernelAlgoCreationCoordinatorV1:
                 monotonic_ns=None,
                 source=EventSourceV2.MINIQMT_EXECUTION_KERNEL,
                 symbol=request.symbol,
-                payload_schema_version="miniqmt_algo_start_v1",
-                payload={
-                    "parent_intent_id": request.parent_intent_id,
-                    "strategy_slot_id": request.strategy_slot_id,
-                    "target_quantity": request.parent_quantity,
-                    "execution_plan_id": request.execution_plan_id,
-                    "execution_plan_sha256": request.execution_plan_sha256,
-                    "release_id": request.release_id,
-                    "release_sha256": request.release_sha256,
-                    "policy_id": request.policy_id,
-                    "policy_sha256": request.policy_sha256,
-                    "route_receipt_sha256": route_receipt.receipt_sha256,
-                    "route_compatibility_receipt": route_receipt.model_dump(mode="json"),
-                    "gateway_capability_catalog": self._gateway_catalog.model_dump(mode="json"),
-                    "plugin_catalog_sha256": self._catalog_snapshot.catalog_sha256,
-                },
+                payload_schema_version="miniqmt_algo_start_v2" if final_product_route else "miniqmt_algo_start_v1",
+                payload=payload,
                 source_identity={
                     "algo_instance_id": algo_instance_id,
                     "runtime_id": request.runtime_id,
@@ -172,6 +263,10 @@ class KernelAlgoCreationCoordinatorV1:
                     "execution_plan_id": request.execution_plan_id,
                     "release_id": request.release_id,
                     "policy_id": request.policy_id,
+                    "binding_id": request.binding_id if final_product_route else None,
+                    "exchange_trade_date": request.exchange_trade_date,
+                    "session_epoch": request.session_epoch,
+                    "session_phase": request.session_phase.value,
                 },
             )
 
@@ -262,11 +357,57 @@ class KernelAlgoCreationCoordinatorV1:
                     canonical_plugin_config=thaw_json_v1(request.plugin_config),
                     plugin_config_sha256=request.plugin_config_sha256,
                 )
+                facade_input = None
+                if isinstance(resolved.plugin, VnpyFacadeBackedPluginAdapterV1):
+                    if self._facade_authority is not None:
+                        k1_receipts = tuple(
+                            item
+                            for item in self._catalog_snapshot.pinned_compatibility_receipts
+                            if item.plugin_key == plugin_key
+                        )
+                        if len(k1_receipts) != 1:
+                            raise KernelPluginInvocationError(
+                                "MINIQMT_VNPY_FACADE_CONFORMANCE_AUTHORITY_INVALID",
+                                "facade initialization requires one exact K1 compatibility receipt",
+                                context={"plugin_key": plugin_key.canonical_payload_v1()},
+                                broker_called=False,
+                            )
+                        authority_input = VnpyFacadeAuthorityInputV2.create(
+                            conformance_authority=self._facade_authority,
+                            plugin_catalog_snapshot=self._catalog_snapshot,
+                            gateway_capability_catalog=self._gateway_catalog,
+                            plugin_key=plugin_key,
+                            manifest=manifest,
+                            pinned_compatibility_receipt=k1_receipts[0],
+                            route_compatibility_receipt=route_receipt,
+                        )
+                        facade_input = VnpyFacadeInitializationInputV2.create(
+                            start_event=event,
+                            start_delivery=event_delivery,
+                            start_context=start_context,
+                            authority_input=authority_input,
+                        )
                 initialization = invoke_plugin_initialize_v1(
                     plugin=resolved.plugin,
                     expected_manifest=manifest,
                     start_context=start_context,
+                    facade_input=facade_input,
                 )
+                if facade_input is not None and final_product_route:
+                    validate_vnpy_facade_k6_product_command_trace_v1(initialization)
+                elif facade_input is not None:
+                    validate_vnpy_facade_k2_shadow_command_authority_v1(initialization)
+                if final_product_route and initialization.broker_commands:
+                    raise KernelPluginInvocationError(
+                        "MINIQMT_K6_PRODUCT_ALGO_START_COMMAND_FORBIDDEN",
+                        "final product ALGO_START may initialize state/timers but cannot emit broker commands",
+                        context={
+                            "runtime_id": request.runtime_id,
+                            "parent_intent_id": request.parent_intent_id,
+                            "ordered_command_ids": [item.command_id for item in initialization.broker_commands],
+                        },
+                        broker_called=False,
+                    )
                 transition = AlgoTransitionV1(
                     schema_version="miniqmt_algo_transition_v1",
                     next_state=initialization.next_state,
@@ -298,6 +439,13 @@ class KernelAlgoCreationCoordinatorV1:
                     algo_code=manifest.algo_code,
                     symbol=request.symbol,
                     side=request.side,
+                    command_lifecycle_projection=KernelCommandLifecycleProjectionV1.create(
+                        runtime_id=event.runtime_id,
+                        algo_instance_id=initialization.next_state.algo_instance_id,
+                        event_id=event.event_id,
+                        delivery_id=initial_delivery.delivery_id,
+                        ordered_items=(),
+                    ),
                     existing_mappings_by_local_vt_orderid={},
                     existing_timer_schedules={},
                     initialization=True,
@@ -337,6 +485,22 @@ class KernelAlgoCreationCoordinatorV1:
             )
 
         probe = build_event(1)
+        if final_product_route:
+            assert type(request) is KernelAlgoCreationRequestV2
+            assert product_creation_binding is not None
+            initialize_v3 = getattr(self._repository, "initialize_product_algo_atomic_v3", None)
+            if not callable(initialize_v3):
+                raise TypeError(
+                    "repository must implement initialize_product_algo_atomic_v3 for final product creation"
+                )
+            return initialize_v3(
+                runtime_id=request.runtime_id,
+                worker_incarnation_id=self._product_worker_incarnation_id,
+                event_key_sha256=probe.event_key_sha256,
+                creation_authority=request,
+                creation_binding=product_creation_binding,
+                bundle_builder=build_bundle,
+            )
         return self._repository.initialize_algo_atomic(
             runtime_id=request.runtime_id,
             event_key_sha256=probe.event_key_sha256,
@@ -345,4 +509,86 @@ class KernelAlgoCreationCoordinatorV1:
         )
 
 
-__all__ = ["KernelAlgoCreationCoordinatorV1", "KernelAlgoCreationRepositoryV1"]
+class KernelAlgoCreationCoordinatorV2(KernelAlgoCreationCoordinatorV1):
+    """Final K6-D product creation entry; V1 shadow requests are not accepted."""
+
+    def __init__(
+        self,
+        *,
+        repository: KernelAlgoCreationRepositoryV2,
+        catalog_runtime: PluginCatalogRuntimeV2,
+        gateway_catalog: GatewayCapabilityCatalogV1,
+        worker_incarnation_id: str,
+        facade_authority: VnpyFacadeConformanceAuthorityV2,
+    ) -> None:
+        if not callable(getattr(repository, "initialize_product_algo_atomic_v3", None)):
+            raise TypeError("repository must implement initialize_product_algo_atomic_v3")
+        if (
+            type(worker_incarnation_id) is not str
+            or not worker_incarnation_id
+            or (worker_incarnation_id != worker_incarnation_id.strip())
+        ):
+            raise TypeError("worker_incarnation_id must be a non-empty canonical string")
+        if not isinstance(facade_authority, VnpyFacadeConformanceAuthorityV2):
+            raise TypeError("final product creation requires VnpyFacadeConformanceAuthorityV2")
+        strict_gateway = GatewayCapabilityCatalogV1.model_validate(
+            gateway_catalog.model_dump(mode="python"), strict=True
+        )
+        full_authority = build_hot_full_five_catalog_authority_v1(gateway_catalog=strict_gateway)
+        supplied_snapshot = PluginCatalogSnapshotV1.model_validate(
+            catalog_runtime.snapshot.model_dump(mode="python"), strict=True
+        )
+        expected_snapshot = PluginCatalogSnapshotV1.model_validate(
+            full_authority.catalog_runtime.snapshot.model_dump(mode="python"), strict=True
+        )
+        actual_algos = tuple(item.manifest.algo_code for item in supplied_snapshot.registration_descriptors)
+        if actual_algos != FULL_FIVE_ALGO_CODES_V1 or supplied_snapshot != expected_snapshot:
+            raise KernelPluginInvocationError(
+                "MINIQMT_K6_PRODUCT_CATALOG_AUTHORITY_INVALID",
+                "final product creation requires the independently rebuilt exact full-five plugin catalog",
+                context={
+                    "expected_algo_codes": list(FULL_FIVE_ALGO_CODES_V1),
+                    "actual_algo_codes": list(actual_algos),
+                    "expected_catalog_sha256": expected_snapshot.catalog_sha256,
+                    "actual_catalog_sha256": supplied_snapshot.catalog_sha256,
+                },
+                broker_called=False,
+            )
+        expected_facade_authority = full_authority.conformance_authority
+        if (
+            facade_authority.conformance_set != expected_facade_authority.conformance_set
+            or facade_authority.source_executor_binding != expected_facade_authority.source_executor_binding
+            or facade_authority.source_execution_sets != expected_facade_authority.source_execution_sets
+            or facade_authority.characterization_receipts != expected_facade_authority.characterization_receipts
+            or facade_authority.algorithm_bindings != expected_facade_authority.algorithm_bindings
+            or facade_authority.validation_receipt != expected_facade_authority.validation_receipt
+        ):
+            raise KernelPluginInvocationError(
+                "MINIQMT_K6_PRODUCT_FACADE_AUTHORITY_INVALID",
+                "final product creation facade authority differs from the independently rebuilt full-five source authority",
+                context={
+                    "expected_receipt_set_sha256": expected_facade_authority.conformance_set.receipt_set_sha256,
+                    "actual_receipt_set_sha256": facade_authority.conformance_set.receipt_set_sha256,
+                },
+                broker_called=False,
+            )
+        super().__init__(
+            repository=repository,  # type: ignore[arg-type]
+            catalog_runtime=catalog_runtime,
+            gateway_catalog=strict_gateway,
+            facade_authority=facade_authority,
+        )
+        self._product_worker_incarnation_id = worker_incarnation_id
+
+    def create(self, request: KernelAlgoCreationRequestV2) -> dict[str, Any]:
+        if type(request) is not KernelAlgoCreationRequestV2:
+            raise TypeError("request must be KernelAlgoCreationRequestV2")
+        return self._create(request, final_product_route=True)
+
+
+__all__ = [
+    "KernelAlgoCreationCoordinatorV1",
+    "KernelAlgoCreationCoordinatorV2",
+    "KernelAlgoCreationRepositoryV1",
+    "KernelAlgoCreationRepositoryV2",
+]

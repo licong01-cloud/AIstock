@@ -1,0 +1,209 @@
+{
+  "actual": "RD-Agent qe_evolution_api initializes log offsets at zero for every SSE connection and scans run.log files each second. Reconnects replay complete history and AIstock mirrors duplicate multi-gigabyte content. Implement stable opaque cursor with stream identity and sequence, SSE id plus Last-Event-ID/after_cursor, bounded initial tail, explicit 410 qe_log_cursor_expired for malformed or stale cursors, and heartbeat comments that are never persisted. Must not control qrun/backend processes or delete logs.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260811_BUG-1030-rd-agent-qe-log-sse-replays-full-history-without-resumable-cursor.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1030",
+  "closed_at": "2026-08-12T02:17:14Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-11T19:49:19.362263Z",
+  "description": "RD-Agent qe_evolution_api initializes log offsets at zero for every SSE connection and scans run.log files each second. Reconnects replay complete history and AIstock mirrors duplicate multi-gigabyte content. Implement stable opaque cursor with stream identity and sequence, SSE id plus Last-Event-ID/after_cursor, bounded initial tail, explicit 410 qe_log_cursor_expired for malformed or stale cursors, and heartbeat comments that are never persisted. Must not control qrun/backend processes or delete logs.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260811-1cfa454f8429",
+      "timestamp": "2026-08-11T19:49:19.362252Z"
+    },
+    {
+      "action": "cross_repo_source_pr_ready",
+      "actor": "codex",
+      "note": "RD-Agent PR #19 at commit 9f7f8086430f83e23aca34733394074e24021731 is OPEN, CLEAN, and MERGEABLE. Opaque resumable cursor, bounded initial tail and append reads, SSE id/Last-Event-ID, terminal replay suppression, disconnect handling, and loud stale-cursor failure are implemented. Focused cursor tests 13 passed; related API matrix 57 passed/5 environment skips; ruff, py_compile, and diff-check passed. No database access, process control, dependency install, DDL/DML, deployment, restart, or log cleanup was performed.",
+      "timestamp": "2026-08-11T20:23:47Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "codex",
+      "note": "DESIGN-COMPLIANCE-001: complete resumable cursor delivery rather than a subset; malformed, conflicting, truncated, replaced, and wrong-stream cursors fail loudly; QE execution and terminal semantics are unchanged; no new approval or release gate was added. Cross-repository source readiness remains separate from user-owned RD-Agent deployment and runtime verification.",
+      "timestamp": "2026-08-11T20:23:47Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/RD-Agent/pull/19"
+  ],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-11T19:49:19.362263Z",
+  "fix_branch": "bug/BUG-1030-qe-log-cursor-20260812",
+  "fix_commit": "aee31e674af85d8c290fe5393648bb070df442df",
+  "fixed_at": "2026-08-12T02:17:14Z",
+  "github_issue_number": 3297,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3297",
+  "last_seen_at": "2026-08-11T19:49:19.362263Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not deploy RD-Agent or delete historical logs as part of the source fix."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3300",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "external_runtime_dependencies": [
+      {
+        "backend_restart_owner": "user",
+        "deployment_restart": "pending_user",
+        "pr_number": 19,
+        "repository": "licong01-cloud/RD-Agent",
+        "runtime_identity_match": "pending",
+        "runtime_target": "RD-Agent QE API",
+        "source_merge": "pending_user_authorization"
+      }
+    ],
+    "fresh_process_evidence": [],
+    "overall_runtime_activation_gate": "pending_rdagent_source_merge_and_runtime_verification",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "RD-Agent QE log SSE replays full history without resumable cursor",
+  "trigger_condition": {
+    "fingerprint": "1cfa454f84294fe847cb17e3",
+    "source_event_id": "FE-20260811-1cfa454f8429"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=556df1a72f563069 commit=0e0afed26732ea5eb61988b516bd0b49becfead5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- tests/aistock_validation/bugs/.bug_id_allocator.json tests/aistock_validation/bugs/20260811_BUG-1030-rd-agent-qe-log-sse-replays-full-history-without-resumable-cursor.json` result=`Session l0 was successful`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

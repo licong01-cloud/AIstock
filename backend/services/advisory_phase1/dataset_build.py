@@ -18,12 +18,22 @@ from urllib.parse import unquote, urlparse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
+from backend.services.advisory_phase1.retrospective_contracts import (
+    HistoricalRangeArtifactReference,
+)
 
 
 DATASET_BUILD_REQUEST_SCHEMA_VERSION = "advisory_phase1c3_fixture_dataset_build_request_v1"
 RETROSPECTIVE_DATASET_BUILD_REQUEST_SCHEMA_VERSION = "advisory_phase1_retrospective_dataset_build_request_v1"
 SNAPSHOT_UNIVERSE_POLICY_SET_SCHEMA_VERSION = (
     "advisory_phase1r_snapshot_universe_policy_set_v1"
+)
+SNAPSHOT_POLICY_SET_SCHEMA_VERSION = "advisory_phase1r_snapshot_policy_set_v1"
+SNAPSHOT_POLICY_COMPONENT_BINDING_SET_SCHEMA_VERSION = (
+    "advisory_phase1r_snapshot_policy_component_binding_set_v1"
+)
+SNAPSHOT_POLICY_COMPONENT_SET_SCHEMA_VERSION = (
+    "advisory_phase1r_snapshot_policy_component_set_v1"
 )
 BATCH_C_FILESET_VERIFICATION_CONTRACT = "PHASE1C3_BATCH_C_FILESET_FOUNDATION_V1"
 BATCH_D_FULL_PARQUET_VERIFICATION_CONTRACT = "PHASE1C3_BATCH_D_FULL_PARQUET_V1"
@@ -218,6 +228,182 @@ class RetrospectiveCaptureSetMember(BaseModel):
 
     def canonical_identity(self) -> dict[str, str]:
         return self.model_dump(mode="json")
+
+
+class RetrospectiveSnapshotPolicyMember(BaseModel):
+    """One exact per-Program policy retained under a snapshot aggregate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_bundle_id: str = Field(min_length=1, max_length=160)
+    policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    policy_bundle_ref: HistoricalRangeArtifactReference
+    policy_component_hashes: dict[str, str]
+    policy_component_set_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("policy_bundle_hash", "policy_component_set_hash")
+    @classmethod
+    def _hashes(cls, value: str, info) -> str:  # type: ignore[no-untyped-def]
+        return _sha256(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _identity(self) -> "RetrospectiveSnapshotPolicyMember":
+        ref = self.policy_bundle_ref
+        if (
+            ref.artifact_kind != "REQUEST"
+            or ref.payload_sha256 != self.policy_bundle_hash
+        ):
+            raise ValueError("snapshot policy member requires an exact REQUEST ref")
+        required_roles = {
+            "CALENDAR",
+            "MARKET_DATA",
+            "EXECUTION",
+            "COST",
+            "BENCHMARK",
+            "CASH_RETURN",
+            "TERMINAL",
+            "BARRIER",
+            "CORPORATE_ACTION",
+        }
+        if set(self.policy_component_hashes) != required_roles:
+            raise ValueError("snapshot policy member requires every Phase 1 component role")
+        components = {
+            role: _sha256(value, field_name=f"policy_component_hashes[{role}]")
+            for role, value in self.policy_component_hashes.items()
+        }
+        expected_set_hash = canonical_json_sha256(
+            [
+                {"component_role": role, "component_hash": components[role]}
+                for role in sorted(components)
+            ]
+        )
+        if self.policy_component_set_hash != expected_set_hash:
+            raise ValueError("snapshot policy member component set hash differs")
+        object.__setattr__(
+            self,
+            "policy_component_hashes",
+            {role: components[role] for role in sorted(components)},
+        )
+        return self
+
+
+class RetrospectiveSnapshotPolicySet(BaseModel):
+    """Snapshot aggregate whose members remain exact capture authorities."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: str = SNAPSHOT_POLICY_SET_SCHEMA_VERSION
+    members: tuple[RetrospectiveSnapshotPolicyMember, ...] = Field(min_length=2)
+    aggregate_component_hashes: dict[str, str]
+    aggregate_component_set_hash: str = Field(min_length=64, max_length=64)
+    research_scope: str = "RETROSPECTIVE_RESEARCH_ONLY"
+    execution_prohibited: bool = True
+
+    @classmethod
+    def from_members(
+        cls,
+        members: Iterable[RetrospectiveSnapshotPolicyMember],
+    ) -> "RetrospectiveSnapshotPolicySet":
+        ordered = tuple(sorted(members, key=lambda item: item.policy_bundle_hash))
+        if not ordered:
+            raise ValueError("snapshot policy set cannot be empty")
+        roles = tuple(sorted(ordered[0].policy_component_hashes))
+        aggregate_component_hashes = {
+            role: canonical_json_sha256(
+                {
+                    "schema_version": SNAPSHOT_POLICY_COMPONENT_BINDING_SET_SCHEMA_VERSION,
+                    "component_role": role,
+                    "members": [
+                        {
+                            "policy_bundle_hash": member.policy_bundle_hash,
+                            "component_hash": member.policy_component_hashes[role],
+                        }
+                        for member in ordered
+                    ],
+                }
+            )
+            for role in roles
+        }
+        aggregate_component_set_hash = canonical_json_sha256(
+            {
+                "schema_version": SNAPSHOT_POLICY_COMPONENT_SET_SCHEMA_VERSION,
+                "members": [
+                    {
+                        "policy_bundle_hash": member.policy_bundle_hash,
+                        "policy_component_set_hash": member.policy_component_set_hash,
+                    }
+                    for member in ordered
+                ],
+            }
+        )
+        return cls(
+            members=ordered,
+            aggregate_component_hashes=aggregate_component_hashes,
+            aggregate_component_set_hash=aggregate_component_set_hash,
+        )
+
+    @field_validator("aggregate_component_set_hash")
+    @classmethod
+    def _aggregate_hash(cls, value: str) -> str:
+        return _sha256(value, field_name="aggregate_component_set_hash")
+
+    @model_validator(mode="after")
+    def _identity(self) -> "RetrospectiveSnapshotPolicySet":
+        if (
+            self.schema_version != SNAPSHOT_POLICY_SET_SCHEMA_VERSION
+            or self.research_scope != "RETROSPECTIVE_RESEARCH_ONLY"
+            or self.execution_prohibited is not True
+        ):
+            raise ValueError("snapshot policy set boundary is invalid")
+        ordered = tuple(sorted(self.members, key=lambda item: item.policy_bundle_hash))
+        if (
+            self.members != ordered
+            or len({item.policy_bundle_hash for item in ordered}) != len(ordered)
+            or len({item.policy_bundle_id for item in ordered}) != len(ordered)
+        ):
+            raise ValueError("snapshot policy members must be sorted and unique")
+        roles = tuple(sorted(ordered[0].policy_component_hashes))
+        expected_component_hashes = {
+            role: canonical_json_sha256(
+                {
+                    "schema_version": SNAPSHOT_POLICY_COMPONENT_BINDING_SET_SCHEMA_VERSION,
+                    "component_role": role,
+                    "members": [
+                        {
+                            "policy_bundle_hash": member.policy_bundle_hash,
+                            "component_hash": member.policy_component_hashes[role],
+                        }
+                        for member in ordered
+                    ],
+                }
+            )
+            for role in roles
+        }
+        supplied_component_hashes = {
+            role: _sha256(value, field_name=f"aggregate_component_hashes[{role}]")
+            for role, value in self.aggregate_component_hashes.items()
+        }
+        if supplied_component_hashes != expected_component_hashes:
+            raise ValueError("snapshot aggregate component hashes differ from members")
+        expected_set_hash = canonical_json_sha256(
+            {
+                "schema_version": SNAPSHOT_POLICY_COMPONENT_SET_SCHEMA_VERSION,
+                "members": [
+                    {
+                        "policy_bundle_hash": member.policy_bundle_hash,
+                        "policy_component_set_hash": member.policy_component_set_hash,
+                    }
+                    for member in ordered
+                ],
+            }
+        )
+        if self.aggregate_component_set_hash != expected_set_hash:
+            raise ValueError("snapshot aggregate component set hash differs from members")
+        object.__setattr__(self, "aggregate_component_hashes", expected_component_hashes)
+        return self
+
+    def canonical_payload(self) -> dict[str, object]:
+        return canonicalize(self.model_dump(mode="json"))
 
 
 class FrozenIdentity(BaseModel):

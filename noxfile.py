@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, suppress
+import json
 import os
 import socket
 import subprocess
@@ -26,6 +27,12 @@ VALIDATION_ENV_FILE_DENYLIST = {
 VALIDATION_RUNTIME_DEFAULTS = {
     "MINIQMT_EXECUTION_RUNTIME": "event_loop",
 }
+FRONTEND_DIRECT_ENTRYPOINTS = (
+    Path("@playwright/test/cli.js"),
+    Path("typescript/bin/tsc"),
+    Path("next/dist/bin/next"),
+)
+NIGHTLY_SESSION_ARGS_FILE_ENV = "AISTOCK_NIGHTLY_SESSION_ARGS_FILE"
 
 nox.options.reuse_existing_virtualenvs = True
 nox.options.sessions = ["l0"]
@@ -94,6 +101,20 @@ def _paper_v2_force_realtime(args: list[str]) -> bool:
     if os.environ.get("PAPER_V2_FORCE_REALTIME", "").strip().lower() in {"1", "true", "yes", "on"}:
         return True
     return "--require-live-bars" in args or "--require-fills" in args
+
+
+def _ci_dependency_install_forbidden() -> bool:
+    """Return whether this run must use the prebuilt validation environment.
+
+    GitHub Actions must never repair a missing frontend dependency tree at
+    runtime.  Local developers can still opt into the historical ``npm ci``
+    bootstrap by leaving both markers unset.
+    """
+
+    return any(
+        os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+        for name in ("GITHUB_ACTIONS", "AISTOCK_CI_INSTALL_FORBIDDEN")
+    )
 
 
 def _validation_artifact_args(*, output_json: str, summary_md: str | None = None) -> list[str]:
@@ -323,9 +344,20 @@ def _managed_validation_frontend(session: nox.Session, frontend_port: str, env: 
 
 def _ensure_frontend_node_modules(session: nox.Session) -> None:
     frontend = ROOT / "frontend"
-    if (frontend / "node_modules" / ".bin" / ("playwright.cmd" if os.name == "nt" else "playwright")).exists():
+    node_modules = frontend / "node_modules"
+    missing_entries = [path for path in FRONTEND_DIRECT_ENTRYPOINTS if not (node_modules / path).is_file()]
+    if not missing_entries:
         return
-    session.log("frontend node_modules missing Playwright; running npm ci once for validation workspace")
+    if _ci_dependency_install_forbidden():
+        session.error(
+            "frontend direct entrypoints are missing from the prebuilt CI environment: "
+            f"{', '.join(path.as_posix() for path in missing_entries)}; "
+            "CI/Nightly cannot run npm ci. Rebuild the AIstock-CI image or run "
+            "an explicit local dependency bootstrap before validation."
+        )
+    session.log(
+        "frontend node_modules is missing required direct entrypoints; running npm ci once for validation workspace"
+    )
     old_cwd = Path.cwd()
     os.chdir(frontend)
     try:
@@ -385,7 +417,7 @@ def _guardrail_baseline_json(session: nox.Session) -> str:
 def _l0_changed_files() -> list[str]:
     paths: list[str] = []
     commands = (
-        ("diff", "--name-only", "--diff-filter=ACMRT", "origin/main", "HEAD", "--"),
+        ("diff", "--name-only", "--diff-filter=ACMRT", "origin/main...HEAD", "--"),
         ("diff", "--name-only", "--diff-filter=ACMRT", "--"),
         ("diff", "--cached", "--name-only", "--diff-filter=ACMRT", "--"),
         ("ls-files", "--others", "--exclude-standard"),
@@ -410,6 +442,15 @@ def _l0_changed_files() -> list[str]:
 def _l0_scan_paths(posargs: list[str]) -> list[str]:
     if posargs:
         return list(dict.fromkeys(path.replace("\\", "/") for path in posargs if path.strip()))
+    scope_file = os.environ.get(NIGHTLY_SESSION_ARGS_FILE_ENV)
+    if scope_file:
+        payload = json.loads(Path(scope_file).read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, list) or not all(isinstance(path, str) for path in payload):
+            raise RuntimeError(f"{NIGHTLY_SESSION_ARGS_FILE_ENV} must contain a JSON list of paths")
+        paths = list(dict.fromkeys(path.strip().replace("\\", "/") for path in payload if path.strip()))
+        if not paths:
+            raise RuntimeError(f"{NIGHTLY_SESSION_ARGS_FILE_ENV} contains no changed paths")
+        return paths
     paths = _l0_changed_files()
     if not paths:
         raise RuntimeError("l0 found no changed files; pass explicit paths when validating a clean checkout")
@@ -467,10 +508,9 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
     os.chdir(ROOT / "frontend")
     try:
         session.run(
-            "npm",
-            "run",
-            "test:e2e",
-            "--",
+            "node",
+            "node_modules/@playwright/test/cli.js",
+            "test",
             target,
             env=_env(
                 {
@@ -493,8 +533,15 @@ def frontend_type_lint(session: nox.Session) -> None:
     old_cwd = Path.cwd()
     os.chdir(ROOT / "frontend")
     try:
-        session.run("npm", "exec", "tsc", "--", "--noEmit", "--incremental", "false", external=True)
-        session.run("npm", "run", "lint", external=True)
+        session.run(
+            "node",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run("node", "node_modules/next/dist/bin/next", "lint", external=True)
     finally:
         os.chdir(old_cwd)
 
@@ -631,6 +678,33 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def advisory_phase0b_backend(session: nox.Session) -> None:
+    """Run Phase 0B candidate-quality and direct historical-data regressions."""
+    _run_pytest(
+        session,
+        "backend/tests/advisory_phase0b",
+        "backend/tests/advisory_historical_range/test_r4_summary_service.py",
+        "backend/tests/advisory_phase1/test_phase1c3_batch_d_integrity.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def advisory_modeling_backend(session: nox.Session) -> None:
+    """Run isolated Advisory short-rebound modeling contract regressions."""
+    _run_pytest(
+        session,
+        "backend/tests/advisory_modeling",
+        "backend/tests/advisory_model_first",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def paper_v2_backend(session: nox.Session) -> None:
     """Run Paper v2, Selection Center, and shared minute-execution tests."""
     args = [
@@ -745,6 +819,10 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "scripts/aistock_data_quality_smoke.py",
         "backend/services/validation/plan_catalog.py",
         "backend/services/validation/catalog_integrity.py",
+        "backend/services/industry_pit",
+        "backend/services/sector_data_builder.py",
+        "scripts/build_industry_pit_candidates.py",
+        "scripts/build_sector_data_candidate.py",
         "noxfile.py",
         external=True,
     )
@@ -759,6 +837,10 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_validation_center_api.py",
         "backend/tests/test_validation_execution_runner.py",
         "backend/tests/test_data_quality_smoke_env.py",
+        "backend/tests/industry_pit",
+        "backend/tests/scripts/test_build_industry_pit_candidates.py",
+        "backend/tests/services/test_sector_data_builder.py",
+        "backend/tests/scripts/test_build_sector_data_candidate.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -831,7 +913,18 @@ def paper_v2_ui(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def paper_v2_l3(session: nox.Session) -> None:
     """Run the first-stage Paper v2 + Selection Center L3 local suite."""
-    session.run("python", "scripts/aistock_validate.py", "record", "--module", "paper_v2_selection_center", "--level", "L3", "--title", "Paper v2 Selection Center L3 regression", external=True)
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "record",
+        "--module",
+        "paper_v2_selection_center",
+        "--level",
+        "L3",
+        "--title",
+        "Paper v2 Selection Center L3 regression",
+        external=True,
+    )
     session.notify("l0")
     session.notify("paper_v2_backend")
     session.notify("paper_v2_data_quality")
@@ -847,6 +940,9 @@ def simulation_core_l2(session: nox.Session) -> None:
         "python",
         "-m",
         "compileall",
+        "backend/services/simulation_data",
+        "backend/services/simulation_signal",
+        "backend/services/simulation_execution",
         "backend/services/simulation_runtime",
         "backend/routers/qmt_strategy_ledger.py",
         "backend/db/init_trading_core_v2_schema.py",
@@ -855,9 +951,41 @@ def simulation_core_l2(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/simulation_runtime",
+        "backend/tests/simulation_architecture",
+        "backend/tests/simulation_data",
+        "backend/tests/simulation_signal",
         "-q",
         "-p",
         "no:cacheprovider",
+    )
+    _run_pytest(
+        session,
+        "backend/tests/advisory_phase1/test_stage_trace.py",
+        "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py",
+        "backend/tests/qmt_strategy_ledger/test_router_summary.py",
+        "backend/tests/qmt_strategy_ledger/test_tca_phase0a2.py",
+        "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+        "backend/tests/scripts/test_strategy_package_binding_refreeze.py",
+        "backend/tests/trading_core/sim_gateway/test_sim_gateway_unit.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def localsim_successor_core_dev_db(session: nox.Session) -> None:
+    """Run the guarded existing-DEV-PostgreSQL successor-core DDL and repository gate."""
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env({"AISTOCK_DEV_DB_E2E": "1"}),
+        external=True,
     )
 
 
@@ -1013,6 +1141,74 @@ def qe_long_trend_phase2_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_long_trend_phase3_platform(session: nox.Session) -> None:
+    """Run F-014 Phase 3 persistence, snapshot, API, MCP, and Phase 2 compatibility contracts."""
+    _run_pytest(
+        session,
+        "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py",
+        "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase3_api.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py",
+        "backend/tests/mcp/test_qe_archive_module.py",
+        "backend/tests/test_qe_archive_schema.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qe_long_trend_phase4_ui(session: nox.Session) -> None:
+    """Run the F-014 DB-restored Loop action and same-vintage Archive UI contracts."""
+    _ensure_frontend_node_modules(session)
+    frontend_port = session.posargs[0] if session.posargs else os.environ.get("FRONTEND_PORT", "3012")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        frontend_port,
+        external=True,
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "node",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "node",
+            "node_modules/@playwright/test/cli.js",
+            "test",
+            "tests/quantevolver/qe_long_trend_evaluation.spec.ts",
+            "--project",
+            "chromium",
+            "--timeout",
+            "120000",
+            "--output",
+            "../tmp/playwright-results-f014-phase4",
+            env=_env(
+                {
+                    "BACKEND_PORT": os.environ.get("BACKEND_PORT", "8014"),
+                    "FRONTEND_PORT": frontend_port,
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{os.environ.get('BACKEND_PORT', '8014')}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                    "PLAYWRIGHT_HTML_OUTPUT_DIR": "../tmp/playwright-report-f014-phase4",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
 def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
     """Run QE-only sector-risk artifact, strategy, persistence, and evaluation contracts."""
     _run_pytest(
@@ -1022,7 +1218,9 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
         "backend/tests/quantevolver/test_sector_risk_overlay_artifacts.py",
         "backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py",
+        "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
         "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+        "backend/tests/unified_engine/test_score_weighted_strategy_determinism.py",
         "backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py",
         "tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py",
         "-q",
@@ -1033,12 +1231,25 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def qe_read_backend(session: nox.Session) -> None:
-    """Run QE read-path backend regression tests only."""
-    _run_pytest(
-        session,
+    """Run QE read-path and authoritative factor-metric contract regressions."""
+    targets = [
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
+        "backend/tests/quantevolver/test_factor_emit_hook.py",
+        "backend/tests/quantevolver/test_sector_participation_gap_v2.py",
+        "backend/tests/quantevolver/test_ma_e19_semantic_equivalence_audit.py",
+        "backend/tests/quantevolver/test_p0_d2_sector_oracle.py",
+        "backend/tests/quantevolver/test_p0_d3_benchmark_brinson.py",
+        "backend/tests/test_factor_metrics_h20_contract.py",
+        "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
+    ]
+    dynamic_relation_test = ROOT / "backend" / "tests" / "quantevolver" / "test_dynamic_residual_flow_relation_v1.py"
+    if dynamic_relation_test.exists():
+        targets.append("backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py")
+    _run_pytest(
+        session,
+        *targets,
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1248,6 +1459,12 @@ def qe_archive_backend(session: nox.Session) -> None:
     handler_contract_test = ROOT / "backend" / "tests" / "qe_archive" / "test_handler_contract.py"
     if handler_contract_test.exists():
         pytest_targets.append("backend/tests/qe_archive/test_handler_contract.py")
+    factor_retirement_test = ROOT / "backend" / "tests" / "qe_archive" / "test_factor_value_archive_handler.py"
+    if factor_retirement_test.exists():
+        pytest_targets.append("backend/tests/qe_archive/test_factor_value_archive_handler.py")
+    round3_regression_test = ROOT / "backend" / "tests" / "qe_archive" / "test_round3_fixes.py"
+    if round3_regression_test.exists():
+        pytest_targets.append("backend/tests/qe_archive/test_round3_fixes.py")
     _run_pytest(
         session,
         *pytest_targets,
@@ -2221,7 +2438,15 @@ def research_assistant_mcp_contract(session: nox.Session) -> None:
 def research_assistant_ui(session: nox.Session) -> None:
     """Run Research Assistant mocked UI regression."""
     session.chdir("frontend")
-    session.run("npx", "playwright", "test", "tests/research-assistant/research-assistant.spec.ts", "--project", "chromium", external=True)
+    session.run(
+        "npx",
+        "playwright",
+        "test",
+        "tests/research-assistant/research-assistant.spec.ts",
+        "--project",
+        "chromium",
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")
@@ -2346,10 +2571,7 @@ def rl_execution_smoke(session: nox.Session) -> None:
             "no:cacheprovider",
         )
     else:
-        session.skip(
-            "backend/tests/test_rl_execution_module_visibility.py not yet present "
-            "on this branch."
-        )
+        session.skip("backend/tests/test_rl_execution_module_visibility.py not yet present on this branch.")
 
 
 @nox.session(venv_backend="none")
@@ -2400,6 +2622,27 @@ def validation_coverage_backend(session: nox.Session) -> None:
         external=True,
     )
     _cleanup_validation_artifact_paths(coverage_xml, coverage_snapshot, coverage_data)
+
+
+@nox.session(venv_backend="none")
+def platform_api_backend(session: nox.Session) -> None:
+    """Run shared Platform API contracts without starting a backend process."""
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/routers/health.py",
+        "backend/db/pg_pool.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/platform_api",
+        "backend/tests/test_pg_pool_audit.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
 
 
 @nox.session(venv_backend="none")
@@ -3503,7 +3746,6 @@ def rl_execution_ui(session: nox.Session) -> None:
         )
     finally:
         os.chdir(old_cwd)
-
 
 
 @nox.session(venv_backend="none")

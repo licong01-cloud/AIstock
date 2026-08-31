@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - direct script execution convenience.
     from backend.db.pg_pool import get_conn
 
 
-QE_ARCHIVE_SCHEMA_VERSION = "qe_archive_v4_20260713"
+QE_ARCHIVE_SCHEMA_VERSION = "qe_archive_v5_20260728"
 
 
 BASE_DDL: list[str] = [
@@ -87,6 +87,157 @@ BASE_DDL: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_qear_run_factor_hash ON qe_archive.run(factor_set_hash, completed_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_qear_run_type_status ON qe_archive.run(run_type, source_system, status)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.run_evaluation (
+        evaluation_id TEXT PRIMARY KEY,
+        run_id TEXT REFERENCES qe_archive.run(run_id) ON DELETE CASCADE,
+        parent_task_id TEXT NOT NULL,
+        parent_loop_index INTEGER NOT NULL,
+        evaluation_type TEXT NOT NULL DEFAULT 'long_trend',
+        profile_id TEXT NOT NULL,
+        profile_sha256 TEXT NOT NULL,
+        evaluator_version TEXT NOT NULL,
+        evaluator_source_sha256 TEXT NOT NULL,
+        execution_environment_snapshot_id TEXT NOT NULL,
+        execution_environment_manifest_sha256 TEXT NOT NULL,
+        bundle_sha256 TEXT NOT NULL,
+        qe_dataset_contract_id TEXT NOT NULL,
+        feature_dataset_snapshot_id TEXT,
+        feature_dataset_manifest_sha256 TEXT,
+        outcome_dataset_snapshot_id TEXT,
+        outcome_dataset_manifest_sha256 TEXT,
+        input_manifest_sha256 TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        job_id TEXT,
+        request_sha TEXT NOT NULL,
+        request_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        current_attempt_id TEXT,
+        resource_session_id TEXT,
+        worker_terminal_sha256 TEXT,
+        artifact_store_run_key TEXT,
+        artifact_manifest_sha256 TEXT,
+        status TEXT NOT NULL DEFAULT 'queued',
+        family_status_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        platform_delivery_status_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        data_action_plan_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        reason_code TEXT,
+        reason_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        stats_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        owner_id TEXT,
+        fencing_token BIGINT NOT NULL DEFAULT 0,
+        lease_expires_at TIMESTAMPTZ,
+        row_version BIGINT NOT NULL DEFAULT 1,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        CONSTRAINT ck_qear_run_evaluation_type CHECK (evaluation_type = 'long_trend'),
+        CONSTRAINT ck_qear_run_evaluation_status CHECK (
+            status IN ('queued', 'submitting', 'submitted', 'running', 'collecting',
+                       'succeeded', 'partial', 'failed', 'cancelled', 'remote_state_unknown')
+        ),
+        CONSTRAINT ck_qear_run_evaluation_identity CHECK (
+            evaluation_id ~ '^qelt_[0-9a-f]{64}$'
+            AND profile_sha256 ~ '^[0-9a-f]{64}$'
+            AND evaluator_source_sha256 ~ '^[0-9a-f]{64}$'
+            AND execution_environment_manifest_sha256 ~ '^[0-9a-f]{64}$'
+            AND bundle_sha256 ~ '^[0-9a-f]{64}$'
+            AND input_manifest_sha256 ~ '^[0-9a-f]{64}$'
+            AND request_sha ~ '^[0-9a-f]{64}$'
+        ),
+        CONSTRAINT ck_qear_run_evaluation_versions CHECK (
+            fencing_token >= 0 AND row_version >= 1 AND parent_loop_index >= 1
+        ),
+        CONSTRAINT ck_qear_run_evaluation_lease CHECK (
+            lease_expires_at IS NULL OR owner_id IS NOT NULL
+        ),
+        CONSTRAINT ck_qear_run_evaluation_terminal_time CHECK (
+            status NOT IN ('succeeded', 'partial', 'failed', 'cancelled') OR completed_at IS NOT NULL
+        ),
+        CONSTRAINT uq_qear_run_evaluation_identity UNIQUE (
+            parent_task_id, parent_loop_index, evaluation_type, profile_sha256, input_manifest_sha256,
+            evaluator_source_sha256, execution_environment_manifest_sha256
+        )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_run_evaluation_recovery
+        ON qe_archive.run_evaluation(status, lease_expires_at, created_at, evaluation_id)
+        WHERE status NOT IN ('succeeded', 'partial', 'failed', 'cancelled')
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_run_evaluation_parent ON qe_archive.run_evaluation(parent_task_id, parent_loop_index, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.run_evaluation_metric (
+        evaluation_metric_id BIGSERIAL PRIMARY KEY,
+        evaluation_id TEXT NOT NULL REFERENCES qe_archive.run_evaluation(evaluation_id) ON DELETE CASCADE,
+        metric_key TEXT NOT NULL,
+        metric_scope TEXT NOT NULL,
+        period_start DATE,
+        period_end DATE,
+        horizon INTEGER,
+        sector_code TEXT,
+        dimension_key TEXT NOT NULL,
+        dimension_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        value_num DOUBLE PRECISION,
+        value_text TEXT,
+        value_json JSONB,
+        unit TEXT,
+        direction TEXT,
+        source_payload_path TEXT NOT NULL,
+        quality_flag TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        CONSTRAINT uq_qear_run_evaluation_metric_dimension UNIQUE (evaluation_id, metric_key, dimension_key),
+        CONSTRAINT ck_qear_run_evaluation_metric_scope CHECK (
+            metric_scope IN ('signal_path', 'position_episode', 'portfolio_result',
+                             'order_fill', 'execution_cause', 'sector_regime')
+        ),
+        CONSTRAINT ck_qear_run_evaluation_metric_quality CHECK (
+            quality_flag IN ('ok', 'computed_with_limitations', 'insufficient_maturity',
+                             'not_computable', 'not_verifiable', 'censored_only')
+        ),
+        CONSTRAINT ck_qear_run_evaluation_metric_horizon CHECK (
+            horizon IS NULL OR horizon IN (20, 40, 60, 120, 180)
+        ),
+        CONSTRAINT ck_qear_run_evaluation_metric_values CHECK (
+            value_text IS NULL OR (value_num IS NULL AND value_json IS NULL)
+        ),
+        CONSTRAINT ck_qear_run_evaluation_metric_dimension_key CHECK (dimension_key ~ '^[0-9a-f]{64}$'),
+        CONSTRAINT ck_qear_run_evaluation_metric_period CHECK (
+            period_start IS NULL OR period_end IS NULL OR period_start <= period_end
+        )
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_run_evaluation_metric_lookup ON qe_archive.run_evaluation_metric(evaluation_id, metric_scope, horizon, sector_code)",
+    "CREATE INDEX IF NOT EXISTS idx_qear_run_evaluation_metric_key_value ON qe_archive.run_evaluation_metric(metric_key, value_num DESC NULLS LAST)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.run_evaluation_artifact (
+        evaluation_artifact_id BIGSERIAL PRIMARY KEY,
+        evaluation_id TEXT NOT NULL REFERENCES qe_archive.run_evaluation(evaluation_id) ON DELETE CASCADE,
+        artifact_type TEXT NOT NULL,
+        artifact_uri TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        schema_sha256 TEXT,
+        size_bytes BIGINT,
+        row_count BIGINT,
+        status TEXT NOT NULL DEFAULT 'published',
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        CONSTRAINT uq_qear_run_evaluation_artifact_identity UNIQUE (evaluation_id, artifact_type, sha256),
+        CONSTRAINT uq_qear_run_evaluation_artifact_type UNIQUE (evaluation_id, artifact_type),
+        CONSTRAINT ck_qear_run_evaluation_artifact_hash CHECK (
+            sha256 ~ '^[0-9a-f]{64}$' AND (schema_sha256 IS NULL OR schema_sha256 ~ '^[0-9a-f]{64}$')
+        ),
+        CONSTRAINT ck_qear_run_evaluation_artifact_size CHECK (
+            (size_bytes IS NULL OR size_bytes >= 0) AND (row_count IS NULL OR row_count >= 0)
+        ),
+        CONSTRAINT ck_qear_run_evaluation_artifact_status CHECK (status IN ('staged', 'published', 'failed')),
+        CONSTRAINT ck_qear_run_evaluation_artifact_uri CHECK (
+            artifact_uri LIKE 'aistock-qe-long-trend://evaluations/%'
+        )
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_run_evaluation_artifact_lookup ON qe_archive.run_evaluation_artifact(evaluation_id, artifact_type, status)",
+    "CREATE INDEX IF NOT EXISTS idx_qear_run_evaluation_artifact_sha ON qe_archive.run_evaluation_artifact(sha256)",
     """
     CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_run (
         run_id TEXT PRIMARY KEY REFERENCES qe_archive.run(run_id) ON DELETE CASCADE,
@@ -252,7 +403,8 @@ BASE_DDL: list[str] = [
         agent_context JSONB NOT NULL DEFAULT '{}'::jsonb,
         config_capture_complete BOOLEAN NOT NULL DEFAULT FALSE,
         config_provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
-        missing_config_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+        missing_config_items JSONB NOT NULL"""
+    """ DEFAULT '[]'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
@@ -262,7 +414,10 @@ BASE_DDL: list[str] = [
     "ALTER TABLE qe_archive.run_config ALTER COLUMN raw_config SET NOT NULL",
     "ALTER TABLE qe_archive.run_config ADD COLUMN IF NOT EXISTS config_capture_complete BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE qe_archive.run_config ADD COLUMN IF NOT EXISTS config_provenance JSONB NOT NULL DEFAULT '{}'::jsonb",
-    "ALTER TABLE qe_archive.run_config ADD COLUMN IF NOT EXISTS missing_config_items JSONB NOT NULL DEFAULT '[]'::jsonb",
+    (
+        "ALTER TABLE qe_archive.run_config ADD COLUMN IF NOT EXISTS missing_config_items JSONB NOT NULL "
+        "DEFAULT '[]'::jsonb"
+    ),
     "CREATE INDEX IF NOT EXISTS idx_qear_run_config_hash ON qe_archive.run_config(config_sha256)",
     "CREATE INDEX IF NOT EXISTS gin_qear_run_config_canonical ON qe_archive.run_config USING GIN(canonical_config)",
     """
@@ -295,7 +450,8 @@ BASE_DDL: list[str] = [
         deterministic_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
         source_config_paths JSONB NOT NULL DEFAULT '{}'::jsonb,
         required_artifact_types TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-        missing_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+        missing_items JSONB NOT NULL"""
+    """ DEFAULT '[]'::jsonb,
         manifest_json JSONB NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1053,6 +1209,9 @@ ON qe_archive.run_resource_session(node_id, gpu_training_policy, status, current
 TABLE_COMMENTS: dict[str, str] = {
     "qe_archive.schema_version": "Applied QE archive schema versions and bootstrap metadata.",
     "qe_archive.run": "Canonical archive row for one QE experiment attempt or evolution loop.",
+    "qe_archive.run_evaluation": "QE-only F-014 long-trend evaluation lifecycle control; platform status is not a research approval gate.",
+    "qe_archive.run_evaluation_metric": "Compact QE-only F-014 long-trend metrics with explicit dimension and evidence-quality semantics.",
+    "qe_archive.run_evaluation_artifact": "Published immutable artifact metadata from the dedicated QE-only F-014 content-addressed store.",
     "qe_archive.run_source": "External source identifiers and recorder links for an archived QE run.",
     "qe_archive.multi_alpha_run": "Archived multi-alpha combine-backtest run header and roster-level configuration snapshot.",
     "qe_archive.multi_alpha_leg": "Materialized per-leg snapshot for multi-alpha combine-backtest provenance and replay.",
@@ -1088,6 +1247,49 @@ TABLE_COMMENTS: dict[str, str] = {
     "qe_archive.backfill_run": "Durable lifecycle record for historical QE archive backfill preview, execute, resume, and rebootstrap operations.",
     "qe_archive.backfill_run_item": "Per-source item state captured for one historical QE archive backfill run.",
     "qe_archive.bootstrap_marker": "One-time broad historical backfill marker by QE source type.",
+}
+
+
+TABLE_COLUMN_COMMENTS: dict[tuple[str, str], str] = {
+    ("qe_archive.run_evaluation", "run_id"): "Bound once a matching QE Archive run exists; normal registration remains parented by task and Loop before archival.",
+    ("qe_archive.run_evaluation", "request_json"): "qe_long_trend_job_request_v1: canonical secret-free internal recovery request; never part of a public API response.",
+    ("qe_archive.run_evaluation", "status"): "Platform evaluation lifecycle only; it does not approve or reject a research direction.",
+    ("qe_archive.run_evaluation", "family_status_json"): "qe_long_trend_family_status_v1: per-family computation, coverage, limitation and quality evidence from the worker terminal receipt.",
+    ("qe_archive.run_evaluation", "platform_delivery_status_json"): "qe_long_trend_platform_delivery_v1: worker, CAS, DB, API, MCP, UI and backfill delivery state; never a research gate.",
+    ("qe_archive.run_evaluation", "data_action_plan_json"): "qe_long_trend_data_action_plan_v1: explicit acquisition, repair and recomputation actions for missing evidence.",
+    ("qe_archive.run_evaluation", "reason_json"): "qe_long_trend_reason_v1: structured platform failure context without credentials or local file-system paths.",
+    ("qe_archive.run_evaluation", "stats_json"): "qe_long_trend_evaluation_stats_v1: bounded counts and immutable artifact hashes without local file-system paths.",
+    ("qe_archive.run_evaluation", "owner_id"): "Current AIstock reconciliation owner; mutations are fenced by owner, fencing_token and row_version.",
+    ("qe_archive.run_evaluation", "worker_terminal_sha256"): "Immutable hash of the node worker terminal receipt, distinct from the CAS manifest hash.",
+    ("qe_archive.run_evaluation_metric", "evaluation_metric_id"): "Surrogate identifier for one compact F-014 metric row.",
+    ("qe_archive.run_evaluation_metric", "evaluation_id"): "F-014 evaluation identity from qe_archive.run_evaluation.",
+    ("qe_archive.run_evaluation_metric", "metric_key"): "Registered F-014 metric key; unknown keys are rejected by the canonical receipt writer.",
+    ("qe_archive.run_evaluation_metric", "metric_scope"): "Registered metric family scope such as signal_path, position_episode, portfolio_result or sector_regime.",
+    ("qe_archive.run_evaluation_metric", "period_start"): "Optional inclusive evaluation slice start date from the immutable worker receipt.",
+    ("qe_archive.run_evaluation_metric", "period_end"): "Optional inclusive evaluation slice end date from the immutable worker receipt.",
+    ("qe_archive.run_evaluation_metric", "horizon"): "Optional registered long-trend horizon in trading days: 20, 40, 60, 120 or 180.",
+    ("qe_archive.run_evaluation_metric", "sector_code"): "Optional signal-date PIT sector identity; null denotes a non-sector or all-market metric.",
+    ("qe_archive.run_evaluation_metric", "dimension_key"): "SHA-256 of qelt_metric_dimension_v2 generated from the server-side canonical dimension object.",
+    ("qe_archive.run_evaluation_metric", "dimension_json"): "qelt_metric_dimension_v2: bounded server-generated scope, period, slice, horizon, sector and execution dimensions from the worker receipt.",
+    ("qe_archive.run_evaluation_metric", "value_num"): "Primary finite sortable numeric value; it may coexist with registered bounded value_json diagnostics.",
+    ("qe_archive.run_evaluation_metric", "value_text"): "Optional bounded enum or text value, mutually exclusive with value_num and value_json.",
+    ("qe_archive.run_evaluation_metric", "value_json"): "Registered bounded metric diagnostics from the worker receipt; never signal rows, episodes, curves or arbitrary raw payloads.",
+    ("qe_archive.run_evaluation_metric", "unit"): "Registered unit for value_num, such as ratio; null for metrics without a scalar unit.",
+    ("qe_archive.run_evaluation_metric", "direction"): "Registered interpretation such as higher_better or lower_better; null for descriptive metrics.",
+    ("qe_archive.run_evaluation_metric", "source_payload_path"): "Deterministic JSON path in qe_long_trend_worker_terminal_v1 used to reproduce the row.",
+    ("qe_archive.run_evaluation_metric", "quality_flag"): "Evidence quality for this metric only; it does not approve, reject or eliminate research.",
+    ("qe_archive.run_evaluation_metric", "created_at"): "Database publication timestamp, not the signal date or evaluation as-of date.",
+    ("qe_archive.run_evaluation_artifact", "evaluation_artifact_id"): "Surrogate identifier for one published F-014 artifact metadata row.",
+    ("qe_archive.run_evaluation_artifact", "evaluation_id"): "F-014 evaluation identity from qe_archive.run_evaluation.",
+    ("qe_archive.run_evaluation_artifact", "artifact_type"): "Allowlisted F-014 artifact type; one immutable type is allowed per evaluation.",
+    ("qe_archive.run_evaluation_artifact", "artifact_uri"): "Allowlisted aistock-qe-long-trend URI verified against the immutable Phase 2 manifest.",
+    ("qe_archive.run_evaluation_artifact", "sha256"): "SHA-256 of immutable artifact bytes or canonical manifest content.",
+    ("qe_archive.run_evaluation_artifact", "schema_sha256"): "SHA-256 of the registered JSON or Parquet schema identity.",
+    ("qe_archive.run_evaluation_artifact", "size_bytes"): "Non-negative artifact byte length from the immutable manifest; nullable for the manifest envelope.",
+    ("qe_archive.run_evaluation_artifact", "row_count"): "Non-negative Parquet row count when applicable; null for JSON receipts and manifest metadata.",
+    ("qe_archive.run_evaluation_artifact", "status"): "Artifact publication lifecycle only; it has no research promotion meaning.",
+    ("qe_archive.run_evaluation_artifact", "metadata"): "qelt_evaluation_artifact_metadata_v1: bounded manifest-derived schema, row, column and quality metadata without secrets or paths.",
+    ("qe_archive.run_evaluation_artifact", "created_at"): "Database publication timestamp for the immutable artifact metadata row.",
 }
 
 
@@ -1507,9 +1709,12 @@ def _extract_create_table_columns(ddl_statements: Iterable[str]) -> dict[str, tu
 
 
 def _column_comment(table_name: str, column_name: str) -> str:
-    return COMMON_COLUMN_COMMENTS.get(
-        column_name,
-        f"{table_name.rsplit('.', 1)[-1]} column {column_name} used by the QE archive.",
+    return TABLE_COLUMN_COMMENTS.get(
+        (table_name, column_name),
+        COMMON_COLUMN_COMMENTS.get(
+            column_name,
+            f"{table_name.rsplit('.', 1)[-1]} column {column_name} used by the QE archive.",
+        ),
     )
 
 

@@ -251,19 +251,18 @@ function HealthPanel({ health }: { health: PredictionStoreHealth | null }) {
   if (!health) return <div className="pv2-help">正在等待 model_store_health 只读接口返回。</div>;
   const store = health.artifact_store || {};
   const disk = store.disk || {};
-  const policy = store.policy || {};
   return (
     <div className="pv2-readable-list">
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="Store Root" value={store.store_root ? shortHash(store.store_root, 18) : "-"} hint={store.store_root || "-"} tone={store.exists ? "success" : "warning"} />
         <MetricCard label="占用" value={formatBytes(disk.used_bytes)} hint={`free ${formatBytes(disk.free_bytes)} / total ${formatBytes(disk.total_bytes)}`} tone={disk.error ? "danger" : "info"} />
-        <MetricCard label="MLflow PG" value={health.mlflow_pg_enabled ? "enabled" : "deferred"} hint={String(health.tracking_backend || "deferred_to_m4")} />
-        <MetricCard label="存储策略" value={store.scheme || "-"} hint={`policy ${JSON.stringify(policy)}`} tone="info" />
+        <MetricCard label="MLflow 元数据" value={health.mlflow_pg_enabled ? "已启用" : "暂未启用"} hint="跟踪后端由服务端配置" />
+        <MetricCard label="存储策略" value={store.scheme || "-"} hint="由后端健康检查强制校验" tone="info" />
       </div>
       <div className="pv2-readable-panel">
         <div className="pv2-readable-table">
           <div className="pv2-readable-row"><div className="pv2-readable-key">合规判断</div><div className="pv2-readable-value">以后端 health 返回为准；若 root 违反后端策略，health 会返回错误而不是前端硬编码盘符。</div></div>
-          <div className="pv2-readable-row"><div className="pv2-readable-key">E: 拒绝策略</div><div className="pv2-readable-value pv2-mono">{JSON.stringify(policy)}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">不合规位置处理</div><div className="pv2-readable-value">后端拒绝不符合存储策略的位置；页面不展示或要求编辑底层策略代码。</div></div>
           {disk.error ? <div className="pv2-readable-row"><div className="pv2-readable-key">Disk Error</div><div className="pv2-readable-value">{disk.error}</div></div> : null}
         </div>
       </div>
@@ -374,7 +373,7 @@ export default function PredictionStorePage() {
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="指针覆盖率" value={formatPercentValue(coverage)} hint={`采样 ${rows.length} / 仓库 ${formatCompact(summary?.run_count || 0, 0)} run`} tone={coverage > 0 ? "success" : "warning"} />
         <MetricCard label="有指针 Run" value={formatCompact(availableRows.length, 0)} hint={`manifest ${formatCompact(manifestCount, 0)}`} tone="info" />
-        <MetricCard label="无指针 Run" value={formatCompact(missingRows.length, 0)} hint="前向 only：历史 run 允许为空" />
+        <MetricCard label="无指针实验" value={formatCompact(missingRows.length, 0)} hint="仅新实验自动形成指针；历史实验允许为空" />
         <MetricCard label="指针错误" value={formatCompact(pointerErrorRows.length, 0)} hint="只读查询失败或 manifest 不可读" tone={pointerErrorRows.length ? "danger" : "success"} />
       </div>
 
@@ -393,7 +392,7 @@ export default function PredictionStorePage() {
             <div className="pv2-readable-panel">
               <div className="pv2-readable-table">
                 <div className="pv2-readable-row"><div className="pv2-readable-key">上传开关</div><div className="pv2-readable-value">Runner 侧由 <span className="pv2-mono">AISTOCK_PREDICTION_STORE_UPLOAD_URL</span> 或后端 base env 启用；现有只读接口不回传节点 env，前端只展示已落库 manifest/marker 的实际观测结果。</div></div>
-                <div className="pv2-readable-row"><div className="pv2-readable-key">缺失处理</div><div className="pv2-readable-value">Top-level 指针缺失显示为 missing，不按 0 或成功处理；历史 run 前向 only，允许无指针。</div></div>
+                <div className="pv2-readable-row"><div className="pv2-readable-key">缺失处理</div><div className="pv2-readable-value">顶层指针缺失显示为“证据缺失”，不按 0 或成功处理；历史实验允许无指针。</div></div>
               </div>
             </div>
             <PaperTable
@@ -445,7 +444,7 @@ export default function PredictionStorePage() {
       <SectionCard title="Manifest Artifact 清单" eyebrow="artifact type / sha256 / bytes / store URI">
         <PaperTable
           rows={artifactRows}
-          empty={loading ? "正在加载 prediction-store 指针..." : "当前采样没有 prediction-store artifact；历史 run 前向 only 可能为空。"}
+          empty={loading ? "正在加载预测制品指针..." : "当前采样没有预测制品；历史实验可能没有前向生成的指针。"}
           columns={[
             { key: "run", header: "Run", render: ({ row }) => <><div className="pv2-mono">{shortHash(row.run.run_id)}</div><div className="pv2-muted">{row.run.run_type || "-"}</div></> },
             { key: "artifact", header: "Artifact", render: ({ artifact }) => <><div>{artifactTypeLabel(artifact.artifact_type)}</div><div className="pv2-muted">{artifact.artifact_name || "-"}</div></> },

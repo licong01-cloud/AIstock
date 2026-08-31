@@ -1,4 +1,4 @@
-﻿"""Selection Center API."""
+"""Selection Center API."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.paper_trading_v2.selection_portfolio_controller import SelectionPaperPortfolioController
 from backend.services.advisory_lifecycle import (
     AdvisoryLifecycleService,
     AdvisoryMarketSnapshot,
@@ -22,7 +23,12 @@ from backend.services.advisory_quality import generate_quality_report
 from backend.services.selection_center.models import SelectionMode
 from backend.services.selection_center.industry_tree import SelectionIndustryTreeService
 from backend.services.selection_center.service import SelectionCenterService
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError, UnsupportedFeatureError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    StrategyPackageValidationError,
+    TradingCoreError,
+    UnsupportedFeatureError,
+)
 from backend.services.trading_core.exit_guard import ExitGuardPolicy
 
 router = APIRouter(prefix="/selection-center", tags=["selection-center"])
@@ -376,7 +382,11 @@ def get_selection_aggregate_results(
 ) -> dict[str, Any]:
     try:
         run = service.get_run(run_id)
-        return {"ok": True, "run_id": run.run_id, "aggregate_results": [item.model_dump(mode="json") for item in run.aggregate_results]}
+        return {
+            "ok": True,
+            "run_id": run.run_id,
+            "aggregate_results": [item.model_dump(mode="json") for item in run.aggregate_results],
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -414,8 +424,7 @@ def preview_multi_package_advisory_review(req: MultiPackageAdvisoryReviewPreview
                 for code, by_package in req.package_evidence_by_code.items()
             },
             market_by_code={
-                code: AdvisoryMarketSnapshot(**snapshot.model_dump())
-                for code, snapshot in req.market_by_code.items()
+                code: AdvisoryMarketSnapshot(**snapshot.model_dump()) for code, snapshot in req.market_by_code.items()
             },
             trade_date=req.trade_date,
             policy=ExitGuardPolicy.from_dict(req.exit_guard_policy),
@@ -460,7 +469,7 @@ def create_paper_portfolio_from_selection_run(
     service: SelectionCenterService = Depends(get_selection_center_service),
 ) -> dict[str, Any]:
     try:
-        result = service.create_paper_portfolio_from_run(
+        result = SelectionPaperPortfolioController(selection_service=service).create_from_run(
             run_id=run_id,
             portfolio_name=req.portfolio_name,
             initial_cash=req.initial_cash,
@@ -486,7 +495,7 @@ def list_selection_paper_portfolio_links(
     service: SelectionCenterService = Depends(get_selection_center_service),
 ) -> dict[str, Any]:
     try:
-        links = service.list_paper_portfolio_links(run_id)
+        links = SelectionPaperPortfolioController(selection_service=service).list_links(run_id)
         return {"ok": True, "run_id": run_id, "links": [link.model_dump(mode="json") for link in links]}
     except TradingCoreError as exc:
         _raise_http(exc)

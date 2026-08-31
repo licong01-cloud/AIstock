@@ -4,6 +4,7 @@ import inspect
 import json
 import subprocess
 import sys
+from functools import lru_cache
 from itertools import permutations
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from backend.execution_algos.vnpy_style import plugin_manifests as manifest_module
+from backend.execution_algos.vnpy_style import plugin_factories as factory_module
 from backend.execution_algos.vnpy_style.plugin_manifests import (
     current_three_creation_bindings_v1,
     current_three_descriptors_v2,
@@ -45,12 +47,38 @@ from backend.services.miniqmt_execution_runtime.plugin_registry import (
     PluginRouteCompatibilityReceiptV1,
     VnpyCompatibilityFailureV1,
     VnpyCompatibilityReceiptV1,
+    _canonical_lf_file_sha256_v1,
     build_plugin_catalog_v2,
     compatibility_component_hashes_v1,
     evaluate_plugin_route_compatibility_v1,
 )
 
 
+def test_registry_callable_source_hash_is_checkout_eol_independent(tmp_path: Path) -> None:
+    source = tmp_path / "binding.py"
+    source.write_bytes(b"def binding():\r\n    return 1\r\n")
+    crlf_hash = _canonical_lf_file_sha256_v1(source)
+    source.write_bytes(b"def binding():\n    return 1\n")
+
+    assert _canonical_lf_file_sha256_v1(source) == crlf_hash
+
+
+@lru_cache(maxsize=1)
+def _descriptors():
+    return current_three_descriptors_v2()
+
+
+@lru_cache(maxsize=1)
+def _creation_bindings():
+    return current_three_creation_bindings_v1()
+
+
+@lru_cache(maxsize=1)
+def _process_bindings():
+    return current_three_process_bindings_v2()
+
+
+@lru_cache(maxsize=None)
 def _receipts(failed_plugin_id: str | None = None) -> tuple[VnpyCompatibilityReceiptV1, ...]:
     result = []
     for manifest in current_three_manifests_v2():
@@ -87,9 +115,9 @@ def _receipts(failed_plugin_id: str | None = None) -> tuple[VnpyCompatibilityRec
 
 def _build(receipts: tuple[VnpyCompatibilityReceiptV1, ...] | None = None):
     return build_plugin_catalog_v2(
-        descriptors=current_three_descriptors_v2(),
-        creation_bindings=current_three_creation_bindings_v1(),
-        process_bindings=current_three_process_bindings_v2(),
+        descriptors=_descriptors(),
+        creation_bindings=_creation_bindings(),
+        process_bindings=_process_bindings(),
         pinned_compatibility_receipts=_receipts() if receipts is None else receipts,
     )
 
@@ -160,14 +188,14 @@ def _descriptor_for(runtime: object, algo_code: str) -> object:
 
 
 def test_catalog_snapshot_is_byte_identical_for_all_input_permutations() -> None:
-    descriptors = current_three_descriptors_v2()
+    descriptors = _descriptors()
     expected = _build().snapshot
     expected_bytes = canonical_json_bytes_v1(expected.canonical_payload_v1())
     for descriptor_order in permutations(descriptors):
         runtime = build_plugin_catalog_v2(
             descriptors=descriptor_order,
-            creation_bindings=tuple(reversed(current_three_creation_bindings_v1())),
-            process_bindings=current_three_process_bindings_v2(),
+            creation_bindings=tuple(reversed(_creation_bindings())),
+            process_bindings=_process_bindings(),
             pinned_compatibility_receipts=tuple(reversed(_receipts())),
         )
         assert runtime.snapshot.catalog_sha256 == expected.catalog_sha256
@@ -269,7 +297,7 @@ def test_catalog_snapshot_readback_rejects_incomplete_compatibility_component_cl
 
 
 def test_snapshot_has_no_callable_and_process_mapping_is_sealed() -> None:
-    bindings = current_three_process_bindings_v2()
+    bindings = _process_bindings()
     original = bindings.resolve("aistock.vnpy.sniper.factory")
     caller_copy = bindings.copy_bindings_v1()
     caller_copy["aistock.vnpy.sniper.factory"] = lambda: None
@@ -306,7 +334,7 @@ print(canonical_json_bytes_v1(runtime.snapshot.canonical_payload_v1()).hex())
 def test_creation_binding_and_restore_use_exact_plugin_keys() -> None:
     runtime = _build()
     key = runtime.plugin_key_for_new_instance("SNIPER_MINIQMT")
-    expected = next(item for item in current_three_creation_bindings_v1() if item.algo_code == "SNIPER_MINIQMT")
+    expected = next(item for item in _creation_bindings() if item.algo_code == "SNIPER_MINIQMT")
     assert key == expected.plugin_key
     assert runtime.descriptor_for_restore(key).manifest.plugin_id == "aistock.vnpy.sniper"
     with pytest.raises(KeyError):
@@ -316,12 +344,12 @@ def test_creation_binding_and_restore_use_exact_plugin_keys() -> None:
 
 
 def test_catalog_aggregates_failures_and_never_publishes_partial_state() -> None:
-    creation = current_three_creation_bindings_v1()
+    creation = _creation_bindings()
     duplicate = PluginCreationBindingV1(algo_code=creation[0].algo_code, plugin_key=creation[0].plugin_key)
-    process = current_three_process_bindings_v2().without("aistock.vnpy.best_limit.state_codec")
+    process = _process_bindings().without("aistock.vnpy.best_limit.state_codec")
     with pytest.raises(PluginCatalogBuildError) as error:
         build_plugin_catalog_v2(
-            descriptors=current_three_descriptors_v2(),
+            descriptors=_descriptors(),
             creation_bindings=creation + (duplicate,),
             process_bindings=process,
             pinned_compatibility_receipts=_receipts("aistock.vnpy.twap_lite"),
@@ -341,14 +369,14 @@ def test_catalog_aggregates_failures_and_never_publishes_partial_state() -> None
 
 
 def test_malformed_descriptor_is_aggregated_without_hiding_later_failures() -> None:
-    descriptors = current_three_descriptors_v2()
+    descriptors = _descriptors()
     malformed = descriptors[0].model_copy(update={"manifest": "malformed"})
-    process = current_three_process_bindings_v2().without("aistock.vnpy.best_limit.state_codec")
+    process = _process_bindings().without("aistock.vnpy.best_limit.state_codec")
 
     with pytest.raises(PluginCatalogBuildError) as error:
         build_plugin_catalog_v2(
             descriptors=(malformed, *descriptors[1:]),
-            creation_bindings=current_three_creation_bindings_v1(),
+            creation_bindings=_creation_bindings(),
             process_bindings=process,
             pinned_compatibility_receipts=_receipts(),
         )
@@ -360,15 +388,15 @@ def test_malformed_descriptor_is_aggregated_without_hiding_later_failures() -> N
 
 
 def test_failure_receipt_is_input_order_independent_for_semantic_conflicts() -> None:
-    creation = current_three_creation_bindings_v1()
+    creation = _creation_bindings()
     duplicate = PluginCreationBindingV1(algo_code=creation[0].algo_code, plugin_key=creation[0].plugin_key)
     receipts = []
     for ordered_creation in (creation + (duplicate,), (duplicate,) + creation):
         with pytest.raises(PluginCatalogBuildError) as error:
             build_plugin_catalog_v2(
-                descriptors=current_three_descriptors_v2(),
+                descriptors=_descriptors(),
                 creation_bindings=ordered_creation,
-                process_bindings=current_three_process_bindings_v2(),
+                process_bindings=_process_bindings(),
                 pinned_compatibility_receipts=_receipts(),
             )
         receipts.append(error.value.receipt)
@@ -383,7 +411,7 @@ def test_empty_catalog_and_orphan_receipt_fail_without_partial_publication() -> 
         build_plugin_catalog_v2(
             descriptors=(),
             creation_bindings=(),
-            process_bindings=current_three_process_bindings_v2(),
+            process_bindings=_process_bindings(),
             pinned_compatibility_receipts=(),
         )
     assert empty_error.value.partial_catalog is None
@@ -1009,17 +1037,15 @@ def test_code_owned_descriptor_is_immutable_and_live_binding_drift_fails_loud(
 ) -> None:
     runtime_before = _build()
     manifests_before = canonical_json_bytes_v1([item.canonical_payload_v1() for item in current_three_manifests_v2()])
-    descriptors_before = canonical_json_bytes_v1(
-        [item.canonical_payload_v1() for item in current_three_descriptors_v2()]
-    )
+    descriptors_before = canonical_json_bytes_v1([item.canonical_payload_v1() for item in _descriptors()])
     descriptor = _descriptor_for(runtime_before, "BEST_LIMIT_MINIQMT")
     source_before = descriptor.manifest.source_attribution
     if binding_kind == "factory":
-        target = manifest_module.BestLimitMiniQMTCore
+        target = factory_module.create_best_limit_miniqmt_plugin_v3
     elif binding_kind == "config_validator":
         target = manifest_module.validate_current_three_config_v2
     else:
-        target = manifest_module.validate_current_three_state_v2
+        target = manifest_module.validate_current_three_state_v3
 
     original_qualname = target.__qualname__
     had_signature = hasattr(target, "__signature__")
@@ -1036,10 +1062,7 @@ def test_code_owned_descriptor_is_immutable_and_live_binding_drift_fails_loud(
             canonical_json_bytes_v1([item.canonical_payload_v1() for item in current_three_manifests_v2()])
             == manifests_before
         )
-        assert (
-            canonical_json_bytes_v1([item.canonical_payload_v1() for item in current_three_descriptors_v2()])
-            == descriptors_before
-        )
+        assert canonical_json_bytes_v1([item.canonical_payload_v1() for item in _descriptors()]) == descriptors_before
         assert _descriptor_for(runtime_before, "BEST_LIMIT_MINIQMT").manifest.source_attribution == source_before
         with pytest.raises(PluginCatalogBuildError) as error:
             _build()

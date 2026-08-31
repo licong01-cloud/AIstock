@@ -10,7 +10,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from backend.services.trading_core.execution_algo_retirement import require_execution_algo_active
+
+require_execution_algo_active("V25_TWO_STAGE", operation="legacy_cli_paper_v2_live_validation", semantic_path="cli.execution_algo")
 
 
 DEFAULT_QE_SOURCES = ("qe_20260416_002701", "qe_20260413_084216", "qe_20260416_082012")
@@ -264,3 +273,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+# ruff: noqa: E402

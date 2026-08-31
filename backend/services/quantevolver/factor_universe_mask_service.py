@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 import psycopg2.extras as pgx
 
 from ...db.pg_pool import get_conn
+from ..canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
+from ..canonical_pit_dataset_consumer import FormalDatasetUsage
+from ..dataset_release.pit import (
+    FrozenPitSnapshot,
+    frozen_pit_snapshot_from_mapping,
+)
 from ..stock_universe_pit_service import (
     DEFAULT_ST_PIT_RULE_VERSION,
     DEFAULT_ST_PIT_REFRESH_POLICY,
@@ -19,7 +25,10 @@ from .qe_dataset_contract import (
     QE_DATASET_SIGNAL_END_DATE,
     QE_DATASET_START_DATE,
     QE_ST_PIT_UNIVERSE_KEY,
+    QEFormalDatasetBinding,
     require_qe_dataset_window,
+    require_qe_formal_dataset_binding,
+    require_qe_formal_dataset_window,
 )
 
 
@@ -84,8 +93,105 @@ class FactorUniverseMetadata:
 class FactorUniverseMaskService:
     """Dataset-pinned ST PIT universe service for QE metrics and caches."""
 
-    def __init__(self, pit_service: Optional[StockUniversePitService] = None) -> None:
-        self._pit_service = pit_service or StockUniversePitService()
+    def __init__(
+        self,
+        pit_service: Optional[StockUniversePitService] = None,
+        *,
+        formal_binding: QEFormalDatasetBinding | None = None,
+        frozen_snapshot: FrozenPitSnapshot | None = None,
+    ) -> None:
+        if (formal_binding is None) != (frozen_snapshot is None):
+            raise ValueError("formal_binding and frozen_snapshot must be supplied together")
+        self._formal_binding = formal_binding
+        self._frozen_snapshot = frozen_snapshot
+        self._pit_service = None if formal_binding is not None else (pit_service or StockUniversePitService())
+        if formal_binding is not None and frozen_snapshot is not None:
+            self._validate_formal_snapshot(formal_binding, frozen_snapshot)
+
+    @classmethod
+    def from_formal_release(
+        cls,
+        *,
+        release_manifest: Mapping[str, Any],
+        expected_manifest_digest: str,
+        usage_mode: FormalDatasetUsage | str,
+        frozen_snapshot: FrozenPitSnapshot | Mapping[str, Any],
+    ) -> "FactorUniverseMaskService":
+        binding = require_qe_formal_dataset_binding(
+            release_manifest,
+            usage_mode=usage_mode,
+            expected_manifest_digest=expected_manifest_digest,
+        )
+        snapshot = (
+            frozen_snapshot
+            if isinstance(frozen_snapshot, FrozenPitSnapshot)
+            else frozen_pit_snapshot_from_mapping(frozen_snapshot)
+        )
+        return cls(formal_binding=binding, frozen_snapshot=snapshot)
+
+    @staticmethod
+    def _validate_formal_snapshot(
+        binding: QEFormalDatasetBinding,
+        snapshot: FrozenPitSnapshot,
+    ) -> None:
+        mismatches: list[str] = []
+        if snapshot.universe_key != CANONICAL_PIT_UNIVERSE_KEY:
+            mismatches.append("universe_key")
+        if snapshot.rule_version != binding.rule_version:
+            mismatches.append("rule_version")
+        if snapshot.parameter_hash != binding.rule_parameters_digest:
+            mismatches.append("rule_parameters_digest")
+        if snapshot.cutoff != binding.cutoff:
+            mismatches.append("cutoff")
+        if snapshot.spans_sha256 != binding.frozen_snapshot_digest:
+            mismatches.append("frozen_snapshot_digest")
+        if mismatches:
+            raise ValueError(
+                "formal QE frozen PIT artifact differs from release binding: "
+                + ",".join(mismatches)
+            )
+
+    @property
+    def is_formal_frozen(self) -> bool:
+        return self._formal_binding is not None
+
+    def _formal_state(self) -> dict[str, Any]:
+        if self._formal_binding is None or self._frozen_snapshot is None:
+            raise RuntimeError("formal frozen PIT state is not configured")
+        return {
+            "status": "ready",
+            "dirty": False,
+            "scope": "full",
+            "universe_key": self._formal_binding.frozen_universe_key,
+            "rule_version": self._formal_binding.rule_version,
+            "rule_parameters_digest": self._formal_binding.rule_parameters_digest,
+            "source_fingerprint_sha256": self._formal_binding.frozen_snapshot_digest,
+            "start_date": self._frozen_snapshot.scope_start.isoformat(),
+            "end_date": self._formal_binding.cutoff.isoformat(),
+            "generated_at": None,
+            "release_id": self._formal_binding.release_id,
+            "release_manifest_digest": self._formal_binding.manifest_digest,
+            "formal_usage_mode": self._formal_binding.usage_mode,
+        }
+
+    def _require_formal_window(
+        self,
+        *,
+        start_date: dt.date,
+        end_date: dt.date,
+        universe_key: str,
+    ) -> None:
+        if universe_key != OFFICIAL_FACTOR_UNIVERSE_KEY:
+            raise ValueError("formal frozen PIT does not accept a universe_key override")
+        if self._formal_binding is None or self._frozen_snapshot is None:
+            raise RuntimeError("formal frozen PIT state is not configured")
+        require_qe_formal_dataset_window(
+            self._formal_binding,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if start_date < self._frozen_snapshot.scope_start:
+            raise ValueError("QE request starts before the formal frozen PIT scope")
 
     def ensure_ready(
         self,
@@ -98,7 +204,15 @@ class FactorUniverseMaskService:
     ) -> dict[str, Any]:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        if self.is_formal_frozen:
+            self._require_formal_window(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+            )
+            return {"state": self._formal_state(), "action": "read_frozen_artifact"}
         universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
+        assert self._pit_service is not None
         if universe_key == OFFICIAL_FACTOR_UNIVERSE_KEY:
             require_qe_dataset_window(start_date=start, end_date=end)
             return self._pit_service.ensure_immutable_dataset_snapshot(
@@ -121,7 +235,12 @@ class FactorUniverseMaskService:
         *,
         universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
     ) -> dict[str, Any]:
+        if self.is_formal_frozen:
+            if universe_key != OFFICIAL_FACTOR_UNIVERSE_KEY:
+                raise ValueError("formal frozen PIT does not accept a universe_key override")
+            return self._formal_state()
         universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
+        assert self._pit_service is not None
         return self._pit_service.get_status(universe_key=universe_key)
 
     def metadata(
@@ -135,6 +254,38 @@ class FactorUniverseMaskService:
     ) -> dict[str, Any]:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        if self.is_formal_frozen:
+            self._require_formal_window(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+            )
+            state = self._formal_state()
+            assert self._formal_binding is not None
+            meta = FactorUniverseMetadata(
+                universe_key=self._formal_binding.frozen_universe_key,
+                universe_rule_version=self._formal_binding.rule_version,
+                universe_scope="full",
+                universe_fingerprint_sha256=self._formal_binding.frozen_snapshot_digest,
+                stock_universe_mode="pit_spans",
+                snapshot_universe_mode="canonical_frozen_release_v1",
+                index_policy=OFFICIAL_FACTOR_INDEX_POLICY,
+                coverage_semantics=OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+                universe_start_date=state["start_date"],
+                universe_end_date=state["end_date"],
+                universe_generated_at=None,
+            ).as_dict()
+            meta.update(
+                {
+                    "authority_id": self._formal_binding.authority_id,
+                    "rule_parameters_digest": self._formal_binding.rule_parameters_digest,
+                    "release_id": self._formal_binding.release_id,
+                    "release_cutoff": self._formal_binding.cutoff.isoformat(),
+                    "release_manifest_digest": self._formal_binding.manifest_digest,
+                    "formal_usage_mode": self._formal_binding.usage_mode,
+                }
+            )
+            return meta
         universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         ensure_result: dict[str, Any] | None = None
         if ensure:
@@ -191,7 +342,7 @@ class FactorUniverseMaskService:
         try:
             state_start = _as_date(state.get("start_date"))
             state_end = _as_date(state.get("end_date"))
-        except Exception:
+        except (TypeError, ValueError):
             return False
         if state_start > start_date or state_end < end_date:
             return False
@@ -220,6 +371,20 @@ class FactorUniverseMaskService:
     ) -> list[str]:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        if self.is_formal_frozen:
+            self._require_formal_window(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+            )
+            assert self._frozen_snapshot is not None
+            return sorted(
+                {
+                    span.ts_code
+                    for span in self._frozen_snapshot.spans
+                    if span.eligible_start <= end and span.eligible_end >= start
+                }
+            )
         universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         if ensure:
             self.ensure_ready(start_date=start, end_date=end, universe_key=universe_key)
@@ -249,6 +414,35 @@ class FactorUniverseMaskService:
     ) -> list[dict[str, Any]]:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        if self.is_formal_frozen:
+            self._require_formal_window(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+            )
+            wanted = (
+                None
+                if instruments is None
+                else {_normalize_instrument(inst) for inst in instruments}
+            )
+            assert self._frozen_snapshot is not None
+            assert self._formal_binding is not None
+            rows: list[dict[str, Any]] = []
+            for span in self._frozen_snapshot.spans:
+                if span.eligible_start > end or span.eligible_end < start:
+                    continue
+                if wanted is not None and span.ts_code not in wanted:
+                    continue
+                rows.append(
+                    {
+                        **span.as_dict(),
+                        "entry_event_date": None,
+                        "exit_event_date": None,
+                        "terminal_exit": None,
+                        "rule_version": self._formal_binding.rule_version,
+                    }
+                )
+            return rows
         universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         if ensure:
             self.ensure_ready(start_date=start, end_date=end, universe_key=universe_key)
@@ -324,9 +518,56 @@ class FactorUniverseMaskService:
         universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
         instruments: Optional[Iterable[str]] = None,
         ensure: bool = True,
+        trading_dates: Sequence[Any] | pd.DatetimeIndex | None = None,
     ) -> pd.MultiIndex:
         start = _as_date(start_date)
         end = _as_date(end_date)
+        if self.is_formal_frozen:
+            self._require_formal_window(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+            )
+            if trading_dates is None:
+                raise ValueError(
+                    "formal frozen PIT eligible index requires explicit frozen trading_dates"
+                )
+            date_index = pd.DatetimeIndex(trading_dates).normalize()
+            date_index = date_index[
+                (date_index >= pd.Timestamp(start)) & (date_index <= pd.Timestamp(end))
+            ].drop_duplicates().sort_values()
+            if len(date_index) == 0:
+                return pd.MultiIndex.from_arrays(
+                    [[], []], names=["datetime", "instrument"]
+                )
+            selected = (
+                self.get_window_union_instruments(
+                    start_date=start,
+                    end_date=end,
+                    ensure=ensure,
+                )
+                if instruments is None
+                else sorted({_normalize_instrument(inst) for inst in instruments})
+            )
+            mask = self.build_eligible_mask(
+                date_index,
+                selected,
+                start_date=start,
+                end_date=end,
+                ensure=ensure,
+            )
+            rows = [
+                (date_index[row], selected[col])
+                for row, col in zip(*np.nonzero(mask))
+            ]
+            if not rows:
+                return pd.MultiIndex.from_arrays(
+                    [[], []], names=["datetime", "instrument"]
+                )
+            return pd.MultiIndex.from_tuples(
+                rows,
+                names=["datetime", "instrument"],
+            )
         universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
         if ensure:
             self.ensure_ready(start_date=start, end_date=end, universe_key=universe_key)
@@ -368,10 +609,21 @@ class FactorUniverseMaskService:
 
 def normalize_factor_universe_metadata(meta: Optional[dict[str, Any]]) -> dict[str, Any]:
     meta = dict(meta or {})
-    return {
+    normalized = {
         "universe_key": meta.get("universe_key") or OFFICIAL_FACTOR_UNIVERSE_KEY,
         "universe_rule_version": meta.get("universe_rule_version") or OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
         "universe_fingerprint_sha256": meta.get("universe_fingerprint_sha256") or "",
         "index_policy": meta.get("index_policy") or OFFICIAL_FACTOR_INDEX_POLICY,
         "coverage_semantics": meta.get("coverage_semantics") or OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
     }
+    for key in (
+        "authority_id",
+        "rule_parameters_digest",
+        "release_id",
+        "release_cutoff",
+        "release_manifest_digest",
+        "formal_usage_mode",
+    ):
+        if meta.get(key) is not None:
+            normalized[key] = meta[key]
+    return normalized

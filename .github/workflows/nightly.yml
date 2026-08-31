@@ -15,7 +15,7 @@ on:
         type: boolean
         default: true
       full_nightly_run:
-        description: Explicitly run every enabled runner plan instead of the successful-watermark change window.
+        description: Explicitly run every enabled runner plan instead of the receipt-watermark retry window.
         required: false
         default: false
         type: boolean
@@ -24,9 +24,18 @@ on:
         type: boolean
         default: false
       run_code_intelligence:
-        description: 'Build CodeGraph / Understand Anything warning-only artifacts.'
+        description: 'Refresh CodeGraph and assess Understand Anything state without paid semantic work.'
         type: boolean
         default: true
+      run_paid_ua_refresh:
+        description: 'Explicitly authorize the paid Understand Anything semantic refresh for this dispatch.'
+        type: boolean
+        default: false
+      ua_max_budget_usd:
+        description: 'One-run UA budget cap when paid refresh is explicitly authorized.'
+        required: false
+        default: 2
+        type: number
       llm_triage_mode:
         description: 'LLM guarded rollout mode for issue intake.'
         type: choice
@@ -53,6 +62,8 @@ env:
   AISTOCK_WORKTREE_ROOT: F:/Dev/AIstock_worktrees
   AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: F:/Dev/AIstock
   AISTOCK_CODE_INTELLIGENCE_STATE_ROOT: F:/Dev/AIstock_code_intelligence_state
+  AISTOCK_RUN_PAID_UA_REFRESH: ${{ github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh || false }}
+  AISTOCK_UA_DAILY_MAX_BUDGET_USD: ${{ github.event_name == 'workflow_dispatch' && inputs.ua_max_budget_usd || vars.AISTOCK_UA_DAILY_MAX_BUDGET_USD || '2' }}
   AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env
 
 permissions:
@@ -65,11 +76,14 @@ jobs:
     name: Runner preflight
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      retry_run_id: ${{ steps.select_nightly_receipt.outputs.run_id }}
+      retry_source_head: ${{ steps.select_nightly_receipt.outputs.head_sha }}
     permissions:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check self-hosted runner availability
         env:
@@ -95,24 +109,90 @@ jobs:
 
       - name: Upload runner health evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: runner-health-${{ github.run_id }}
           path: tmp/validation/runner_health/
           if-no-files-found: ignore
 
+      - name: Select prior durable Nightly L3 receipt
+        id: select_nightly_receipt
+        if: github.event_name == 'schedule' || (inputs.run_nightly_l3 && !inputs.full_nightly_run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          receipt_root="tmp/validation/nightly_retry_receipt"
+          mkdir -p "${receipt_root}"
+          if ! prior_runs_tsv=$(gh run list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --workflow nightly.yml \
+            --branch main \
+            --event schedule \
+            --status completed \
+            --limit 10 \
+            --json databaseId,headSha \
+            --jq '.[] | [.databaseId, .headSha] | @tsv'); then
+            echo "::error::Failed to query prior completed scheduled Nightly runs."
+            exit 1
+          fi
+          selected_run_id=""
+          selected_head=""
+          while IFS=$'\t' read -r candidate_run_id candidate_head; do
+            if [[ -z "${candidate_run_id}" || -z "${candidate_head}" ]]; then
+              continue
+            fi
+            candidate_dir="${receipt_root}/candidate-${candidate_run_id}"
+            mkdir -p "${candidate_dir}"
+            if ! gh run download "${candidate_run_id}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "nightly-l3-results-${candidate_run_id}" \
+              --dir "${candidate_dir}"; then
+              continue
+            fi
+            candidate_results="${candidate_dir}/session-results.json"
+            candidate_plan="${candidate_dir}/execution-plan.json"
+            if [[ -f "${candidate_results}" && -f "${candidate_plan}" ]]; then
+              install -m 0644 "${candidate_results}" "${receipt_root}/session-results.json"
+              install -m 0644 "${candidate_plan}" "${receipt_root}/execution-plan.json"
+              selected_run_id="${candidate_run_id}"
+              selected_head="${candidate_head}"
+              break
+            fi
+          done <<< "${prior_runs_tsv}"
+          if [[ -z "${selected_run_id}" || -z "${selected_head}" ]]; then
+            echo "::error::No prior scheduled Nightly run with a durable session receipt is available; use workflow_dispatch with full_nightly_run=true for an explicit recovery run."
+            exit 1
+          fi
+          echo "run_id=${selected_run_id}" >> "${GITHUB_OUTPUT}"
+          echo "head_sha=${selected_head}" >> "${GITHUB_OUTPUT}"
+          echo "nightly_retry_source run_id=${selected_run_id} head=${selected_head}"
+
+      - name: Upload selected Nightly L3 retry receipt
+        if: steps.select_nightly_receipt.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-l3-retry-source-${{ github.run_id }}
+          path: |
+            tmp/validation/nightly_retry_receipt/session-results.json
+            tmp/validation/nightly_retry_receipt/execution-plan.json
+          if-no-files-found: error
+          retention-days: 1
+
   dr-snapshot:
     name: DR snapshot prod DB
+    # Operations-only DR lane: it probes an already-running authorized target.
+    # It is not PR CI, DEV validation, or permission to create/start a database.
     needs: runner-preflight
     if: github.event_name != 'workflow_dispatch' || inputs.run_dr
     # self-hosted is mandatory because the DR job needs to read the local
     # production DB at 127.0.0.1:5432; GitHub-hosted runners cannot reach it.
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 60
     defaults:
       run:
         shell: powershell
     env:
+      AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'
       DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
       DR_PG_CONTAINER: 'timescaledb'
     steps:
@@ -182,12 +262,13 @@ jobs:
     name: DR validation (dump validity + schema diff + retention)
     needs: dr-snapshot
     if: github.event_name != 'workflow_dispatch' || inputs.run_dr
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 15
     defaults:
       run:
         shell: powershell
     env:
+      AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'
       DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
       DR_PG_CONTAINER: 'timescaledb'
     steps:
@@ -224,7 +305,7 @@ jobs:
     # produce green L3/live reports.
     needs: [runner-preflight, dr-validate]
     if: always() && needs.runner-preflight.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3) && (needs.dr-validate.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.run_dr))
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 120
     defaults:
       run:
@@ -238,53 +319,81 @@ jobs:
             --dest "${env:GITHUB_WORKSPACE}" `
             --expected-commit "${env:GITHUB_SHA}" `
             --repo "${env:GITHUB_REPOSITORY}" `
+            --frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules" `
             --package-asset-store-root "${env:AISTOCK_SELF_HOSTED_SOURCE}/rdagent_assets/package_assets" `
             --github-env-file "${env:GITHUB_ENV}" `
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
-      # Activates the local AIstock conda env. The runner must have conda on PATH
-      # and the AIstock env pre-built (see docs/process/mcp_server_setup_claude_code_20260510.md
-      # for env setup pointers). GitHub-hosted Linux runners can't do this.
-      - name: Sanity - conda AIstock env present
+      - name: Verify prebuilt AIstock-CI and frontend dependencies
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
         run: |
           if (-not (Get-Command conda -ErrorAction SilentlyContinue)) {
             Write-Host "::error::conda not on PATH on this self-hosted runner"
             exit 1
           }
-          $envLines = conda env list
-          if (-not ($envLines -match '^AIstock\s')) {
-            Write-Host "::error::conda env AIstock missing"
-            exit 1
+          conda run -n AIstock-CI python scripts/ci_environment_verify.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $requiredFrontendEntrypoints = @(
+            "frontend/node_modules/@playwright/test/cli.js",
+            "frontend/node_modules/typescript/bin/tsc",
+            "frontend/node_modules/next/dist/bin/next"
+          )
+          $missingFrontendEntrypoints = @($requiredFrontendEntrypoints | Where-Object {
+            -not (Test-Path -LiteralPath $_ -PathType Leaf)
+          })
+          if ($missingFrontendEntrypoints.Count -gt 0) {
+            throw "frontend/node_modules direct entrypoints are not materialized: $($missingFrontendEntrypoints -join ', '); dependency installation is prohibited in Nightly"
           }
 
-      - name: Build successful-watermark Nightly execution plan
+      - name: Download selected Nightly L3 retry receipt
+        if: github.event_name == 'schedule' || !inputs.full_nightly_run
+        uses: actions/download-artifact@v8
+        with:
+          name: nightly-l3-retry-source-${{ github.run_id }}
+          path: tmp/validation/nightly_retry_receipt
+
+      - name: Build receipt-watermark Nightly execution plan
         env:
-          GH_TOKEN: ${{ github.token }}
           FULL_NIGHTLY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.full_nightly_run || false }}
+          RETRY_SOURCE_RUN_ID: ${{ needs.runner-preflight.outputs.retry_run_id }}
+          RETRY_SOURCE_HEAD: ${{ needs.runner-preflight.outputs.retry_source_head }}
         run: |
           $outDir = "tmp/validation/nightly_l3"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          $successful = gh run list --workflow nightly.yml --branch main --event schedule --status success --limit 1 --json headSha | ConvertFrom-Json | Select-Object -First 1
-          $watermark = if ($successful) { $successful.headSha } else { "" }
           $changedFile = "$outDir/changed-files.txt"
           $extraArgs = @()
           $watermarkArgs = @()
-          if ($watermark) { $watermarkArgs += @("--watermark", $watermark) }
-          if ($env:FULL_NIGHTLY_RUN -eq "true" -or -not $watermark) {
+          $watermark = ""
+          if ($env:FULL_NIGHTLY_RUN -eq "true") {
             $extraArgs += "--full-run"
             New-Item -ItemType File -Force -Path $changedFile | Out-Null
           } else {
+            $retryRunId = $env:RETRY_SOURCE_RUN_ID
+            $watermark = $env:RETRY_SOURCE_HEAD
+            $retryResults = "tmp/validation/nightly_retry_receipt/session-results.json"
+            $retryPlan = "tmp/validation/nightly_retry_receipt/execution-plan.json"
+            if (-not $retryRunId -or -not $watermark) {
+              throw "Runner preflight did not provide a prior durable Nightly receipt identity."
+            }
+            if ((-not (Test-Path -LiteralPath $retryResults -PathType Leaf)) -or (-not (Test-Path -LiteralPath $retryPlan -PathType Leaf))) {
+              throw "Runner preflight Nightly receipt artifact is incomplete for run $retryRunId."
+            }
             git cat-file -e "$watermark^{commit}" 2>$null
             if ($LASTEXITCODE -ne 0) {
-              Write-Host "::warning::Successful watermark is unavailable locally; using explicit full-run fallback."
-              $extraArgs += "--full-run"
-              New-Item -ItemType File -Force -Path $changedFile | Out-Null
-            } else {
-              git diff --name-only "$watermark...${env:GITHUB_SHA}" | Set-Content -Path $changedFile -Encoding UTF8
-              if ($LASTEXITCODE -ne 0) { throw "Failed to build Nightly change window from $watermark" }
+              throw "Receipt-bound scheduled Nightly watermark is unavailable locally: $watermark"
             }
+            git diff --name-only "$watermark...${env:GITHUB_SHA}" | Set-Content -Path $changedFile -Encoding UTF8
+            if ($LASTEXITCODE -ne 0) { throw "Failed to build Nightly change window from receipt watermark $watermark" }
+            $watermarkArgs += @(
+              "--watermark", $watermark,
+              "--retry-results-json", $retryResults,
+              "--retry-plan-json", $retryPlan,
+              "--retry-source-head", $watermark
+            )
+            Write-Host "nightly_retry_source run_id=$retryRunId head=$watermark"
           }
-          conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
+          conda run -n AIstock-CI python scripts/nightly_adaptive_scheduler.py --json `
             --provider deterministic `
             --changed-files-file $changedFile `
             --head-commit "${env:GITHUB_SHA}" `
@@ -302,17 +411,12 @@ jobs:
           QE_READ_L3_SKIP_UI: '1'
         run: |
           $outDir = "tmp/validation/nightly_l3"
-          $plan = Get-Content -Raw "$outDir/execution-plan.json" | ConvertFrom-Json
-          $rows = @()
-          foreach ($session in $plan.selected_sessions) {
-            conda run -n AIstock python -m nox -s $session
-            $result = if ($LASTEXITCODE -eq 0) { "success" } else { "failure" }
-            $rows += [pscustomobject]@{ session = $session; result = $result }
-          }
-          $rows | ConvertTo-Json | Set-Content -Path "$outDir/session-results.json" -Encoding UTF8
-          "# Nightly selected session results" | Set-Content -Path "$outDir/session-results.md" -Encoding UTF8
-          foreach ($row in $rows) { "- $($row.session): $($row.result)" | Add-Content -Path "$outDir/session-results.md" -Encoding UTF8 }
-          if ($rows.result -contains "failure") { exit 1 }
+          conda run -n AIstock-CI python scripts/nightly_session_runner.py `
+            --plan "$outDir/execution-plan.json" `
+            --output-json "$outDir/session-results.json" `
+            --output-md "$outDir/session-results.md" `
+            --session-timeout-seconds 1200 `
+            --total-timeout-seconds 6300
 
       - name: Print validation history manifest
         if: always()
@@ -324,19 +428,31 @@ jobs:
           }
 
       - name: Upload Nightly L3 session results
+        id: upload_nightly_l3
         if: always()
-        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-l3-results-${{ github.run_id }}
           path: tmp/validation/nightly_l3/
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Retry Nightly L3 session results upload
+        if: always() && steps.upload_nightly_l3.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-l3-results-${{ github.run_id }}
+          path: tmp/validation/nightly_l3/
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
     needs: nightly-l3
     if: github.event_name != 'workflow_dispatch' || (inputs.run_nightly_l3 && inputs.run_paper_v2_live)
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 60
     defaults:
       run:
@@ -373,11 +489,10 @@ jobs:
     name: Code intelligence daily graph refresh and summary
     needs: runner-preflight
     if: github.event_name == 'schedule' || inputs.run_code_intelligence
-    continue-on-error: true
     concurrency:
       group: code-intelligence-refresh-main
       cancel-in-progress: false
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 45
     permissions:
       actions: read
@@ -411,33 +526,49 @@ jobs:
 
       - name: Reconcile CodeGraph and Understand Anything
         id: graph_refresh
-        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/code_intelligence_adapter.py refresh-plan `
             --trigger nightly `
             --output "$outDir/graph-refresh-plan.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Graph refresh planning failed."
+          }
           conda run -n AIstock python scripts/code_intelligence_adapter.py codegraph-sync `
             --output-dir $outDir `
+            --require-publish-ready `
             --output "$outDir/codegraph-sync.stdout.json"
-          $codegraph = Get-Content "$outDir/codegraph-sync.stdout.json" -Raw | ConvertFrom-Json
-          if ($codegraph.publish_ready) {
-            conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
-              --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
-              --direction export `
-              --provider codegraph
+          if ($LASTEXITCODE -ne 0) {
+            throw "CodeGraph sync did not produce publish-ready state."
           }
-          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-refresh `
-            --output-dir $outDir `
-            --max-budget-usd 2 `
-            --output "$outDir/understand-anything-refresh.stdout.json"
-          $ua = Get-Content "$outDir/understand-anything-refresh.stdout.json" -Raw | ConvertFrom-Json
-          if ($ua.publish_ready) {
+          conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
+            --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+            --direction export `
+            --provider codegraph `
+            --output "$outDir/codegraph-state-export.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "CodeGraph state export failed."
+          }
+          if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true") {
+            conda run -n AIstock python scripts/code_intelligence_adapter.py ua-refresh `
+              --output-dir $outDir `
+              --max-budget-usd "${env:AISTOCK_UA_DAILY_MAX_BUDGET_USD}" `
+              --require-publish-ready `
+              --output "$outDir/understand-anything-refresh.stdout.json"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Understand Anything refresh did not produce publish-ready state."
+            }
             conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
               --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
               --direction export `
-              --provider understand_anything
+              --provider understand_anything `
+              --output "$outDir/understand-anything-state-export.json"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Understand Anything state export failed."
+            }
+          } else {
+            Write-Host "Paid Understand Anything refresh skipped; refresh-plan remains the visible assessment artifact."
           }
 
       - name: Report daily graph refresh status
@@ -445,11 +576,16 @@ jobs:
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           $rows = @()
-          foreach ($item in @(
+          $items = @(
             @{Provider="state-import"; Path="$outDir/graph-state-import.json"; RequiresPublish=$false},
-            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"; RequiresPublish=$true},
-            @{Provider="understand-anything"; Path="$outDir/understand-anything-refresh.stdout.json"; RequiresPublish=$true}
-          )) {
+            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"; RequiresPublish=$true}
+          )
+          if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true") {
+            $items += @{Provider="understand-anything"; Path="$outDir/understand-anything-refresh.stdout.json"; RequiresPublish=$true}
+          } else {
+            $items += @{Provider="ua-assessment"; Path="$outDir/graph-refresh-plan.json"; RequiresPublish=$false}
+          }
+          foreach ($item in $items) {
             if (-not (Test-Path -LiteralPath $item.Path)) {
               Write-Host "::warning title=Daily graph refresh::$($item.Provider) did not produce an artifact"
               $rows += "| $($item.Provider) | warning | missing artifact |"
@@ -482,11 +618,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/code_intelligence_adapter.py freshness `
             --output-dir $outDir `
+            --max-age-hours 24 `
             --output "$outDir/codegraph-freshness.stdout.json"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "CodeGraph freshness command exited with $LASTEXITCODE; continuing."
-            $global:LASTEXITCODE = 0
-            # PowerShell equivalent of bash non-blocking suffix: || true
+            throw "CodeGraph freshness evidence generation failed."
           }
           if (Test-Path -LiteralPath "$outDir/codegraph-freshness.md") {
             Get-Content -LiteralPath "$outDir/codegraph-freshness.md"
@@ -538,6 +673,8 @@ jobs:
             --output "$outDir/llm-triage-quality.json"
 
       - name: Build LLM test-plan advisor smoke
+        id: nightly_llm_test_plan
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -559,6 +696,8 @@ jobs:
           }
 
       - name: Build LLM nightly scheduler advice smoke
+        id: nightly_llm_scheduler_advice
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -581,6 +720,8 @@ jobs:
           }
 
       - name: Build LLM nightly discovery hypotheses
+        id: nightly_discovery_hypotheses
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -664,6 +805,8 @@ jobs:
           }
 
       - name: Build Nightly adaptive scheduler warning report
+        id: nightly_llm_adaptive_scheduler
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -728,6 +871,8 @@ jobs:
             --output "$outDir/llm-guarded-rollout-gate.json"
 
       - name: Build Nightly LLM design drift audit
+        id: nightly_llm_design_drift
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -745,6 +890,8 @@ jobs:
           }
 
       - name: Build Nightly LLM silent degradation audit
+        id: nightly_llm_silent_degradation
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -760,6 +907,41 @@ jobs:
           if (Test-Path -LiteralPath "$outDir/silent-degradation-audit.md") {
             Get-Content -LiteralPath "$outDir/silent-degradation-audit.md"
           }
+
+      - name: Record advisory LLM step outcomes
+        id: nightly_llm_outcomes
+        if: always()
+        env:
+          TEST_PLAN_OUTCOME: ${{ steps.nightly_llm_test_plan.outcome }}
+          SCHEDULER_ADVICE_OUTCOME: ${{ steps.nightly_llm_scheduler_advice.outcome }}
+          DISCOVERY_OUTCOME: ${{ steps.nightly_discovery_hypotheses.outcome }}
+          ADAPTIVE_SCHEDULER_OUTCOME: ${{ steps.nightly_llm_adaptive_scheduler.outcome }}
+          DESIGN_DRIFT_OUTCOME: ${{ steps.nightly_llm_design_drift.outcome }}
+          SILENT_DEGRADATION_OUTCOME: ${{ steps.nightly_llm_silent_degradation.outcome }}
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $outcomes = [ordered]@{
+            schema_version = "aistock_nightly_llm_step_outcomes_v1"
+            workflow_gate = "ready"
+            planner_status = "ready"
+            steps = [ordered]@{
+              test_plan_advice = $env:TEST_PLAN_OUTCOME
+              scheduler_advice = $env:SCHEDULER_ADVICE_OUTCOME
+              discovery_hypotheses = $env:DISCOVERY_OUTCOME
+              adaptive_scheduler = $env:ADAPTIVE_SCHEDULER_OUTCOME
+              design_drift_audit = $env:DESIGN_DRIFT_OUTCOME
+              silent_degradation_audit = $env:SILENT_DEGRADATION_OUTCOME
+            }
+          }
+          $failed = @($outcomes.steps.GetEnumerator() | Where-Object { $_.Value -eq "failure" })
+          if ($failed.Count -gt 0) {
+            $outcomes.workflow_gate = "warning"
+            $outcomes.planner_status = "failed"
+            $names = @($failed | ForEach-Object { $_.Key }) -join ","
+            Write-Host "::warning title=Nightly advisory LLM degraded::planner_status=failed failed_steps=$names; deterministic tests and discovery continue"
+          }
+          $outcomes | ConvertTo-Json -Depth 5 | Set-Content -Path "$outDir/llm-step-outcomes.json" -Encoding UTF8
 
       - name: Build Repo hygiene orphan audit
         run: |
@@ -823,7 +1005,7 @@ jobs:
 
       - name: Upload code intelligence artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: code-intelligence-${{ github.run_id }}
           path: tmp/validation/code-intelligence/${{ github.run_id }}/
@@ -842,11 +1024,11 @@ jobs:
       actions: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download code intelligence refs
         if: always()
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: code-intelligence-${{ github.run_id }}
           path: tmp/validation/code-intelligence/${{ github.run_id }}
@@ -854,7 +1036,7 @@ jobs:
 
       - name: Download Nightly L3 session results
         if: always()
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nightly-l3-results-${{ github.run_id }}
           path: tmp/validation/nightly_l3/
@@ -984,7 +1166,7 @@ jobs:
 
       - name: Upload Nightly failure issue context
         if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-failure-issue-context
           path: tmp/validation/nightly_failure_issue/
@@ -993,7 +1175,7 @@ jobs:
 
       - name: Auto-register failure as actionable GitHub Issue
         if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -1096,8 +1278,13 @@ jobs:
             --create-registry-worktree \
             --apply \
             --output tmp/validation/nightly_failure_issue/bug-promotion-full.json \
-            --output-format compact | tee tmp/validation/nightly_failure_issue/bug-promotion.json; then
+              --output-format compact | tee tmp/validation/nightly_failure_issue/bug-promotion.json; then
             BUG_ID="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('bug_id') or p.get('bug_id') or '')")"
+            PROMOTION_WORKFLOW_GATE="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('workflow_gate') or '')")"
+            if [ "${PROMOTION_WORKFLOW_GATE}" = "deferred_registry_pr_capability" ]; then
+              PROMOTION_GATE="deferred_registry_pr_capability"
+              echo "workflow_gate=${PROMOTION_GATE} issue=${ISSUE_NUMBER} reason=actions_cannot_persist_registry_pr" | tee -a "${PROMOTION_STATUS}"
+            fi
             if [ -n "${BUG_ID}" ]; then
               BRANCH="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_worktree_plan', {}).get('branch') or '')")"
               REGISTRY_ROOT="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_root') or '')")"
@@ -1153,12 +1340,14 @@ jobs:
           bug_path = payload.get("submit_bug", {}).get("bug_json_path") or payload.get("bug_json_path")
           branch = payload.get("submit_bug", {}).get("registry_worktree_plan", {}).get("branch")
           registry_pr_status = os.environ.get("REGISTRY_PR_STATUS") or "not_attempted"
-          body_json = subprocess.check_output(
-              ["gh", "issue", "view", issue, "--json", "body"],
+          issue_json = subprocess.check_output(
+              ["gh", "issue", "view", issue, "--json", "body,title"],
               text=True,
               encoding="utf-8",
           )
-          body = json.loads(body_json).get("body") or ""
+          issue_payload = json.loads(issue_json)
+          body = issue_payload.get("body") or ""
+          title = issue_payload.get("title") or "Nightly failure requires triage"
           replacement = f"- BUG ID: `{bug_id}` (Nightly BUG draft generated; registry branch `{branch}`; registry_pr_status=`{registry_pr_status}`; business fix still requires standard workflow)."
           body = body.replace(
               "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
@@ -1175,7 +1364,11 @@ jobs:
               )
           body_path = Path("tmp/validation/nightly_failure_issue/github-issue-body-with-bug.md")
           body_path.write_text(body, encoding="utf-8")
-          subprocess.check_call(["gh", "issue", "edit", issue, "--body-file", str(body_path)])
+          if not title.startswith(f"{bug_id} "):
+              title = f"{bug_id} {title}"
+          subprocess.check_call(
+              ["gh", "issue", "edit", issue, "--title", title, "--body-file", str(body_path)]
+          )
           PY
             fi
             echo "workflow_gate=${PROMOTION_GATE} issue=${ISSUE_NUMBER}" | tee -a "${PROMOTION_STATUS}"
@@ -1186,7 +1379,7 @@ jobs:
 
       - name: Upload Nightly BUG promotion context
         if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-bug-promotion-${{ github.run_id }}
           path: |
@@ -1207,7 +1400,7 @@ jobs:
 
       - name: Upload summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-summary-${{ github.run_id }}
           path: tmp/validation/nightly_summary/

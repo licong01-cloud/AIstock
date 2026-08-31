@@ -12,27 +12,22 @@ import akshare as ak
 from datetime import datetime, timedelta
 import warnings
 import sys
-import io
 from .data_source_manager_impl import data_source_manager
 from ..infra.network_optimizer import network_optimizer
 
 warnings.filterwarnings('ignore')
 
 # 设置标准输出编码为UTF-8（仅在命令行环境，避免streamlit冲突）
-def _setup_stdout_encoding():
-    """仅在命令行环境设置标准输出编码"""
-    if sys.platform == 'win32' and not hasattr(sys.stdout, '_original_stream'):
+def _setup_stdout_encoding() -> None:
+    """Configure the real Windows console without replacing captured streams."""
+    if sys.platform != "win32" or sys.stdout is not sys.__stdout__:
+        return
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
         try:
-            # 检测是否在streamlit环境中
-            import streamlit
-            # 在streamlit中不修改stdout
-            return
-        except ImportError:
-            # 不在streamlit环境，可以安全修改
-            try:
-                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='ignore')
-            except:
-                pass
+            reconfigure(encoding="utf-8", errors="ignore")
+        except (AttributeError, OSError, ValueError):
+            pass
 
 _setup_stdout_encoding()
 
@@ -547,14 +542,14 @@ class MarketSentimentDataFetcher:
                         interpretation = "换手率偏低（2%-5%），交易相对清淡"
                     else:
                         interpretation = "换手率很低（<2%），交易清淡"
-                except:
+                except Exception:  # noqa: BLE001
                     pass
             return interpretation
         
         # 优先使用Tushare（通过统一数据访问接口）
         if data_source_manager.tushare_available:
             try:
-                print(f"   [Tushare] 正在获取换手率数据...")
+                print("   [Tushare] 正在获取换手率数据...")
                 ts_code = data_source_manager._convert_to_ts_code(symbol)
                 
                 # 尝试获取最近几个交易日的数据（因为可能是非交易日）
@@ -579,7 +574,7 @@ class MarketSentimentDataFetcher:
                                 "interpretation": interpretation,
                                 "source": "tushare"
                             }
-                    except:
+                    except Exception:  # noqa: BLE001
                         continue
                         
             except Exception as te:
@@ -587,7 +582,7 @@ class MarketSentimentDataFetcher:
         
         # Tushare失败，尝试Akshare作为备用
         try:
-            print(f"   [Akshare] 正在获取换手率数据（备用数据源）...")
+            print("   [Akshare] 正在获取换手率数据（备用数据源）...")
             # 获取A股实时行情数据
             with network_optimizer.apply():
                 df = ak.stock_zh_a_spot_em()
@@ -615,7 +610,7 @@ class MarketSentimentDataFetcher:
         # 优先使用Tushare（通过统一数据访问接口）
         if data_source_manager.tushare_available:
             try:
-                print(f"   [Tushare] 正在获取大盘指数数据...")
+                print("   [Tushare] 正在获取大盘指数数据...")
                 
                 # 尝试获取最近几个交易日的数据（因为可能是非交易日）
                 for days_back in range(5):
@@ -639,7 +634,7 @@ class MarketSentimentDataFetcher:
                                 "change_percent": change_pct,
                                 "source": "tushare"
                             }
-                    except:
+                    except Exception:  # noqa: BLE001
                         continue
                         
             except Exception as te:
@@ -647,7 +642,7 @@ class MarketSentimentDataFetcher:
         
         # Tushare失败，尝试Akshare作为备用
         try:
-            print(f"   [Akshare] 正在获取大盘指数数据（备用数据源）...")
+            print("   [Akshare] 正在获取大盘指数数据（备用数据源）...")
             # 使用正确的symbol参数
             with network_optimizer.apply():
                 df = ak.stock_zh_index_spot_em(symbol="上证系列指数")
@@ -683,7 +678,7 @@ class MarketSentimentDataFetcher:
                             else:
                                 sentiment = "市场情绪极度悲观"
                             
-                            print(f"   [Akshare] ✅ 成功获取大盘数据")
+                            print("   [Akshare] ✅ 成功获取大盘数据")
                             return {
                                 "index_name": "上证指数",
                                 "change_percent": change_pct,
@@ -698,7 +693,7 @@ class MarketSentimentDataFetcher:
                     except Exception as e:
                         print(f"   [Akshare] 获取涨跌家数失败: {e}")
                         
-                    print(f"   [Akshare] ✅ 成功获取指数涨跌幅")
+                    print("   [Akshare] ✅ 成功获取指数涨跌幅")
                     return {
                         "index_name": "上证指数",
                         "change_percent": change_pct,
@@ -720,7 +715,7 @@ class MarketSentimentDataFetcher:
                 with network_optimizer.apply():
                     limit_up_df = ak.stock_zt_pool_em(date=today)
                 limit_up_count = len(limit_up_df) if limit_up_df is not None and not limit_up_df.empty else 0
-            except:
+            except Exception:  # noqa: BLE001
                 limit_up_count = 0
             
             # 获取跌停股票
@@ -728,7 +723,7 @@ class MarketSentimentDataFetcher:
                 with network_optimizer.apply():
                     limit_down_df = ak.stock_zt_pool_dtgc_em(date=today)
                 limit_down_count = len(limit_down_df) if limit_down_df is not None and not limit_down_df.empty else 0
-            except:
+            except Exception:  # noqa: BLE001
                 limit_down_count = 0
             
             # 计算涨跌停比例
@@ -953,14 +948,13 @@ class MarketSentimentDataFetcher:
                     market_summary = ak.stock_zh_a_spot_em()
                 if market_summary is not None and not market_summary.empty:
                     up_count = len(market_summary[market_summary['涨跌幅'] > 0])
-                    down_count = len(market_summary[market_summary['涨跌幅'] < 0])
                     total = len(market_summary)
                     
                     up_ratio = up_count / total
                     # 根据涨跌家数比例调整分数（权重30%）
                     score += (up_ratio - 0.5) * 60
                     factors.append(f"涨跌家数比例: {up_ratio:.1%}")
-            except:
+            except Exception:  # noqa: BLE001
                 pass
             
             # 确保分数在0-100之间

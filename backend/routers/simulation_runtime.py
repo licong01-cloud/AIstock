@@ -225,6 +225,26 @@ def get_scheduler_status(
         _raise_http(exc)
 
 
+@router.get("/scheduler/verification-status")
+def get_scheduler_verification_status(
+    broker_backend: str | None = Query(None),
+    run_id: str | None = Query(None),
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+) -> dict[str, Any]:
+    """Return a bounded read-only scheduler smoke scoped to one broker or run subject."""
+
+    try:
+        return {
+            "ok": True,
+            "scheduler": service.scheduler_verification_status(
+                broker_backend=_parse_backend(broker_backend),
+                run_id=run_id,
+            ),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/platform-diagnostics")
 def get_platform_diagnostics(
     trade_date: date | None = None,
@@ -286,6 +306,17 @@ def get_simulation_run(
 ) -> dict[str, Any]:
     try:
         return {"ok": True, **service.get_run_detail(run_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/runs/{run_id}/terminal-evidence")
+def get_simulation_run_terminal_evidence(
+    run_id: str,
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.get_run_terminal_evidence(run_id)}
     except TradingCoreError as exc:
         _raise_http(exc)
 

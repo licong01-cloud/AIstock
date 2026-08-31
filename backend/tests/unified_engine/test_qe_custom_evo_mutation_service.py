@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import json
 
 import pytest
 
@@ -46,6 +47,7 @@ class FakeCursor:
     def execute(self, sql, params=None):
         self.sql = " ".join(str(sql).split())
         self.state["sql"].append(self.sql)
+        self.state["params"].append(params)
         self.rowcount = 1 if self.sql.startswith("DELETE") else 0
 
     def fetchone(self):
@@ -82,7 +84,7 @@ class FakeCursor:
 
 
 def _patch_fake_db(monkeypatch):
-    state = {"entered": 0, "exited": 0, "commits": 0, "sql": []}
+    state = {"entered": 0, "exited": 0, "commits": 0, "sql": [], "params": []}
     monkeypatch.setattr(qes, "get_conn", lambda: FakeConnContext(state))
     return state
 
@@ -114,8 +116,71 @@ def test_rerun_custom_evo_loop_uses_get_conn_context_manager_for_lock(monkeypatc
     )
 
     assert result["loop_id"] == "task-a_Loop2"
+    assert len(result["rerun_attempt_id"]) == 32
+    assert result["source_execution_id"] == (
+        f"task-a_Loop2:rerun:{result['rerun_attempt_id']}"
+    )
+    persisted_configs = [
+        json.loads(params[0])
+        for sql, params in zip(state["sql"], state["params"])
+        if "SET strategy_evo_config = %s" in sql
+    ]
+    rerun_metadata = persisted_configs[0]["loops"][1]["_qe_rerun_submission"]
+    assert rerun_metadata == {
+        "schema_version": "qe_custom_evo_rerun_submission_v1",
+        "rerun_attempt_id": result["rerun_attempt_id"],
+        "source_execution_id": result["source_execution_id"],
+    }
     assert state["entered"] == state["exited"]
     assert any("pg_advisory_unlock" in sql for sql in state["sql"])
+
+
+def test_custom_evo_rerun_submission_uses_attempt_reservation_and_canonical_claim() -> None:
+    attempt_id = "a" * 32
+    canonical_loop_id = "task-a_Loop2"
+
+    source_execution_id, source_claim_id = (
+        qes.AutoEvolutionScheduler._custom_evo_submission_identity(
+            {
+                "_qe_rerun_submission": {
+                    "schema_version": "qe_custom_evo_rerun_submission_v1",
+                    "rerun_attempt_id": attempt_id,
+                    "source_execution_id": f"{canonical_loop_id}:rerun:{attempt_id}",
+                }
+            },
+            canonical_loop_id=canonical_loop_id,
+        )
+    )
+
+    assert source_execution_id == f"{canonical_loop_id}:rerun:{attempt_id}"
+    assert source_claim_id == canonical_loop_id
+
+
+def test_custom_evo_normal_submission_keeps_canonical_identity() -> None:
+    assert qes.AutoEvolutionScheduler._custom_evo_submission_identity(
+        {"loop_index": 2},
+        canonical_loop_id="task-a_Loop2",
+    ) == ("task-a_Loop2", None)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        "not-an-object",
+        {},
+        {
+            "schema_version": "qe_custom_evo_rerun_submission_v1",
+            "rerun_attempt_id": "a" * 32,
+            "source_execution_id": "task-a_Loop2:rerun:different",
+        },
+    ],
+)
+def test_custom_evo_rerun_submission_identity_fails_closed(metadata) -> None:
+    with pytest.raises(ValueError, match="QE_CUSTOM_EVO_RERUN_IDENTITY_INVALID"):
+        qes.AutoEvolutionScheduler._custom_evo_submission_identity(
+            {"_qe_rerun_submission": metadata},
+            canonical_loop_id="task-a_Loop2",
+        )
 
 
 def test_append_custom_evo_loops_uses_get_conn_context_manager_for_lock(monkeypatch):

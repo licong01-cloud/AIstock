@@ -1,27 +1,102 @@
 """T24 (Codex round 2 BLOCKED) regression tests:
 
   P1.1  SCD2 replay completion marker (archive_complete column)
-  P2.1  factor_value data_start/data_end filter
   P2.2  runtime_profile SCD2 close-current
   P2.3  daily_snapshot benchmark + regime ETL join
 
 All require dev DB (5433/aistock_dev) per existing conftest fixtures.
+
+P2.1 (factor_value data_start/data_end filter) was removed by BUG-1001: the
+FactorValueArchiveHandler and its _apply_data_bounds helper were retired.
 """
 from __future__ import annotations
-
-from datetime import date, timedelta
 
 import pytest
 
 from backend.services.qe_archive.handlers.contract import HandlerStatus
-from backend.services.qe_archive.handlers.factor_value_archive_handler import (
-    FactorValueArchiveHandler,
-    _apply_data_bounds,
-)
 from backend.services.qe_archive.handlers.paper_v2_archive_handler import (
     PaperV2ArchiveHandler,
 )
 from backend.services.qe_archive.models import ArchiveJobRecord, ClaimedOutboxEvent
+from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
+from backend.services.quantevolver.runtime_contract import merge_qe_minute_runtime_contract
+from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
+
+
+def test_source_assembler_projects_retired_v25_experiment_as_history() -> None:
+    payload = QEArchiveSourceAssembler.build_experiment_payload(
+        {
+            "experiment_id": "qe_exp_v25_history",
+            "status": "completed",
+            "custom_params": {"execution_algo": "V25_TWO_STAGE"},
+        }
+    )
+
+    assert payload["freq"] == "1min"
+    assert payload["config"]["runtime_flags"]["execution_algo"] == "V25_TWO_STAGE"
+    assert payload["config"]["runtime_flags"]["runtime_contract_historical_read_only"] is True
+    assert payload["config"]["execution"]["historical_read_only"] is True
+    assert payload["config"]["execution"]["retirement"] == {
+        "retired": True,
+        "selectable": False,
+        "activatable": False,
+        "retirement_reason_code": "V25_EXECUTION_ALGO_RETIRED",
+        "historical_artifacts_readable": True,
+    }
+
+
+def test_source_assembler_reads_retired_v25_loop_without_reactivating_it() -> None:
+    payload = QEArchiveSourceAssembler.build_loop_payload(
+        {
+            "task_id": "qe_task_v25_history",
+            "loop_id": "Loop4",
+            "loop_index": 4,
+            "status": "completed",
+            "config_json": {
+                "runtime_flags": {"execution_algo": "V25_1_SMALL_CAP"},
+                "factor_list": ["alpha_001"],
+            },
+            "metrics_json": {"IC": 0.02},
+        },
+        {"task_id": "qe_task_v25_history", "label_horizon": 5},
+    )
+
+    assert payload["freq"] == "1min"
+    assert payload["config"]["runtime_flags"]["execution_algo"] == "V25_1_SMALL_CAP"
+    assert payload["config"]["execution"]["historical_read_only"] is True
+    assert payload["config"]["execution"]["retirement"]["retired"] is True
+
+
+def test_source_assembler_preserves_complete_retired_runtime_snapshot() -> None:
+    payload = QEArchiveSourceAssembler.build_experiment_payload(
+        {
+            "experiment_id": "qe_exp_v25_complete_history",
+            "status": "completed",
+            "custom_params": {
+                "execution_algo": "V25_TWO_STAGE",
+                "execution_algo_params": {"participation": 0.2},
+                "backtest_freq": "5min",
+                "runtime_mode": "legacy_observed_mode",
+                "runtime_contract_source": "legacy_snapshot",
+            },
+        }
+    )
+
+    runtime_flags = payload["config"]["runtime_flags"]
+    assert runtime_flags["backtest_freq"] == "5min"
+    assert runtime_flags["runtime_mode"] == "legacy_observed_mode"
+    assert runtime_flags["runtime_contract_source"] == "legacy_snapshot"
+    assert runtime_flags["execution_algo_params"] == {"participation": 0.2}
+    assert runtime_flags["execution_algo_retirement"]["historical_artifacts_readable"] is True
+
+
+def test_archive_history_projection_does_not_relax_new_work_retirement_gate() -> None:
+    with pytest.raises(ExecutionAlgoRetiredError, match="cannot create new executable work"):
+        merge_qe_minute_runtime_contract(
+            {"execution_algo": "V25_TWO_STAGE"},
+            source="new_executable_work_regression_guard",
+            require_minute=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -144,74 +219,6 @@ class TestArchiveCompleteMarker:
                     (sample_run_id,),
                 )
                 assert cur.fetchone()[0] is True
-
-
-# ---------------------------------------------------------------------------
-# P2.1 — factor_value data bounds
-# ---------------------------------------------------------------------------
-
-class TestFactorValueDataBoundsFilter:
-    """Pure helper tests + integration via injected loader."""
-
-    def test_apply_data_bounds_both_none_returns_identity(self):
-        import pandas as pd
-        df = pd.DataFrame({
-            "trade_date": [date(2026, 1, 1), date(2026, 6, 1), date(2026, 12, 1)],
-            "code": ["A", "B", "C"],
-            "value": [1.0, 2.0, 3.0],
-        })
-        out = _apply_data_bounds(df, None, None)
-        assert len(out) == 3
-
-    def test_apply_data_bounds_inclusive_window(self):
-        import pandas as pd
-        df = pd.DataFrame({
-            "trade_date": [date(2026, 1, 1), date(2026, 6, 1), date(2026, 12, 1)],
-            "code": ["A", "B", "C"],
-            "value": [1.0, 2.0, 3.0],
-        })
-        out = _apply_data_bounds(df, "2026-03-01", "2026-09-30")
-        assert len(out) == 1
-        assert list(out["code"]) == ["B"]
-
-    def test_apply_data_bounds_open_start(self):
-        import pandas as pd
-        df = pd.DataFrame({
-            "trade_date": [date(2026, 1, 1), date(2026, 6, 1)],
-            "code": ["A", "B"], "value": [1.0, 2.0],
-        })
-        out = _apply_data_bounds(df, None, "2026-03-01")
-        assert list(out["code"]) == ["A"]
-
-    def test_apply_data_bounds_open_end(self):
-        import pandas as pd
-        df = pd.DataFrame({
-            "trade_date": [date(2026, 1, 1), date(2026, 6, 1)],
-            "code": ["A", "B"], "value": [1.0, 2.0],
-        })
-        out = _apply_data_bounds(df, "2026-03-01", None)
-        assert list(out["code"]) == ["B"]
-
-
-@pytest.mark.usefixtures("cleanup_qe_archive")
-class TestFactorValueLoaderHonorsDataBounds:
-    """Inject a synthetic loader that returns rows spanning years; verify
-    the handler's full pipeline (loader -> bulk_upsert) honors the window
-    declared in the payload. The default loader's slicing happens BEFORE
-    the rows reach _bulk_upsert, so we test at the loader level."""
-
-    def test_default_loader_slicing_via_apply_data_bounds(self):
-        """End-to-end: build a dataframe, slice via _apply_data_bounds (the
-        production code path), assert only in-window rows survive."""
-        import pandas as pd
-        all_rows = pd.DataFrame({
-            "trade_date": [date(2018, 1, 1), date(2022, 6, 1),
-                           date(2026, 5, 5), date(2099, 12, 31)],
-            "code": ["A", "B", "C", "D"],
-            "value": [0.1, 0.2, 0.3, 0.4],
-        })
-        windowed = _apply_data_bounds(all_rows, "2020-01-01", "2026-12-31")
-        assert list(windowed["code"]) == ["B", "C"]
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +348,7 @@ class TestDailySnapshotBenchmarkAndRegimeJoin:
                 )
                 bench, regime = cur.fetchone()
         assert bench is not None, \
-            f"benchmark_csi300 must be populated when market.index_daily has the row"
+            "benchmark_csi300 must be populated when market.index_daily has the row"
         # regime is allowed to be NULL (regime_label table is currently empty)
 
     def test_regime_null_when_regime_label_missing(

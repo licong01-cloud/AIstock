@@ -1,31 +1,42 @@
 name: AIstock Code Intelligence Refresh
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'tests/aistock_validation/bugs/**'
+  schedule:
+    # Finish the daily graph refresh before Nightly starts at 19:07 UTC.
+    - cron: '30 18 * * *'
   workflow_dispatch:
+    inputs:
+      run_paid_ua_refresh:
+        description: 'Explicitly authorize the paid Understand Anything semantic refresh for this dispatch.'
+        required: false
+        default: false
+        type: boolean
+      ua_max_budget_usd:
+        description: 'One-run UA budget cap for an explicitly dispatched repair/full rebuild.'
+        required: false
+        default: 2
+        type: number
 
 permissions:
   contents: read
 
 concurrency:
   group: code-intelligence-refresh-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   PYTHONIOENCODING: utf-8
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
   AISTOCK_CODE_INTELLIGENCE_STATE_ROOT: F:/Dev/AIstock_code_intelligence_state
+  AISTOCK_RUN_PAID_UA_REFRESH: ${{ github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh || false }}
+  AISTOCK_UA_DAILY_MAX_BUDGET_USD: ${{ github.event_name == 'workflow_dispatch' && inputs.ua_max_budget_usd || vars.AISTOCK_UA_DAILY_MAX_BUDGET_USD || '2' }}
 
 jobs:
   refresh-after-main:
-    name: Async graph refresh after main update
-    runs-on: [self-hosted, windows]
-    timeout-minutes: 15
-    continue-on-error: true
+    name: Refresh and publish code intelligence graphs
+    runs-on: [self-hosted, Windows, aistock-ci-security]
+    timeout-minutes: 45
     defaults:
       run:
         shell: powershell
@@ -43,7 +54,6 @@ jobs:
 
       - name: Import persistent graph state
         id: graph_state_import
-        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -54,42 +64,68 @@ jobs:
             --output "$outDir/graph-state-import.json"
 
       - name: Sync CodeGraph incrementally
-        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           python scripts/code_intelligence_adapter.py codegraph-sync `
             --output-dir $outDir `
+            --require-publish-ready `
             --output "$outDir/codegraph-sync.stdout.json"
-          $result = Get-Content "$outDir/codegraph-sync.stdout.json" -Raw | ConvertFrom-Json
-          if ($result.publish_ready) {
-            python scripts/code_intelligence_adapter.py graph-state `
-              --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
-              --direction export `
-              --provider codegraph `
-              --output "$outDir/codegraph-state-export.json"
-          } else {
-            Write-Host "::warning title=CodeGraph refresh::sync did not produce publishable state; previous published state preserved"
+          if ($LASTEXITCODE -ne 0) {
+            throw "CodeGraph sync did not produce publish-ready state."
+          }
+          python scripts/code_intelligence_adapter.py graph-state `
+            --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+            --direction export `
+            --provider codegraph `
+            --output "$outDir/codegraph-state-export.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "CodeGraph state export failed."
           }
 
       - name: Assess Understand Anything work without LLM
         id: ua_assessment
-        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           python scripts/code_intelligence_adapter.py refresh-plan `
             --trigger main_push `
             --output "$outDir/graph-refresh-plan.json"
 
-      - name: Report warning-only refresh status
+      - name: Refresh and publish Understand Anything
+        if: github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          python scripts/code_intelligence_adapter.py ua-refresh `
+            --output-dir $outDir `
+            --max-budget-usd "${env:AISTOCK_UA_DAILY_MAX_BUDGET_USD}" `
+            --require-publish-ready `
+            --output "$outDir/understand-anything-refresh.stdout.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Understand Anything refresh did not produce publish-ready state."
+          }
+          python scripts/code_intelligence_adapter.py graph-state `
+            --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+            --direction export `
+            --provider understand_anything `
+            --output "$outDir/understand-anything-state-export.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Understand Anything state export failed."
+          }
+
+      - name: Report refresh status
         if: always()
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
-          $rows = @()
-          foreach ($item in @(
+          $items = @(
             @{Provider="state-import"; Path="$outDir/graph-state-import.json"},
-            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"},
-            @{Provider="ua-assessment"; Path="$outDir/graph-refresh-plan.json"}
-          )) {
+            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"}
+          )
+          if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true") {
+            $items += @{Provider="understand-anything"; Path="$outDir/understand-anything-refresh.stdout.json"}
+          } else {
+            $items += @{Provider="ua-assessment"; Path="$outDir/graph-refresh-plan.json"}
+          }
+          $rows = @()
+          foreach ($item in $items) {
             if (-not (Test-Path -LiteralPath $item.Path)) {
               Write-Host "::warning title=Code intelligence refresh::$($item.Provider) did not produce an artifact"
               $rows += "| $($item.Provider) | warning | missing artifact |"
@@ -106,7 +142,7 @@ jobs:
             if ($gate -notin @("ready", "passed")) {
               Write-Host "::warning title=Code intelligence refresh::$($item.Provider) workflow_gate=$gate"
             }
-            $rows += "| $($item.Provider) | $gate | warning-only; not a merge gate |"
+            $rows += "| $($item.Provider) | $gate | required when refresh executes |"
           }
           @(
             "## Code intelligence refresh",
@@ -115,11 +151,3 @@ jobs:
             "| --- | --- | --- |"
           ) + $rows | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
-      - name: Upload warning-only refresh evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: code-intelligence-refresh-${{ github.run_id }}
-          path: tmp/validation/code-intelligence/${{ github.run_id }}/
-          if-no-files-found: warn
-          retention-days: 14

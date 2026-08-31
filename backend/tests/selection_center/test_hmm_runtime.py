@@ -9,6 +9,7 @@ import pytest
 
 from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
 from backend.services.selection_center.models import SelectionCandidate
+from backend.services.selection_center.prospective_evidence import canonical_evidence_json_sha256
 from backend.services.selection_center.runtime_profile import RuntimeHMMProfile
 from backend.services.trading_core.errors import ArtifactGenerationFailedError, HMMRuntimeUnavailableError
 
@@ -90,6 +91,79 @@ def test_preflight_coefficients_returns_ready_context_for_valid_artifact(tmp_pat
     assert result["sector_count"] == 2
     assert result["coefficient_count"] == 2
     assert result["stock_sector_map_count"] == 2
+
+
+def test_preflight_coefficients_prefers_point_in_time_stock_sector_map(tmp_path: Path) -> None:
+    model_path = _model_path(tmp_path)
+    payload = _valid_payload()
+    payload["stock_sector_map"] = {"000001.SZ": "FUTURE.SI"}
+    payload["stock_sector_map_by_date"] = {
+        TRADE_DATE.isoformat(): {
+            "000001.SZ": "801780.SI",
+            "000002.SZ": "801750.SI",
+        }
+    }
+    coeff_path = _write_coefficients(tmp_path, payload)
+    runtime = SectorHMMRuntime(snapshot_provider=_SnapshotProvider(model_path))
+
+    result = runtime.preflight_coefficients(
+        trade_date=TRADE_DATE,
+        profile=_profile(coefficients_path=str(coeff_path)),
+        package_id="pkg_hmm_pit_map",
+    )
+
+    assert result["stock_sector_map_count"] == 2
+
+
+def test_preflight_coefficients_does_not_fallback_when_pit_map_omits_day(tmp_path: Path) -> None:
+    model_path = _model_path(tmp_path)
+    payload = _valid_payload()
+    payload["stock_sector_map_by_date"] = {"2026-05-29": payload["stock_sector_map"]}
+    coeff_path = _write_coefficients(tmp_path, payload)
+    runtime = SectorHMMRuntime(snapshot_provider=_SnapshotProvider(model_path))
+
+    with pytest.raises(HMMRuntimeUnavailableError, match="no point-in-time") as exc_info:
+        runtime.preflight_coefficients(
+            trade_date=TRADE_DATE,
+            profile=_profile(coefficients_path=str(coeff_path)),
+            package_id="pkg_hmm_pit_map_missing_day",
+        )
+
+    assert exc_info.value.context["trade_date"] == TRADE_DATE.isoformat()
+
+
+def test_preflight_coefficients_hashes_merged_model_and_daily_input_watermarks(tmp_path: Path) -> None:
+    model_path = _model_path(tmp_path)
+    payload = _valid_payload()
+    payload["input_data_max_dates_by_date"] = {
+        TRADE_DATE.isoformat(): {
+            "sector_data": TRADE_DATE.isoformat(),
+            "index_daily": TRADE_DATE.isoformat(),
+        }
+    }
+    coeff_path = _write_coefficients(tmp_path, payload)
+
+    class _EvidenceProvider(_SnapshotProvider):
+        def get_snapshot(self, snapshot_id: str) -> dict[str, Any] | None:
+            snapshot = super().get_snapshot(snapshot_id)
+            assert snapshot is not None
+            snapshot["input_data_max_dates"] = {"model_training_panel": "2025-03-31"}
+            return snapshot
+
+    runtime = SectorHMMRuntime(snapshot_provider=_EvidenceProvider(model_path))
+    result = runtime.preflight_coefficients(
+        trade_date=TRADE_DATE,
+        profile=_profile(coefficients_path=str(coeff_path)),
+        package_id="pkg_hmm_input_watermark",
+    )
+
+    assert result["input_data_max_dates_hash"] == canonical_evidence_json_sha256(
+        {
+            "model_training_panel": "2025-03-31",
+            "sector_data": TRADE_DATE.isoformat(),
+            "index_daily": TRADE_DATE.isoformat(),
+        }
+    )
 
 
 def test_preflight_coefficients_rejects_missing_daily_coefficients_key(tmp_path: Path) -> None:
@@ -269,3 +343,37 @@ def test_adjust_candidates_marks_existing_reason_as_hmm_adjusted(tmp_path: Path)
 
     assert adjusted[0].reason == "live_qe_model_inference_score|hmm_adjusted"
     assert adjusted[0].component_scores["hmm"]["source_reason"] == "live_qe_model_inference_score"
+
+
+def test_adjust_candidates_can_explicitly_exclude_missing_sector_with_receipt(
+    tmp_path: Path,
+) -> None:
+    model_path = _model_path(tmp_path)
+    coeff_path = _write_coefficients(tmp_path, _valid_payload())
+    runtime = SectorHMMRuntime(snapshot_provider=_SnapshotProvider(model_path))
+
+    result = runtime.adjust_candidates_with_receipt(
+        candidates=[
+            SelectionCandidate(symbol="000001.SZ", score=1.0, rank=1),
+            SelectionCandidate(symbol="000003.SZ", score=0.9, rank=2),
+        ],
+        trade_date=TRADE_DATE,
+        profile=_profile(
+            coefficients_path=str(coeff_path),
+            missing_sector_policy="exclude_candidate",
+        ),
+        package_id="pkg_hmm_explicit_missing_sector_exclusion",
+        manifest_sha256="manifest_sha",
+        require_frozen_snapshot=True,
+        effective_trade_date=TRADE_DATE,
+        receipt_admissibility="FORMAL_FROZEN_HISTORICAL",
+    )
+
+    assert [candidate.symbol for candidate in result.candidates] == ["000001.SZ"]
+    assert result.receipt.input_count == 2
+    assert result.receipt.output_count == 1
+    assert result.receipt.excluded_count == 1
+    assert result.receipt.exclusions[0]["symbol"] == "000003.SZ"
+    assert result.receipt.exclusions[0]["reason"] == "HMM_SECTOR_MAPPING_MISSING"
+    assert result.hmm_metadata["missing_sector_policy"] == "exclude_candidate"
+    assert result.hmm_metadata["missing_sector_excluded_count"] == 1

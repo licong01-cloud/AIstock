@@ -34,6 +34,7 @@ from backend.services.quantevolver.long_trend_evaluation_contract import (
     typed_null,
 )
 from backend.services.quantevolver.long_trend_evaluation_control_repository import (
+    MAX_RESTART_SAFE_LEASE_SECONDS,
     QELongTrendControlLease,
     QELongTrendEvaluationControlRepository,
     QELongTrendEvaluationControlSpec,
@@ -48,11 +49,15 @@ from backend.services.quantevolver.qe_workspace_client import (
     QEWorkspaceDatasetIdentity,
 )
 from backend.services.quantevolver.results_only_retry import ResultsOnlyGateError, load_authoritative_recorder_ref
+from backend.services.qe_archive.long_trend_repository import (
+    QELongTrendEvaluationResultRepository,
+    QELongTrendResultPersistenceUnavailable,
+    QELongTrendResultRepositoryError,
+    QELongTrendResultSchemaNotReady,
+)
 
 CONTROL_SECRET_ROOT_ENV = "QE_LONG_TREND_CONTROL_SECRET_ROOT"
-COLLECT_LEASE_SECONDS = 300
-COLLECT_LEASE_HEARTBEAT_SECONDS = 60
-COLLECT_LEASE_RENEW_TIMEOUT_SECONDS = 30
+COLLECT_LEASE_SECONDS = MAX_RESTART_SAFE_LEASE_SECONDS
 RETRYABLE_PREJOB_REJECTION_REASONS = frozenset({QELongTrendReason.BUNDLE_INVALID.value})
 _T = TypeVar("_T")
 WORKER_INPUT_ARTIFACTS = frozenset(
@@ -86,6 +91,21 @@ class PreparedLongTrendEvaluation:
     data_action_plan: tuple[dict[str, Any], ...]
 
 
+@dataclass(frozen=True)
+class ResolvedLongTrendEvaluationRequest:
+    """Server-resolved, path-safe input shared by normal and historical adapters."""
+
+    profile_id: str
+    evaluator_version: str
+    feature_data_root_uri: str
+    outcome_data_root_uri: str | None
+    backtest_freq: str | None
+    requested_outcome_snapshot_id: str | None = None
+    feature_identity: QEWorkspaceDatasetIdentity | None = None
+    outcome_identity: QEWorkspaceDatasetIdentity | None = None
+    data_actions: tuple[Mapping[str, Any], ...] = ()
+
+
 class QELongTrendControlSecretStore:
     def __init__(self, root: str | Path | None = None) -> None:
         configured = str(os.getenv(CONTROL_SECRET_ROOT_ENV) or "").strip()
@@ -94,6 +114,11 @@ class QELongTrendControlSecretStore:
     def load_or_create(self, evaluation_id: str, *, session_id: str, source_run_key: str) -> tuple[str, bool]:
         path = self._path(evaluation_id)
         with _exclusive_file_lock(path.with_name(path.name + ".lock")):
+            if path.is_symlink():
+                raise QELongTrendPhase2Error(
+                    "durable qelt resource secret cannot be a symbolic link",
+                    reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
+                )
             if path.is_file():
                 return self._validated_token(
                     path,
@@ -120,7 +145,7 @@ class QELongTrendControlSecretStore:
 
     def load(self, evaluation_id: str, *, session_id: str, source_run_key: str) -> str:
         path = self._path(evaluation_id)
-        if not path.is_file():
+        if path.is_symlink() or not path.is_file():
             raise QELongTrendPhase2Error(
                 "durable qelt resource secret is missing during recovery",
                 reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
@@ -133,7 +158,13 @@ class QELongTrendControlSecretStore:
 
     @staticmethod
     def _validated_token(path: Path, *, session_id: str, source_run_key: str) -> str:
-        payload = _read_json(path)
+        try:
+            payload = _read_json(path)
+        except Exception as exc:
+            raise QELongTrendPhase2Error(
+                "durable qelt resource secret is malformed",
+                reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
+            ) from exc
         if payload.get("session_id") != session_id or payload.get("source_run_key") != source_run_key:
             raise QELongTrendPhase2Error(
                 "durable qelt resource secret identity mismatch during recovery",
@@ -153,12 +184,14 @@ class QELongTrendPhase2Service:
         self,
         *,
         control_repository: QELongTrendEvaluationControlRepository | None = None,
+        result_repository: QELongTrendEvaluationResultRepository | None = None,
         resource_service: QEResourcePhaseService | None = None,
         secret_store: QELongTrendControlSecretStore | None = None,
         owner_id: str | None = None,
         repo_root: str | Path | None = None,
     ) -> None:
         self.control_repository = control_repository or QELongTrendEvaluationControlRepository()
+        self.result_repository = result_repository
         self.resource_service = resource_service or QEResourcePhaseService()
         self.secret_store = secret_store or QELongTrendControlSecretStore()
         self.owner_id = str(owner_id or f"qelt_{os.getpid()}_{secrets.token_hex(6)}")
@@ -183,7 +216,7 @@ class QELongTrendPhase2Service:
             task_id=task_id,
             loop_index=loop_index,
             node_id=node_id,
-            opt_in=opt_in,
+            resolved_request=_resolved_request_from_opt_in(opt_in),
             registration_catalog=registration_catalog,
             label_horizon=label_horizon,
             strategy_topk=strategy_topk,
@@ -212,7 +245,36 @@ class QELongTrendPhase2Service:
             task_id=task_id,
             loop_index=loop_index,
             node_id=node_id,
-            opt_in=opt_in,
+            resolved_request=_resolved_request_from_opt_in(opt_in),
+            registration_catalog=registration_catalog,
+            label_horizon=label_horizon,
+            strategy_topk=strategy_topk,
+            client=client,
+            run_id=run_id,
+            frozen_identity=frozen_identity,
+            expected_recorder_ref=expected_recorder_ref,
+        )
+
+    async def prepare_long_trend_only_resolved(
+        self,
+        *,
+        run_id: str,
+        task_id: str,
+        loop_index: int,
+        node_id: str,
+        resolved_request: ResolvedLongTrendEvaluationRequest,
+        registration_catalog: Mapping[str, Any],
+        label_horizon: int | None,
+        strategy_topk: int | None,
+        client: QEWorkspaceClient,
+        frozen_identity: Mapping[str, Any] | None = None,
+        expected_recorder_ref: Mapping[str, Any] | None = None,
+    ) -> PreparedLongTrendEvaluation:
+        return await self._prepare(
+            task_id=task_id,
+            loop_index=loop_index,
+            node_id=node_id,
+            resolved_request=resolved_request,
             registration_catalog=registration_catalog,
             label_horizon=label_horizon,
             strategy_topk=strategy_topk,
@@ -228,7 +290,7 @@ class QELongTrendPhase2Service:
         task_id: str,
         loop_index: int,
         node_id: str,
-        opt_in: LongTrendEvaluationOptIn,
+        resolved_request: ResolvedLongTrendEvaluationRequest,
         registration_catalog: Mapping[str, Any],
         label_horizon: int | None,
         strategy_topk: int | None,
@@ -238,90 +300,162 @@ class QELongTrendPhase2Service:
         expected_recorder_ref: Mapping[str, Any] | None,
     ) -> PreparedLongTrendEvaluation:
         loop_id = f"Loop{int(loop_index)}"
-        environment = await client.get_execution_environment()
-        capability = environment.manifest.get("capabilities", {}).get("qe_long_trend_evaluation_v1")
-        if not isinstance(capability, Mapping):
-            raise QELongTrendPhase2Error(
-                "QE node does not declare qe_long_trend_evaluation_v1",
-                reason_code=QELongTrendReason.NODE_CAPABILITY_UNAVAILABLE.value,
+        identity_incomplete_before_node = _known_dataset_identity_incomplete(resolved_request)
+        environment = None
+        bundle: QELongTrendEvaluatorBundle | None = None
+        if identity_incomplete_before_node:
+            environment_snapshot_id = "qelt_env_not_resolved_dataset_identity_incomplete_v1"
+            environment_manifest_sha = canonical_sha256(
+                {"schema_version": environment_snapshot_id, "status": "not_resolved"}
             )
-        bundle = build_long_trend_evaluator_bundle(
-            repo_root=self.repo_root,
-            execution_environment={
-                "execution_environment_snapshot_id": environment.execution_environment_snapshot_id,
-                "execution_environment_manifest_sha256": environment.execution_environment_manifest_sha256,
-                "manifest": environment.manifest,
-            },
-        )
-        try:
-            recorder_ref = await load_authoritative_recorder_ref(
-                client, task_id=task_id, loop_id=loop_id, node_id=node_id
+            evaluator_source_sha = canonical_sha256(
+                {"schema_version": "qelt_evaluator_not_bundled_dataset_identity_incomplete_v1"}
             )
-        except ResultsOnlyGateError as exc:
-            raise QELongTrendPhase2Error(
-                "authoritative QE Recorder reference is unavailable",
-                reason_code=QELongTrendReason.RECORDER_REF_MISSING.value,
-                context={
-                    "source_reason_code": exc.reason_code,
-                    "artifact": exc.artifact,
-                    "details": exc.details,
-                },
-            ) from exc
-        if expected_recorder_ref is not None:
-            expected_pair = {
-                "experiment_id": str(expected_recorder_ref.get("experiment_id") or ""),
-                "recorder_id": str(expected_recorder_ref.get("recorder_id") or ""),
-            }
-            actual_pair = {
-                "experiment_id": str(recorder_ref.get("experiment_id") or ""),
-                "recorder_id": str(recorder_ref.get("recorder_id") or ""),
-            }
-            if expected_pair != actual_pair:
+            bundle_sha = canonical_sha256(
+                {"schema_version": "qelt_bundle_not_built_dataset_identity_incomplete_v1"}
+            )
+        else:
+            environment = await client.get_execution_environment()
+            capability = environment.manifest.get("capabilities", {}).get("qe_long_trend_evaluation_v1")
+            if not isinstance(capability, Mapping):
                 raise QELongTrendPhase2Error(
-                    "adapter recorder identity differs from authoritative node recorder ref",
-                    reason_code=QELongTrendReason.RECORDER_REF_MISSING.value,
-                    context={"expected": expected_pair, "actual": actual_pair},
+                    "QE node does not declare qe_long_trend_evaluation_v1",
+                    reason_code=QELongTrendReason.NODE_CAPABILITY_UNAVAILABLE.value,
                 )
-        live_catalog = await client.list_workspace_files(task_id, loop_id)
-        merged_catalog = _merge_registration_catalog(live_catalog, registration_catalog)
-        inventory = resolve_long_trend_recorder_artifacts(
-            task_id=task_id,
-            loop_id=loop_id,
-            recorder_ref=recorder_ref,
-            catalog=merged_catalog,
-            backtest_freq=opt_in.backtest_freq,
-        )
-        feature_identity = await client.get_dataset_identity(node_id=node_id, data_root_uri=opt_in.feature_data_root_uri)
-        outcome_identity = await client.get_dataset_identity(node_id=node_id, data_root_uri=opt_in.outcome_data_root_uri)
-        if frozen_identity is not None:
-            _require_frozen_identity(
-                frozen_identity,
-                bundle=bundle,
-                environment_snapshot_id=environment.execution_environment_snapshot_id,
-                environment_manifest_sha256=environment.execution_environment_manifest_sha256,
-                feature_identity=feature_identity,
-                outcome_identity=outcome_identity,
-                profile_sha256=get_long_trend_profile(opt_in.profile_id).profile_sha256,
+            bundle = build_long_trend_evaluator_bundle(
+                repo_root=self.repo_root,
+                execution_environment={
+                    "execution_environment_snapshot_id": environment.execution_environment_snapshot_id,
+                    "execution_environment_manifest_sha256": environment.execution_environment_manifest_sha256,
+                    "manifest": environment.manifest,
+                },
             )
+            environment_snapshot_id = environment.execution_environment_snapshot_id
+            environment_manifest_sha = environment.execution_environment_manifest_sha256
+            evaluator_source_sha = bundle.evaluator_source_sha256
+            bundle_sha = bundle.bundle_sha256
+        feature_identity = resolved_request.feature_identity or await client.get_dataset_identity(
+            node_id=node_id,
+            data_root_uri=resolved_request.feature_data_root_uri,
+        )
+        if resolved_request.outcome_identity is not None:
+            outcome_identity = resolved_request.outcome_identity
+        elif resolved_request.outcome_data_root_uri is not None:
+            outcome_identity = await client.get_dataset_identity(
+                node_id=node_id,
+                data_root_uri=resolved_request.outcome_data_root_uri,
+            )
+        else:
+            outcome_identity = QEWorkspaceDatasetIdentity(
+                schema_version="qe_dataset_identity_evidence_v1",
+                complete=False,
+                reason_code="QELT_REQUESTED_OUTCOME_SNAPSHOT_UNAVAILABLE",
+                missing=("outcome_data_root_uri",),
+                acquisition_suggestions=("register_requested_snapshot_in_qe_dataset_identity_roots",),
+                dataset=None,
+                long_trend_snapshot=None,
+                long_trend_snapshot_reason="QELT_REQUESTED_OUTCOME_SNAPSHOT_UNAVAILABLE",
+                detail="requested outcome snapshot is not present in the node allowlisted roots",
+            )
+        if frozen_identity is not None:
+            if bundle is None or environment is None:
+                action_rows = [
+                    {
+                        "family": "frozen_identity",
+                        "action": "revalidate_frozen_identity_after_dataset_identity_repair",
+                        "reason_code": "QELT_DATASET_IDENTITY_INCOMPLETE",
+                    }
+                ]
+            else:
+                action_rows = []
+                _require_frozen_identity(
+                    frozen_identity,
+                    bundle=bundle,
+                    environment_snapshot_id=environment_snapshot_id,
+                    environment_manifest_sha256=environment_manifest_sha,
+                    feature_identity=feature_identity,
+                    outcome_identity=outcome_identity,
+                    profile_sha256=get_long_trend_profile(resolved_request.profile_id).profile_sha256,
+                )
+        else:
+            action_rows = []
         feature_snapshot, feature_action = _long_trend_snapshot(feature_identity, family="feature")
         outcome_snapshot, outcome_action = _long_trend_snapshot(outcome_identity, family="outcome")
-        actions = tuple(item for item in (feature_action, outcome_action) if item is not None)
-        profile = get_long_trend_profile(opt_in.profile_id)
-        input_hashes = _input_artifact_hashes(inventory)
-        input_hashes["catalog_digest"] = _recorder_catalog_digest(inventory)
-        input_hashes["catalog_completeness"] = inventory.catalog_completeness
+        action_rows.extend(item for item in (feature_action, outcome_action) if item is not None)
+        action_rows.extend(dict(item) for item in resolved_request.data_actions)
+        actions = tuple(
+            dict(item)
+            for index, item in enumerate(action_rows)
+            if canonical_sha256(item) not in {canonical_sha256(previous) for previous in action_rows[:index]}
+        )
+        profile = get_long_trend_profile(resolved_request.profile_id)
+        inventory: RecorderArtifactInventory | None = None
+        if feature_snapshot is not None and outcome_snapshot is not None:
+            try:
+                recorder_ref = await load_authoritative_recorder_ref(
+                    client, task_id=task_id, loop_id=loop_id, node_id=node_id
+                )
+            except ResultsOnlyGateError as exc:
+                raise QELongTrendPhase2Error(
+                    "authoritative QE Recorder reference is unavailable",
+                    reason_code=QELongTrendReason.RECORDER_REF_MISSING.value,
+                    context={
+                        "source_reason_code": exc.reason_code,
+                        "artifact": exc.artifact,
+                        "details": exc.details,
+                    },
+                ) from exc
+            if expected_recorder_ref is not None:
+                expected_pair = {
+                    "experiment_id": str(expected_recorder_ref.get("experiment_id") or ""),
+                    "recorder_id": str(expected_recorder_ref.get("recorder_id") or ""),
+                }
+                actual_pair = {
+                    "experiment_id": str(recorder_ref.get("experiment_id") or ""),
+                    "recorder_id": str(recorder_ref.get("recorder_id") or ""),
+                }
+                if expected_pair != actual_pair:
+                    raise QELongTrendPhase2Error(
+                        "adapter recorder identity differs from authoritative node recorder ref",
+                        reason_code=QELongTrendReason.RECORDER_REF_MISSING.value,
+                        context={"expected": expected_pair, "actual": actual_pair},
+                    )
+            live_catalog = await client.list_workspace_files(task_id, loop_id)
+            merged_catalog = _merge_registration_catalog(live_catalog, registration_catalog)
+            inventory = resolve_long_trend_recorder_artifacts(
+                task_id=task_id,
+                loop_id=loop_id,
+                recorder_ref=recorder_ref,
+                catalog=merged_catalog,
+                backtest_freq=resolved_request.backtest_freq,
+            )
+            input_hashes = _input_artifact_hashes(inventory)
+            input_hashes["catalog_digest"] = _recorder_catalog_digest(inventory)
+            input_hashes["catalog_completeness"] = inventory.catalog_completeness
+        else:
+            input_hashes = _dataset_identity_incomplete_input_hashes(
+                task_id=task_id,
+                loop_id=loop_id,
+                feature_snapshot=feature_snapshot,
+                outcome_snapshot=outcome_snapshot,
+            )
         input_manifest = canonical_input_manifest(input_hashes)
         input_manifest["evaluation_parameters"] = {
             "label_horizon": label_horizon if label_horizon is not None else typed_null("label_horizon"),
             "strategy_topk": strategy_topk if strategy_topk is not None else typed_null("strategy_topk"),
+            "requested_outcome_snapshot_id": (
+                resolved_request.requested_outcome_snapshot_id
+                if resolved_request.requested_outcome_snapshot_id is not None
+                else typed_null("requested_outcome_snapshot_id")
+            ),
         }
         input_manifest_sha = canonical_sha256(input_manifest)
         parent_identity = _evaluation_parent_identity(task_id=task_id, loop_index=loop_index)
         evaluation_id = build_evaluation_id(
             run_id=parent_identity,
             profile_sha256=profile.profile_sha256,
-            evaluator_source_sha256=bundle.evaluator_source_sha256,
-            execution_environment_manifest_sha256=environment.execution_environment_manifest_sha256,
+            evaluator_source_sha256=evaluator_source_sha,
+            execution_environment_manifest_sha256=environment_manifest_sha,
             feature_dataset_manifest_sha256=(feature_snapshot.manifest_sha256 if feature_snapshot else None),
             outcome_dataset_manifest_sha256=(outcome_snapshot.manifest_sha256 if outcome_snapshot else None),
             input_manifest_sha256=input_manifest_sha,
@@ -333,6 +467,11 @@ class QELongTrendPhase2Service:
         )
         request_payload = None
         if feature_snapshot is not None and outcome_snapshot is not None:
+            if inventory is None or bundle is None:  # pragma: no cover - invariant protected by branches above.
+                raise QELongTrendPhase2Error(
+                    "recorder inventory is unavailable for a runnable F-014 request",
+                    reason_code=QELongTrendReason.RECORDER_REF_MISSING.value,
+                )
             callback_url = _resource_callback_url()
             request_payload = self._request_payload(
                 evaluation_id=evaluation_id,
@@ -340,7 +479,7 @@ class QELongTrendPhase2Service:
                 task_id=task_id,
                 loop_index=loop_index,
                 node_id=node_id,
-                opt_in=opt_in,
+                resolved_request=resolved_request,
                 profile_sha256=profile.profile_sha256,
                 bundle=bundle,
                 feature_snapshot=feature_snapshot,
@@ -359,7 +498,7 @@ class QELongTrendPhase2Service:
             request_sha = _request_sha(request_payload)
         else:
             request_sha = canonical_sha256(
-                {"evaluation_id": evaluation_id, "platform_status": "dataset_identity_incomplete", "actions": actions}
+                {"evaluation_id": evaluation_id, "platform_status": "dataset_identity_incomplete"}
             )
         spec = QELongTrendEvaluationControlSpec(
             evaluation_id=evaluation_id,
@@ -369,10 +508,10 @@ class QELongTrendPhase2Service:
             profile_id=profile.profile_id,
             profile_sha256=profile.profile_sha256,
             evaluator_version=EVALUATOR_VERSION,
-            evaluator_source_sha256=bundle.evaluator_source_sha256,
-            execution_environment_snapshot_id=environment.execution_environment_snapshot_id,
-            execution_environment_manifest_sha256=environment.execution_environment_manifest_sha256,
-            bundle_sha256=bundle.bundle_sha256,
+            evaluator_source_sha256=evaluator_source_sha,
+            execution_environment_snapshot_id=environment_snapshot_id,
+            execution_environment_manifest_sha256=environment_manifest_sha,
+            bundle_sha256=bundle_sha,
             qe_dataset_contract_id=QE_DATASET_CONTRACT_ID,
             feature_dataset_snapshot_id=feature_snapshot.snapshot_id if feature_snapshot else None,
             feature_dataset_manifest_sha256=feature_snapshot.manifest_sha256 if feature_snapshot else None,
@@ -384,7 +523,7 @@ class QELongTrendPhase2Service:
             request_json=(
                 {key: value for key, value in request_payload.items() if key != "resource_session_token"}
                 if request_payload is not None
-                else {"platform_status": "dataset_identity_incomplete", "data_action_plan": list(actions)}
+                else {"platform_status": "dataset_identity_incomplete"}
             ),
             resource_session_id=session_id,
         )
@@ -597,13 +736,16 @@ class QELongTrendPhase2Service:
         client: QEWorkspaceClient,
         artifact_store: QELongTrendArtifactStore | None = None,
         _claimed_row: Mapping[str, Any] | None = None,
+        _inspection: QELongTrendJobInspection | None = None,
     ) -> dict[str, Any]:
-        inspection = await self.inspect(
-            evaluation_id=evaluation_id,
-            task_id=task_id,
-            loop_index=loop_index,
-            client=client,
-        )
+        inspection = _inspection
+        if inspection is None:
+            inspection = await self.inspect(
+                evaluation_id=evaluation_id,
+                task_id=task_id,
+                loop_index=loop_index,
+                client=client,
+            )
         if inspection.status not in {"succeeded", "partial", "failed", "cancelled"}:
             return {"status": "awaiting_worker", "evaluation_id": evaluation_id, "remote_status": inspection.status}
         claimed = (
@@ -623,7 +765,7 @@ class QELongTrendPhase2Service:
         )
         lease = self.control_repository.lease_from(collecting)
         try:
-            worker_terminal, manifest, published, published_meta, by_type = await self._await_with_lease_heartbeat(
+            worker_terminal, manifest, published, published_meta, by_type = await self._await_with_fenced_lease(
                 lease=lease,
                 awaitable=self._publish_remote_artifacts(
                     evaluation_id=evaluation_id,
@@ -665,6 +807,63 @@ class QELongTrendPhase2Service:
                     },
                 ) from exc
             raise
+        delivery_status = dict(published.get("platform_delivery_status") or {})
+        data_action_plan = list(worker_terminal.get("data_action_plan") or [])
+        persistence_error: QELongTrendResultRepositoryError | None = None
+        if self.result_repository is not None:
+            try:
+                persisted = self.result_repository.persist_published_receipt(
+                    evaluation_id=evaluation_id,
+                    worker_terminal=worker_terminal,
+                    manifest=manifest,
+                    published_meta=published_meta,
+                    lease=lease,
+                )
+                lease = self.control_repository.lease_from(persisted.control_row)
+                delivery_status = dict(persisted.control_row.get("platform_delivery_status_json") or {})
+            except QELongTrendResultSchemaNotReady as exc:
+                delivery_status.update(
+                    {
+                        "db": "schema_not_ready",
+                        "db_reason_code": exc.reason_code,
+                    }
+                )
+                data_action_plan.append(
+                    {
+                        "family": "platform_persistence",
+                        "action": "apply_phase3_result_schema_then_materialize_existing_receipt",
+                        "reason_code": exc.reason_code,
+                    }
+                )
+            except QELongTrendResultPersistenceUnavailable as exc:
+                delivery_status.update(
+                    {
+                        "db": "retry_pending",
+                        "db_reason_code": exc.reason_code,
+                    }
+                )
+                data_action_plan.append(
+                    {
+                        "family": "platform_persistence",
+                        "action": "retry_phase3_result_materialization",
+                        "reason_code": exc.reason_code,
+                    }
+                )
+            except QELongTrendResultRepositoryError as exc:
+                persistence_error = exc
+                delivery_status.update(
+                    {
+                        "db": "conflict",
+                        "db_reason_code": exc.reason_code,
+                    }
+                )
+                data_action_plan.append(
+                    {
+                        "family": "platform_persistence",
+                        "action": "inspect_phase3_receipt_content_conflict",
+                        "reason_code": exc.reason_code,
+                    }
+                )
         terminal_status = str(worker_terminal.get("status") or "failed")
         if terminal_status not in {"succeeded", "partial", "failed", "cancelled"}:
             terminal_status = "failed"
@@ -677,17 +876,19 @@ class QELongTrendPhase2Service:
                 "artifact_store_run_key": evaluation_id,
                 "artifact_manifest_sha256": manifest["artifact_manifest_sha256"],
                 "family_status_json": worker_terminal.get("family_status") or {},
-                "platform_delivery_status_json": published.get("platform_delivery_status") or {},
-                "data_action_plan_json": worker_terminal.get("data_action_plan") or [],
+                "platform_delivery_status_json": delivery_status,
+                "data_action_plan_json": data_action_plan,
                 "stats_json": {
                     **dict(worker_terminal.get("stats") or {}),
-                    "published_compact_receipt": published_meta,
+                    "published_compact_receipt": _public_artifact_metadata(published_meta),
                 },
                 "reason_code": worker_terminal.get("reason_code"),
                 "reason_json": worker_terminal.get("reason_json") or {},
             },
             release_owner=True,
         )
+        if persistence_error is not None:
+            raise persistence_error
         return {
             "status": terminal_status,
             "evaluation_id": evaluation_id,
@@ -696,62 +897,25 @@ class QELongTrendPhase2Service:
             "control_row_version": updated["row_version"],
         }
 
-    async def _await_with_lease_heartbeat(
+    async def _await_with_fenced_lease(
         self,
         *,
         lease: QELongTrendControlLease,
         awaitable: Awaitable[_T],
     ) -> _T:
-        stop_heartbeat = asyncio.Event()
+        """Await artifact I/O without a periodic database heartbeat.
 
-        async def heartbeat() -> None:
-            while True:
-                try:
-                    await asyncio.wait_for(
-                        stop_heartbeat.wait(),
-                        timeout=COLLECT_LEASE_HEARTBEAT_SECONDS,
-                    )
-                    return
-                except asyncio.TimeoutError:
-                    await asyncio.wait_for(
-                        asyncio.to_thread(
-                            self.control_repository.renew_lease,
-                            lease,
-                            lease_seconds=COLLECT_LEASE_SECONDS,
-                        ),
-                        timeout=COLLECT_LEASE_RENEW_TIMEOUT_SECONDS,
-                    )
+        The 45-second lease is intentionally allowed to expire.  A replacement
+        coordinator can therefore take over by its first <=60-second safety
+        sweep.  Every persistence transition after this await still carries the
+        original owner/fencing-token/row-version CAS, so an old collector cannot
+        commit after another process takes ownership.  Artifact publication is
+        content-addressed and idempotent; overlapping reads cannot become two
+        durable business results.
+        """
 
-        work_task = asyncio.create_task(awaitable, name=f"qelt-collect-{lease.evaluation_id}")
-        heartbeat_task = asyncio.create_task(
-            heartbeat(),
-            name=f"qelt-lease-heartbeat-{lease.evaluation_id}",
-        )
-        try:
-            done, _pending = await asyncio.wait(
-                {work_task, heartbeat_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if heartbeat_task in done:
-                heartbeat_error = heartbeat_task.exception()
-                if heartbeat_error is None:
-                    raise QELongTrendPhase2Error(
-                        "control lease heartbeat stopped before artifact collection completed",
-                        reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
-                    )
-                raise QELongTrendPhase2Error(
-                    f"control lease heartbeat failed: {type(heartbeat_error).__name__}: {heartbeat_error}",
-                    reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
-                ) from heartbeat_error
-            result = await work_task
-            stop_heartbeat.set()
-            await heartbeat_task
-            return result
-        finally:
-            stop_heartbeat.set()
-            if not work_task.done():
-                work_task.cancel()
-            await asyncio.gather(work_task, heartbeat_task, return_exceptions=True)
+        del lease  # The lease is consumed by the fenced transition after await.
+        return await awaitable
 
     async def _publish_remote_artifacts(
         self,
@@ -861,6 +1025,7 @@ class QELongTrendPhase2Service:
         *,
         row: Mapping[str, Any],
         client: QEWorkspaceClient,
+        inspection: QELongTrendJobInspection | None = None,
     ) -> dict[str, Any]:
         evaluation_id = str(row["evaluation_id"])
         task_id = str(row["parent_task_id"])
@@ -903,12 +1068,13 @@ class QELongTrendPhase2Service:
                 _claimed_row=row,
             )
             return {"status": receipt.status if receipt else "awaiting_data", "evaluation_id": evaluation_id}
-        inspection = await self.inspect(
-            evaluation_id=evaluation_id,
-            task_id=task_id,
-            loop_index=loop_index,
-            client=client,
-        )
+        if inspection is None:
+            inspection = await self.inspect(
+                evaluation_id=evaluation_id,
+                task_id=task_id,
+                loop_index=loop_index,
+                client=client,
+            )
         if inspection.status in {"succeeded", "partial", "failed", "cancelled"}:
             return await self.collect_and_publish(
                 evaluation_id=evaluation_id,
@@ -916,6 +1082,7 @@ class QELongTrendPhase2Service:
                 loop_index=loop_index,
                 client=client,
                 _claimed_row=row,
+                _inspection=inspection,
             )
         lease = self.control_repository.lease_from(row)
         local_status = "running" if inspection.status == "running" else "submitted"
@@ -940,21 +1107,136 @@ class QELongTrendPhase2Service:
         results: list[dict[str, Any]] = []
         for row in self.control_repository.list_nonterminal(limit=limit):
             try:
-                bound = self.control_repository.bind_available_archive_run(str(row["evaluation_id"]))
+                evaluation_id = str(row["evaluation_id"])
+                if not row.get("job_id"):
+                    bound = self.control_repository.bind_available_archive_run(evaluation_id)
+                    if self._long_trend_prejob_observation_unchanged(bound):
+                        results.append(
+                            {
+                                "evaluation_id": evaluation_id,
+                                "status": "awaiting_data",
+                                "unchanged": True,
+                            }
+                        )
+                        continue
+                    claimed = self.control_repository.claim(
+                        evaluation_id,
+                        owner_id=self.owner_id,
+                        lease_seconds=COLLECT_LEASE_SECONDS,
+                        expected_row_version=int(bound["row_version"]),
+                    )
+                    if claimed is None:
+                        results.append(
+                            {
+                                "evaluation_id": evaluation_id,
+                                "status": "stale_observation",
+                                "owned": False,
+                            }
+                        )
+                        continue
+                    async with QEWorkspaceClient.for_node(str(claimed["node_id"])) as client:
+                        results.append(
+                            await self._reconcile_claimed(row=claimed, client=client)
+                        )
+                    continue
+
+                async with QEWorkspaceClient.for_node(str(row["node_id"])) as client:
+                    inspection = await self.inspect(
+                        evaluation_id=evaluation_id,
+                        task_id=str(row["parent_task_id"]),
+                        loop_index=int(row["parent_loop_index"]),
+                        client=client,
+                    )
+                    if self._long_trend_observation_unchanged(row, inspection):
+                        results.append(
+                            {
+                                "evaluation_id": evaluation_id,
+                                "status": inspection.status,
+                                "unchanged": True,
+                            }
+                        )
+                        continue
+                    bound = self.control_repository.bind_available_archive_run(evaluation_id)
+                    claimed = self.control_repository.claim(
+                        str(bound["evaluation_id"]),
+                        owner_id=self.owner_id,
+                        lease_seconds=COLLECT_LEASE_SECONDS,
+                        expected_row_version=int(bound["row_version"]),
+                    )
+                    if claimed is None:
+                        results.append(
+                            {
+                                "evaluation_id": evaluation_id,
+                                "status": "stale_observation",
+                                "owned": False,
+                            }
+                        )
+                        continue
+                    results.append(
+                        await self._reconcile_claimed(
+                            row=claimed,
+                            client=client,
+                            inspection=inspection,
+                        )
+                    )
+            except QELongTrendWorkspaceError as exc:
+                if self._long_trend_failure_unchanged(row, exc):
+                    results.append(
+                        {
+                            "evaluation_id": row["evaluation_id"],
+                            "status": "remote_state_unknown",
+                            "recovery_persisted": True,
+                            "unchanged": True,
+                        }
+                    )
+                    continue
                 claimed = self.control_repository.claim(
-                    str(bound["evaluation_id"]),
+                    str(row["evaluation_id"]),
                     owner_id=self.owner_id,
                     lease_seconds=COLLECT_LEASE_SECONDS,
+                    expected_row_version=int(row["row_version"]),
                 )
-                async with QEWorkspaceClient.for_node(str(claimed["node_id"])) as client:
-                    results.append(await self._reconcile_claimed(row=claimed, client=client))
-            except QELongTrendWorkspaceError as exc:
+                if claimed is None:
+                    results.append(
+                        {
+                            "evaluation_id": row["evaluation_id"],
+                            "status": "stale_observation",
+                            "owned": False,
+                        }
+                    )
+                    continue
                 recovery = self._persist_reconcile_failure(str(row["evaluation_id"]), exc)
                 if exc.reason_code != QELongTrendReason.NODE_STATE_UNKNOWN.value:
                     results.append({"evaluation_id": row["evaluation_id"], "status": "platform_error", "reason_code": exc.reason_code, **recovery})
                 else:
                     results.append({"evaluation_id": row["evaluation_id"], "status": "remote_state_unknown", **recovery})
             except Exception as exc:
+                if self._long_trend_failure_unchanged(row, exc):
+                    results.append(
+                        {
+                            "evaluation_id": row["evaluation_id"],
+                            "status": "platform_error",
+                            "reason_code": getattr(exc, "reason_code", type(exc).__name__),
+                            "recovery_persisted": True,
+                            "unchanged": True,
+                        }
+                    )
+                    continue
+                claimed = self.control_repository.claim(
+                    str(row["evaluation_id"]),
+                    owner_id=self.owner_id,
+                    lease_seconds=COLLECT_LEASE_SECONDS,
+                    expected_row_version=int(row["row_version"]),
+                )
+                if claimed is None:
+                    results.append(
+                        {
+                            "evaluation_id": row["evaluation_id"],
+                            "status": "stale_observation",
+                            "owned": False,
+                        }
+                    )
+                    continue
                 recovery = self._persist_reconcile_failure(str(row["evaluation_id"]), exc)
                 results.append(
                     {
@@ -966,6 +1248,60 @@ class QELongTrendPhase2Service:
                     }
                 )
         return results
+
+    @staticmethod
+    def _long_trend_prejob_observation_unchanged(row: Mapping[str, Any]) -> bool:
+        request = dict(row.get("request_json") or {})
+        delivery = dict(row.get("platform_delivery_status_json") or {})
+        return (
+            request.get("schema_version") != "qe_long_trend_job_request_v1"
+            and delivery == {"worker": "not_submitted", "cas": "awaiting_data"}
+            and not row.get("reason_code")
+            and dict(row.get("reason_json") or {}) == {}
+        )
+
+    @staticmethod
+    def _long_trend_observation_unchanged(
+        row: Mapping[str, Any],
+        inspection: QELongTrendJobInspection,
+    ) -> bool:
+        if inspection.status in {"succeeded", "partial", "failed", "cancelled"}:
+            return False
+        local_status = "running" if inspection.status == "running" else "submitted"
+        delivery = dict(row.get("platform_delivery_status_json") or {})
+        return (
+            str(row.get("status") or "") == local_status
+            and str(row.get("current_attempt_id") or "")
+            == str(inspection.current_attempt_id or "")
+            and delivery
+            == {"worker": inspection.status, "cas": "awaiting_worker"}
+            and not row.get("reason_code")
+            and dict(row.get("reason_json") or {}) == {}
+        )
+
+    @staticmethod
+    def _long_trend_failure_unchanged(
+        row: Mapping[str, Any],
+        exc: BaseException,
+    ) -> bool:
+        reason_code = str(
+            getattr(exc, "reason_code", None)
+            or QELongTrendReason.NODE_STATE_UNKNOWN.value
+        )
+        reason = dict(row.get("reason_json") or {})
+        delivery = dict(row.get("platform_delivery_status_json") or {})
+        return (
+            str(row.get("status") or "") == "remote_state_unknown"
+            and str(row.get("reason_code") or "") == reason_code
+            and str(reason.get("error_type") or "") == type(exc).__name__
+            and str(reason.get("message") or "") == str(exc)
+            and str(reason.get("recovery") or "") == "continuous_reconcile_retry"
+            and delivery
+            == {
+                "worker": "remote_state_unknown",
+                "cas": "reconcile_retry_pending",
+            }
+        )
 
     def _persist_reconcile_failure(self, evaluation_id: str, exc: BaseException) -> dict[str, Any]:
         try:
@@ -1008,14 +1344,17 @@ class QELongTrendPhase2Service:
         bundle: QELongTrendEvaluatorBundle = values["bundle"]
         feature_snapshot: QEDatasetSnapshotIdentity = values["feature_snapshot"]
         outcome_snapshot: QEDatasetSnapshotIdentity = values["outcome_snapshot"]
+        resolved_request = values.get("resolved_request")
+        if resolved_request is None:
+            resolved_request = _resolved_request_from_opt_in(values["opt_in"])
         return {
             "schema_version": "qe_long_trend_job_request_v1",
             "evaluation_id": values["evaluation_id"],
             "run_id": values["run_id"],
             "node_id": values["node_id"],
-            "profile_id": values["opt_in"].profile_id,
+            "profile_id": resolved_request.profile_id,
             "profile_sha256": values["profile_sha256"],
-            "evaluator_version": values["opt_in"].evaluator_version,
+            "evaluator_version": resolved_request.evaluator_version,
             "evaluator_source_sha256": bundle.evaluator_source_sha256,
             "execution_environment_snapshot_id": bundle.execution_environment_snapshot_id,
             "execution_environment_manifest_sha256": bundle.execution_environment_manifest_sha256,
@@ -1023,8 +1362,8 @@ class QELongTrendPhase2Service:
             "qe_dataset_contract_id": QE_DATASET_CONTRACT_ID,
             "feature_snapshot": asdict(feature_snapshot),
             "outcome_snapshot": asdict(outcome_snapshot),
-            "feature_data_root_uri": values["opt_in"].feature_data_root_uri,
-            "outcome_data_root_uri": values["opt_in"].outcome_data_root_uri,
+            "feature_data_root_uri": resolved_request.feature_data_root_uri,
+            "outcome_data_root_uri": resolved_request.outcome_data_root_uri,
             "input_manifest_sha256": values["input_manifest_sha"],
             "input_artifact_hashes": values["input_hashes"],
             "artifact_paths": {
@@ -1042,7 +1381,7 @@ class QELongTrendPhase2Service:
             "recorder_ref": {"experiment_id": inventory.experiment_id, "recorder_id": inventory.recorder_id},
             "catalog_digest": values["catalog_digest"],
             "catalog_completeness": inventory.catalog_completeness,
-            "backtest_freq": values["opt_in"].backtest_freq,
+            "backtest_freq": resolved_request.backtest_freq,
             "evaluation_asof": outcome_snapshot.end_date,
             "label_horizon": values["label_horizon"],
             "strategy_topk": values["strategy_topk"],
@@ -1186,6 +1525,33 @@ def _long_trend_snapshot(
     )
 
 
+def _known_dataset_identity_incomplete(request: ResolvedLongTrendEvaluationRequest) -> bool:
+    """Return true only when the adapter already supplied definitive missing-snapshot evidence."""
+    feature_missing = (
+        request.feature_identity is not None
+        and not isinstance(request.feature_identity.long_trend_snapshot, Mapping)
+    )
+    outcome_missing = (
+        request.outcome_identity is not None
+        and not isinstance(request.outcome_identity.long_trend_snapshot, Mapping)
+    ) or (
+        request.outcome_identity is None
+        and request.outcome_data_root_uri is None
+        and request.requested_outcome_snapshot_id is not None
+    )
+    return feature_missing or outcome_missing
+
+
+def _resolved_request_from_opt_in(opt_in: LongTrendEvaluationOptIn) -> ResolvedLongTrendEvaluationRequest:
+    return ResolvedLongTrendEvaluationRequest(
+        profile_id=opt_in.profile_id,
+        evaluator_version=opt_in.evaluator_version,
+        feature_data_root_uri=opt_in.feature_data_root_uri,
+        outcome_data_root_uri=opt_in.outcome_data_root_uri,
+        backtest_freq=opt_in.backtest_freq,
+    )
+
+
 def _input_artifact_hashes(inventory: RecorderArtifactInventory) -> dict[str, Any]:
     field_names = {
         "prediction": "prediction_sha256",
@@ -1206,10 +1572,52 @@ def _input_artifact_hashes(inventory: RecorderArtifactInventory) -> dict[str, An
     return values
 
 
+def _dataset_identity_incomplete_input_hashes(
+    *,
+    task_id: str,
+    loop_id: str,
+    feature_snapshot: QEDatasetSnapshotIdentity | None,
+    outcome_snapshot: QEDatasetSnapshotIdentity | None,
+) -> dict[str, Any]:
+    """Build a stable non-runnable identity without requiring Recorder assets."""
+    field_names = (
+        "prediction_sha256",
+        "label_sha256",
+        "position_sha256",
+        "portfolio_report_sha256",
+        "indicator_frame_sha256",
+        "indicator_object_sha256",
+        "order_sha256",
+        "trade_sha256",
+        "params_sha256",
+    )
+    result = {field: typed_null(field) for field in field_names}
+    result["catalog_digest"] = canonical_sha256(
+        {
+            "schema_version": "qe_long_trend_dataset_identity_incomplete_v1",
+            "task_id": task_id,
+            "loop_id": loop_id,
+            "feature_snapshot_id": feature_snapshot.snapshot_id if feature_snapshot is not None else None,
+            "outcome_snapshot_id": outcome_snapshot.snapshot_id if outcome_snapshot is not None else None,
+        }
+    )
+    result["catalog_completeness"] = "not_checked_dataset_identity_incomplete"
+    return result
+
+
 def _request_sha(payload: Mapping[str, Any]) -> str:
     public = dict(payload)
     public.pop("resource_session_token", None)
     return canonical_sha256(public)
+
+
+def _public_artifact_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain immutable public identity fields and exclude any local storage path."""
+    return {
+        key: value
+        for key, value in dict(metadata).items()
+        if key not in {"path", "local_path", "absolute_path", "blob_path"}
+    }
 
 
 def _recorder_catalog_digest(inventory: RecorderArtifactInventory) -> str:
@@ -1299,6 +1707,11 @@ def _require_frozen_identity(
 @contextmanager
 def _exclusive_file_lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise QELongTrendPhase2Error(
+            "durable qelt resource lock cannot be a symbolic link",
+            reason_code=QELongTrendReason.CONTROL_STATE_CONFLICT.value,
+        )
     with path.open("a+b") as handle:
         if path.stat().st_size == 0:
             handle.write(b"\0")

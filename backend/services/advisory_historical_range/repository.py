@@ -742,10 +742,16 @@ class PostgresHistoricalRangeRepository:
                 cur.execute(
                     """
                     SELECT * FROM app.advisory_historical_range_operation
-                    WHERE batch_id = %s AND operation_idempotency_key = %s
+                    WHERE batch_id = %s
+                      AND operation_type = %s
+                      AND operation_idempotency_key = %s
                     FOR UPDATE
                     """,
-                    (request.batch_id, request.operation_idempotency_key),
+                    (
+                        request.batch_id,
+                        request.operation_type.value,
+                        request.operation_idempotency_key,
+                    ),
                 )
                 row = cur.fetchone()
                 if row is not None:
@@ -755,9 +761,15 @@ class PostgresHistoricalRangeRepository:
                 cur.execute(
                     """
                     SELECT * FROM app.advisory_historical_range_operation
-                    WHERE batch_id = %s AND operation_idempotency_key = %s
+                    WHERE batch_id = %s
+                      AND operation_type = %s
+                      AND operation_idempotency_key = %s
                     """,
-                    (request.batch_id, request.operation_idempotency_key),
+                    (
+                        request.batch_id,
+                        request.operation_type.value,
+                        request.operation_idempotency_key,
+                    ),
                 )
                 created = cur.fetchone()
                 if created is None:
@@ -5290,7 +5302,10 @@ class PostgresHistoricalRangeRepository:
                 expected_kind=expected_kind,
                 resolved_request_hash=resolved_request_hash,
             )
-            if operation_type is HistoricalRangeOperationType.REFRESH_OUTCOMES:
+            if operation_type in {
+                HistoricalRangeOperationType.REFRESH_OUTCOMES,
+                HistoricalRangeOperationType.REFRESH_OUTCOMES_RUN,
+            }:
                 receipt = HistoricalRangeOutcomeRefreshReceiptV1.model_validate(envelope.payload)
                 if (
                     receipt.operation_id != attempt.operation_id
@@ -5326,7 +5341,9 @@ class PostgresHistoricalRangeRepository:
                             ),
                         ),
                     )
-            elif operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE:
+            elif operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE or (
+                operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN
+            ):
                 receipt = HistoricalRangeDatasetBridgeReceiptV1.model_validate(envelope.payload)
                 expected_status = {
                     HistoricalRangeBridgeResultStatus.SEALED: (HistoricalRangeOperationStatus.COMPLETED.value),
@@ -5405,9 +5422,15 @@ class PostgresHistoricalRangeRepository:
     def _operation_receipt_kind(operation_type: HistoricalRangeOperationType) -> HistoricalRangeArtifactKind:
         if operation_type in {HistoricalRangeOperationType.RESUME, HistoricalRangeOperationType.CANCEL}:
             return HistoricalRangeArtifactKind.RANGE_RECEIPT
-        if operation_type is HistoricalRangeOperationType.REFRESH_OUTCOMES:
+        if operation_type in {
+            HistoricalRangeOperationType.REFRESH_OUTCOMES,
+            HistoricalRangeOperationType.REFRESH_OUTCOMES_RUN,
+        }:
             return HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT
-        if operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE:
+        if operation_type in {
+            HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
+            HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN,
+        }:
             return HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT
         if operation_type is HistoricalRangeOperationType.CREATE:
             return HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN
@@ -6335,6 +6358,38 @@ class PostgresHistoricalRangeRepository:
         visited: set[str],
         allow_direct_predecessor_day_run_id: str | None = None,
     ) -> None:
+        typed_predecessor_day_run_id: str | None = None
+        if (
+            envelope.artifact_kind is HistoricalRangeArtifactKind.DAY_RECEIPT
+            and envelope.day_run_id is not None
+        ):
+            predecessor_ref: HistoricalRangeArtifactRefV1 | None = None
+            if envelope.payload_schema_version == DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2:
+                typed_receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(envelope.payload)
+                if (
+                    typed_receipt.range_run_id != envelope.range_run_id
+                    or typed_receipt.day_run_id != envelope.day_run_id
+                ):
+                    raise ValueError("typed successful receipt has an invalid range/day identity")
+                predecessor_ref = typed_receipt.previous_day_receipt_ref
+            elif envelope.payload_schema_version == DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION:
+                attempt_receipt = HistoricalRangeDayAttemptReceiptPayloadV1.model_validate(envelope.payload)
+                if attempt_receipt.day_run_id != envelope.day_run_id:
+                    raise ValueError("typed attempt receipt has an invalid day identity")
+                predecessor_ref = attempt_receipt.previous_day_receipt_ref
+            if predecessor_ref is not None:
+                if predecessor_ref not in envelope.upstream_refs:
+                    raise ValueError("typed predecessor receipt must be an exact upstream")
+                predecessor = self._artifact_store.load(predecessor_ref)
+                if (
+                    predecessor.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
+                    or predecessor.resolved_request_hash != resolved_request_hash
+                    or predecessor.range_run_id != envelope.range_run_id
+                    or predecessor.day_run_id is None
+                    or predecessor.day_run_id == envelope.day_run_id
+                ):
+                    raise ValueError("typed predecessor receipt has an invalid range/day identity")
+                typed_predecessor_day_run_id = str(predecessor.day_run_id)
         for upstream_ref in envelope.upstream_refs:
             closure_key = (
                 upstream_ref.semantic_content_hash,
@@ -6345,9 +6400,6 @@ class PostgresHistoricalRangeRepository:
             )
             if closure_key in self._validated_upstream_closures:
                 continue
-            if upstream_ref.semantic_content_hash in visited:
-                continue
-            visited.add(upstream_ref.semantic_content_hash)
             upstream = self._artifact_store.load(upstream_ref)
             if upstream.resolved_request_hash != resolved_request_hash:
                 raise ValueError("upstream artifact resolved_request_hash differs from its consumer")
@@ -6358,8 +6410,11 @@ class PostgresHistoricalRangeRepository:
                 allowed_day_ids.add(allow_direct_predecessor_day_run_id)
             if day_run_id is not None and upstream.day_run_id not in allowed_day_ids:
                 raise ValueError("upstream artifact belongs to a different day run")
+            if upstream_ref.semantic_content_hash in visited:
+                continue
+            visited.add(upstream_ref.semantic_content_hash)
             next_day_run_id = day_run_id
-            next_predecessor_day_run_id: str | None = None
+            next_predecessor_day_run_id = typed_predecessor_day_run_id
             if (
                 upstream_ref.artifact_kind is HistoricalRangeArtifactKind.DAY_RECEIPT
                 and upstream.day_run_id is not None
@@ -6380,6 +6435,17 @@ class PostgresHistoricalRangeRepository:
                                 or predecessor.day_run_id is None
                             ):
                                 raise ValueError("typed predecessor receipt has an invalid range/day identity")
+                            next_predecessor_day_run_id = str(predecessor.day_run_id)
+                    elif upstream.payload_schema_version == DAY_ATTEMPT_RECEIPT_PAYLOAD_SCHEMA_VERSION:
+                        attempt_receipt = HistoricalRangeDayAttemptReceiptPayloadV1.model_validate(upstream.payload)
+                        if attempt_receipt.previous_day_receipt_ref is not None:
+                            predecessor = self._artifact_store.load(attempt_receipt.previous_day_receipt_ref)
+                            if (
+                                predecessor.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
+                                or predecessor.range_run_id != upstream.range_run_id
+                                or predecessor.day_run_id is None
+                            ):
+                                raise ValueError("typed attempt predecessor receipt has an invalid range/day identity")
                             next_predecessor_day_run_id = str(predecessor.day_run_id)
             self._load_upstream_closure(
                 envelope=upstream,

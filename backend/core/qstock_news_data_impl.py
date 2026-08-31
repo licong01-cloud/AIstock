@@ -7,7 +7,6 @@ next_app 内部的 infra.network_optimizer。
 
 import pandas as pd
 import sys
-import io
 import warnings
 from datetime import datetime
 import akshare as ak
@@ -19,22 +18,15 @@ warnings.filterwarnings("ignore")
 
 # 设置标准输出编码为UTF-8（仅在命令行环境，避免streamlit冲突）
 def _setup_stdout_encoding() -> None:
-    """仅在命令行环境设置标准输出编码"""
-    if sys.platform == "win32" and not hasattr(sys.stdout, "_original_stream"):
+    """Configure the real Windows console without replacing captured streams."""
+    if sys.platform != "win32" or sys.stdout is not sys.__stdout__:
+        return
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
         try:
-            # 检测是否在 streamlit 环境中
-            import streamlit  # type: ignore  # noqa: F401
-
-            # 在 streamlit 中不修改 stdout
-            return
-        except ImportError:
-            # 不在 streamlit 环境，可以安全修改
-            try:
-                sys.stdout = io.TextIOWrapper(  # type: ignore[assignment]
-                    sys.stdout.buffer, encoding="utf-8", errors="ignore"
-                )
-            except Exception:
-                pass
+            reconfigure(encoding="utf-8", errors="ignore")
+        except (AttributeError, OSError, ValueError):
+            pass
 
 
 _setup_stdout_encoding()
@@ -179,8 +171,8 @@ class QStockNewsDataFetcher:
 
                                     if len(item) > 1:
                                         news_items.append(item)
-                        except Exception:
-                            pass
+                        except Exception as e:  # noqa: BLE001
+                            print(f"   ⚠ 新浪财经新闻过滤失败: {e}")
 
                 except Exception as e:  # noqa: BLE001
                     print(f"   ⚠ 从新浪财经获取失败: {e}")

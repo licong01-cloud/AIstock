@@ -24,15 +24,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
-import numpy as np
-
 from .base_algo import OrderState, StepResult
 from .board_lot import (
     board_lot_rule,
     build_cost_aware_bucket_schedule,
     round_to_board_lot,
 )
-from .registry import register
 from .v25_core import (
     REASON_LIMIT_DATA_MISSING_DUE_TO_SUSPEND,
     REASON_PREV_CLOSE_MISSING_WITH_SUSPEND,
@@ -54,7 +51,6 @@ class V25_1SmallCapUnavailableError(V25TwoStageUnavailableError):
     """Raised when V25_1_SMALL_CAP cannot run authoritatively."""
 
 
-@register
 class V25_1SmallCapAlgo(V25TwoStageAlgo):
     ALGO_CODE = "V25_1_SMALL_CAP"
     HANDLES_MARKET_STATE = True

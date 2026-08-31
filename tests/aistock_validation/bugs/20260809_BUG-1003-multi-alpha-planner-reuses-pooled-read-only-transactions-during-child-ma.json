@@ -1,0 +1,410 @@
+{
+  "actual": "On runtime identity 41504a205b9372a4e709587dc2310fd8143c6c6d, two independent MA-E14 durable runs (macb_idem_6ebaee4ec80242a3632bae7c79efcf1abff9d358 and macb_idem_67bda61e726d6b371e5f5fc158ad63690542f401) failed while materializing their only orthogonality_aware child. Both recorded ReadOnlySqlTransaction: cannot execute UPDATE in a read-only transaction. The first then overwrote the primary failure at parent finalization with multi_alpha_row_version_conflict; the second ended multi_alpha_no_successful_scheme. Expected: a connection returned from any read-only control-plane operation cannot contaminate later durable writes; child materialization must run in a writable transaction, primary errors remain attributable, and row-version CAS still fails closed without hiding the root cause. Preserve QE file-only data plane and control/result DB use; no DDL/DML migration and no process control.",
+  "allowed_write_scope": [
+    "backend/db/pg_pool.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/test_pg_pool_audit.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
+    "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1003",
+  "closed_at": "2026-08-13T17:33:47.459443Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-09T08:59:58.102110Z",
+  "description": "On runtime identity 41504a205b9372a4e709587dc2310fd8143c6c6d, two independent MA-E14 durable runs (macb_idem_6ebaee4ec80242a3632bae7c79efcf1abff9d358 and macb_idem_67bda61e726d6b371e5f5fc158ad63690542f401) failed while materializing their only orthogonality_aware child. Both recorded ReadOnlySqlTransaction: cannot execute UPDATE in a read-only transaction. The first then overwrote the primary failure at parent finalization with multi_alpha_row_version_conflict; the second ended multi_alpha_no_successful_scheme. Expected: a connection returned from any read-only control-plane operation cannot contaminate later durable writes; child materialization must run in a writable transaction, primary errors remain attributable, and row-version CAS still fails closed without hiding the root cause. Preserve QE file-only data plane and control/result DB use; no DDL/DML migration and no process control.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260809-dc02608dc5aa",
+      "timestamp": "2026-08-09T08:59:58.102106Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "CodeGraph scoped miss: runtime evidence traces the contamination to pooled session characteristics in backend/db/pg_pool.py; add the direct pool test only. Actual changed files remain authoritative for runtime-impact inference.",
+      "timestamp": "2026-08-09T09:22:13.771278Z"
+    },
+    {
+      "action": "confirm_root_cause",
+      "actor": "codex",
+      "note": "Read-only Advisory borrowers mutate psycopg2 session characteristics; rollback ends the transaction but the legacy default pooled checkout skipped session sanitization, so a later Multi-Alpha UPDATE could inherit readonly=true.",
+      "timestamp": "2026-08-09T10:03:04Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Every checkout now resets READ COMMITTED/read-write/non-deferrable state; reset failures close the unsafe connection. Targeted regression, lint/compile, L0, registry/catalog, and qe_read_backend gates passed without process control or DDL/DML.",
+      "timestamp": "2026-08-09T10:03:04Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR #3232 pre-test classification failed because the existing pg_pool audit test had no direct CI plan. Add only the exact source/test mapping, its classifier regression, and wire the existing platform_api_backend session to execute the direct pg_pool test.",
+      "timestamp": "2026-08-09T10:24:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR #3234 exposed a stale Paper v2 test that still rejected the BUG-1003 requirement to sanitize every pooled checkout. Add only that existing test so it preserves default autocommit and no-commit/rollback semantics while asserting the mandatory writable session reset.",
+      "timestamp": "2026-08-09T17:02:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Every pooled checkout must restore a writable READ COMMITTED, non-deferrable session before yielding the connection, including the default autocommit writer path. A read-only borrower may not contaminate a later Multi-Alpha durable write. Session reset failure must fail closed and discard the unsafe connection. Existing fencing, row-version CAS, child error evidence, QE file-only data plane, and control/result database semantics remain unchanged.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/db/pg_pool.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/test_pg_pool_audit.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/db/pg_pool.py",
+        "backend/tests/paper_trading_v2/test_day_runner.py",
+        "backend/tests/test_pg_pool_audit.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "noxfile.py",
+        "scripts/ci_change_classifier.py",
+        "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "impacted_modules": [
+        "platform.db",
+        "qe.archive",
+        "paper_v2",
+        "selection_center",
+        "strategy_package",
+        "validation.center",
+        "tests.backend",
+        "validation.guardrails",
+        "validation.runner",
+        "platform.config",
+        "validation.module_quality",
+        "tests.frontend",
+        "tests.validation_history"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/db/pg_pool.py",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_day_runner.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/test_pg_pool_audit.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "scripts/ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
+          "impact_modules": [
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_bug_registry"
+        },
+        {
+          "file": "tests/aistock_validation/bugs/.bug_id_allocator.json",
+          "impact_modules": [
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_bug_registry"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/db/pg_pool.py",
+        "backend/tests/paper_trading_v2/test_day_runner.py",
+        "backend/tests/test_pg_pool_audit.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "noxfile.py",
+        "scripts/ci_change_classifier.py",
+        "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/db/pg_pool.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/test_pg_pool_audit.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ]
+  },
+  "first_seen_at": "2026-08-09T08:59:58.102110Z",
+  "fix_branch": "bug/BUG-1003-multi-alpha-planner-reuses-pooled-read-only-tran-20260809",
+  "fix_commit": "9b35f41a2d492d6be247ad03de0375b6c89a8896",
+  "fixed_at": "2026-08-09T10:03:04Z",
+  "github_issue_number": 3231,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3231",
+  "last_seen_at": "2026-08-09T08:59:58.102110Z",
+  "module": "qe.auto_evolution",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3232",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "platform_api_backend",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process ran backend/tests/test_pg_pool_audit.py: readonly borrower -> default writer UPDATE succeeds after checkout sanitization; reset failure closes unsafe pooled connection; 6 passed",
+      "fresh Python process imported and compiled backend.db.pg_pool via python -m py_compile -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1003\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1003",
+      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
+      "contract_digest": "282907c2158dde05e306d5d05c768ddabe9a3d99044305716621f1ec099d65ca",
+      "expected_identity": "9b35f41a2d492d6be247ad03de0375b6c89a8896",
+      "generated_at": "2026-08-13T17:33:12.504424Z",
+      "mode": "read_only",
+      "observed_identity": "5151eebb7661204457b7f5be79de1424df2d4844",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7bdad2ff131476cc522ad2a68bb94ddca14494685a53e8e9d44551c1eb19241f",
+      "receipt_sha256": "1434a2e5b0e43783c91a8a14103038fcb83f68953053e1903d9313f86868b159",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "3ddd752baf78214ef399a8930febec912b2a6dd96a7dd427884c04f4dc864541",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "qe.auto_evolution",
+    "platform.db"
+  ],
+  "title": "Multi-Alpha planner reuses pooled read-only transactions during child materialization",
+  "trigger_condition": {
+    "fingerprint": "dc02608dc5aadd23e1253063",
+    "source_event_id": "FE-20260809-dc02608dc5aa"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_pg_pool_audit.py -q -> 6 passed",
+    "python -m ruff check backend/db/pg_pool.py backend/tests/test_pg_pool_audit.py -> passed",
+    "python -m py_compile backend/db/pg_pool.py backend/tests/test_pg_pool_audit.py -> passed",
+    "python -m nox -s l0 -> passed; guardrail blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; files=14 mapped=14",
+    "python -m nox -s guardrail_changed_files -> files=4 mapped=4; blocking=0",
+    "python -m nox -s validation_catalog_integrity -> 6 passed; findings=0",
+    "python -m nox -s qe_read_backend -> 34 passed",
+    "python -m nox -s platform_api_backend -> 13 passed",
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/test_noxfile_validation_env.py -q -> 67 passed",
+    "python scripts/ci_change_classifier.py <BUG-1003 changed files> -> workflow_gate=passed; backend_sessions=platform_api_backend; unmapped_code_files=[]",
+    "git diff --check -> passed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1003 --target backend-main --expected-identity 9b35f41a2d492d6be247ad03de0375b6c89a8896 -> passed (workflow_gate=verified, ancestor identity, health/identity/business smoke complete)"
+  ],
+  "verification_budget": {
+    "budget": "deep",
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.auto_evolution",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "45-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "deep",
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.auto_evolution",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "45-60%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

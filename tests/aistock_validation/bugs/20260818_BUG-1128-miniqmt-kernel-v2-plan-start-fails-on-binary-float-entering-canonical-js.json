@@ -1,0 +1,236 @@
+{
+  "actual": "Production read-only evidence 2026-08-18: run simrun_a00542d8e17154f4 (binding simbind_e12b636ec0d6291f, execution plan plan_ad6435e2ecd31cd9, strategy ma_8ec5e389_sim_20260703, backend minqmt_sim, execution policy b0_quote_v2:SNIPER_MINIQMT:ma_8ec5e389:20260714:v1) is FAILED_RETRYABLE with failure stage MINIQMT_KERNEL_V2_PLAN_START_FAILED and error 'TypeError: binary float is forbidden in canonical JSON'. submitted intents=0, trading-rule decisions=60, execution-plan intents=59; the 60/59 partition is the legal partition fixed by BUG-1112 and must not be re-judged as non-closed. No registered open BUG covers this. Root cause to locate read-only: which exact binary-float field reaches canonical JSON through the chain immutable ExecutionPlan -> MiniQMT product reader -> KERNEL_V2 plan-start input -> B0 quote/context/config -> plugin binding/config -> canonical hash/receipt/outbox. Design contracts: binary float may only convert to finite canonical decimal text at the explicit external source boundary; durable config/hash/receipt/canonical JSON authority must never store binary float (K6-D design 20260804, K1 contracts design 20260722). BUG-1112 is prerequisite background only; do not reuse it.",
+  "allowed_write_scope": [
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+    "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+    "tests/aistock_validation/bugs/20260818_BUG-1128-miniqmt-kernel-v2-plan-start-fails-on-binary-float-entering-canonical-js.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1128",
+  "closed_at": "2026-08-22T08:39:19.655604Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-18T08:06:54.641409Z",
+  "description": "Production read-only evidence 2026-08-18: run simrun_a00542d8e17154f4 (binding simbind_e12b636ec0d6291f, execution plan plan_ad6435e2ecd31cd9, strategy ma_8ec5e389_sim_20260703, backend minqmt_sim, execution policy b0_quote_v2:SNIPER_MINIQMT:ma_8ec5e389:20260714:v1) is FAILED_RETRYABLE with failure stage MINIQMT_KERNEL_V2_PLAN_START_FAILED and error 'TypeError: binary float is forbidden in canonical JSON'. submitted intents=0, trading-rule decisions=60, execution-plan intents=59; the 60/59 partition is the legal partition fixed by BUG-1112 and must not be re-judged as non-closed. No registered open BUG covers this. Root cause to locate read-only: which exact binary-float field reaches canonical JSON through the chain immutable ExecutionPlan -> MiniQMT product reader -> KERNEL_V2 plan-start input -> B0 quote/context/config -> plugin binding/config -> canonical hash/receipt/outbox. Design contracts: binary float may only convert to finite canonical decimal text at the explicit external source boundary; durable config/hash/receipt/canonical JSON authority must never store binary float (K6-D design 20260804, K1 contracts design 20260722). BUG-1112 is prerequisite background only; do not reuse it.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260818-6733812e29b8",
+      "timestamp": "2026-08-18T08:06:54.641394Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-18T08:06:54.641409Z",
+  "fix_branch": null,
+  "fix_commit": "0645e9b8ba05b9dd927d76ee83df5861f3dae2ba",
+  "fixed_at": "2026-08-18T17:29:51Z",
+  "github_issue_number": 3600,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3600",
+  "last_seen_at": "2026-08-18T08:06:54.641409Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3605",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "miniqmt_execution_runtime_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked BUG-1128 K6-D plan-authority reader and passed the real-run binary-float canonicalization, equivalent-representation, fail-closed carrier and legal reject-partition matrix (62 passed in test_kernel_product_runtime_integration.py).",
+      "Fresh nox MiniQMT L2 process loaded the persisted BUG-1128 source and passed 1503 tests with 82 explicit skips; no backend process control.",
+      "Fresh nox Simulation Core L2 process loaded the persisted BUG-1128 source and passed 616 tests with 2 explicit skips; no backend process control.",
+      "Fresh pytest process loaded the tracked BUG-1128 plan-authority reader and passed 62 tests in test_kernel_product_runtime_integration.py including the real-run binary-float canonicalization matrix; no backend process control.",
+      "Fresh nox miniqmt_execution_runtime_l2 process loaded the persisted BUG-1128 source and passed 1503 tests with 82 explicit skips; no backend process control.",
+      "Fresh nox simulation_core_l2 process loaded the persisted BUG-1128 source and passed 616 tests with 2 explicit skips; no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1128\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1128",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "4b5d3d0054193c8d55cd39d2731cfdbf764fb8bbca5fd1c4cc68ab1cd7e58724",
+      "contract_digest": "79f8c02c968dfad3f207cfcf5dc54c7f3790bfb8fdd3657111ee2b095f3d0234",
+      "expected_identity": "0645e9b8ba05b9dd927d76ee83df5861f3dae2ba",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-22T08:37:12.039364Z",
+      "mode": "read_only",
+      "observed_identity": "9ee30678cc67aff500c7396df2246d6897209465",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3bfc180beb7e34cd04149f361fb9d2595a962466f5b7401008493f671e14b5d4",
+      "receipt_sha256": "3a5e70596698e4a3a04cc5b42e300c011000a701928e48e4515189713d0b0a34",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a65acd2167baabf795506be65c2e1e36c0db6f64645a9f0563832aef8bd25ac6",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT KERNEL_V2 plan start fails on binary float entering canonical JSON",
+  "trigger_condition": {
+    "fingerprint": "6733812e29b81e1ab6d29f6e",
+    "source_event_id": "FE-20260818-6733812e29b8"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=fad26dac63160953 commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=62ef294957ab5fed commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=nox plan=simulation_core_l2 status=passed command=`rtk python -m nox -s simulation_core_l2` result=`616 passed, 2 skipped`",
+    "validation-receipt: id=7ccf19567df22155 commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=nox plan=miniqmt_execution_runtime_l2 status=passed command=`rtk python -m nox -s miniqmt_execution_runtime_l2` result=`1503 passed, 82 skipped`",
+    "validation-receipt: id=e428110900784d38 commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=pytest plan=direct status=passed command=`rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`62 passed`",
+    "validation-receipt: id=cbf0910b1725c76d commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=ruff plan=direct status=passed command=`rtk python -m ruff check backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`All checks passed`",
+    "validation-receipt: id=7d25f944cc10796b commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`ok`",
+    "validation-receipt: id=f93e6cd78e31cf0a commit=359d565f21d4fcb8beedd2416689e5cb3ada9a36 kind=compile plan=direct status=passed command=`rtk python -m py_compile backend/services/simulation_runtime/miniqmt_kernel_product.py backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py` result=`ok`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1128 --target backend-main --expected-identity 0645e9b8ba05b9dd927d76ee83df5861f3dae2ba -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "miniqmt_execution_runtime"
+      ],
+      "plans": [
+        "miniqmt_execution_runtime_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "miniqmt_execution_runtime"
+        ],
+        "plans": [
+          "miniqmt_execution_runtime_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

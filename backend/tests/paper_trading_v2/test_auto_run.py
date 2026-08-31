@@ -12,7 +12,7 @@ from backend.services.paper_trading_v2.auto_run import (
     normalize_auto_run_config,
 )
 from backend.services.paper_trading_v2.day_runner import miniqmt_account_slot_context
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperSessionMode, PaperSessionStatus
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.scheduler import PaperTradingV2SessionScheduler
@@ -317,7 +317,13 @@ def test_scheduler_status_exposes_auto_run_bootstrap_state(monkeypatch: pytest.M
 
     status = scheduler.bootstrap_status()
 
-    assert status["scheduler_autostart_env"] is True
+    assert status["retired"] is True
+    assert status["reason_code"] == "PAPER_V2_LEGACY_SESSION_SCHEDULER_RETIRED"
+    assert status["replacement"] == "/api/v1/simulation-runtime"
+    assert status["scheduler_autostart_env"] is False
+    assert status["scheduler_env_requested"] is True
+    assert status["scheduler_env_ignored"] is True
+    assert status["scheduler"]["execution_enabled"] is False
     assert status["auto_run"]["env_enabled"] is True
 
 

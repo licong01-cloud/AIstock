@@ -319,6 +319,35 @@ def test_cli_refuses_missing_dev_database_identity(monkeypatch):
         cli._db_config("dev")
 
 
+def test_cli_preflight_requires_explicit_universe_and_window_before_database_access(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "_connect",
+        lambda _target: pytest.fail("invalid preflight must fail before database access"),
+    )
+
+    exit_code = cli.run(
+        [
+            "preflight",
+            "--env-file",
+            str(env_file),
+            "--target",
+            "dev",
+        ]
+    )
+    error = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 2
+    assert error["db_writes"] is False
+    assert "explicit --universe-key" in error["error"]
+
+
 def test_mutating_receipt_can_be_fsynced_before_commit_and_atomically_published(tmp_path):
     output = tmp_path / "receipt.json"
     value = {"schema_version": "test_receipt_v1", "status": "applied", "db_writes": True}

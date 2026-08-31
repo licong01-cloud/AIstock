@@ -278,6 +278,249 @@ export type AdvisoryListVersionDetail = {
   items: AdvisoryRecommendationListItem[];
 };
 
+export type AdvisoryModelFeatureContribution = {
+  feature: string;
+  contribution: number;
+};
+
+export type AdvisoryModelShadowCandidate = {
+  symbol: string;
+  selection_effective_rank: number;
+  selection_score: number;
+  advisory_model_rank: number;
+  advisory_model_score: number;
+  is_top5: boolean;
+  top_feature_contributions: AdvisoryModelFeatureContribution[];
+};
+
+export type AdvisoryOutcomeHorizonPrediction = {
+  horizon_days: 1 | 3 | 5 | 10 | 20;
+  excess_return_q10: number;
+  excess_return_q50: number;
+  excess_return_q90: number;
+  positive_probability: number;
+  signal_survival_probability: number;
+  path_mfe_q50: number;
+  path_mfe_q90: number;
+  path_mae_loss_q50: number;
+  path_mae_loss_q90: number;
+  excess_return_calibrated_q10?: number | null;
+  excess_return_calibrated_q50?: number | null;
+  excess_return_calibrated_q90?: number | null;
+  positive_probability_calibrated?: number | null;
+  signal_survival_probability_calibrated?: number | null;
+  path_mfe_calibrated_q50?: number | null;
+  path_mfe_calibrated_q90?: number | null;
+  path_mae_loss_calibrated_q50?: number | null;
+  path_mae_loss_calibrated_q90?: number | null;
+  positive_probability_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  signal_survival_probability_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  return_interval_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  path_mfe_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  path_mae_loss_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+};
+
+export type AdvisoryOutcomeCandidate = {
+  symbol: string;
+  horizons: AdvisoryOutcomeHorizonPrediction[];
+  holding_period: {
+    calibration_state?: "UNCALIBRATED";
+    probabilities: Record<string, number>;
+    mode_days: number;
+    range_low_days: number;
+    range_high_days: number;
+  };
+};
+
+export type AdvisoryOutcomeShadow = {
+  status: "EXPERIMENTAL_SHADOW" | "OUTCOME_UNAVAILABLE";
+  calibration_state: "UNCALIBRATED" | "PARTIAL";
+  calibration_policy_version?: string | null;
+  parent_outcome_bundle_id?: string | null;
+  binary_calibration_state?: "CALIBRATED" | "PARTIAL" | "UNCALIBRATED";
+  return_interval_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  path_upper_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  holding_calibration_state?: "UNCALIBRATED";
+  outcome_bundle_id: string | null;
+  parent_bundle_id: string | null;
+  model_version: string | null;
+  horizons: Array<1 | 3 | 5 | 10 | 20>;
+  candidates: AdvisoryOutcomeCandidate[];
+  reason_code: string | null;
+  message: string | null;
+};
+
+export type AdvisoryPriceBand = {
+  low: number;
+  high: number;
+};
+
+export type AdvisoryPriceRangeCandidate = {
+  symbol: string;
+  status: "EXPERIMENTAL_SHADOW" | "PRICE_RANGE_UNAVAILABLE";
+  projection_condition: "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID";
+  entry_executable_probability: number | null;
+  decision_reference_price: number | null;
+  target_raw_price_multiplier: number | null;
+  entry_price: ({ condition: "ENTRY_EXECUTABLE"; mid: number } & AdvisoryPriceBand) | null;
+  calibrated_entry_price?: ({ condition: "ENTRY_EXECUTABLE"; mid: number } & AdvisoryPriceBand) | null;
+  entry_gap_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  entry_gap_calibration_method?: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION" | null;
+  entry_gap_calibration_delta?: number | null;
+  entry_executable_calibration_state?: "UNCALIBRATED";
+  take_profit_price: (AdvisoryPriceBand & { horizon_trade_days: 1 | 3 | 5 | 10 | 20 }) | null;
+  protective_price: {
+    status: "NOT_APPLICABLE" | "MODEL_BELOW_POLICY_ACTIVATION" | "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION";
+    policy_activation_price: number | null;
+    model_peak_low: number | null;
+    model_peak_high: number | null;
+    floor_low: number | null;
+    floor_high: number | null;
+  } | null;
+  stop_loss_price: (AdvisoryPriceBand & { status: "AVAILABLE" | "SINGLE_POINT"; hard_stop_price: number | null }) | null;
+  tick_size: number | null;
+  regulatory_price_range: {
+    status: "LIMITED" | "NO_DAILY_LIMIT";
+    low: number | null;
+    high: number | null;
+    rule_id: string;
+    source: "DECISION_TIME_BOARD_ST_RULE";
+  } | null;
+  review_policy: {
+    review_policy_sha256: string;
+    stop_loss_bps: number;
+    take_profit_bps: number;
+    trailing_stop_bps: number;
+    take_profit_mode: string;
+  } | null;
+  reason_code: string | null;
+  message: string | null;
+};
+
+export type AdvisoryPriceRangeShadow = {
+  status: "EXPERIMENTAL_SHADOW" | "PRICE_RANGE_UNAVAILABLE";
+  calibration_state: "UNCALIBRATED" | "CALIBRATED_INTERVAL";
+  price_range_bundle_id: string | null;
+  parent_bundle_id: string | null;
+  outcome_bundle_id: string | null;
+  model_version: string | null;
+  price_basis: "UNADJUSTED_CNY_DECISION_CLOSE";
+  candidates: AdvisoryPriceRangeCandidate[];
+  reason_code: string | null;
+  message: string | null;
+};
+
+export type AdvisoryModelShadowResponse = {
+  status: "EXPERIMENTAL_SHADOW" | "MODEL_UNAVAILABLE";
+  calibration_state: "UNCALIBRATED" | "NOT_APPLICABLE_RANKING_SCORE";
+  program_id: string;
+  binding_version_id: string | null;
+  package_id: string | null;
+  manifest_sha256: string | null;
+  decision_as_of_trade_date: string | null;
+  target_trade_date: string;
+  selection_runtime_semantics_hash: string | null;
+  model_version: string | null;
+  bundle_id: string | null;
+  feature_schema_version: string | null;
+  candidate_count: number;
+  shortlist_count: number;
+  candidates: AdvisoryModelShadowCandidate[];
+  baselines: JsonObject;
+  hmm_unavailable: JsonObject[];
+  outcome: AdvisoryOutcomeShadow;
+  price_range: AdvisoryPriceRangeShadow;
+  reason_code: string | null;
+  message: string | null;
+};
+
+export type AdvisoryForwardRun = {
+  forward_run_id: string;
+  program_id: string;
+  decision_as_of_trade_date: string;
+  target_trade_date: string;
+  publication_status: "PENDING" | "PUBLISHED" | "WAITING_DATA" | "FAILED";
+  settlement_status: "NOT_DUE" | "WAITING_DATA" | "SETTLED" | "NOT_ENTERED" | "FAILED";
+  selection_run_id?: string | null;
+  list_version_id?: string | null;
+  last_stage: string;
+  last_reason_code?: string | null;
+  last_error_json?: JsonObject | null;
+  model_resolution_json?: JsonObject;
+  run_payload_json?: JsonObject;
+  published_at?: string | null;
+  settled_at?: string | null;
+};
+
+export type AdvisoryForwardModelObservation = {
+  observation_id: string;
+  forward_run_id: string;
+  status: "EXPERIMENTAL_SHADOW" | "UNAVAILABLE" | "FAILED";
+  reason_code?: string | null;
+  message?: string | null;
+  package_id?: string | null;
+  manifest_sha256?: string | null;
+  model_descriptor_sha256?: string | null;
+  bundle_id?: string | null;
+  outcome_bundle_id?: string | null;
+  price_range_bundle_id?: string | null;
+  maturity_trade_date?: string | null;
+  candidate_count: number;
+  shortlist_count: number;
+  prediction_payload_json?: JsonObject;
+};
+
+export type AdvisoryForwardRunDetail = {
+  forward_run: AdvisoryForwardRun;
+  model_observation: AdvisoryForwardModelObservation | null;
+  model_outcome: AdvisoryForwardModelObservationOutcome | null;
+};
+
+export type AdvisoryForwardModelObservationOutcome = {
+  outcome_id: string;
+  observation_id: string;
+  evaluation_id: string;
+  status: "MATURED" | "NO_ENTRY";
+  target_trade_date: string;
+  maturity_trade_date: string;
+  entered_episode_count: number;
+  exited_episode_count: number;
+  completed_episode_hit_rate?: number | null;
+  mean_net_return_bps?: number | null;
+};
+
+export type AdvisoryForwardModelMetrics = {
+  schema_version: "advisory_forward_model_metrics_response_v1";
+  program_id: string;
+  status: "EVIDENCE_IMMATURE" | "READY" | "WAITING_DATA" | "FAILED";
+  observation_count: number;
+  due_observation_count: number;
+  next_maturity_trade_date?: string | null;
+  reason_code?: string | null;
+  error?: JsonObject | null;
+  evaluation?: {
+    evaluation_id: string;
+    model_descriptor_sha256: string;
+    bundle_id: string;
+    first_target_trade_date: string;
+    as_of_trade_date: string;
+    last_due_maturity_trade_date: string;
+    observation_count: number;
+    due_observation_count: number;
+    matured_outcome_count: number;
+    metrics_json: {
+      completed_episode_hit_rate?: number | null;
+      mean_daily_net_return_bps?: number | null;
+      mean_daily_net_excess_return_bps?: number | null;
+      maximum_drawdown?: number | null;
+      mean_turnover_fraction?: number | null;
+      coverage?: number | null;
+      exited_episode_count?: number;
+      active_episode_count?: number;
+    };
+  } | null;
+};
+
 export type WatchlistCategory = {
   id: number;
   name: string;
@@ -732,6 +975,25 @@ export const advisoryApi = {
   },
   async listVersionDetail(listVersionId: string): Promise<AdvisoryListVersionDetail> {
     return apiFetch<AdvisoryListVersionDetail>(`/advisory/list-versions/${encodeURIComponent(listVersionId)}`);
+  },
+  async modelShadow(programId: string, targetTradeDate: string): Promise<AdvisoryModelShadowResponse> {
+    return apiFetch<AdvisoryModelShadowResponse>(
+      `/advisory/programs/${encodeURIComponent(programId)}/model-shadow?target_trade_date=${encodeURIComponent(targetTradeDate)}`,
+    );
+  },
+  async forwardRuns(programId: string, limit = 20): Promise<AdvisoryForwardRun[]> {
+    const data = await apiFetch<{ forward_runs: AdvisoryForwardRun[] }>(
+      `/advisory/programs/${encodeURIComponent(programId)}/forward-runs?limit=${encodeURIComponent(String(limit))}`,
+    );
+    return data.forward_runs || [];
+  },
+  async forwardRunDetail(forwardRunId: string): Promise<AdvisoryForwardRunDetail> {
+    return apiFetch<AdvisoryForwardRunDetail>(`/advisory/forward-runs/${encodeURIComponent(forwardRunId)}`);
+  },
+  async forwardModelMetrics(programId: string): Promise<AdvisoryForwardModelMetrics> {
+    return apiFetch<AdvisoryForwardModelMetrics>(
+      `/advisory/programs/${encodeURIComponent(programId)}/forward-model-metrics`,
+    );
   },
   async previewReview(programId: string, payload: AdvisoryReviewPayload): Promise<AdvisoryReviewResult> {
     const data = await apiFetch<{ review: AdvisoryReviewResult }>(`/advisory/programs/${encodeURIComponent(programId)}/reviews/preview`, body(payload));

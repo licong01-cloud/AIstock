@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import io
 import json
@@ -10,15 +10,19 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
+from backend.services.paper_trading_v2.selection_portfolio_controller import SelectionPaperPortfolioController
 from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
 from backend.services.selection_center.industry_provider import IndustryInfo
 from backend.services.selection_center.models import SelectionMode, SelectionRunStatus
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
-from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256, validate_runtime_profile_binding
+from backend.services.selection_center.runtime_profile import (
+    runtime_profile_config_sha256,
+    validate_runtime_profile_binding,
+)
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.manifest import freeze_manifest
@@ -368,9 +372,7 @@ def test_selection_center_records_filtered_empty_as_valid_no_candidate() -> None
     package_repo = InMemoryStrategyPackageRepository()
     manifest = ready_manifest_with_scores("pkg_filtered_empty", "000001.SZ", 0.9, 1)
     package_repo.save_manifest(manifest)
-    risk_policy_service = RecordingRiskPolicyService(
-        {"000001.SZ": RiskDecision(symbol="000001.SZ", can_buy=False)}
-    )
+    risk_policy_service = RecordingRiskPolicyService({"000001.SZ": RiskDecision(symbol="000001.SZ", can_buy=False)})
     service = SelectionCenterService(
         package_repository=package_repo,
         repository=InMemorySelectionCenterRepository(),
@@ -893,10 +895,10 @@ def test_selection_center_non_trading_preview_is_marked_and_cannot_create_paper_
         repository=InMemorySelectionCenterRepository(),
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
-        paper_portfolio_service=PaperTradingV2PortfolioService(
-            package_repository=package_repo,
-            repository=paper_repo,
-        ),
+    )
+    controller = SelectionPaperPortfolioController(
+        selection_service=service,
+        portfolio_service=PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo),
     )
 
     run = service.run_single_package(
@@ -911,7 +913,7 @@ def test_selection_center_non_trading_preview_is_marked_and_cannot_create_paper_
     assert run.runtime_config["runtime_profile_binding"]["source"] == "ad_hoc_non_trading_preview"
     assert run.runtime_config["runtime_profile_binding"]["trade_enabled"] is False
     with pytest.raises(InvalidStateTransitionError, match="non-trading"):
-        service.create_paper_portfolio_from_run(
+        controller.create_from_run(
             run_id=run.run_id,
             portfolio_name="preview should not trade",
             initial_cash=100_000,
@@ -1047,7 +1049,9 @@ def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cuto
 def test_selection_center_pit_mode_maps_non_trading_date_to_latest_completed_day() -> None:
     class FakeCalendar:
         def ensure_trading_day(self, trade_date: date) -> None:
-            raise DataUnavailableError("trade_date is not a trading day", context={"trade_date": trade_date.isoformat()})
+            raise DataUnavailableError(
+                "trade_date is not a trading day", context={"trade_date": trade_date.isoformat()}
+            )
 
         def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
             if end_date == date(2024, 1, 6):
@@ -1177,8 +1181,7 @@ def test_live_inference_factor_order_uses_static_dataloader_schema(tmp_path) -> 
     (artifacts_dir / "params.pkl").write_bytes(b"test model placeholder")
     for factor_name in ["factor_b", "factor_a", "factor_c"]:
         (factors_dir / f"{factor_name}.py").write_text(
-            "import pandas as pd\n"
-            f"def calculate():\n    return pd.DataFrame({{{factor_name!r}: [1.0]}})\n",
+            f"import pandas as pd\ndef calculate():\n    return pd.DataFrame({{{factor_name!r}: [1.0]}})\n",
             encoding="utf-8",
         )
     (workspace / "model.py").write_text(
@@ -1248,8 +1251,7 @@ def test_live_inference_factor_order_falls_back_to_qe_factor_names_when_static_s
     (artifacts_dir / "params.pkl").write_bytes(b"test model placeholder")
     for factor_name in ["factor_c", "factor_a"]:
         (factors_dir / f"{factor_name}.py").write_text(
-            "import pandas as pd\n"
-            f"def calculate():\n    return pd.DataFrame({{{factor_name!r}: [1.0]}})\n",
+            f"import pandas as pd\ndef calculate():\n    return pd.DataFrame({{{factor_name!r}: [1.0]}})\n",
             encoding="utf-8",
         )
     (workspace / "conf.yaml").write_text(
@@ -1728,15 +1730,17 @@ def test_selectable_packages_summary_path_does_not_revalidate_or_filter_upstream
     class SummaryOnlyPackageRepository(InMemoryStrategyPackageRepository):
         def list_summaries(self, *, status=None, limit: int = 100):  # noqa: ANN001, ANN202
             rows = super().list_summaries(status=status, limit=limit)
-            rows.append({
-                **rows[0],
-                "package_id": "pkg_blocked_summary",
-                "asset_eligibility": {
-                    "eligible": False,
-                    "summary_only": True,
-                    "blockers": ["multi_alpha_runtime_not_validated_until_dry_run"],
-                },
-            })
+            rows.append(
+                {
+                    **rows[0],
+                    "package_id": "pkg_blocked_summary",
+                    "asset_eligibility": {
+                        "eligible": False,
+                        "summary_only": True,
+                        "blockers": ["multi_alpha_runtime_not_validated_until_dry_run"],
+                    },
+                }
+            )
             return rows[:limit]
 
     package_repo = SummaryOnlyPackageRepository()
@@ -1901,7 +1905,9 @@ def test_selection_center_consumes_validated_runtime_variant_candidate() -> None
         ),
     )
     st_pit_config = st_pit_run.runtime_config["package_runtime_configs"][manifest.package_id]
-    assert st_pit_config["qe_backtest_runtime_contract"]["runtime_features"]["variant"]["variant_id"] == variant.variant_id
+    assert (
+        st_pit_config["qe_backtest_runtime_contract"]["runtime_features"]["variant"]["variant_id"] == variant.variant_id
+    )
     assert st_pit_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["topk"] == 1
 
 
@@ -2000,7 +2006,7 @@ def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_infe
                             "enabled": True,
                             "model_snapshot_id": "hmm_001",
                             "signal_preset": "preset_A",
-                        }
+                        },
                     },
                 }
             ),
@@ -2067,7 +2073,7 @@ def test_selection_center_health_passes_hmm_artifact_preflight(tmp_path) -> None
                         "enabled": True,
                         "model_snapshot_id": "hmm_001",
                         "signal_preset": "preset_A",
-                    }
+                    },
                 },
             }
         ),
@@ -2115,7 +2121,9 @@ def test_selection_center_weighted_fusion_uses_rank_normalized_scores() -> None:
         mode=SelectionMode.WEIGHTED_FUSION,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config=versioned_selection_runtime_config({"package_weights": {manifest_a.package_id: 0.25, manifest_b.package_id: 0.75}}),
+        runtime_config=versioned_selection_runtime_config(
+            {"package_weights": {manifest_a.package_id: 0.25, manifest_b.package_id: 0.75}}
+        ),
     )
 
     assert run.status == SelectionRunStatus.SUCCEEDED
@@ -2188,7 +2196,9 @@ def test_selection_center_aggregates_existing_single_package_runs() -> None:
     aggregate = service.aggregate_existing_runs(
         source_run_ids=[run_a.run_id, run_b.run_id],
         mode=SelectionMode.WEIGHTED_FUSION,
-        runtime_config=versioned_selection_runtime_config({"package_weights": {manifest_a.package_id: 0.4, manifest_b.package_id: 0.6}}),
+        runtime_config=versioned_selection_runtime_config(
+            {"package_weights": {manifest_a.package_id: 0.4, manifest_b.package_id: 0.6}}
+        ),
     )
 
     assert aggregate.status == SelectionRunStatus.SUCCEEDED
@@ -2196,7 +2206,9 @@ def test_selection_center_aggregates_existing_single_package_runs() -> None:
     assert aggregate.runtime_config["source_run_ids"] == [run_a.run_id, run_b.run_id]
     assert [item.symbol for item in aggregate.aggregate_results] == ["000002.SZ", "000001.SZ", "000003.SZ"]
     assert aggregate.aggregate_results[0].component_scores["source_run_ids"] == [run_a.run_id, run_b.run_id]
-    assert aggregate.package_results[manifest_a.package_id][0].component_scores["source_selection_run_id"] == run_a.run_id
+    assert (
+        aggregate.package_results[manifest_a.package_id][0].component_scores["source_selection_run_id"] == run_a.run_id
+    )
 
 
 def test_selection_center_aggregate_existing_runs_requires_same_date() -> None:
@@ -2255,7 +2267,9 @@ def test_selection_center_weighted_fusion_requires_exact_positive_weights() -> N
             mode=SelectionMode.WEIGHTED_FUSION,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config=versioned_selection_runtime_config({"package_weights": {manifest_a.package_id: 1.0, manifest_b.package_id: 0.0}}),
+            runtime_config=versioned_selection_runtime_config(
+                {"package_weights": {manifest_a.package_id: 1.0, manifest_b.package_id: 0.0}}
+            ),
         )
 
 
@@ -2384,7 +2398,9 @@ def test_selection_center_runtime_profile_industry_blacklist_backfills() -> None
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config=versioned_selection_runtime_config({"runtime_profile": {"industry_blacklist": ["Bank"], "selection": {"top_k": 2}}}),
+        runtime_config=versioned_selection_runtime_config(
+            {"runtime_profile": {"industry_blacklist": ["Bank"], "selection": {"top_k": 2}}}
+        ),
     )
 
     assert [item.symbol for item in run.aggregate_results] == ["000002.SZ", "000003.SZ"]
@@ -2460,7 +2476,9 @@ def test_selection_center_industry_blacklist_matches_pit_l2_code() -> None:
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config=versioned_selection_runtime_config({"runtime_profile": {"industry_blacklist": ["801783.SI"], "selection": {"top_k": 1}}}),
+        runtime_config=versioned_selection_runtime_config(
+            {"runtime_profile": {"industry_blacklist": ["801783.SI"], "selection": {"top_k": 1}}}
+        ),
     )
 
     assert [item.symbol for item in run.aggregate_results] == ["000002.SZ"]
@@ -2519,7 +2537,9 @@ def test_selection_center_hmm_runtime_profile_fails_fast() -> None:
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config=versioned_selection_runtime_config({"runtime_profile": {"hmm": {"enabled": True, "model_snapshot_id": "hmm_001"}}}),
+            runtime_config=versioned_selection_runtime_config(
+                {"runtime_profile": {"hmm": {"enabled": True, "model_snapshot_id": "hmm_001"}}}
+            ),
         )
 
 
@@ -2595,20 +2615,33 @@ def test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss(tmp_pa
 
     class AutoGenerateHMMSnapshotProvider(FakeHMMSnapshotProvider):
         def __init__(self) -> None:
-            super().__init__({"hmm_001": {"snapshot_id": "hmm_001", "model_path": str(model_path), "status": "completed"}})
+            super().__init__(
+                {"hmm_001": {"snapshot_id": "hmm_001", "model_path": str(model_path), "status": "completed"}}
+            )
             self.calls = []
 
         def _list_trading_days(self, start_date, end_date):
             return [date(2024, 1, 1)]
 
-        def generate_daily_coefficients(self, snapshot_id, *, signal_preset, confirm_generate=False, confirm_text=None, as_of_date=None, effective_trade_date=None):
-            self.calls.append({
-                "snapshot_id": snapshot_id,
-                "signal_preset": signal_preset,
-                "confirm_generate": confirm_generate,
-                "as_of_date": as_of_date,
-                "effective_trade_date": effective_trade_date,
-            })
+        def generate_daily_coefficients(
+            self,
+            snapshot_id,
+            *,
+            signal_preset,
+            confirm_generate=False,
+            confirm_text=None,
+            as_of_date=None,
+            effective_trade_date=None,
+        ):
+            self.calls.append(
+                {
+                    "snapshot_id": snapshot_id,
+                    "signal_preset": signal_preset,
+                    "confirm_generate": confirm_generate,
+                    "as_of_date": as_of_date,
+                    "effective_trade_date": effective_trade_date,
+                }
+            )
             output = tmp_path / "coefficients_preset_A_2024-01-02_2024-01-02.json"
             output.write_text(
                 json.dumps(
@@ -2674,7 +2707,10 @@ def test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss(tmp_pa
     )
 
     assert len(provider.calls) == 1
-    assert cached.candidates[0].component_scores["hmm"]["coefficients_path"] == snapshot.candidates[0].component_scores["hmm"]["coefficients_path"]
+    assert (
+        cached.candidates[0].component_scores["hmm"]["coefficients_path"]
+        == snapshot.candidates[0].component_scores["hmm"]["coefficients_path"]
+    )
 
 
 def test_strategy_package_runtime_auto_generation_accepts_metadata_only_builtin_preset(tmp_path) -> None:
@@ -2683,14 +2719,20 @@ def test_strategy_package_runtime_auto_generation_accepts_metadata_only_builtin_
 
     class MetadataOnlyPresetProvider(FakeHMMSnapshotProvider):
         def __init__(self) -> None:
-            super().__init__({"hmm_001": {"snapshot_id": "hmm_001", "model_path": str(model_path), "status": "completed"}})
+            super().__init__(
+                {"hmm_001": {"snapshot_id": "hmm_001", "model_path": str(model_path), "status": "completed"}}
+            )
             self.calls = []
 
         def _list_trading_days(self, start_date, end_date):
             return [date(2024, 1, 1)]
 
-        def generate_daily_coefficients(self, snapshot_id, *, signal_preset, confirm_generate=False, as_of_date=None, effective_trade_date=None):
-            self.calls.append({"signal_preset": signal_preset, "as_of_date": as_of_date, "effective_trade_date": effective_trade_date})
+        def generate_daily_coefficients(
+            self, snapshot_id, *, signal_preset, confirm_generate=False, as_of_date=None, effective_trade_date=None
+        ):
+            self.calls.append(
+                {"signal_preset": signal_preset, "as_of_date": as_of_date, "effective_trade_date": effective_trade_date}
+            )
             output = tmp_path / "coefficients_preset_A_2024-01-02_2024-01-02.json"
             output.write_text(
                 json.dumps(
@@ -2729,7 +2771,9 @@ def test_strategy_package_runtime_auto_generation_accepts_metadata_only_builtin_
         },
     )
 
-    assert provider.calls == [{"signal_preset": "preset_A", "as_of_date": date(2024, 1, 1), "effective_trade_date": date(2024, 1, 2)}]
+    assert provider.calls == [
+        {"signal_preset": "preset_A", "as_of_date": date(2024, 1, 1), "effective_trade_date": date(2024, 1, 2)}
+    ]
     assert snapshot.candidates[0].component_scores["hmm"]["coefficient"] == pytest.approx(1.05)
 
 
@@ -2753,9 +2797,24 @@ def test_strategy_package_runtime_resolves_latest_ready_hmm_snapshot_from_model_
         def __init__(self) -> None:
             super().__init__(
                 {
-                    "hmm_old": {"snapshot_id": "hmm_old", "model_path": str(old_model_path), "status": "completed", "trained_at": "2024-01-01T00:00:00"},
-                    "hmm_latest": {"snapshot_id": "hmm_latest", "model_path": str(new_model_path), "status": "completed", "trained_at": "2024-01-03T00:00:00"},
-                    "hmm_failed": {"snapshot_id": "hmm_failed", "model_path": str(new_model_path), "status": "failed", "trained_at": "2024-01-04T00:00:00"},
+                    "hmm_old": {
+                        "snapshot_id": "hmm_old",
+                        "model_path": str(old_model_path),
+                        "status": "completed",
+                        "trained_at": "2024-01-01T00:00:00",
+                    },
+                    "hmm_latest": {
+                        "snapshot_id": "hmm_latest",
+                        "model_path": str(new_model_path),
+                        "status": "completed",
+                        "trained_at": "2024-01-03T00:00:00",
+                    },
+                    "hmm_failed": {
+                        "snapshot_id": "hmm_failed",
+                        "model_path": str(new_model_path),
+                        "status": "failed",
+                        "trained_at": "2024-01-04T00:00:00",
+                    },
                 }
             )
             self.list_calls: list[str] = []
@@ -2828,7 +2887,7 @@ def test_strategy_package_runtime_hmm_requires_stock_sector_map(tmp_path) -> Non
                         "enabled": True,
                         "model_snapshot_id": "hmm_001",
                         "signal_preset": "preset_A",
-                    }
+                    },
                 }
             },
         )
@@ -2856,10 +2915,10 @@ def test_selection_center_creates_single_package_paper_portfolio_with_trace_link
         repository=selection_repo,
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
-        paper_portfolio_service=PaperTradingV2PortfolioService(
-            package_repository=package_repo,
-            repository=paper_repo,
-        ),
+    )
+    controller = SelectionPaperPortfolioController(
+        selection_service=service,
+        portfolio_service=PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo),
     )
     run = service.run_single_package(
         package_id=manifest.package_id,
@@ -2867,7 +2926,7 @@ def test_selection_center_creates_single_package_paper_portfolio_with_trace_link
         data_source="DB_HISTORICAL",
     )
 
-    result = service.create_paper_portfolio_from_run(
+    result = controller.create_from_run(
         run_id=run.run_id,
         portfolio_name="from selection",
         initial_cash=100_000,
@@ -2884,7 +2943,7 @@ def test_selection_center_creates_single_package_paper_portfolio_with_trace_link
     assert result["paper_runtime_config"]["selection_source"]["candidate_count"] == 1
     assert "selection_scores" not in result["paper_runtime_config"]
     assert package_repo.get(manifest.package_id).paper_portfolio_count == 1
-    assert service.list_paper_portfolio_links(run.run_id)[0].portfolio_id == portfolio.portfolio_id
+    assert controller.list_links(run.run_id)[0].portfolio_id == portfolio.portfolio_id
 
 
 def test_selection_center_creates_paper_portfolio_after_default_pit_binding_finalization() -> None:
@@ -2916,11 +2975,11 @@ def test_selection_center_creates_paper_portfolio_after_default_pit_binding_fina
         repository=InMemorySelectionCenterRepository(),
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
-        paper_portfolio_service=PaperTradingV2PortfolioService(
-            package_repository=package_repo,
-            repository=paper_repo,
-        ),
         calendar_provider=FakeCalendar(),
+    )
+    controller = SelectionPaperPortfolioController(
+        selection_service=service,
+        portfolio_service=PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo),
     )
 
     run = service.run_single_package(
@@ -2931,7 +2990,7 @@ def test_selection_center_creates_paper_portfolio_after_default_pit_binding_fina
     )
     binding = validate_runtime_profile_binding(run.runtime_config)
 
-    result = service.create_paper_portfolio_from_run(
+    result = controller.create_from_run(
         run_id=run.run_id,
         portfolio_name="from PIT default selection",
         initial_cash=100_000,
@@ -2942,7 +3001,9 @@ def test_selection_center_creates_paper_portfolio_after_default_pit_binding_fina
     assert run.runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-02"
     assert binding["source"] == "generated_effective_runtime_config"
     assert binding["config_sha256"] == runtime_profile_config_sha256(run.runtime_config)
-    assert result["paper_runtime_config"]["selection_runtime_profile_binding"]["config_sha256"] == binding["config_sha256"]
+    assert (
+        result["paper_runtime_config"]["selection_runtime_profile_binding"]["config_sha256"] == binding["config_sha256"]
+    )
 
 
 def test_selection_center_rejects_multi_package_paper_portfolio_without_combined_package() -> None:
@@ -2957,7 +3018,10 @@ def test_selection_center_rejects_multi_package_paper_portfolio_without_combined
         repository=selection_repo,
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
-        paper_portfolio_service=PaperTradingV2PortfolioService(
+    )
+    controller = SelectionPaperPortfolioController(
+        selection_service=service,
+        portfolio_service=PaperTradingV2PortfolioService(
             package_repository=package_repo,
             repository=InMemoryPaperTradingV2Repository(),
         ),
@@ -2970,7 +3034,7 @@ def test_selection_center_rejects_multi_package_paper_portfolio_without_combined
     )
 
     with pytest.raises(UnsupportedFeatureError, match="combined StrategyPackage"):
-        service.create_paper_portfolio_from_run(
+        controller.create_from_run(
             run_id=run.run_id,
             portfolio_name="multi package",
             initial_cash=100_000,

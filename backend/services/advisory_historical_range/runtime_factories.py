@@ -24,6 +24,7 @@ from .api_models import (
 )
 from .artifact_store import HistoricalRangeArtifactStore
 from .canonical import canonical_json_sha256
+from .dataset_bridge import _eligible_executable_results
 from .models import (
     HistoricalRangeArtifactRefV1,
     HistoricalRangeDatasetBridgeRequestV1,
@@ -51,6 +52,7 @@ R5_PARTITION_POLICY_ID = "ADVISORY_PHASE1R_RETROSPECTIVE_RANGE_PARTITION_V1"
 
 _OUTCOME_SOURCE_FILES = (
     "backend/services/advisory_historical_range/outcome_evaluator.py",
+    "backend/services/advisory_historical_range/outcome_planner.py",
     "backend/services/advisory_historical_range/outcome_policy_catalog.py",
     "backend/services/advisory_historical_range/outcome_policy_provider.py",
     "backend/services/advisory_historical_range/outcome_projection.py",
@@ -126,6 +128,15 @@ class HistoricalRangeR5PolicyRegistry:
         self._artifact_store = artifact_store
         self._component_root = component_root
         self._provider = provider
+
+    def register_frozen_policy_refs(
+        self,
+        refs: Sequence[HistoricalRangeArtifactRefV1],
+    ) -> None:
+        """Rehydrate the explicit catalog from an already-frozen request."""
+
+        for ref in refs:
+            self._provider.register(str(ref.payload_sha256), ref)
 
     def resolve(
         self, *, batch_id: str, requested_run_ids: Sequence[str]
@@ -208,12 +219,15 @@ class HistoricalRangeR5OutcomeRequestFactory:
                     requested_subject_types=tuple(
                         sorted(HistoricalRangeOutcomeSubjectType, key=lambda item: item.value)
                     ),
+                    requested_outcome_logical_ids=tuple(request.requested_outcome_logical_ids),
                     requested_projections=tuple(
                         sorted(HistoricalRangeOutcomeProjection, key=lambda item: item.value)
                     ),
                     horizons=tuple(request.horizons),
                     producer_code_hash=self._identities.outcome_producer_hash,
                     outcome_contract_version=R5_OUTCOME_CONTRACT_VERSION,
+                    correction_reason=request.correction_reason,
+                    correction_evidence_ref=request.correction_evidence_ref,
                     operation_idempotency_key=derive_prefixed_id(
                         "ahroutkey",
                         {
@@ -273,6 +287,14 @@ class HistoricalRangeR5BridgeRequestFactory:
         self._policy_registry = policy_registry
         self._artifact_store = artifact_store
         self._identities = identities
+
+    def register_frozen_policy_refs(
+        self,
+        request: HistoricalRangeDatasetBridgeRequestV1,
+    ) -> None:
+        self._policy_registry.register_frozen_policy_refs(
+            request.policy_bundle_refs
+        )
 
     def build(
         self, batch_id: str, request: HistoricalRangeBuildBridgeRequest
@@ -387,6 +409,9 @@ def _bridge_refs(
     horizons: Sequence[int],
     maturity_statuses: Sequence[str],
 ) -> Mapping[str, tuple[HistoricalRangeArtifactRefV1, ...]]:
+    requested_maturity_statuses = tuple(
+        HistoricalRangeOutcomeStatus(value) for value in maturity_statuses
+    )
     with conn_factory() as conn:
         conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -403,7 +428,7 @@ def _bridge_refs(
             day_rows = tuple(dict(row) for row in cur.fetchall())
             cur.execute(
                 """
-                SELECT outcome.outcome_artifact_ref
+                SELECT outcome.outcome_artifact_ref, outcome.outcome_json
                 FROM app.advisory_historical_range_outcome outcome
                 JOIN app.advisory_historical_range_candidate candidate
                   ON candidate.candidate_id = outcome.subject_id
@@ -414,7 +439,6 @@ def _bridge_refs(
                   AND outcome.projection = 'EXECUTABLE'
                   AND outcome.evaluation_window_type = 'FIXED_HORIZON'
                   AND outcome.horizon_trade_days = ANY(%s)
-                  AND outcome.maturity_status = ANY(%s)
                   AND outcome.historical_range_policy_bundle_hash = %s
                   AND outcome.outcome_version = (
                       SELECT MAX(newer.outcome_version)
@@ -423,9 +447,16 @@ def _bridge_refs(
                   )
                 ORDER BY outcome.outcome_artifact_ref
                 """,
-                (range_run_id, list(horizons), list(maturity_statuses), policy_hash),
+                (range_run_id, list(horizons), policy_hash),
             )
-            outcome_rows = tuple(dict(row) for row in cur.fetchall())
+            outcome_rows = tuple(
+                row
+                for row in (dict(item) for item in cur.fetchall())
+                if _eligible_executable_results(
+                    row["outcome_json"],
+                    requested_maturity_statuses=requested_maturity_statuses,
+                )
+            )
             cur.execute(
                 """
                 SELECT summary.summary_artifact_ref

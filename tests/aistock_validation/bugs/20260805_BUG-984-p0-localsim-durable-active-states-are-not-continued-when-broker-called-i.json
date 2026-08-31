@@ -1,0 +1,326 @@
+{
+  "actual": "After PR #3161 was merged and the user restarted backend-main, runtime identity included the first BUG-984 source fix but production run simrun_f318f4152b31c761 remained FAILED_TERMINAL with 246 authoritative non-terminal LocalSIM states and local_sim_persistence.terminal=false. The stale recovery scanner admits active statuses and FAILED_RETRYABLE, but excludes historical FAILED_TERMINAL active generations, so the contradictory durable state can never reach automatic EOD closure.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_ops_api.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "tests/aistock_validation/bugs/20260805_BUG-984-p0-localsim-durable-active-states-are-not-continued-when-broker-called-i.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-984",
+  "closed_at": "2026-08-13T14:38:34.781757Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-05T09:41:16.812676Z",
+  "description": "On 2026-08-05 run simrun_f318f4152b31c761 / binding simbind_3e17c6c15d9297e7 / plan plan_eeab8f7509e16b4b reached FAILED_TERMINAL with submitted_intents=0 and failed_intents=246, while platform diagnostics reported active_algo_count=246 and terminal/residual counts zero. Source continuation predicate requires broker_called=true.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260805-dfdb96720c0d",
+      "timestamp": "2026-08-05T09:41:16.812672Z"
+    },
+    {
+      "action": "reopen_after_post_restart_business_failure",
+      "actor": "codex",
+      "note": "Runtime identity contains merged PR #3161, but the exact production run remains FAILED_TERMINAL with 246 authoritative active durable states. Continue the same BUG/Issue with automatic strict-authority cross-day recovery; manual DML remains forbidden.",
+      "timestamp": "2026-08-08T07:28:35.7323534Z"
+    },
+    {
+      "action": "source_merge_pending_user_restart",
+      "actor": "codex",
+      "note": "Continuation PR #3213 merged at 446910d18751cb1eb8c827f4da8842ff63b5c883 with required CI green. Issue remains OPEN; runtime identity and exact target-run business recovery require the next user-owned backend-main restart.",
+      "timestamp": "2026-08-08T08:08:54Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime:2026-08-05:simrun_f318f4152b31c761:simbind_3e17c6c15d9297e7:plan_eeab8f7509e16b4b:FAILED_TERMINAL:submitted=0:failed=246:active_algo=246"
+  ],
+  "expected": "LocalSIM continuation must be derived from exact durable plan/state/persistence/outbox and receipt closure, not broker_called. A historical FAILED_TERMINAL run that still owns one strict PROJECTED non-terminal durable generation must automatically re-enter the existing LocalSIM minute loop at its original trade-date EOD, without parent resubmission or predecessor projection replay, and persist terminal state/persistence facts idempotently. Missing, malformed, duplicate or identity/hash-drift authority must fail loud per run. No fallback, manual DML, approval gate, RBAC, real broker call, forced broker_called=true or silent historical abandonment is allowed.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "backend/tests/simulation_runtime/test_ops_api.py",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_ops_api.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "backend/tests/simulation_runtime/test_ops_api.py",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_ops_api.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ]
+  },
+  "first_seen_at": "2026-08-05T09:41:16.812676Z",
+  "fix_branch": "bug/BUG-984-historical-failed-terminal-active-state-recovery-20260808",
+  "fix_commit": "446910d18751cb1eb8c827f4da8842ff63b5c883",
+  "fix_summary": "The continuation admits only historical LocalSIM FAILED_TERMINAL runs that still own one strict PROJECTED non-terminal generation. It closes run/release/binding/plan, outbox, state, receipt and Paper authority, then uses the existing per-binding single-flight LocalSIM minute loop at the original trade-date EOD. It never resubmits the parent or replays the predecessor projection, preserves legitimate terminal history, writes bounded hash-closed recovery evidence, and leaves malformed or incomplete authority as an explicit per-run recovery failure.",
+  "fixed_at": "2026-08-08T08:08:54Z",
+  "github_issue_number": 3158,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3158",
+  "last_seen_at": "2026-08-05T09:41:16.812676Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3213",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?trade_date=2026-08-05&limit=100 ; GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_f318f4152b31c761",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "regression",
+  "root_cause": "The first BUG-984 slice prevented new active runs from being summary-terminalized and removed broker_called ownership, but the old process had already stored the exact production run as FAILED_TERMINAL. Cross-day scans admitted active statuses and FAILED_RETRYABLE only, so a FAILED_TERMINAL row with strict non-terminal durable authority was permanently excluded from the only minute-loop continuation path.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?trade_date=2026-08-05&limit=100",
+    "fresh_process_evidence": [
+      "Fresh pytest process exercised public SimulationLifecycleScheduler.run_once across a malformed historical FAILED_TERMINAL outbox, exact typed per-run failure, restored strict predecessor authority, original-trade-date EOD durable minute-loop advancement, terminal state/persistence closure, stable parent/order identity and repeated-cadence zero order/fill replay: 1 passed; changed-code line 85.00%, branch 77.27%",
+      "Fresh Python pytest process exercised SimulationLifecycleScheduler.run_once through a production-equivalent LocalSIM durable restart with broker_called=false, exact plan/state/outbox/economic/projection/Paper readback, no parent resubmit, stable order identities, generation advance, explicit malformed-outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control or broker call",
+      "Fresh pytest process exercised broker_called=false durable restart continuation, exact readback, malformed outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control",
+      "Fresh pytest process exercised public SimulationLifecycleScheduler.run_once through malformed outbox fail-loud, exact historical FAILED_TERMINAL active-generation recovery, original-trade-date EOD closure, stable parent/order identity and repeated-cadence zero order/fill replay -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp\\issue_workflow\\BUG-984\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-984",
+      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
+      "contract_digest": "a1105d48bca88c88df382c53272310799b299b3e4c6746365f47700beacd51a3",
+      "expected_identity": "446910d18751cb1eb8c827f4da8842ff63b5c883",
+      "generated_at": "2026-08-13T14:32:24.621910Z",
+      "mode": "read_only",
+      "observed_identity": "ad24e15857fef09d70bf3125fbacc280ac1f44d6",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "1764a1b2efd5e245edec4f1ee58a381e337a0a9b5d24b416bd50fcfa12ade5ca",
+      "receipt_sha256": "65c9f97275f907ee111d7c5e1ed24333141193742fdef9f0f34ebf94cb340688",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "01cea2cd9a1a2a254cf197bb7fbca272c27537262eaf428b5fd3813d63132f42",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "verified",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "P0 LocalSIM durable active states are not continued when broker_called is false and remain active after terminal EOD",
+  "trigger_condition": {
+    "fingerprint": "dfdb96720c0db9d97f6670b1",
+    "source_event_id": "FE-20260805-dfdb96720c0d"
+  },
+  "validation_evidence": [
+    "BUG-984 continuation exact and authority matrix -> 8 passed",
+    "changed-code coverage -> line 85.00%, branch 77.27%",
+    "python -m nox -s simulation_core_l2 -> 481 passed, 1 skipped",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14/14",
+    "F2 validator -> 112/112 passed, warnings=0",
+    "python -m nox -s simulation_core_l2 -> 411 passed after rebase",
+    "GitHub required CI -> CI verdict passed at d9069f7b436810ba25d5bf6f820c7a4a69522266",
+    "post-restart runtime identity contains merge 446910d18751cb1eb8c827f4da8842ff63b5c883; target run simrun_f318f4152b31c761 FAILED_TERMINAL, 246/246 terminal authoritative states, active=0, parent_resubmitted=false, predecessor_projection_replayed=false"
+  ],
+  "validation_receipts": [
+    "validation-receipt: id=984c0a1d1e2f3001 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=pytest plan=direct status=passed command=`python -m coverage run --branch -m pytest <BUG-984 continuation authority nodeids> -q` result=`8 passed; changed-code line 85.00% branch 77.27%`",
+    "validation-receipt: id=984c0a1d1e2f3002 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`481 passed, 1 skipped`",
+    "validation-receipt: id=984c0a1d1e2f3003 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+    "validation-receipt: id=984c0a1d1e2f3004 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed ownership 14/14`",
+    "validation-receipt: id=984c0a1d1e2f3005 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2` result=`112/112 passed warnings=0`",
+    "validation-receipt: id=b4e84f9b120eb5e7 commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`411 passed after rebase`",
+    "validation-receipt: id=091977cbba721175 commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0 after rebase`",
+    "validation-receipt: id=5997c5c581320a1e commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed ownership 14/14 after rebase`",
+    "validation-receipt: id=52c4339464bf0c9e commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2` result=`112/112 passed warnings=0 after rebase`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

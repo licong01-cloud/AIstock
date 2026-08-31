@@ -1,0 +1,354 @@
+{
+  "actual": "Submission dss_634f1bf90d7e90061b01f44f56436796 is self-locked in WAITING_ORPHAN_QUIESCENCE with lease owner PID 108068 equal to the healthy current Worker; no result.json or semantic_result.json exists and the probe cannot return dead while the Worker root remains alive.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/process_liveness.py",
+    "backend/services/dataset_release/worker.py",
+    "backend/tests/dataset_release/test_process_liveness.py",
+    "backend/tests/dataset_release/test_worker.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/bugs/20260830_BUG-1259-dataset-release-current-worker-orphan-hold-cannot-quiesce-after-resoluti.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1259",
+  "closed_at": "2026-08-30T14:23:45.357936Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-30T12:41:14.112786Z",
+  "description": "Submission dss_634f1bf90d7e90061b01f44f56436796 is self-locked in WAITING_ORPHAN_QUIESCENCE with lease owner PID 108068 equal to the healthy current Worker; no result.json or semantic_result.json exists and the probe cannot return dead while the Worker root remains alive.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260830-be66a077054b",
+      "timestamp": "2026-08-30T12:41:14.112758Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:\\AIstock_dataset_release_control\\attempt_runs\\dsra_00a2e7628d8d40f989890cc0e6dccc8c-20"
+  ],
+  "expected": "When the exact current Worker has already exited the claimed processor into orphan reconciliation and the complete task-owned Windows/WSL child tree is quiescent, reclaim and requeue the same durable submission without requiring a Worker restart; active, reused, mismatched, incomplete or unknown process evidence must remain fail-closed.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/process_liveness.py",
+      "backend/services/dataset_release/worker.py",
+      "backend/tests/dataset_release/test_process_liveness.py",
+      "backend/tests/dataset_release/test_worker.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/process_liveness.py",
+      "backend/services/dataset_release/worker.py",
+      "backend/tests/dataset_release/test_process_liveness.py",
+      "backend/tests/dataset_release/test_worker.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/process_liveness.py",
+        "backend/services/dataset_release/worker.py",
+        "backend/tests/dataset_release/test_process_liveness.py",
+        "backend/tests/dataset_release/test_worker.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/process_liveness.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/worker.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_process_liveness.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_worker.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/process_liveness.py",
+        "backend/services/dataset_release/worker.py",
+        "backend/tests/dataset_release/test_process_liveness.py",
+        "backend/tests/dataset_release/test_worker.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/process_liveness.py",
+      "backend/services/dataset_release/worker.py",
+      "backend/tests/dataset_release/test_process_liveness.py",
+      "backend/tests/dataset_release/test_worker.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/process_liveness.py",
+      "backend/services/dataset_release/worker.py",
+      "backend/tests/dataset_release/test_process_liveness.py",
+      "backend/tests/dataset_release/test_worker.py"
+    ]
+  },
+  "first_seen_at": "2026-08-30T12:41:14.112786Z",
+  "fix_branch": null,
+  "fix_commit": "45f1b4b416eacd5058a40b08f9389ad0ad97a4cb",
+  "fixed_at": "2026-08-30T14:00:47Z",
+  "github_issue_number": 3997,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3997",
+  "last_seen_at": "2026-08-30T12:41:14.112786Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3998",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "fresh Python process loaded task-worktree process_liveness.py and classified live dsra_00a2e7628d8d40f989890cc0e6dccc8c ORPHAN_HOLD from a valid 768-row Windows snapshot as quiescent with writes=0"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1259\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1259",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0b9ba0db52d3d183c73cb700b40440c5316ccf22c569b6715e8085fb4a2f4c26",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "45f1b4b416eacd5058a40b08f9389ad0ad97a4cb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-30T14:09:33.829299Z",
+      "mode": "read_only",
+      "observed_identity": "45f1b4b416eacd5058a40b08f9389ad0ad97a4cb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "86592e4c434c237519a92e455111feb86a4f0a7559d087a3eb7ecd2949ebc3a7",
+      "receipt_sha256": "ef3e0059a035f3ea68514c1e006574f0bc81e1e18395b252afb866d12b1b543a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6e5cbeae1968581b369a34210be5e782ffdb3eb8a1b6bb4496a382bf785e949d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1259",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ac1019ceb6f8de33",
+    "recorded_at": "2026-08-30T14:13:29.639679Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "af51663adc793fff93869652f116a1a006a00e60",
+    "source_merge_commit": "45f1b4b416eacd5058a40b08f9389ad0ad97a4cb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3998",
+    "validation_evidence": [
+      "rtk python -m nox -s validation_module_registry_l0 -> PASS 8 passed ownership 14 of 14",
+      "rtk python -m nox -s guardrail_changed_files -- --changed-only -> PASS guardrails clear ownership 6 of 6",
+      "rtk python -m nox -s qlib_data_backend -> PASS 20 passed",
+      "rtk python -m nox -s l0 -> PASS guardrails clear",
+      "python -m pytest backend/tests/dataset_release/test_process_liveness.py backend/tests/dataset_release/test_worker.py -q -> PASS 44 passed",
+      "python -m ruff check backend/services/dataset_release/process_liveness.py backend/services/dataset_release/worker.py backend/tests/dataset_release/test_process_liveness.py backend/tests/dataset_release/test_worker.py -> PASS all checks passed",
+      "python -m py_compile backend/services/dataset_release/process_liveness.py backend/services/dataset_release/worker.py backend/tests/dataset_release/test_process_liveness.py backend/tests/dataset_release/test_worker.py -> PASS compile successful",
+      "git diff --check origin/main...HEAD -> PASS clean"
+    ],
+    "validation_evidence_digest": "b1d067c134e099783cc83e072cb3b3c88f4286fac62c5c2ae5965fc50d759752"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "Dataset release current-worker orphan hold cannot quiesce after resolution heartbeat uncertainty",
+  "trigger_condition": {
+    "fingerprint": "be66a077054bf1227ddafdc2",
+    "source_event_id": "FE-20260830-be66a077054b"
+  },
+  "validation_evidence": [
+    "rtk python -m nox -s validation_module_registry_l0 -> PASS 8 passed ownership 14 of 14",
+    "rtk python -m nox -s guardrail_changed_files -- --changed-only -> PASS guardrails clear ownership 6 of 6",
+    "rtk python -m nox -s qlib_data_backend -> PASS 20 passed",
+    "rtk python -m nox -s l0 -> PASS guardrails clear",
+    "python -m pytest backend/tests/dataset_release/test_process_liveness.py backend/tests/dataset_release/test_worker.py -q -> PASS 44 passed",
+    "python -m ruff check backend/services/dataset_release/process_liveness.py backend/services/dataset_release/worker.py backend/tests/dataset_release/test_process_liveness.py backend/tests/dataset_release/test_worker.py -> PASS all checks passed",
+    "python -m py_compile backend/services/dataset_release/process_liveness.py backend/services/dataset_release/worker.py backend/tests/dataset_release/test_process_liveness.py backend/tests/dataset_release/test_worker.py -> PASS compile successful",
+    "git diff --check origin/main...HEAD -> PASS clean"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "aistock_backend",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "aistock_backend",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

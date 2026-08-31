@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import contextmanager
 from datetime import date
@@ -11,13 +12,30 @@ import pytest
 from backend.services.hmm_evolution.errors import InvalidSpecError
 from backend.services.hmm_evolution.models import EvaluationSpec
 from backend.services.hmm_evolution.universe import (
+    DATASET_QE_ST_PIT_PREFIX,
+    HMM_FORMAL_DATASET_REQUEST_PARAM,
     LEGACY_QE_ST_PIT_UNIVERSE_KEY,
+    HMMFormalDatasetBinding,
     QEExecutionUniverseResolver,
     QELoopUniverseRepository,
     SourceLoopRiskPolicySnapshot,
     SourceLoopUniverseContract,
     _canonical_json_sha256,
     _parse_source_risk_policy_snapshot,
+)
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SNAPSHOT_PREFIX,
+    CANONICAL_PIT_UNIVERSE_KEY,
+    PitAuthorityStatus,
+    canonical_rule_parameters_digest,
+)
+from backend.services.dataset_release.cas_store import canonical_json_bytes
+from backend.services.dataset_release.pit import (
+    DATASET_CANDIDATE_MANIFEST_SCHEMA,
+    DATASET_PIT_BINDING_SCHEMA,
+    freeze_pit_snapshot,
 )
 from backend.services.hmm_data_source.legacy_qe_artifact_manifests import (
     LegacyQESTPITCompatibilityReceipt,
@@ -187,11 +205,80 @@ def _compatibility_receipt(
     )
 
 
+def _formal_dataset_request() -> tuple[dict, HMMFormalDatasetBinding]:
+    release_id = "qe-hmm-v2-20260731"
+    snapshot = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": "600000.SH",
+                "eligible_start": "2025-01-02",
+                "eligible_end": "2025-01-03",
+                "entry_reason": "fixture",
+                "exit_reason": None,
+            }
+        ],
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        scope_start=date(2025, 1, 1),
+        cutoff=date(2026, 7, 31),
+        state_identity="fixture-state",
+        source_fingerprint_sha256="b" * 64,
+        parameter_hash=canonical_rule_parameters_digest(),
+    )
+    manifest = {
+        "schema_version": DATASET_CANDIDATE_MANIFEST_SCHEMA,
+        "release_id": release_id,
+        "cutoff": snapshot.cutoff.isoformat(),
+        "scope": "full",
+        "artifact_root": "c" * 64,
+        "pit_binding": {
+            "schema_version": DATASET_PIT_BINDING_SCHEMA,
+            "authority_id": CANONICAL_PIT_AUTHORITY_ID,
+            "authority_status": PitAuthorityStatus.ACTIVE_CANONICAL.value,
+            "scope": "full",
+            "rolling_universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+            "frozen_universe_key": f"{CANONICAL_PIT_SNAPSHOT_PREFIX}{release_id}",
+            "rule_version": CANONICAL_PIT_RULE_VERSION,
+            "rule_parameters_digest": canonical_rule_parameters_digest(),
+            "cutoff": snapshot.cutoff.isoformat(),
+            "rolling_cutoff_spans_sha256": snapshot.spans_sha256,
+            "frozen_snapshot_digest": snapshot.spans_sha256,
+            "release_id": release_id,
+        },
+    }
+    digest = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    request = {
+        "schema_version": "qe_formal_canonical_pit_dataset_request_v1",
+        "usage_mode": "formal_prediction",
+        "expected_manifest_digest": digest,
+        "release_manifest": manifest,
+        "runtime_pins": {
+            "schema_version": "qe_formal_frozen_runtime_pins_v1",
+            "artifact_root": manifest["artifact_root"],
+            "qlib_bin_snapshot_id": "qe-hmm-v2-20260731-daily",
+            "qlib_instruments_sha256": "f" * 64,
+            "qlib_calendar_sha256": "1" * 64,
+            "qlib_meta_export_sha256": "2" * 64,
+            "suspend_dataset_id": "qe-hmm-v2-20260731-suspend",
+            "suspend_parquet_sha256": "3" * 64,
+            "suspend_manifest_sha256": "4" * 64,
+            "suspend_source_contract": "tushare_suspend_d_shsz_S_v1",
+        },
+    }
+    from backend.services.hmm_evolution.universe import require_hmm_formal_dataset_binding
+
+    return request, require_hmm_formal_dataset_binding(request)
+
+
 def _risk_policy_payload(
     *,
     universe_key: str = LEGACY_QE_ST_PIT_UNIVERSE_KEY,
     dataset_contract_id: str | None = None,
+    physical_universe_key: str | None = None,
 ) -> dict:
+    formal = dataset_contract_id is not None
+    state_universe_key = physical_universe_key or universe_key
+    rule_version = CANONICAL_PIT_RULE_VERSION if formal else DEFAULT_ST_PIT_RULE_VERSION
     return {
         "enabled": True,
         "contract": "stock_event_risk_policy_v1",
@@ -209,15 +296,15 @@ def _risk_policy_payload(
                 "ts_code": "600000.SH",
                 "eligible_start": "2025-01-02",
                 "eligible_end": "2025-01-03",
-                "rule_version": DEFAULT_ST_PIT_RULE_VERSION,
+                "rule_version": rule_version,
             }
         ],
         "state": {
-            "status": "ready",
+            "status": "frozen" if formal else "ready",
             "dirty": False,
-            "universe_key": universe_key,
-            "rule_version": DEFAULT_ST_PIT_RULE_VERSION,
-            "scope": "st_only_active",
+            "universe_key": state_universe_key,
+            "rule_version": rule_version,
+            "scope": "frozen_dataset_file" if formal else "st_only_active",
             "source_fingerprint_sha256": "f" * 64,
         },
     }
@@ -380,6 +467,61 @@ def test_loop_repository_rejects_conflicting_stock_pool_declarations(monkeypatch
         QELoopUniverseRepository().load("qe_task/Loop8")
 
 
+def test_loop_repository_revalidates_formal_dataset_request_without_legacy_fallback(
+    monkeypatch,
+) -> None:
+    request, expected = _formal_dataset_request()
+    formal_key = f"{DATASET_QE_ST_PIT_PREFIX}{expected.identity.release_id}"
+    config = {
+        "stock_pool": "filtered_pool_fixture",
+        HMM_FORMAL_DATASET_REQUEST_PARAM: request,
+        "risk_policy": {
+            "enabled": True,
+            "providers": ["st_pit"],
+            "hard_actions": ["block_buy", "force_exit"],
+            "policy_version": "stock_event_risk_policy_v1",
+            "strict_data_ready": True,
+            "st_universe_key": formal_key,
+            "visible_time_mode": "next_trading_session",
+        },
+    }
+    monkeypatch.setattr(universe_module, "get_conn", _conn_factory({"config_json": config}))
+    monkeypatch.setattr(
+        universe_module,
+        "find_legacy_qe_artifact_manifest",
+        lambda _base_loop_ref: pytest.fail("formal source must not use the legacy allowlist"),
+    )
+
+    contract = QELoopUniverseRepository().load("qe_task/Loop8")
+
+    assert contract.formal_dataset_binding == expected
+    assert contract.risk_policy_origin == "formal_frozen_dataset_v2"
+    assert contract.st_pit_compatibility is None
+
+
+def test_loop_repository_rejects_tampered_formal_dataset_request(monkeypatch) -> None:
+    request, expected = _formal_dataset_request()
+    tampered = json.loads(json.dumps(request))
+    tampered["release_manifest"]["artifact_root"] = "d" * 64
+    config = {
+        "stock_pool": "filtered_pool_fixture",
+        HMM_FORMAL_DATASET_REQUEST_PARAM: tampered,
+        "risk_policy": {
+            "enabled": True,
+            "providers": ["st_pit"],
+            "hard_actions": ["block_buy", "force_exit"],
+            "policy_version": "stock_event_risk_policy_v1",
+            "strict_data_ready": True,
+            "st_universe_key": f"{DATASET_QE_ST_PIT_PREFIX}{expected.identity.release_id}",
+            "visible_time_mode": "next_trading_session",
+        },
+    }
+    monkeypatch.setattr(universe_module, "get_conn", _conn_factory({"config_json": config}))
+
+    with pytest.raises(InvalidSpecError, match="runtime pins identity|cannot prove a canonical frozen identity"):
+        QELoopUniverseRepository().load("qe_task/Loop8")
+
+
 def test_parser_accepts_exact_frozen_legacy_runtime_artifact() -> None:
     raw = json.dumps(_risk_policy_payload()).encode("utf-8")
 
@@ -402,10 +544,12 @@ def test_parser_rejects_unknown_legacy_runtime_universe_key() -> None:
 def test_parser_accepts_dataset_bound_runtime_artifact() -> None:
     dataset_contract_id = "dataset_contract_v2"
     universe_key = f"shsz_st_pit_qe_dataset_{dataset_contract_id}"
+    physical_key = f"{CANONICAL_PIT_SNAPSHOT_PREFIX}{dataset_contract_id}"
     raw = json.dumps(
         _risk_policy_payload(
             universe_key=universe_key,
             dataset_contract_id=dataset_contract_id,
+            physical_universe_key=physical_key,
         )
     ).encode("utf-8")
 
@@ -413,7 +557,123 @@ def test_parser_accepts_dataset_bound_runtime_artifact() -> None:
 
     assert snapshot.dataset_contract_id == dataset_contract_id
     assert snapshot.universe_key == universe_key
-    assert snapshot.binding_mode == "immutable_dataset_runtime_artifact_v1"
+    assert snapshot.physical_universe_key == physical_key
+    assert snapshot.binding_mode == "canonical_frozen_dataset_runtime_artifact_v2"
+
+
+def test_formal_resolver_proves_same_sealed_identity_and_physical_runtime_key() -> None:
+    request, formal = _formal_dataset_request()
+    del request
+    formal_key = f"{DATASET_QE_ST_PIT_PREFIX}{formal.identity.release_id}"
+    runtime_snapshot = _parse_source_risk_policy_snapshot(
+        json.dumps(
+            _risk_policy_payload(
+                universe_key=formal_key,
+                dataset_contract_id=formal.identity.release_id,
+                physical_universe_key=formal.frozen_universe_key,
+            )
+        ).encode("utf-8"),
+        task_id="qe_task",
+        loop_name="Loop8",
+    )
+
+    class _FormalLoopRepository:
+        def load(self, base_loop_ref: str) -> SourceLoopUniverseContract:
+            assert base_loop_ref == "qe_task/Loop8"
+            return SourceLoopUniverseContract(
+                task_id="qe_task",
+                loop_name="Loop8",
+                stock_pool="filtered_pool_fixture",
+                risk_policy={
+                    "enabled": True,
+                    "providers": ["st_pit"],
+                    "hard_actions": ["block_buy", "force_exit"],
+                    "policy_version": "stock_event_risk_policy_v1",
+                    "strict_data_ready": True,
+                    "st_universe_key": formal_key,
+                    "visible_time_mode": "next_trading_session",
+                },
+                risk_policy_origin="formal_frozen_dataset_v2",
+                formal_dataset_binding=formal,
+            )
+
+    predictions, labels = _frames()
+    resolved = QEExecutionUniverseResolver(
+        loop_repository=_FormalLoopRepository(),
+        stock_pool_loader=lambda _stock_pool: _pool(),
+        risk_policy_loader=lambda _task_id, _loop_name: runtime_snapshot,
+    ).resolve(evaluation_spec=_spec(), predictions=predictions, labels=labels)
+
+    assert resolved.evidence["st_pit"]["coverage_semantics"] == "canonical_frozen_dataset_v2"
+    assert resolved.evidence["st_pit"]["canonical_pit_dataset_identity"] == formal.as_dict()
+
+
+def test_formal_resolver_rejects_runtime_physical_key_drift() -> None:
+    _request, formal = _formal_dataset_request()
+    runtime_snapshot = _parse_source_risk_policy_snapshot(
+        json.dumps(
+            _risk_policy_payload(
+                universe_key=f"{DATASET_QE_ST_PIT_PREFIX}{formal.identity.release_id}",
+                dataset_contract_id=formal.identity.release_id,
+                physical_universe_key=f"{CANONICAL_PIT_SNAPSHOT_PREFIX}{formal.identity.release_id}",
+            )
+        ).encode("utf-8"),
+        task_id="qe_task",
+        loop_name="Loop8",
+    )
+    drifted = HMMFormalDatasetBinding(
+        usage_mode=formal.usage_mode,
+        identity=formal.identity,
+        frozen_universe_key=f"{CANONICAL_PIT_SNAPSHOT_PREFIX}different-release",
+        artifact_root=formal.artifact_root,
+        qlib_instruments_sha256=formal.qlib_instruments_sha256,
+    )
+
+    with pytest.raises(InvalidSpecError, match="differs from its canonical frozen dataset request"):
+        universe_module._verify_formal_dataset_matches_runtime_artifact(
+            base_loop_ref="qe_task/Loop8",
+            formal=drifted,
+            runtime_snapshot=runtime_snapshot,
+        )
+
+
+def test_formal_resolver_rejects_runtime_instruments_fingerprint_drift() -> None:
+    _request, formal = _formal_dataset_request()
+    payload = _risk_policy_payload(
+        universe_key=f"{DATASET_QE_ST_PIT_PREFIX}{formal.identity.release_id}",
+        dataset_contract_id=formal.identity.release_id,
+        physical_universe_key=formal.frozen_universe_key,
+    )
+    payload["state"]["source_fingerprint_sha256"] = "e" * 64
+    runtime_snapshot = _parse_source_risk_policy_snapshot(
+        json.dumps(payload).encode("utf-8"),
+        task_id="qe_task",
+        loop_name="Loop8",
+    )
+
+    with pytest.raises(InvalidSpecError, match="differs from its canonical frozen dataset request"):
+        universe_module._verify_formal_dataset_matches_runtime_artifact(
+            base_loop_ref="qe_task/Loop8",
+            formal=formal,
+            runtime_snapshot=runtime_snapshot,
+        )
+
+
+def test_formal_runtime_parser_rejects_noncanonical_fingerprint_text() -> None:
+    _request, formal = _formal_dataset_request()
+    payload = _risk_policy_payload(
+        universe_key=f"{DATASET_QE_ST_PIT_PREFIX}{formal.identity.release_id}",
+        dataset_contract_id=formal.identity.release_id,
+        physical_universe_key=formal.frozen_universe_key,
+    )
+    payload["state"]["source_fingerprint_sha256"] = ("f" * 64).upper()
+
+    with pytest.raises(InvalidSpecError, match="state is not immutable"):
+        _parse_source_risk_policy_snapshot(
+            json.dumps(payload).encode("utf-8"),
+            task_id="qe_task",
+            loop_name="Loop8",
+        )
 
 
 def test_resolver_intersects_source_pool_with_exact_runtime_st_pit_artifact() -> None:

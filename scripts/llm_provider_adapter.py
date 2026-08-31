@@ -46,6 +46,7 @@ DISCOVERY_HYPOTHESIS_SCHEMA_VERSION = "aistock_llm_discovery_hypothesis_v1"
 PROMPT_EVALUATION_SCHEMA_VERSION = "aistock_validation_llm_prompt_evaluation_v1"
 GUARDED_ROLLOUT_SCHEMA_VERSION = "aistock_validation_llm_guarded_rollout_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
+LLM_FAILURE_RECEIPT_SCHEMA_VERSION = "aistock_llm_failure_receipt_v1"
 ADVISORY_LLM_PURPOSES = {"test_plan_advice", "nightly_scheduler_advice", "nightly_discovery_hypothesis"}
 NON_PLAN_ADVISORY_LLM_PURPOSES = {"design_drift_audit", "silent_degradation_audit"}
 FORBIDDEN_FRONTEND_PORTS = {3000}
@@ -1581,7 +1582,14 @@ def _maybe_invoke_advisory_llm(
             )
     else:
         if not fallback_on_error:
-            raise last_error or ProviderAdapterError(f"{kind} live provider failed")
+            provider_errors = "; ".join(
+                f"{item.get('provider')}: {item.get('error')}"
+                for item in attempts
+                if item.get("status") == "failed"
+            )
+            raise ProviderAdapterError(
+                f"{kind} provider chain failed: {provider_errors or str(last_error or 'unknown provider failure')}"
+            )
         return None, _llm_evidence(
             provider_summary=provider_summary,
             invoked=False,
@@ -2654,6 +2662,18 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     """Build an allowlisted compact artifact for CI/Nightly LLM advisory outputs."""
 
     llm_summary = llm_invocation_public_summary(payload.get("llm_invocation_evidence"))
+    if payload.get("schema_version") == LLM_FAILURE_RECEIPT_SCHEMA_VERSION:
+        return {
+            "schema_version": payload.get("schema_version"),
+            "workflow_gate": payload.get("workflow_gate"),
+            "planner_status": payload.get("planner_status"),
+            "command": payload.get("command"),
+            "provider": payload.get("provider"),
+            "error": redact_secret_text(str(payload.get("error") or "")),
+            "warning_only": bool(payload.get("warning_only")),
+            "selected_plan_keys": payload.get("selected_plan_keys") or [],
+            "selected_plans": payload.get("selected_plans") or [],
+        }
     if payload.get("schema_version") == TEST_PLAN_ADVICE_SCHEMA_VERSION:
         gate = payload.get("deterministic_gate") if isinstance(payload.get("deterministic_gate"), dict) else {}
         return {
@@ -3197,8 +3217,30 @@ def main(argv: list[str] | None = None) -> int:
         return int(args.func(args))
     except (ProviderAdapterError, DeepSeekConfigError) as exc:
         message = _redact_llm_error(exc)
+        failure_receipt = {
+            "schema_version": LLM_FAILURE_RECEIPT_SCHEMA_VERSION,
+            "workflow_gate": "failed",
+            "planner_status": "failed",
+            "command": getattr(args, "command", None),
+            "provider": getattr(args, "provider", None),
+            "error": message,
+        }
+        output = getattr(args, "output", None)
+        if output:
+            _write_public_json_artifact(output, failure_receipt)
+        selected_plans_output = getattr(args, "selected_plans_output", None)
+        if selected_plans_output:
+            _write_public_json_artifact(
+                selected_plans_output,
+                {
+                    **failure_receipt,
+                    "warning_only": True,
+                    "selected_plan_keys": [],
+                    "selected_plans": [],
+                },
+            )
         if args.json:
-            print(json.dumps({"gate": "failed", "error": message}, ensure_ascii=False), file=sys.stderr)
+            print(json.dumps(failure_receipt, ensure_ascii=False), file=sys.stderr)
         else:
             print(f"gate=failed error={message}", file=sys.stderr)
         return 2

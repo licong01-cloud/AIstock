@@ -1,0 +1,438 @@
+{
+  "actual": "DailyTradingContextProvider.load requires successful stk_limit refresh and exact symbol coverage, raising before the approved P1-C TDX derivation can run.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/decision.py",
+    "backend/services/simulation_runtime/daily_limit_authority.py",
+    "backend/services/simulation_runtime/models.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
+    "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
+    "tests/aistock_validation/bugs/20260826_BUG-1203-localsim-planning-cannot-derive-daily-limits-when-stk-limit-is-temporari.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1203",
+  "closed_at": "2026-08-29T19:35:00.360622Z",
+  "closure_requirements": [
+    "Keep market.stk_limit as the first LocalSIM authority and call TDX exactly once only for refresh-unavailable, legal-zero-row, requested-symbol-missing, or null-pre-close availability gaps.",
+    "Reject duplicate, alias, cross-date, non-finite, non-positive, inverted-bound, unknown-board, stale-reference, and hash/reference corruption without masking them through TDX.",
+    "Freeze a hash-closed DailyTradingContextV2 through pre-trade decision, execution plan, persisted readback, and minute hot-path consumption with zero intraday market SQL or limit recomputation.",
+    "Preserve exact symbol intents and isolate unavailable symbols without reallocating quantity, cash, positions, fills, TWAP, OMS, gateway, or broker route semantics.",
+    "Run required verification plans and itemized DESIGN-COMPLIANCE-001 review.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-26T08:59:01.690908Z",
+  "description": "DailyTradingContextProvider.load requires successful stk_limit refresh and exact symbol coverage, raising before the approved P1-C TDX derivation can run.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260826-cc0a3a39d502",
+      "timestamp": "2026-08-26T08:59:01.690891Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md#10-implementation-plan"
+  ],
+  "expected": "LocalSIM uses TUSHARE_STK_LIMIT first and invokes one hash-closed TDX_REFERENCE_DERIVED_V1 batch only for availability gaps, while deterministic stk_limit corruption fails closed and the minute hot path performs zero market SQL or limit recomputation.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
+      "backend/tests/simulation_runtime/test_localsim_limit_authority.py"
+    ],
+    "changed_files": [
+      "backend/services/paper_trading_v2/market_data.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/decision.py",
+      "backend/services/simulation_runtime/daily_limit_authority.py",
+      "backend/services/simulation_runtime/models.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/paper_trading_v2/test_market_data.py",
+      "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/paper_trading_v2/market_data.py",
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/services/simulation_runtime/decision.py",
+        "backend/services/simulation_runtime/daily_limit_authority.py",
+        "backend/services/simulation_runtime/models.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "backend/tests/paper_trading_v2/test_market_data.py",
+        "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+        "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
+        "backend/tests/simulation_runtime/test_localsim_limit_authority.py"
+      ],
+      "impacted_modules": [
+        "paper_v2",
+        "selection_center",
+        "strategy_package",
+        "simulation_runtime",
+        "miniqmt_execution_runtime",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/paper_trading_v2/market_data.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/services/simulation_runtime/scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/decision.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/daily_limit_authority.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/models.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_market_data.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_limit_authority.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/paper_trading_v2/market_data.py",
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/services/simulation_runtime/decision.py",
+        "backend/services/simulation_runtime/daily_limit_authority.py",
+        "backend/services/simulation_runtime/models.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "backend/tests/paper_trading_v2/test_market_data.py",
+        "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+        "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
+        "backend/tests/simulation_runtime/test_localsim_limit_authority.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/paper_trading_v2/market_data.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/decision.py",
+      "backend/services/simulation_runtime/daily_limit_authority.py",
+      "backend/services/simulation_runtime/models.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/paper_trading_v2/test_market_data.py",
+      "docs/architecture/simulation_daily_market_context_freeze_f2_detailed_design_20260821.md",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+      "backend/services/simulation_runtime/localsim_daily_limit_authority.py",
+      "backend/tests/simulation_runtime/test_localsim_limit_authority.py"
+    ]
+  },
+  "first_seen_at": "2026-08-26T08:59:01.690908Z",
+  "fix_branch": null,
+  "fix_commit": "65937d83068fa02beb0c1c173646cb4aaea5eb7a",
+  "fixed_at": "2026-08-26T09:41:45Z",
+  "github_issue_number": 3825,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3825",
+  "last_seen_at": "2026-08-26T08:59:01.690908Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not change MiniQMT direct instrument authority, Strategy Package, QE, Selection, execution algorithm, database schema/data, or broker account state.",
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3827",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_localsim_limit_authority.py -q",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/simulation_runtime/test_localsim_limit_authority.py -q -p no:cacheprovider -> 8 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1203\\post-restart-verify-20260830.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1203",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "eee21d776cd9960b4e2f28a37fad6fd2c26a02858155d4d8e970ba10770daf68",
+      "contract_digest": "ec9214640de4ecfbe8b6841db28744885131a1f96b5247e37424fdf8ccaa1df2",
+      "expected_identity": "65937d83068fa02beb0c1c173646cb4aaea5eb7a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-29T19:23:53.063623Z",
+      "mode": "read_only",
+      "observed_identity": "19814d3e109092b0705f1762da21c762244558fc",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6f1c035db4900f0f66640f8025e1dd21f6a9317609f631d042994e27e264b81e",
+      "receipt_sha256": "5159a223a7232f92b699bac4ecb0d7431ad085bb761930283dcda27b4db16a66",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "535efcc897b8a7584bc9142ca50e8ab257baaf72693e2057df0eef101ed9750c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1203",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d7e6235431f74d93",
+    "recorded_at": "2026-08-26T09:42:53.116667Z",
+    "runtime_contract_digest": "ec9214640de4ecfbe8b6841db28744885131a1f96b5247e37424fdf8ccaa1df2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b3c984c180164deab39b93725e439e4f16459721",
+    "source_merge_commit": "65937d83068fa02beb0c1c173646cb4aaea5eb7a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3827",
+    "validation_evidence": [
+      "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14 of 14",
+      "python -m nox -s simulation_core_l2 -> 695 passed, 2 skipped",
+      "python -m nox -s paper_v2_backend -> 1131 passed, 3 skipped, 2 xfailed"
+    ],
+    "validation_evidence_digest": "1277276c13329e0f0196ae5dd2f68affeed061961aa60af5805c95e4316f20d7"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM planning cannot derive daily limits when stk_limit is temporarily unavailable",
+  "trigger_condition": {
+    "fingerprint": "cc0a3a39d5026cbf22434da1",
+    "source_event_id": "FE-20260826-cc0a3a39d502"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14 of 14",
+    "python -m nox -s simulation_core_l2 -> 695 passed, 2 skipped",
+    "python -m nox -s paper_v2_backend -> 1131 passed, 3 skipped, 2 xfailed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1203 --target backend-main --expected-identity 65937d83068fa02beb0c1c173646cb4aaea5eb7a -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "simulation_core"
+      ],
+      "plans": [
+        "paper_v2_backend",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "paper_v2",
+          "simulation_core"
+        ],
+        "plans": [
+          "paper_v2_backend",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

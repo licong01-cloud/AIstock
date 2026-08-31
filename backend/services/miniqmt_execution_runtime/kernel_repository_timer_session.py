@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import replace
+from datetime import date, datetime, time
 from typing import Any, Sequence
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
 
 from .plugin_canonical import canonical_utc_datetime_v1, thaw_json_v1
+from .kernel_clock import ExchangeSessionProjectionV1, project_exchange_session_v1
 from .kernel_repository_common import (
     KernelRepositoryConflict,
     _bounded_limit,
@@ -490,19 +493,41 @@ class KernelRepositoryTimerSessionMixin:
             raise TypeError("exchange_trade_date must be a date")
         with self._connection(transaction=False) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT authority.runtime_id,authority.exchange_trade_date,
-                           authority.calendar_snapshot_set_id,authority.calendar_snapshot_set_sha256,
-                           authority.session_definition_version,authority.authority_sha256,
-                           authority.authority_json,runtime.trade_date AS runtime_trade_date
-                    FROM qmt_strategy.execution_exchange_session_authority AS authority
-                    JOIN qmt_strategy.execution_runtime AS runtime ON runtime.runtime_id=authority.runtime_id
-                    WHERE authority.runtime_id=%s AND authority.exchange_trade_date=%s
-                    """,
-                    (runtime_id, exchange_trade_date),
+                return self._read_exchange_session_authority_with_cursor(
+                    cur,
+                    runtime_id=runtime_id,
+                    exchange_trade_date=exchange_trade_date,
+                    lock=False,
                 )
-                row = cur.fetchone()
+
+    @staticmethod
+    def _read_exchange_session_authority_with_cursor(
+        cur: Any,
+        *,
+        runtime_id: str,
+        exchange_trade_date: date,
+        lock: bool,
+    ) -> ExchangeSessionAuthorityV1:
+        """Read the exact session authority on an existing product-route transaction."""
+
+        if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():
+            raise TypeError("runtime_id must be a non-empty canonical string")
+        if type(exchange_trade_date) is not date:
+            raise TypeError("exchange_trade_date must be a date")
+        cur.execute(
+            """
+            SELECT authority.runtime_id,authority.exchange_trade_date,
+                   authority.calendar_snapshot_set_id,authority.calendar_snapshot_set_sha256,
+                   authority.session_definition_version,authority.authority_sha256,
+                   authority.authority_json,runtime.trade_date AS runtime_trade_date
+            FROM qmt_strategy.execution_exchange_session_authority AS authority
+            JOIN qmt_strategy.execution_runtime AS runtime ON runtime.runtime_id=authority.runtime_id
+            WHERE authority.runtime_id=%s AND authority.exchange_trade_date=%s
+            """
+            + (" FOR SHARE OF authority,runtime" if lock else ""),
+            (runtime_id, exchange_trade_date),
+        )
+        row = cur.fetchone()
         if row is None:
             raise KeyError((runtime_id, exchange_trade_date))
         authority = _model_from_json(ExchangeSessionAuthorityV1, _row_json(row, "authority_json"))
@@ -514,6 +539,45 @@ class KernelRepositoryTimerSessionMixin:
         if row["exchange_trade_date"] != row["runtime_trade_date"]:
             raise KernelRepositoryConflict("exchange-session trade date drifts from runtime owner")
         return authority
+
+    def _read_exchange_session_projection(
+        self,
+        *,
+        runtime_id: str,
+        observed_at_utc: Any,
+    ) -> ExchangeSessionProjectionV1:
+        """Internal exact projection for events emitted outside the clock worker."""
+
+        observed_text = canonical_utc_datetime_v1(observed_at_utc, field_name="observed_at_utc")
+        observed = datetime.fromisoformat(observed_text.replace("Z", "+00:00"))
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT trade_date FROM qmt_strategy.execution_runtime WHERE runtime_id=%s",
+                    (runtime_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise KeyError(runtime_id)
+        trade_date = row["trade_date"]
+        if type(trade_date) is not date:
+            raise KernelRepositoryConflict("runtime trade date readback is invalid")
+        authority = self.read_exchange_session_authority(
+            runtime_id=runtime_id,
+            exchange_trade_date=trade_date,
+        )
+        local_date = observed.astimezone(ZoneInfo("Asia/Shanghai")).date()
+        if local_date < trade_date:
+            raise KernelRepositoryConflict("outcome event time precedes its runtime exchange trade date")
+        if local_date == trade_date:
+            return project_exchange_session_v1(authority, observed)
+        close_anchor = datetime.combine(
+            trade_date,
+            time(23, 59, 59, 999999),
+            tzinfo=ZoneInfo("Asia/Shanghai"),
+        )
+        closed = project_exchange_session_v1(authority, close_anchor)
+        return replace(closed, observed_at_utc=observed_text)
 
     def read_runtime_last_event_sequence(self, runtime_id: str) -> int:
         if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():
@@ -533,6 +597,23 @@ class KernelRepositoryTimerSessionMixin:
         if type(sequence) is not int or sequence < 0:
             raise KernelRepositoryConflict("runtime last_event_sequence is not a non-negative strict integer")
         return sequence
+
+    def read_runtime_trade_date(self, runtime_id: str) -> date:
+        if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():
+            raise ValueError("runtime_id must be a canonical identity")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT trade_date FROM qmt_strategy.execution_runtime WHERE runtime_id=%s",
+                    (runtime_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise KeyError(runtime_id)
+        trade_date_value = row["trade_date"]
+        if type(trade_date_value) is not date:
+            raise KernelRepositoryConflict("runtime trade-date scalar readback is invalid")
+        return trade_date_value
 
     def claim_due_timer_schedules_atomic(
         self,

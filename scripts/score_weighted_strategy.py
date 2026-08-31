@@ -142,6 +142,62 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
             return float(shares)
         return float(shares) / float(factor)
 
+    def _can_sell_under_hold_thresh(self, stock_id, trade_start_time):
+        """Preserve Qlib's minimum holding-period contract for custom rebalances."""
+        hold_thresh = float(getattr(self, "hold_thresh", 0) or 0)
+        if hold_thresh <= 0:
+            return True
+
+        time_per_step = self.trade_calendar.get_freq()
+        try:
+            hold_count = self.trade_position.get_stock_count(
+                stock_id,
+                bar=time_per_step,
+            )
+        except TypeError:
+            # Older Qlib Position implementations do not accept ``bar``.
+            hold_count = self.trade_position.get_stock_count(stock_id)
+        if hold_count is None:
+            raise RuntimeError(
+                f"[ScoreWeighted] hold_thresh check returned None for {stock_id}; "
+                "refusing to sell without holding-period evidence"
+            )
+        if float(hold_count) < hold_thresh:
+            logger.info(
+                "[ScoreWeighted] hold_thresh blocked sell: "
+                "stock=%s hold_count=%s threshold=%s date=%s",
+                stock_id,
+                hold_count,
+                hold_thresh,
+                trade_start_time,
+            )
+            return False
+        return True
+
+    def _apply_hold_thresh_to_rebalance(
+        self,
+        requested_sells,
+        proposed_buys,
+        current_holdings,
+        trade_start_time,
+    ):
+        """Filter normal exits and cap buys to the slots actually released."""
+        eligible_sells = []
+        blocked_sells = []
+        for stock_id in requested_sells:
+            if self._can_sell_under_hold_thresh(stock_id, trade_start_time):
+                eligible_sells.append(stock_id)
+            else:
+                blocked_sells.append(stock_id)
+
+        eligible_sell_set = set(eligible_sells)
+        retained_count = sum(
+            stock_id not in eligible_sell_set for stock_id in current_holdings
+        )
+        max_buy_slots = max(0, self.topk - retained_count)
+        bounded_buys = list(proposed_buys)[:max_buy_slots]
+        return eligible_sells, bounded_buys, blocked_sells
+
     def _normalize_signal_scores(self, all_pred_scores, end_time):
         """将 signal 输出归一化为单层 pd.Series(stock_id -> score)"""
         if all_pred_scores is None:
@@ -460,7 +516,19 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
             actual_sells, actual_buys = self._filter_dynamic_ndrop(
                 sell_candidates, buy_candidates, current_scores_arr,
             )
-        self._diag_stats["ndrop_filtered"] = len(sell_candidates) - len(actual_sells)
+        requested_sells = list(actual_sells)
+        actual_sells, actual_buys, hold_blocked_sells = (
+            self._apply_hold_thresh_to_rebalance(
+                requested_sells,
+                actual_buys,
+                current_holdings,
+                trade_start_time,
+            )
+        )
+        self._diag_stats["hold_blocked_sells"] = len(hold_blocked_sells)
+        self._diag_stats["ndrop_filtered"] = (
+            len(sell_candidates) - len(requested_sells) + len(hold_blocked_sells)
+        )
 
         # 6. 计算最终持仓列表和权重
         final_holdings = [s for s in current_holdings if s not in actual_sells] + actual_buys

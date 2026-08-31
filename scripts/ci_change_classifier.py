@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -14,8 +14,18 @@ if str(ROOT) not in sys.path:
 from scripts import issue_flow as flow  # noqa: E402
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
-CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
-WORKFLOW_BUG_METADATA_STATUSES = {"open", "in_progress", "triaged", *CLOSE_SYNC_STATUSES}
+CLOSE_SYNC_STATUSES = {
+    "fixed",
+    "fixed_source_pending_user_restart",
+    "closed",
+    "verified",
+}
+WORKFLOW_BUG_METADATA_STATUSES = {
+    "open",
+    "in_progress",
+    "triaged",
+    *CLOSE_SYNC_STATUSES,
+}
 DOCS_ONLY_PREFIXES = ("docs/",)
 DOCS_ONLY_ROOT_FILES = {"README.md", "AGENTS.md", "AGENTS.override.md"}
 DOCS_FAST_PREFIXES = (
@@ -65,20 +75,28 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".codex/skills/verify-aistock-feature/SKILL.md",
     ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_runner_health.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
     "backend/tests/scripts/test_aistock_feature_workflow.py",
     "backend/tests/scripts/test_bug_registry_metadata_check.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
     "backend/tests/scripts/test_ci_changed_files.py",
+    "backend/tests/scripts/test_ci_environment_verify.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_configure_aistock_github_runner.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
     "backend/tests/scripts/test_issue_flow.py",
     "backend/tests/scripts/test_issue_flow_pr_quality.py",
     "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_session_runner.py",
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "backend/tests/scripts/test_nightly_design_drift_audit.py",
     "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
     "backend/tests/scripts/test_validate_changed_requirements.py",
     "backend/tests/scripts/test_verify_aistock_feature_guardrail_scan.py",
+    "backend/tests/test_aistock_mcp_server.py",
     "backend/tests/test_aistock_guardrail_scan.py",
     "configs/validation/llm_triage.yaml",
     "configs/validation/design_drift_audit.yaml",
@@ -87,6 +105,9 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
     "docs/codex_project_memory.md",
     "docs/standards/README.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "docs/standards/aistock_issue_workflow_quickstart.md",
     "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
     "prompt_packs/validation_llm/evaluation_cases/historical_failure_fixtures.json",
@@ -98,16 +119,25 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
     "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runner_health.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "scripts/aistock_bug_id_allocator.py",
+    "scripts/aistock_mcp_server.py",
     "scripts/aistock_feature_workflow.py",
     "scripts/aistock_validation_catalog_integrity.py",
     "scripts/aistock_guardrail_scan.py",
     "scripts/bug_registry_metadata_check.py",
     "scripts/ci_change_classifier.py",
     "scripts/ci_changed_files.py",
+    "scripts/ci_environment_verify.py",
     "scripts/ci_failure_issue_summary.py",
+    "scripts/ci/prepare_self_hosted_workspace.py",
+    "scripts/ci_workflow_policy_scan.py",
+    "scripts/configure_aistock_github_runner.ps1",
     "scripts/code_intelligence_adapter.py",
     "scripts/issue_flow.py",
     "scripts/llm_provider_adapter.py",
+    "scripts/nightly_session_runner.py",
     "scripts/nightly_adaptive_scheduler.py",
     "scripts/nightly_design_drift_audit.py",
     "scripts/nightly_silent_degradation_audit.py",
@@ -123,27 +153,44 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     ".github/workflows/test.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
     ".github/workflows/pr-quality.yml": ("backend/tests/scripts/test_issue_flow_pr_quality.py",),
     ".github/workflows/semgrep.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
-    "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow.py",),
+    "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow_fast.py",),
+    "scripts/aistock_runner_health.py": ("backend/tests/scripts/test_aistock_runner_health.py",),
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py": (
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    ),
+    "backend/tests/test_aistock_mcp_server.py": ("backend/tests/test_aistock_mcp_server.py",),
+    "scripts/aistock_bug_id_allocator.py": (
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    ),
+    "scripts/aistock_mcp_server.py": ("backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",),
     "scripts/aistock_feature_workflow.py": ("backend/tests/scripts/test_aistock_feature_workflow.py",),
     "scripts/aistock_guardrail_scan.py": ("backend/tests/test_aistock_guardrail_scan.py",),
+    "docs/standards/aistock_development_standard_v1.5_20260523.md": ("backend/tests/test_aistock_guardrail_scan.py",),
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml": ("backend/tests/test_aistock_guardrail_scan.py",),
+    "docs/standards/aistock_runtime_targets_v1.yaml": (
+        "backend/tests/test_aistock_guardrail_scan.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+    ),
     "scripts/bug_registry_metadata_check.py": ("backend/tests/scripts/test_bug_registry_metadata_check.py",),
     "scripts/ci_change_classifier.py": ("backend/tests/scripts/test_ci_change_classifier.py",),
     "scripts/ci_changed_files.py": ("backend/tests/scripts/test_ci_changed_files.py",),
+    "scripts/ci_environment_verify.py": ("backend/tests/scripts/test_ci_environment_verify.py",),
     "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
+    "scripts/ci/prepare_self_hosted_workspace.py": ("backend/tests/scripts/test_prepare_self_hosted_workspace.py",),
+    "scripts/ci_workflow_policy_scan.py": ("backend/tests/scripts/test_ci_workflow_policy_scan.py",),
+    "scripts/configure_aistock_github_runner.ps1": ("backend/tests/scripts/test_configure_aistock_github_runner.py",),
     "scripts/code_intelligence_adapter.py": ("backend/tests/scripts/test_code_intelligence_adapter.py",),
     "scripts/issue_flow.py": (
         "backend/tests/scripts/test_issue_flow.py",
         "backend/tests/scripts/test_issue_flow_pr_quality.py",
     ),
     "scripts/llm_provider_adapter.py": ("backend/tests/scripts/test_llm_provider_adapter.py",),
+    "scripts/nightly_session_runner.py": ("backend/tests/scripts/test_nightly_session_runner.py",),
     "scripts/nightly_adaptive_scheduler.py": ("backend/tests/scripts/test_nightly_adaptive_scheduler.py",),
     "scripts/nightly_design_drift_audit.py": ("backend/tests/scripts/test_nightly_design_drift_audit.py",),
-    "scripts/nightly_silent_degradation_audit.py": (
-        "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
-    ),
-    "scripts/validate_changed_requirements.py": (
-        "backend/tests/scripts/test_validate_changed_requirements.py",
-    ),
+    "scripts/nightly_silent_degradation_audit.py": ("backend/tests/scripts/test_nightly_silent_degradation_audit.py",),
+    "scripts/validate_changed_requirements.py": ("backend/tests/scripts/test_validate_changed_requirements.py",),
     "noxfile.py": ("backend/tests/test_noxfile_validation_env.py",),
 }
 WORKFLOW_AUTHORITY_PREFIXES = (".codex/skills/", ".claude/commands/")
@@ -173,7 +220,15 @@ PROMPT_EVALUATION_FILES = {
     "scripts/llm_provider_adapter.py",
 }
 DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
+    "backend/db/pg_pool.py": ("platform_api_backend",),
+    "backend/tests/test_pg_pool_audit.py": ("platform_api_backend",),
     "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
+    "scripts/advisory_p0k_build_training_request.py": ("advisory_modeling_backend",),
+    "scripts/wsl/advisory_p0k_train.py": ("advisory_modeling_backend",),
+    "scripts/advisory_p0l_build_training_request.py": ("advisory_modeling_backend",),
+    "scripts/wsl/advisory_p0l_train.py": ("advisory_modeling_backend",),
+    "scripts/advisory_n1_tier1_oracle_learnability.py": ("advisory_modeling_backend",),
+    "scripts/advisory_strategy_package_alpha_audit.py": ("advisory_modeling_backend",),
 }
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
 FRONTEND_FILES = {
@@ -250,13 +305,20 @@ def _workflow_test_targets(paths: list[str]) -> list[str]:
     targets: list[str] = []
     for path in paths:
         path_targets = list(WORKFLOW_TEST_TARGETS_BY_FILE.get(path, ()))
-        if path.startswith("backend/tests/") and path.endswith(".py"):
+        if (
+            path.startswith("backend/tests/")
+            and path.endswith(".py")
+            and not (
+                path == "backend/tests/scripts/test_aistock_issue_workflow.py"
+                and "scripts/aistock_issue_workflow.py" in paths
+            )
+        ):
             path_targets.append(path)
         if path in WORKFLOW_AUTHORITY_FILES or path.startswith(WORKFLOW_AUTHORITY_PREFIXES):
             path_targets.extend(
                 [
                     "backend/tests/scripts/test_issue_flow.py",
-                    "backend/tests/scripts/test_aistock_issue_workflow.py",
+                    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
                 ]
             )
         for target in path_targets:
@@ -265,22 +327,87 @@ def _workflow_test_targets(paths: list[str]) -> list[str]:
     return targets
 
 
+def _plan_requires_dev_db(plan: dict[str, Any]) -> bool:
+    """Return whether a validation plan must use the existing DEV database.
+
+    CI must never create a disposable database.  Plans that write database
+    state or explicitly declare a database resource are therefore routed out
+    of the ordinary backend matrix and reported as DEV-DB work instead.
+    """
+    if bool(plan.get("requires_dev_db")):
+        return True
+    if bool(plan.get("writes_database")):
+        return True
+    resource_policy = plan.get("resource_policy")
+    if isinstance(resource_policy, str) and any(
+        token in resource_policy.strip().lower() for token in ("postgres", "timescale", "database", "dev_db", "_db")
+    ):
+        return True
+    if isinstance(resource_policy, dict):
+        if bool(resource_policy.get("ddl_idempotency_real_postgres")):
+            return True
+        resource_types = resource_policy.get("resource_types") or []
+        if isinstance(resource_types, str):
+            resource_types = [resource_types]
+        for resource_type in resource_types:
+            normalized = str(resource_type).strip().lower()
+            if "postgres" in normalized or normalized.endswith("database") or normalized.endswith("_db"):
+                return True
+    return False
+
+
 def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str, dict[str, Any]]) -> list[str]:
     sessions: list[str] = []
     for plan_key in selection.get("required_plans") or []:
         plan = plans.get(str(plan_key)) or {}
         session = str(plan.get("nox_session") or "").strip()
         ci_enabled = bool(plan.get("ci_enabled", plan.get("enabled", True)))
-        if plan.get("ci_lane") != "backend" or not ci_enabled or not session or session in sessions:
+        runner_enabled = bool(plan.get("runner_enabled", True))
+        if (
+            plan.get("ci_lane") != "backend"
+            or not ci_enabled
+            or not runner_enabled
+            or _plan_requires_dev_db(plan)
+            or not session
+            or session in sessions
+        ):
             continue
         sessions.append(session)
     return sessions
+
+
+def _dev_db_plan_keys(selection: dict[str, Any], plans: dict[str, dict[str, Any]]) -> list[str]:
+    plan_keys: list[str] = []
+    for plan_key in selection.get("required_plans") or []:
+        normalized = str(plan_key)
+        plan = plans.get(normalized) or {}
+        if _plan_requires_dev_db(plan) and normalized not in plan_keys:
+            plan_keys.append(normalized)
+    return plan_keys
+
+
+def _plan_routing(plan_key: str, plan: dict[str, Any]) -> dict[str, Any]:
+    """Return the runner and database contract for a selected plan."""
+    requires_dev_db = _plan_requires_dev_db(plan)
+    runner_kind = (
+        "windows_ai_stock_ci"
+        if requires_dev_db or plan.get("ci_lane") in {"backend", "frontend", "go"}
+        else "hosted_static"
+    )
+    return {
+        "plan_key": plan_key,
+        "runner_kind": runner_kind,
+        "requires_dev_db": requires_dev_db,
+        "environment_fingerprint_ref": "AIstock-CI" if runner_kind == "windows_ai_stock_ci" else None,
+        "install_forbidden": True,
+    }
 
 
 def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
     plans = flow._plans_by_key()
     selection = flow.select_validation(paths)
     selected_plan_keys: list[str] = []
+    dev_db_plan_keys: list[str] = []
     frontend_test_targets: list[str] = []
     mapped_files: list[str] = []
     unmapped_files: list[str] = []
@@ -300,13 +427,18 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             if plan_key not in selected_plan_keys:
                 selected_plan_keys.append(plan_key)
             plan = plans.get(plan_key) or {}
+            if _plan_requires_dev_db(plan) and plan_key not in dev_db_plan_keys:
+                dev_db_plan_keys.append(plan_key)
             target = str(plan.get("frontend_test_path") or "").strip()
             if plan.get("ci_lane") == "frontend" and target and target not in frontend_test_targets:
                 frontend_test_targets.append(target)
         has_related_deferred_plan = any(
             plan_key not in SHARED_PLAN_KEYS
             and bool((plans.get(plan_key) or {}).get("enabled", True))
-            and bool((plans.get(plan_key) or {}).get("runner_enabled", True))
+            and (
+                bool((plans.get(plan_key) or {}).get("runner_enabled", True))
+                or _plan_requires_dev_db(plans.get(plan_key) or {})
+            )
             for plan_key in required_plans
         )
         if _backend_sessions_from_selection({"required_plans": required_plans}, plans) or has_related_deferred_plan:
@@ -314,8 +446,11 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         elif _is_code_path(path):
             unmapped_files.append(path)
     sessions = _backend_sessions_from_selection({"required_plans": selected_plan_keys}, plans)
+    dev_db_plan_keys = _dev_db_plan_keys({"required_plans": selected_plan_keys}, plans)
     return {
+        "selected_plan_keys": selected_plan_keys,
         "backend_sessions": sessions,
+        "dev_db_plan_keys": dev_db_plan_keys,
         "frontend_test_targets": frontend_test_targets,
         "mapped_files": mapped_files,
         "unmapped_code_files": unmapped_files,
@@ -345,6 +480,38 @@ def _is_code_path(path: str) -> bool:
             "go.sum",
         }
     return False
+
+
+def _codeql_language(path: str) -> str | None:
+    suffix = Path(path).suffix.lower()
+    if suffix == ".py":
+        return "python"
+    if suffix in {".js", ".jsx", ".ts", ".tsx"}:
+        return "javascript-typescript"
+    return None
+
+
+def _is_test_source_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    parts = normalized.split("/")
+    name = parts[-1]
+    return (
+        any(part in {"test", "tests", "__tests__", "e2e"} for part in parts[:-1])
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+        or ".test." in name
+        or ".spec." in name
+    )
+
+
+def _codeql_languages(paths: list[str], *, exclude_test_sources: bool) -> list[str]:
+    observed = {
+        language
+        for path in paths
+        if not (exclude_test_sources and _is_test_source_path(path))
+        if (language := _codeql_language(path)) is not None
+    }
+    return [language for language in ("python", "javascript-typescript") if language in observed]
 
 
 def _is_bug_registry_metadata_path(path: str) -> bool:
@@ -464,12 +631,10 @@ def classify_changed_files(
             workflow_bug_metadata_files.append(rel_path)
 
     if close_sync_metadata_only:
-        reasons.append("only fixed/closed/verified BUG JSON metadata changed; backend matrix can be skipped")
+        reasons.append("only close-sync BUG JSON metadata changed; backend matrix can be skipped")
 
     workflow_fast_files = [
-        path
-        for path in non_bug_registry_files
-        if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
+        path for path in non_bug_registry_files if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
     ]
     workflow_test_targets = _workflow_test_targets(workflow_fast_files)
     frontend_files = [path for path in non_bug_registry_files if _is_frontend_path(path)]
@@ -483,14 +648,15 @@ def classify_changed_files(
         and not _catalog_validation_required(path)
     ]
     catalog_selection = _catalog_backend_selection(business_files)
+    selected_plan_keys = catalog_selection["selected_plan_keys"]
     backend_sessions = catalog_selection["backend_sessions"]
+    dev_db_plan_keys = catalog_selection["dev_db_plan_keys"]
     frontend_test_targets = catalog_selection["frontend_test_targets"]
     mapped_backend_files = catalog_selection["mapped_files"]
     unmapped_code_files = catalog_selection["unmapped_code_files"]
     if unmapped_code_files:
         blocking.append(
-            "unmapped executable code must declare a direct CI test mapping: "
-            + ", ".join(unmapped_code_files)
+            "unmapped executable code must declare a direct CI test mapping: " + ", ".join(unmapped_code_files)
         )
 
     workflow_validation_required = bool(workflow_test_targets)
@@ -506,23 +672,32 @@ def classify_changed_files(
         and not go_files
     )
     if workflow_validation_only:
-        reasons.append("only workflow/validation fast-lane files changed; run focused workflow validation instead of backend matrix")
+        reasons.append(
+            "only workflow/validation fast-lane files changed; run focused workflow validation instead of backend matrix"
+        )
     if docs_lite_only:
-        reasons.append(f"only ordinary documentation files changed; {docs_fast_tier or 'docs_fast'} uses diff/version-change review only")
+        reasons.append(
+            f"only ordinary documentation files changed; {docs_fast_tier or 'docs_fast'} uses diff/version-change review only"
+        )
     if docs_controlled_required:
         reasons.append("controlled documentation or client instructions changed; keep normal workflow guardrails")
     elif docs_only:
-        reasons.append("documentation files changed but include standards or agent instructions; keep normal guardrails")
+        reasons.append(
+            "documentation files changed but include standards or agent instructions; keep normal guardrails"
+        )
     if prompt_evaluation_files:
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
     if backend_sessions:
         reasons.append("backend code matched direct nox sessions: " + ", ".join(backend_sessions))
+    if dev_db_plan_keys:
+        reasons.append("database validation must use the existing DEV database: " + ", ".join(dev_db_plan_keys))
     if frontend_files:
         reasons.append("frontend code changed; run the single frontend type/lint gate")
     if go_files:
         reasons.append("TDX Go code changed; run the Go unit-test gate")
 
     backend_required = bool(backend_sessions) and not docs_lite_only and not close_sync_metadata_only
+    dev_db_required = bool(dev_db_plan_keys) and not docs_lite_only and not close_sync_metadata_only
     frontend_required = bool(frontend_files) and not docs_lite_only
     go_required = bool(go_files) and not docs_lite_only
     classification = "full_ci_required"
@@ -538,6 +713,8 @@ def classify_changed_files(
         classification = "docs_controlled"
     elif workflow_validation_only:
         classification = "workflow_validation_only"
+    elif dev_db_required and not backend_required and not frontend_required and not go_required:
+        classification = "dev_db_validation_required"
     elif catalog_validation_required and not business_files and not frontend_files and not go_files:
         classification = "catalog_validation_only"
     elif frontend_required and not backend_required and not go_required:
@@ -546,6 +723,15 @@ def classify_changed_files(
         classification = "go_ci_required"
     elif backend_required or frontend_required or go_required:
         classification = "targeted_ci_required"
+    plans = flow._plans_by_key()
+    plan_routing = [_plan_routing(plan_key, plans.get(plan_key) or {}) for plan_key in selected_plan_keys]
+    runner_kind = (
+        "windows_ai_stock_ci"
+        if backend_required or frontend_required or go_required or dev_db_required
+        else "hosted_static"
+    )
+    codeql_languages = _codeql_languages(normalized, exclude_test_sources=False)
+    codeql_pr_languages = _codeql_languages(normalized, exclude_test_sources=True)
     return {
         "schema_version": "aistock_ci_change_classifier_v1",
         "changed_files": normalized,
@@ -571,7 +757,14 @@ def classify_changed_files(
         "prompt_evaluation_required": bool(prompt_evaluation_files),
         "backend_required": backend_required,
         "backend_sessions": backend_sessions,
+        "dev_db_required": dev_db_required,
+        "dev_db_plan_keys": dev_db_plan_keys,
+        "runner_kind": runner_kind,
+        "plan_routing": plan_routing,
+        "environment_fingerprint_ref": "AIstock-CI" if runner_kind == "windows_ai_stock_ci" else None,
+        "install_forbidden": True,
         "backend_plan_keys": catalog_selection["required_plans"],
+        "selected_plan_keys": selected_plan_keys,
         "catalog_impacted_modules": catalog_selection["impacted_modules"],
         "mapped_backend_files": mapped_backend_files,
         "frontend_required": frontend_required,
@@ -579,6 +772,9 @@ def classify_changed_files(
         "frontend_files": frontend_files,
         "go_required": go_required,
         "go_files": go_files,
+        "codeql_languages": codeql_languages,
+        "codeql_pr_languages": codeql_pr_languages,
+        "codeql_pr_test_only": bool(codeql_languages) and not codeql_pr_languages,
         "unmapped_code_files": unmapped_code_files,
         "obsolete_surface_removal": False,
         "nightly_deferred_verification": {
@@ -604,6 +800,12 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
     lines = [
         f"backend_required={str(payload['backend_required']).lower()}",
         f"backend_sessions={json.dumps(payload['backend_sessions'])}",
+        f"dev_db_required={str(payload['dev_db_required']).lower()}",
+        f"dev_db_plan_keys={json.dumps(payload['dev_db_plan_keys'])}",
+        f"runner_kind={payload['runner_kind']}",
+        f"plan_routing={json.dumps(payload['plan_routing'])}",
+        f"environment_fingerprint_ref={payload['environment_fingerprint_ref'] or 'not_applicable'}",
+        f"install_forbidden={str(payload['install_forbidden']).lower()}",
         f"frontend_required={str(payload['frontend_required']).lower()}",
         f"frontend_test_targets={json.dumps(payload['frontend_test_targets'])}",
         f"go_required={str(payload['go_required']).lower()}",
@@ -634,31 +836,45 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     args = parser.parse_args(argv)
 
-    payload = classify_changed_files(_load_changed_files(args), repo_root=Path(args.repo_root), added_files=args.added_file)
+    payload = classify_changed_files(
+        _load_changed_files(args), repo_root=Path(args.repo_root), added_files=args.added_file
+    )
     if args.output_json:
         _write_json(Path(args.output_json), payload)
     if args.github_output:
         _write_github_output(args.github_output, payload)
-    print(json.dumps({
-        "workflow_gate": payload["workflow_gate"],
-        "classification": payload["classification"],
-        "backend_required": payload["backend_required"],
-        "backend_sessions": payload["backend_sessions"],
-        "frontend_required": payload["frontend_required"],
-        "frontend_test_targets": payload["frontend_test_targets"],
-        "go_required": payload["go_required"],
-        "unmapped_code_files": payload["unmapped_code_files"],
-        "workflow_validation_required": payload["workflow_validation_required"],
-        "workflow_test_targets": payload["workflow_test_targets"],
-        "docs_lite_required": payload["docs_lite_required"],
-        "docs_fast_required": payload["docs_fast_required"],
-        "docs_fast_tier": payload["docs_fast_tier"],
-        "docs_controlled_required": payload["docs_controlled_required"],
-        "static_gate_required": payload["static_gate_required"],
-        "catalog_validation_required": payload["catalog_validation_required"],
-        "prompt_evaluation_required": payload["prompt_evaluation_required"],
-        "changed_file_count": payload["changed_file_count"],
-    }, ensure_ascii=False, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "workflow_gate": payload["workflow_gate"],
+                "classification": payload["classification"],
+                "backend_required": payload["backend_required"],
+                "backend_sessions": payload["backend_sessions"],
+                "dev_db_required": payload["dev_db_required"],
+                "dev_db_plan_keys": payload["dev_db_plan_keys"],
+                "runner_kind": payload["runner_kind"],
+                "plan_routing": payload["plan_routing"],
+                "environment_fingerprint_ref": payload["environment_fingerprint_ref"],
+                "install_forbidden": payload["install_forbidden"],
+                "frontend_required": payload["frontend_required"],
+                "frontend_test_targets": payload["frontend_test_targets"],
+                "go_required": payload["go_required"],
+                "unmapped_code_files": payload["unmapped_code_files"],
+                "workflow_validation_required": payload["workflow_validation_required"],
+                "workflow_test_targets": payload["workflow_test_targets"],
+                "docs_lite_required": payload["docs_lite_required"],
+                "docs_fast_required": payload["docs_fast_required"],
+                "docs_fast_tier": payload["docs_fast_tier"],
+                "docs_controlled_required": payload["docs_controlled_required"],
+                "static_gate_required": payload["static_gate_required"],
+                "catalog_validation_required": payload["catalog_validation_required"],
+                "prompt_evaluation_required": payload["prompt_evaluation_required"],
+                "changed_file_count": payload["changed_file_count"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
     return 2 if payload["workflow_gate"] == "blocked" else 0
 
 

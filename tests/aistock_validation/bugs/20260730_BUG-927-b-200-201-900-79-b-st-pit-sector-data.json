@@ -1,0 +1,177 @@
+{
+  "actual": "stock_universe_pit_service 入池规则(ipo_365d等)只过滤 .SH/.SZ 后缀，未排除B股板块段(200xxx.SZ/201xxx.SZ/900xxx.SH)，79只B股经 ipo_365d 规则进入 ST PIT 池 stock_universe_pit_spans。BUG-832 将 sector_data 契约 eligible 集合改为 PIT 池驱动后，75只无申万行业映射的B股造成 SECTOR_DATA_PIT_CONTRACT_INVALID (missing_pit_mappings=75) 每日确定性失败，sector_data 停在 2026-07-21，每日产生 retry_exhausted 告警。修复: 在 PIT universe 入池源头排除B股板块段，仅保留A股，重建 ST/QE universe spans 使 sector_data 契约自愈。策略上AIstock永无B股回测与交易。",
+  "allowed_write_scope": [
+    "scripts/build_stock_universe_pit_spans.py",
+    "backend/services/stock_universe_pit_service.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260730_BUG-927-b-200-201-900-79-b-st-pit-sector-data.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-927",
+  "closed_at": "2026-07-30T07:53:54Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-30T04:51:43.517055Z",
+  "description": "stock_universe_pit_service 入池规则(ipo_365d等)只过滤 .SH/.SZ 后缀，未排除B股板块段(200xxx.SZ/201xxx.SZ/900xxx.SH)，79只B股经 ipo_365d 规则进入 ST PIT 池 stock_universe_pit_spans。BUG-832 将 sector_data 契约 eligible 集合改为 PIT 池驱动后，75只无申万行业映射的B股造成 SECTOR_DATA_PIT_CONTRACT_INVALID (missing_pit_mappings=75) 每日确定性失败，sector_data 停在 2026-07-21，每日产生 retry_exhausted 告警。修复: 在 PIT universe 入池源头排除B股板块段，仅保留A股，重建 ST/QE universe spans 使 sector_data 契约自愈。策略上AIstock永无B股回测与交易。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260730-ca5a403a5f50",
+      "timestamp": "2026-07-30T04:51:43.517051Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "stock_universe_pit_spans/stock_universe_pit_events 的所有 universe(live ST 池及后续新建的 QE 不可变快照)仅含A股: 构建器在 stock_basic/stock_st/stock_st_events 读取层排除B股板块段(200xxx.SZ/201xxx.SZ/900xxx.SH)，compute_source_fingerprint 口径一致; 合并后经授权对 live universe 执行一次 force 全量重建(write_mode=replace)清除历史B股 spans, sector_data preflight 的 missing_pit_mappings 归零。存量 QE 不可变快照(20180801_20260630)按契约不原地修复, 下次数据集构建用新 key 自动获得无B股版本; 07-22起16只映射到已停更L2指数的A股(missing_sw_daily_facts=16)为独立数据缺口, 另案处理。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-07-30T04:51:43.517055Z",
+  "fix_branch": null,
+  "fix_commit": "1294854921319911871beb27b00b7cb9e6135558",
+  "fixed_at": "2026-07-30T08:25:56.399616Z",
+  "github_issue_number": 2941,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2941",
+  "last_seen_at": "2026-07-30T04:51:43.517055Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2942",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "股票池未排除B股(200/201/900段)导致79只B股进入ST PIT池并锁死sector_data每日构建",
+  "trigger_condition": {
+    "fingerprint": "ca5a403a5f50aa45a7ae207c",
+    "source_event_id": "FE-20260730-ca5a403a5f50"
+  },
+  "validation_evidence": [
+    "pytest backend/tests/test_stock_universe_pit_spans.py -q -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s data_sync_autonomy_backend -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

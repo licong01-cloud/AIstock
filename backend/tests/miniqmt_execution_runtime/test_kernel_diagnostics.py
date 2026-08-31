@@ -4,7 +4,10 @@ from datetime import date
 
 import pytest
 
-from backend.services.miniqmt_execution_runtime.kernel_diagnostics import project_kernel_diagnostics_v1
+from backend.services.miniqmt_execution_runtime.kernel_diagnostics import (
+    project_k6d_product_diagnostics_v1,
+    project_kernel_diagnostics_v1,
+)
 from backend.services.miniqmt_execution_runtime.kernel_repository_diagnostics import (
     KernelRepositoryDiagnosticsMixin,
     _decode_kernel_cursor,
@@ -133,6 +136,90 @@ def test_kernel_readback_failure_is_critical_and_never_false_green() -> None:
     assert projection.layer["status"] == "BLOCKED"
     assert projection.alerts[0]["status"] == "CRITICAL"
     assert projection.alerts[0]["reason_code"] == "MINIQMT_KERNEL_READBACK_SCALAR_DRIFT"
+
+
+def _k6d_route(**updates):
+    route = {
+        "schema_version": "miniqmt_k6d_product_route_diagnostics_v1",
+        "status": "ACTIVE",
+        "runtime_id": "runtime_k2d",
+        "binding_id": "binding_k6d",
+        "trade_date": "2026-07-27",
+        "route_owner": "KERNEL_V2",
+        "route_epoch": 1,
+        "effective_new_instance_sequence": 1,
+        "owner_row_version": 1,
+        "owner_sha256": "1" * 64,
+        "current_receipt_sha256": "2" * 64,
+        "legacy_active_instance_count": 0,
+        "kernel_active_instance_count": 2,
+        "cutover_legacy_active_instance_count": 0,
+        "cutover_kernel_active_instance_count": 0,
+        "catalog_sha256": "3" * 64,
+        "gateway_capability_catalog_sha256": "4" * 64,
+        "exchange_session_authority_sha256": "5" * 64,
+        "migration_readback_sha256": "6" * 64,
+        "product_authority_schema_sha256": "7" * 64,
+        "coordination_status_counts": {"WAITING": 1},
+        "read_only": True,
+    }
+    route.update(updates)
+    return route
+
+
+def _k6d_activation(*, registered: bool = True):
+    return {
+        "kernel_product_runtimes": (
+            [
+                {
+                    "runtime_id": "runtime_k2d",
+                    "binding_id": "binding_k6d",
+                    "trade_date": "2026-07-27",
+                    "source_capability_sha256": "8" * 64,
+                }
+            ]
+            if registered
+            else []
+        )
+    }
+
+
+def test_k6d_product_diagnostics_closes_durable_route_to_live_source_and_auto_clears() -> None:
+    healthy = project_k6d_product_diagnostics_v1(
+        _payload(product_route=_k6d_route()),
+        quote_activation=_k6d_activation(),
+    )
+    assert healthy.layer["status"] == "HEALTHY"
+    assert healthy.layer["facts"]["route_owner"] == "KERNEL_V2"
+    assert healthy.layer["facts"]["source_capability_sha256"] == "8" * 64
+    assert healthy.layer["projection_sha256"]
+    assert healthy.alerts == ()
+    assert all("runtime_id" not in item["labels"] for item in healthy.metrics)
+
+    blocked = project_k6d_product_diagnostics_v1(
+        _payload(product_route=_k6d_route(legacy_active_instance_count=1)),
+        quote_activation=_k6d_activation(registered=False),
+    )
+    assert blocked.layer["status"] == "BLOCKED"
+    assert blocked.alerts[0]["reason_code"] == "MINIQMT_K6_LEGACY_ACTIVE_AFTER_CUTOVER"
+    assert blocked.alerts[0]["context"]["auto_clear"] is True
+    assert blocked.layer["execution_gate"] is False
+
+
+@pytest.mark.parametrize(
+    "route_update",
+    [
+        {"owner_sha256": "not-a-hash"},
+        {"runtime_id": "runtime_other"},
+        {"coordination_status_counts": {"WAITING": -1}},
+    ],
+)
+def test_k6d_product_diagnostics_rejects_durable_authority_drift(route_update) -> None:
+    with pytest.raises(ValueError):
+        project_k6d_product_diagnostics_v1(
+            _payload(product_route=_k6d_route(**route_update)),
+            quote_activation=_k6d_activation(),
+        )
 
 
 @pytest.mark.parametrize(

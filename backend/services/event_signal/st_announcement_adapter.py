@@ -28,20 +28,26 @@ from backend.services.announcements.title_classifier import (
 )
 from backend.services.event_signal.announcement_adapter import (
     SOURCE_TYPE,
-    build_event_key,
     finish_run,
     start_run,
     upsert_facts,
     upsert_signals,
 )
+from backend.services.event_signal.announcement_issuer_binding import (
+    ISSUER_BINDING_LATERAL_SQL,
+    ISSUER_BINDING_PROJECTION_SQL,
+    SHANGHAI,
+    attach_announcement_issuer_bindings,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
-ST_UNIFIED_RULE_VERSION = "unified_event_signal_rules_st_first_v1_20260506"
+ST_UNIFIED_RULE_VERSION = "unified_event_signal_rules_st_first_v2_20260817"
 ENGINE_NAME = "STFirstAnnouncementEventSignalAdapter"
 
 ST_FIRST_EVENT_TYPES: tuple[str, ...] = (
     "stock_delisting_confirmed",
+    "stock_delisting_predecision",
     "stock_delisting_risk_warning",
     "stock_st_imposed",
     "stock_st_added_or_continued",
@@ -53,10 +59,18 @@ ST_FIRST_EVENT_TYPES: tuple[str, ...] = (
 
 ST_SIGNAL_EVENT_TYPES: tuple[str, ...] = (
     "stock_delisting_confirmed",
+    "stock_delisting_predecision",
     "stock_delisting_risk_warning",
     "stock_st_imposed",
     "stock_st_added_or_continued",
     "stock_st_removal_applied",
+)
+
+TERMINAL_ST_KEYWORDS: tuple[str, ...] = (
+    "终止上市",
+    "摘牌",
+    "退市整理",
+    "delist",
 )
 
 
@@ -111,7 +125,7 @@ def st_first_rule_config(
                 "signal_event_types": list(ST_SIGNAL_EVENT_TYPES),
             }
         },
-        "phase": "st_first_announcement_rules_v1",
+        "phase": "st_first_announcement_rules_v2",
         "llm_enabled": False,
         "pdf_enabled": False,
         "trading_consumption_enabled": False,
@@ -225,6 +239,7 @@ def fetch_st_classification_batch(
             c.classification_detail,
             c.time_mode,
             a.title,
+            {ISSUER_BINDING_PROJECTION_SQL}
             NULL::bigint AS ann_signal_id,
             'ACTIVE'::text AS ann_signal_status,
             NULL::text AS ann_signal_reason,
@@ -232,6 +247,7 @@ def fetch_st_classification_batch(
           FROM market.ann_event_classification c
           JOIN market.anns a
             ON a.id = c.ann_id
+          {ISSUER_BINDING_LATERAL_SQL}
          WHERE c.rule_version = %s
            AND c.time_mode = %s
            AND c.event_type = ANY(%s)
@@ -276,10 +292,62 @@ def fetch_stock_st_events_for_rows(conn: Any, rows: list[dict[str, Any]]) -> dic
         return grouped
 
 
+def fetch_stock_basic_terminal_for_rows(
+    conn: Any,
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Load independent Tushare lifecycle evidence for terminal announcements."""
+
+    ts_codes = sorted(
+        {
+            str(row["ts_code"])
+            for row in rows
+            if row.get("ts_code") and row.get("event_type") == "stock_delisting_confirmed"
+        }
+    )
+    if not ts_codes:
+        return {}
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT ts_code, name, list_status, list_date::date, delist_date::date
+              FROM market.stock_basic
+             WHERE ts_code = ANY(%s)
+               AND list_status = 'D'
+               AND delist_date IS NOT NULL
+             ORDER BY ts_code
+            """,
+            (ts_codes,),
+        )
+        return {str(row["ts_code"]): dict(row) for row in cur.fetchall()}
+
+
 def _day_distance(left: Optional[dt.date], right: Optional[dt.date]) -> int:
     if left is None or right is None:
         return 999_999
     return abs((left - right).days)
+
+
+def _announcement_known_date(row: dict[str, Any]) -> Optional[dt.date]:
+    value = row.get("available_at")
+    if isinstance(value, dt.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=SHANGHAI)
+        return value.astimezone(SHANGHAI).date()
+    if value is not None:
+        parsed = dt.datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=SHANGHAI)
+        return parsed.astimezone(SHANGHAI).date()
+    return _date_or_none(row.get("ann_date"))
+
+
+def _is_terminal_st_event(candidate: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(candidate.get(field) or "")
+        for field in ("st_type", "st_reason", "st_explain")
+    ).casefold()
+    return any(keyword.casefold() in text for keyword in TERMINAL_ST_KEYWORDS)
 
 
 def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
@@ -287,11 +355,27 @@ def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) 
 
     ann_date = _date_or_none(row.get("ann_date"))
     effective_date = _date_or_none(row.get("effective_trade_date"))
+    known_date = _announcement_known_date(row)
     if not candidates:
         return {
             "checked": True,
             "matched": False,
             "match_reason": "no_stock_st_events_for_symbol_in_window",
+        }
+
+    pit_candidates = [
+        candidate
+        for candidate in candidates
+        if known_date is not None
+        and (pub_date := _date_or_none(candidate.get("pub_date"))) is not None
+        and pub_date <= known_date
+    ]
+    if not pit_candidates:
+        return {
+            "checked": True,
+            "matched": False,
+            "match_reason": "no_stock_st_events_available_by_announcement_known_date",
+            "announcement_known_date": known_date,
         }
 
     def score(candidate: dict[str, Any]) -> tuple[int, int, int]:
@@ -301,7 +385,7 @@ def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) 
         imp_distance = _day_distance(effective_date, imp_date)
         return (min(pub_distance, imp_distance), pub_distance, imp_distance)
 
-    best = min(candidates, key=score)
+    best = min(pit_candidates, key=score)
     best_score = score(best)
     if best_score[0] > 5:
         return {
@@ -323,22 +407,105 @@ def select_best_st_event(row: dict[str, Any], candidates: list[dict[str, Any]]) 
         "st_explain": best.get("st_explain"),
         "source_api": best.get("source_api"),
         "distance_days": best_score[0],
+        "announcement_known_date": known_date,
+        "terminal": _is_terminal_st_event(best),
+    }
+
+
+def select_terminal_cross_check(
+    row: dict[str, Any],
+    *,
+    st_cross_check: dict[str, Any],
+    stock_basic: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """Select independent terminal evidence without changing announcement as-of time."""
+
+    if row.get("event_type") != "stock_delisting_confirmed":
+        return {
+            "checked": False,
+            "matched": False,
+            "terminal": False,
+            "match_reason": "terminal_cross_check_not_required",
+        }
+    if st_cross_check.get("matched") and st_cross_check.get("terminal"):
+        return {
+            **st_cross_check,
+            "source_table": "market.stock_st_events",
+            "authority_source": "tushare.stock_st_terminal_event_v1",
+        }
+    known_date = _announcement_known_date(row)
+    if not stock_basic:
+        return {
+            "checked": True,
+            "matched": False,
+            "terminal": False,
+            "match_reason": "no_authoritative_terminal_lifecycle_evidence",
+            "announcement_known_date": known_date,
+        }
+    list_date = _date_or_none(stock_basic.get("list_date"))
+    delist_date = _date_or_none(stock_basic.get("delist_date"))
+    ts_code = str(row.get("ts_code") or "")
+    if (
+        str(stock_basic.get("ts_code") or "") != ts_code
+        or stock_basic.get("list_status") != "D"
+        or known_date is None
+        or delist_date is None
+        or delist_date < known_date
+        or (list_date is not None and list_date > known_date)
+    ):
+        return {
+            "checked": True,
+            "matched": False,
+            "terminal": False,
+            "match_reason": "stock_basic_terminal_lifecycle_is_pit_inconsistent",
+            "announcement_known_date": known_date,
+            "list_date": list_date,
+            "delist_date": delist_date,
+        }
+    return {
+        "checked": True,
+        "matched": True,
+        "terminal": True,
+        "match_reason": "tushare_stock_basic_delist_date_confirms_terminal_outcome",
+        "source_table": "market.stock_basic",
+        "source_api": "tushare.stock_basic",
+        "authority_source": "tushare.stock_basic_delist_lifecycle_v1",
+        "ts_code": ts_code,
+        "list_status": "D",
+        "list_date": list_date,
+        "delist_date": delist_date,
+        "announcement_known_date": known_date,
     }
 
 
 def attach_st_cross_checks(
     rows: list[dict[str, Any]],
     stock_st_events_by_code: dict[str, list[dict[str, Any]]],
+    stock_basic_terminal_by_code: Optional[dict[str, dict[str, Any]]] = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Attach ST cross-check evidence without changing raw/classification tables."""
 
     matched_rows = 0
     enriched: list[dict[str, Any]] = []
+    terminal_by_code = stock_basic_terminal_by_code or {}
     for row in rows:
         copied = dict(row)
         cross_check = select_best_st_event(copied, stock_st_events_by_code.get(str(copied.get("ts_code")), []))
+        terminal_cross_check = select_terminal_cross_check(
+            copied,
+            st_cross_check=cross_check,
+            stock_basic=terminal_by_code.get(str(copied.get("ts_code"))),
+        )
         if cross_check.get("matched"):
             matched_rows += 1
+        detail = copied.get("classification_detail") or {}
+        if not isinstance(detail, dict):
+            detail = {"source_classification_detail": detail}
+        detail = dict(detail)
+        classifier_issuer_binding = detail.get("issuer_binding")
+        if classifier_issuer_binding is not None:
+            detail["classifier_issuer_binding"] = classifier_issuer_binding
+
         evidence = copied.get("ann_signal_evidence") or {}
         if not isinstance(evidence, dict):
             evidence = {"source_signal_evidence": evidence}
@@ -349,13 +516,12 @@ def attach_st_cross_checks(
                 "source_ann_rule_version": copied.get("source_rule_version"),
                 "title": copied.get("title"),
                 "st_cross_check": cross_check,
+                "terminal_cross_check": terminal_cross_check,
+                "classifier_issuer_binding": classifier_issuer_binding,
             }
         )
-        detail = copied.get("classification_detail") or {}
-        if not isinstance(detail, dict):
-            detail = {"source_classification_detail": detail}
-        detail = dict(detail)
         detail["st_cross_check"] = cross_check
+        detail["terminal_cross_check"] = terminal_cross_check
         copied["ann_signal_evidence"] = evidence
         copied["classification_detail"] = detail
         copied["ann_signal_reason"] = f"{copied.get('risk_level')} {copied.get('event_type')}: {copied.get('title') or ''}"[:1000]
@@ -391,6 +557,7 @@ def sync_st_first_announcement_event_signals(
     signal_rows = 0
     cross_checked_rows = 0
     st_event_matched_rows = 0
+    issuer_binding_counts: dict[str, int] = {}
     last_classification_id = 0
 
     with get_conn() as conn:
@@ -425,7 +592,18 @@ def sync_st_first_announcement_event_signals(
                     break
                 last_classification_id = int(rows[-1]["classification_id"])
                 stock_st_events = fetch_stock_st_events_for_rows(conn, rows)
-                rows, matched_rows = attach_st_cross_checks(rows, stock_st_events)
+                stock_basic_terminal = fetch_stock_basic_terminal_for_rows(conn, rows)
+                rows, matched_rows = attach_st_cross_checks(
+                    rows,
+                    stock_st_events,
+                    stock_basic_terminal,
+                )
+                rows, batch_binding_counts = attach_announcement_issuer_bindings(
+                    rows,
+                    require_terminal_cross_check=True,
+                )
+                for status, count in batch_binding_counts.items():
+                    issuer_binding_counts[status] = issuer_binding_counts.get(status, 0) + count
                 event_ids = upsert_facts(conn, rows, run_id=run_id, rule_version=rule_version)
                 batch_signal_rows = upsert_signals(
                     conn,
@@ -459,6 +637,7 @@ def sync_st_first_announcement_event_signals(
                     "cross_checked_rows": cross_checked_rows,
                     "st_event_matched_rows": st_event_matched_rows,
                     "st_event_match_rate": (st_event_matched_rows / cross_checked_rows) if cross_checked_rows else None,
+                    "issuer_binding_counts": dict(sorted(issuer_binding_counts.items())),
                 },
             )
             return AdapterSummary(
@@ -488,6 +667,7 @@ def sync_st_first_announcement_event_signals(
                     "last_classification_id": last_classification_id,
                     "cross_checked_rows": cross_checked_rows,
                     "st_event_matched_rows": st_event_matched_rows,
+                    "issuer_binding_counts": dict(sorted(issuer_binding_counts.items())),
                 },
             )
             raise

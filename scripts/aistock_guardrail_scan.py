@@ -6,12 +6,18 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 DEFAULT_CATALOG = Path("docs/standards/aistock_development_standard_v1.5_20260523.yaml")
@@ -24,6 +30,7 @@ class CompiledRule:
     title: str
     severity: str
     category: str
+    effect: str
     checker_type: str
     patterns: tuple[Any, ...]
     checker_options: dict[str, Any]
@@ -45,6 +52,7 @@ class Finding:
     remediation: str
     baseline_policy: str
     fingerprint: str
+    effect: str = "block"
     baseline_status: str = "unclassified"
 
     def to_dict(self) -> dict[str, Any]:
@@ -53,6 +61,7 @@ class Finding:
             "title": self.title,
             "severity": self.severity,
             "category": self.category,
+            "effect": self.effect,
             "file": self.file,
             "line": self.line,
             "message": self.message,
@@ -91,6 +100,9 @@ def compile_rules(catalog: dict[str, Any]) -> list[CompiledRule]:
         checker_type = str(checker.get("type") or "")
         if checker_type not in {"regex", "path_regex", "regex_and_python_loop_contains"}:
             continue
+        effect = str(raw_rule.get("effect") or "block").strip().lower()
+        if effect not in {"block", "warn", "advisory"}:
+            raise ValueError(f"Unsupported effect for {raw_rule.get('rule_id')}: {effect}")
         checker_options: dict[str, Any] = {}
         if checker_type == "regex_and_python_loop_contains":
             checker_options["loop_patterns"] = tuple(
@@ -104,6 +116,7 @@ def compile_rules(catalog: dict[str, Any]) -> list[CompiledRule]:
                 title=str(raw_rule.get("title") or raw_rule["rule_id"]),
                 severity=str(raw_rule.get("severity") or "P3"),
                 category=str(raw_rule.get("category") or "general"),
+                effect=effect,
                 checker_type=checker_type,
                 patterns=tuple(re.compile(pattern, re.MULTILINE) for pattern in _as_tuple(checker.get("patterns"))),
                 checker_options=checker_options,
@@ -207,6 +220,7 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
                                 title=rule.title,
                                 severity=rule.severity,
                                 category=rule.category,
+                                effect=rule.effect,
                                 file=path_key,
                                 line=1,
                                 message=rule.title,
@@ -228,6 +242,7 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
                                 title=rule.title,
                                 severity=rule.severity,
                                 category=rule.category,
+                                effect=rule.effect,
                                 file=path_key,
                                 line=line,
                                 message=rule.title,
@@ -263,6 +278,7 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
                                     title=rule.title,
                                     severity=rule.severity,
                                     category=rule.category,
+                                    effect=rule.effect,
                                     file=path_key,
                                     line=line,
                                     message=rule.title,
@@ -273,6 +289,101 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
                             )
                             break
     return findings
+
+
+def scan_ci_workflow_policy(files: Iterable[Path], root: Path) -> list[Finding]:
+    """Adapt the stdlib workflow denylist into normal guardrail findings."""
+    from scripts.ci_workflow_policy_scan import scan_workflow_text
+
+    findings: list[Finding] = []
+    for file_path in files:
+        path_key = _path_key(file_path, root)
+        if not path_key.startswith(".github/workflows/"):
+            continue
+        for item in scan_workflow_text(file_path.read_text(encoding="utf-8", errors="ignore"), path_key):
+            database_violation = any(
+                token in item["reason"]
+                for token in ("database", "postgres", "timescale", "services", "container")
+            )
+            rule_id = "CI-DATABASE-SAFETY-001" if database_violation else "CI-ENVIRONMENT-PARITY-001"
+            title = (
+                "CI workflow must not create an independent database service"
+                if database_violation
+                else "CI workflow must use prebuilt Windows tooling without installation"
+            )
+            remediation = (
+                "Route database validation to the existing DEV database; do not declare services or start a database container."
+                if database_violation
+                else "Use the prebuilt Windows AIstock-CI runner and remove setup or dependency installation commands."
+            )
+            fingerprint = hashlib.sha256(
+                f"{rule_id}:{path_key}:{item['line']}".encode("utf-8")
+            ).hexdigest()[:16]
+            findings.append(
+                Finding(
+                    rule_id=rule_id,
+                    title=title,
+                    severity="P0",
+                    category="ci_workflow",
+                    file=path_key,
+                    line=int(item["line"]),
+                    message=item["reason"],
+                    remediation=remediation,
+                    baseline_policy="block_new_only",
+                    fingerprint=fingerprint,
+                )
+            )
+    return findings
+
+
+def scan_standard_digest_consistency(
+    files: Iterable[Path],
+    *,
+    root: Path,
+    catalog: dict[str, Any],
+    catalog_path: Path,
+) -> list[Finding]:
+    """Surface the existing sole-standard digest contract in changed-files scans."""
+
+    standard_rel = str(catalog.get("source_standard") or "").strip()
+    catalog_rel = _path_key(catalog_path, root)
+    selected = {_path_key(path, root) for path in files}
+    if not standard_rel or not ({standard_rel, catalog_rel} & selected):
+        return []
+    if not bool((catalog.get("rule_sync_policy") or {}).get("source_digest_required")):
+        return []
+    standard_path = root / standard_rel
+    if not standard_path.is_file():
+        return []
+    normalized = standard_path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    expected = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    actual = str(catalog.get("source_sha256") or "").strip().lower()
+    if actual == expected:
+        return []
+    catalog_text = catalog_path.read_text(encoding="utf-8")
+    line = next(
+        (index for index, value in enumerate(catalog_text.splitlines(), start=1) if value.startswith("source_sha256:")),
+        1,
+    )
+    rule_id = "STANDARD-SOURCE-DIGEST"
+    return [
+        Finding(
+            rule_id=rule_id,
+            title="Machine catalog must match the sole human-readable standard",
+            severity="P1",
+            category="development_standard",
+            effect="block",
+            file=catalog_rel,
+            line=line,
+            message=f"source_sha256 is stale: actual={actual or 'missing'} expected={expected}",
+            remediation=(
+                f"After completing Markdown edits, set source_sha256 to {expected}; "
+                "do not copy or replace the human-readable authority."
+            ),
+            baseline_policy="block_new_and_changed_standard",
+            fingerprint=hashlib.sha256(f"{rule_id}:{catalog_rel}:{expected}".encode("utf-8")).hexdigest()[:16],
+        )
+    ]
 
 
 def _changed_line_numbers(root: Path, paths: Iterable[Path], *, staged: bool) -> dict[str, set[int]]:
@@ -347,6 +458,7 @@ def apply_baseline_status(findings: list[Finding], baseline_fingerprints: set[st
                 title=finding.title,
                 severity=finding.severity,
                 category=finding.category,
+                effect=finding.effect,
                 file=finding.file,
                 line=finding.line,
                 message=finding.message,
@@ -365,6 +477,7 @@ def apply_baseline_status(findings: list[Finding], baseline_fingerprints: set[st
                 title=finding.title,
                 severity=finding.severity,
                 category=finding.category,
+                effect=finding.effect,
                 file=finding.file,
                 line=finding.line,
                 message=finding.message,
@@ -426,11 +539,13 @@ def _scope_summary(findings: list[Finding]) -> dict[str, Any]:
 
 def summarize(findings: list[Finding]) -> dict[str, Any]:
     by_severity: dict[str, int] = {}
+    by_effect: dict[str, int] = {}
     by_rule: dict[str, int] = {}
     by_category: dict[str, int] = {}
     by_baseline_status: dict[str, int] = {}
     for finding in findings:
         by_severity[finding.severity] = by_severity.get(finding.severity, 0) + 1
+        by_effect[finding.effect] = by_effect.get(finding.effect, 0) + 1
         by_rule[finding.rule_id] = by_rule.get(finding.rule_id, 0) + 1
         by_category[finding.category] = by_category.get(finding.category, 0) + 1
         by_baseline_status[finding.baseline_status] = by_baseline_status.get(finding.baseline_status, 0) + 1
@@ -438,6 +553,7 @@ def summarize(findings: list[Finding]) -> dict[str, Any]:
     return {
         "total_findings": len(findings),
         "by_severity": dict(sorted(by_severity.items(), key=lambda item: item[0])),
+        "by_effect": dict(sorted(by_effect.items())),
         "by_rule": dict(sorted(by_rule.items())),
         "by_category": dict(sorted(by_category.items())),
         "by_baseline_status": dict(sorted(by_baseline_status.items())),
@@ -454,7 +570,8 @@ def blocking_findings(findings: list[Finding], fail_on_severity: str, *, fail_ne
     return [
         finding
         for finding in findings
-        if SEVERITY_RANK.get(finding.severity, 0) >= fail_rank
+        if finding.effect == "block"
+        and SEVERITY_RANK.get(finding.severity, 0) >= fail_rank
         and (not fail_new_only or finding.baseline_status != "baseline")
     ]
 
@@ -512,6 +629,17 @@ def write_summary_md(path: Path, findings: list[Finding], files_scanned: int, mo
     lines.extend(
         [
             "",
+            "## Summary By Effect",
+            "",
+            "| Effect | Count |",
+            "|---|---:|",
+        ]
+    )
+    for effect in ("block", "warn", "advisory"):
+        lines.append(f"| `{effect}` | {summary['by_effect'].get(effect, 0)} |")
+    lines.extend(
+        [
+            "",
             "## Summary By Severity",
             "",
             "| Severity | Count |",
@@ -554,14 +682,14 @@ def write_summary_md(path: Path, findings: list[Finding], files_scanned: int, mo
             "",
             f"## First {min(max_findings, len(findings))} Findings",
             "",
-            "| Severity | Status | Rule | File | Line | Remediation |",
-            "|---|---|---|---|---:|---|",
+            "| Severity | Effect | Status | Rule | File | Line | Remediation |",
+            "|---|---|---|---|---|---:|---|",
         ]
     )
     for finding in findings[:max_findings]:
         remediation = finding.remediation.replace("|", "/")
         lines.append(
-            f"| {finding.severity} | `{finding.baseline_status}` | `{finding.rule_id}` | `{finding.file}` | {finding.line} | {remediation} |"
+            f"| {finding.severity} | `{finding.effect}` | `{finding.baseline_status}` | `{finding.rule_id}` | `{finding.file}` | {finding.line} | {remediation} |"
         )
     if len(findings) > max_findings:
         lines.append("")
@@ -571,7 +699,7 @@ def write_summary_md(path: Path, findings: list[Finding], files_scanned: int, mo
 
 def _format_finding_line(finding: Finding) -> str:
     return (
-        f"{finding.severity} {finding.baseline_status} "
+        f"{finding.severity} {finding.effect} {finding.baseline_status} "
         f"{finding.rule_id} {finding.file}:{finding.line} - {finding.title}"
     )
 
@@ -669,11 +797,20 @@ def main() -> int:
 
     files = iter_files(candidate_paths, root=root, suffixes=suffixes, skip_parts=skip_parts)
     findings = scan_files(files, rules=rules, root=root)
+    findings.extend(scan_ci_workflow_policy(files, root))
     if args.changed_only or args.staged_only:
         findings = filter_findings_to_changed_lines(
             findings,
             _changed_line_numbers(root, files, staged=args.staged_only),
         )
+    findings.extend(
+        scan_standard_digest_consistency(
+            files,
+            root=root,
+            catalog=catalog,
+            catalog_path=root / args.catalog,
+        )
+    )
     baseline_path = root / args.baseline_json if args.baseline_json else None
     baseline_fingerprints = load_baseline_fingerprints(baseline_path)
     findings = apply_baseline_status(findings, baseline_fingerprints)

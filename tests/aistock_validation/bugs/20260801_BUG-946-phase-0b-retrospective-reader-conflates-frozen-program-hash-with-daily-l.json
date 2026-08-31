@@ -1,0 +1,298 @@
+{
+  "actual": "The reader treats historical_range_frozen_program_hash as a daily range_lineage_scope_hash, has two canonical membership read defects, and the metric engine validates ranks inside each one-candidate canonical signal while rejecting legitimate frozen rank gaps instead of evaluating the complete Program/date candidate group with cash slots; the real 15-day audit cannot complete and per-signal TopK math would be incorrect.",
+  "allowed_write_scope": [
+    "backend/services/advisory_phase0b/audit_service.py",
+    "backend/services/advisory_phase0b/snapshot_reader.py",
+    "backend/tests/advisory_phase0b/test_audit_service.py",
+    "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+    "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
+    "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+    "tests/aistock_validation/bugs/20260801_BUG-946-phase-0b-retrospective-reader-conflates-frozen-program-hash-with-daily-l.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-946",
+  "closed_at": "2026-08-02T06:33:00Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-01T17:24:59.592663Z",
+  "description": "The first real Phase 0B run exposed one retrospective grouping defect across the read and metric boundary: the reader conflates the stable historical_range_frozen_program_hash with per-day capture scope identities; its membership query and canonical ordering reject valid catalog data; and the metric engine treats each one-candidate canonical signal as a complete ranking group instead of combining all signals for the same frozen Program/date. The approved 15-day audit therefore cannot complete with correct TopK semantics.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260801-7671cf16ade6",
+      "timestamp": "2026-08-01T17:24:59.592658Z"
+    }
+  ],
+  "evidence_uris": [
+    "snapshot advsnap_9faa542fd165be6131715125 read-only catalog/lineage evidence",
+    "production read-only SQL: ORDER BY payload::text raises psycopg2.errors.UndefinedColumn because payload is not materialized",
+    "production read-only evidence: one canonical signal carries one ranked candidate while the same frozen Program/date carries the complete frozen ranking, including legitimate cash-slot rank gaps",
+    "repo-external Phase 0B request 950c7adc6ae03b374140dfc5b83de962bb5567d6349f38721942291453488848 completed for both 15-day targets",
+    "report semantic hash 2fb0400a25c8d0b1738901c494214de37cdd5c1436af9d6aa2cee14fafc37209 and receipt f21722c30fc9002189e81cd110d82a925083bf00a52aa4779915aeb2a9371fb0 were identical on exact retry"
+  ],
+  "expected": "Validate the complete daily scope set independently, bind each audit target to its authoritative historical_range_frozen_program_hash, and aggregate all 15 decision dates for the single-Alpha and native multi-Alpha packages.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_phase0b/audit_service.py",
+      "backend/services/advisory_phase0b/snapshot_reader.py",
+      "backend/tests/advisory_phase0b/test_audit_service.py",
+      "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+      "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_phase0b/audit_service.py",
+        "backend/services/advisory_phase0b/snapshot_reader.py",
+        "backend/tests/advisory_phase0b/test_audit_service.py",
+        "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+        "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
+        "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
+      ],
+      "impacted_modules": [
+        "advisory.candidate_quality",
+        "advisory.historical_range",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_phase0b/audit_service.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/services/advisory_phase0b/snapshot_reader.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_audit_service.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_phase0b/audit_service.py",
+        "backend/services/advisory_phase0b/snapshot_reader.py",
+        "backend/tests/advisory_phase0b/test_audit_service.py",
+        "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+        "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
+        "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_phase0b/audit_service.py",
+      "backend/services/advisory_phase0b/snapshot_reader.py",
+      "backend/tests/advisory_phase0b/test_audit_service.py",
+      "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+      "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
+    ]
+  },
+  "first_seen_at": "2026-08-01T17:24:59.592663Z",
+  "fix_branch": null,
+  "fix_commit": "a061d833f10b50f849f18e17cbae2705f157a716",
+  "fixed_at": "2026-08-02T06:33:00Z",
+  "github_issue_number": 3023,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3023",
+  "last_seen_at": "2026-08-01T17:24:59.592663Z",
+  "module": "advisory_historical_range",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3044",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "advisory_phase0b_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory_historical_range"
+  ],
+  "title": "Phase 0B retrospective reader conflates frozen Program hash with daily lineage scope hash",
+  "trigger_condition": {
+    "fingerprint": "7671cf16ade6dce80de225c1",
+    "source_event_id": "FE-20260801-7671cf16ade6"
+  },
+  "validation_evidence": [
+    "python -m nox -s advisory_phase0b_backend -> 99 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "real read-only 15-day audit exact retry -> report 2fb0400a25c8d0b1738901c494214de37cdd5c1436af9d6aa2cee14fafc37209 receipt f21722c30fc9002189e81cd110d82a925083bf00a52aa4779915aeb2a9371fb0"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_historical_range",
+        "advisory_phase0b"
+      ],
+      "plans": [
+        "advisory_phase0b_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_historical_range",
+          "advisory_phase0b"
+        ],
+        "plans": [
+          "advisory_phase0b_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

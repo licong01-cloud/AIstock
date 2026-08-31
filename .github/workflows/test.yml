@@ -3,13 +3,9 @@ name: AIstock CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
 
-# AIstock is a Windows-first project; runners must be Windows.
-# CI uses a venv installed from requirements.txt (no conda) so the workflow
-# stays portable to GitHub-hosted Windows runners. Local dev still uses the
-# AIstock conda env per docs/process/.
+# AIstock CI runs on pre-provisioned Windows runners. Project dependencies are
+# never installed by CI; runner images are versioned and verified instead.
 defaults:
   run:
     shell: bash
@@ -18,40 +14,47 @@ env:
   PYTHONIOENCODING: utf-8
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
+  AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
 
 permissions:
   contents: read
-  pull-requests: write
+
+concurrency:
+  group: aistock-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  classify-changes:
-    name: Classify CI changed files
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      backend_required: ${{ steps.classify.outputs.backend_required }}
-      backend_sessions: ${{ steps.classify.outputs.backend_sessions }}
-      frontend_required: ${{ steps.classify.outputs.frontend_required }}
-      frontend_test_targets: ${{ steps.classify.outputs.frontend_test_targets }}
-      go_required: ${{ steps.classify.outputs.go_required }}
-      close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
-      workflow_validation_required: ${{ steps.classify.outputs.workflow_validation_required }}
-      workflow_test_targets: ${{ steps.classify.outputs.workflow_test_targets }}
-      docs_lite_required: ${{ steps.classify.outputs.docs_lite_required }}
-      static_gate_required: ${{ steps.classify.outputs.static_gate_required }}
-      catalog_validation_required: ${{ steps.classify.outputs.catalog_validation_required }}
-      prompt_evaluation_required: ${{ steps.classify.outputs.prompt_evaluation_required }}
-      classification: ${{ steps.classify.outputs.classification }}
+  ci-verdict:
+    name: CI verdict
+    runs-on: ${{ startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-') && 'ubuntu-latest' || fromJSON('["self-hosted","Windows","aistock-ci"]') }}
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-depth: 2
+
+      - name: Fetch current PR base ref only
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHECKOUT_REF: ${{ github.ref }}
+        run: |
+          python scripts/ci_changed_files.py --prepare-pr-merge-base-only \
+            --base-ref "${BASE_REF}" --base-sha "${BASE_SHA}" --checkout-ref "${CHECKOUT_REF}"
+
+      - name: Verify prebuilt AIstock-CI environment
+        if: ${{ !(startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')) }}
+        shell: powershell
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+        run: python scripts/ci_environment_verify.py
 
       - name: Build changed-file list
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           mkdir -p tmp/validation/ci_change_classifier
           python scripts/ci_changed_files.py \
@@ -61,36 +64,45 @@ jobs:
             --head-sha "${HEAD_SHA}"
           cat tmp/validation/ci_change_classifier/changed_files.txt
 
-      - name: Install change-classifier dependency
-        run: python -m pip install --disable-pip-version-check --no-input pyyaml
-
       - name: Classify CI lane
         id: classify
+        env:
+          CLOSE_SYNC_BRANCH: ${{ startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-') }}
         run: |
-          python scripts/ci_change_classifier.py \
-            --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
-            --output-json tmp/validation/ci_change_classifier/summary.json
-
-      - name: Upload CI change-classifier artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-change-classifier
-          path: tmp/validation/ci_change_classifier/
-          if-no-files-found: ignore
-
-  static-gate:
-    name: Static gate (l0 + module registry)
-    needs: classify-changes
-    runs-on: windows-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+          if [[ "${CLOSE_SYNC_BRANCH}" == "true" ]]; then
+            python scripts/bug_registry_metadata_check.py \
+              --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
+              --close-sync-only \
+              --output-json tmp/validation/ci_change_classifier/summary.json
+            {
+              echo 'backend_required=false'
+              echo 'backend_sessions=[]'
+              echo 'dev_db_required=false'
+              echo 'dev_db_plan_keys=[]'
+              echo 'runner_kind=github_hosted_metadata'
+              echo 'plan_routing={}'
+              echo 'environment_fingerprint_ref=not_required'
+              echo 'install_forbidden=true'
+              echo 'frontend_required=false'
+              echo 'frontend_test_targets=[]'
+              echo 'go_required=false'
+              echo 'close_sync_metadata_only=true'
+              echo 'workflow_validation_required=false'
+              echo 'workflow_test_targets=[]'
+              echo 'docs_lite_required=false'
+              echo 'static_gate_required=true'
+              echo 'catalog_validation_required=false'
+              echo 'prompt_evaluation_required=false'
+              echo 'classification=close_sync_metadata_only'
+            } >> "${GITHUB_OUTPUT}"
+          else
+            python scripts/ci_change_classifier.py \
+              --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
+              --output-json tmp/validation/ci_change_classifier/summary.json
+          fi
 
       - name: Docs-lite version record
-        if: needs.classify-changes.outputs.static_gate_required == 'false'
+        if: steps.classify.outputs.static_gate_required == 'false'
         run: |
           mkdir -p tmp/validation/guardrails
           {
@@ -105,60 +117,16 @@ jobs:
           } > tmp/validation/guardrails/docs-lite-version-record.md
           cat tmp/validation/guardrails/docs-lite-version-record.md
 
-      - name: Set up Python 3.12
-        if: needs.classify-changes.outputs.static_gate_required != 'false'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Build registry changed-file list
-        if: needs.classify-changes.outputs.close_sync_metadata_only == 'true'
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
-          BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          mkdir -p tmp/validation/bug_registry
-          python scripts/ci_changed_files.py \
-            --output tmp/validation/bug_registry/changed_files.txt \
-            --base-ref "${BASE_REF}" \
-            --base-sha "${BASE_SHA}" \
-            --head-sha "${HEAD_SHA}"
-
-      - name: BUG registry metadata check
-        if: needs.classify-changes.outputs.close_sync_metadata_only == 'true'
-        run: |
-          python scripts/bug_registry_metadata_check.py \
-            --changed-files-file tmp/validation/bug_registry/changed_files.txt \
-            --close-sync-only \
-            --output-json tmp/validation/guardrails/bug-registry-metadata.json
-
-      - name: Install nox + light deps
-        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install nox httpx pyyaml pytest
-
-      - name: Build static-gate changed-file list
-        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
-          BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          mkdir -p tmp/validation/guardrails
-          python scripts/ci_changed_files.py \
-            --output tmp/validation/guardrails/l0_changed_files.txt \
-            --base-ref "${BASE_REF}" \
-            --base-sha "${BASE_SHA}" \
-            --head-sha "${HEAD_SHA}" \
-            --diff-filter ACMRT
-
       - name: nox -s l0 -- changed files
-        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true'
+        if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true'
         run: |
-          mapfile -t changed_files < tmp/validation/guardrails/l0_changed_files.txt
+          mapfile -t classified_files < tmp/validation/ci_change_classifier/changed_files.txt
+          changed_files=()
+          for path in "${classified_files[@]}"; do
+            if [ -e "${path}" ]; then
+              changed_files+=("${path}")
+            fi
+          done
           if [ "${#changed_files[@]}" -eq 0 ]; then
             echo "No changed files require the l0 scan."
             exit 0
@@ -166,414 +134,226 @@ jobs:
           python -m nox -s l0 -- "${changed_files[@]}"
 
       - name: nox -s validation_module_registry_l0
-        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true' && needs.classify-changes.outputs.catalog_validation_required == 'true'
+        if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true' && steps.classify.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_module_registry_l0
 
       - name: nox -s validation_catalog_integrity
-        if: needs.classify-changes.outputs.static_gate_required != 'false' && needs.classify-changes.outputs.close_sync_metadata_only != 'true' && needs.classify-changes.outputs.catalog_validation_required == 'true'
+        if: steps.classify.outputs.static_gate_required != 'false' && steps.classify.outputs.close_sync_metadata_only != 'true' && steps.classify.outputs.catalog_validation_required == 'true'
         run: python -m nox -s validation_catalog_integrity
 
-      - name: Upload guardrail evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: guardrail-evidence
-          path: tmp/validation/guardrails/
-          if-no-files-found: ignore
-
-  docs-lite:
-    name: Docs-lite version record
-    needs: classify-changes
-    if: needs.classify-changes.outputs.docs_lite_required == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Record documentation-only change
+      - name: Run PR quality enforcement
+        id: pr_quality_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.docs_lite_required != 'true' && steps.classify.outputs.close_sync_metadata_only != 'true'
+        continue-on-error: true
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
-          BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          CLASSIFICATION: ${{ needs.classify-changes.outputs.classification }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
+          AISTOCK_PR_TITLE: ${{ github.event.pull_request.title || '' }}
+          AISTOCK_PR_BODY: ${{ github.event.pull_request.body || '' }}
+          AISTOCK_PR_QUALITY_ENFORCE_P0P1: ${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}
         run: |
-          mkdir -p tmp/validation/docs_lite
-          python scripts/ci_changed_files.py \
-            --output tmp/validation/docs_lite/changed_files.txt \
-            --base-ref "${BASE_REF}" \
-            --base-sha "${BASE_SHA}" \
-            --head-sha "${HEAD_SHA}"
-          {
-            echo "# Docs-lite version record"
-            echo ""
-            echo "- classification: ${CLASSIFICATION}"
-            echo "- validation: version/change-record only"
-            echo "- code_validation: skipped"
-            echo ""
-            echo "## Changed files"
-            sed 's/^/- `/' tmp/validation/docs_lite/changed_files.txt | sed 's/$/`/'
-          } > tmp/validation/docs_lite/version-record.md
-          cat tmp/validation/docs_lite/version-record.md
+          mkdir -p tmp/validation/pr_quality
+          BASE_COMMIT="origin/${BASE_REF}"
+          ENFORCE_ARGS=()
+          if [ "${AISTOCK_PR_QUALITY_ENFORCE_P0P1}" = "true" ]; then
+            ENFORCE_ARGS+=(--enforce-p0-p1-evidence)
+          fi
+          python scripts/issue_flow.py pr-check \
+            --base "${BASE_COMMIT}" \
+            --head HEAD \
+            --output-json tmp/validation/pr_quality/summary.json \
+            --output-md tmp/validation/pr_quality/summary.md \
+            "${ENFORCE_ARGS[@]}"
+          cat tmp/validation/pr_quality/summary.md
+          python scripts/code_intelligence_adapter.py summary \
+            --item-id "PR-${{ github.event.pull_request.number || github.run_id }}" \
+            --query "AIstock PR ${{ github.event.pull_request.number || github.run_id }} impact and affected tests" \
+            --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
+            --skip-external \
+            --output tmp/validation/pr_quality/code-intelligence-summary.json \
+            --output-md tmp/validation/pr_quality/code-intelligence-summary.md
+          cat tmp/validation/pr_quality/code-intelligence-summary.md
+          git diff --name-only --diff-filter=ACMRT "${BASE_COMMIT}...HEAD" -- '*.py' > tmp/validation/pr_quality/changed_python.txt
+          if [ -s tmp/validation/pr_quality/changed_python.txt ]; then
+            xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude
+          fi
 
-      - name: Upload docs-lite record
-        uses: actions/upload-artifact@v4
-        with:
-          name: docs-lite-version-record
-          path: tmp/validation/docs_lite/
-          if-no-files-found: error
-
-  backend-tests:
-    name: Backend tests (${{ matrix.session }})
-    needs: [classify-changes, static-gate]
-    if: needs.classify-changes.outputs.backend_required != 'false'
-    # ubuntu-latest is required because GitHub-hosted Windows runners do NOT
-    # support `services:` containers (pg_isready / docker daemon are absent).
-    # All current backend nox sessions are pure Python + a postgres URL, so
-    # they run cleanly on Linux. Local developers still use Windows + conda
-    # AIstock; this CI surface is Linux-only by design.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        session: ${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}
-    services:
-      postgres:
-        image: timescale/timescaledb:latest-pg14
-        ports: ['5433:5432']
-        env:
-          POSTGRES_USER: aistock
-          POSTGRES_PASSWORD: aistock_dev_password
-          POSTGRES_DB: aistock_dev
-        options: >-
-          --health-cmd "pg_isready -U aistock"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Install backend deps via venv (no conda on hosted runners)
-        # IMPORTANT: do NOT pip install -r requirements.txt on Linux.
-        # requirements.txt is a Windows conda export (UTF-16, contains
-        # `file:///C:/...` pins like `anaconda-anon-usage @ file:///C:/...`)
-        # that cannot resolve on ubuntu-latest. Stage 4+5 r1 round 2 fix:
-        # enumerate the actual Linux-safe dependency set required to run
-        # the backend nox sessions in this matrix, then `pip check` to
-        # fail fast if anything is missing or conflicting.
+      - name: Run Semgrep guardrails
+        id: semgrep_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.docs_lite_required != 'true' && steps.classify.outputs.close_sync_metadata_only != 'true'
+        continue-on-error: true
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install \
-            nox \
-            fastapi 'uvicorn[standard]' pydantic 'pydantic-settings' python-dotenv \
-            httpx 'httpx-sse' requests aiofiles openai==2.44.0 litellm==1.90.2 reportlab schedule \
-            yfinance akshare ta pywencai h5py \
-            sqlalchemy alembic psycopg2-binary 'asyncpg' \
-            pyyaml 'orjson' \
-            pytest 'pytest-cov' 'pytest-asyncio' 'pytest-mock' \
-            mcp 'mcp[cli]' \
-            pandas numpy scipy 'scikit-learn' hmmlearn==0.3.3 pyarrow \
-            'python-dateutil' pytz \
-            'tenacity' 'cachetools' \
-            'aiosqlite'
-          python -m pip check
+          command -v semgrep >/dev/null || { echo 'semgrep is not preinstalled on aistock-ci runner' >&2; exit 1; }
+          mkdir -p tmp/validation/semgrep
+          semgrep_files=()
+          while IFS= read -r path; do
+            if [ -f "${path}" ]; then
+              semgrep_files+=("${path}")
+            fi
+          done < tmp/validation/ci_change_classifier/changed_files.txt
+          if (( ${#semgrep_files[@]} > 0 )); then
+            semgrep "${semgrep_files[@]}" \
+              --config .semgrep.yml \
+              --json \
+              --output tmp/validation/semgrep/semgrep.json
+          else
+            printf '{"results":[],"errors":[],"paths":{"scanned":[]}}\n' > tmp/validation/semgrep/semgrep.json
+          fi
 
-      - name: nox -s ${{ matrix.session }}
+      - name: Run selected backend sessions
+        id: backend_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.backend_required != 'false'
+        continue-on-error: true
         env:
-          TDX_DB_HOST: 127.0.0.1
-          TDX_DB_PORT: 5433
-          TDX_DB_NAME: aistock_dev
-          TDX_DB_USER: aistock
-          TDX_DB_PASSWORD: aistock_dev_password
-        run: python -m nox -s ${{ matrix.session }}
+          BACKEND_SESSIONS: ${{ steps.classify.outputs.backend_sessions }}
+        run: |
+          mapfile -t backend_sessions < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["BACKEND_SESSIONS"])))' | tr -d '\r')
+          backend_failures=()
+          for session in "${backend_sessions[@]}"; do
+            if ! python -m nox -s "${session}"; then
+              backend_failures+=("${session}")
+            fi
+          done
+          if (( ${#backend_failures[@]} > 0 )); then
+            printf 'Selected backend session failed: %s\n' "${backend_failures[@]}" >&2
+            exit 1
+          fi
 
-      - name: Upload validation artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: validation-${{ matrix.session }}
-          path: |
-            tmp/validation/
-            tmp/coverage/
-          if-no-files-found: ignore
+      - name: Attach lockfile-matched prebuilt frontend dependencies
+        id: frontend_dependencies
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.frontend_required == 'true'
+        continue-on-error: true
+        shell: powershell
+        run: |
+          python scripts/ci/prepare_self_hosted_workspace.py `
+            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
+            --dest "${env:GITHUB_WORKSPACE}" `
+            --expected-commit "${env:GITHUB_SHA}" `
+            --repo "${env:GITHUB_REPOSITORY}" `
+            --frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules" `
+            --attach-frontend-only `
+            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
-  frontend-quality:
-    name: Frontend quality (type + lint)
-    needs: [classify-changes, static-gate]
-    if: needs.classify-changes.outputs.frontend_required == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
+      - name: Run selected frontend quality
+        id: frontend_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.frontend_required == 'true' && steps.frontend_dependencies.outcome == 'success'
+        continue-on-error: true
         working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        run: npm ci --prefer-offline --no-audit --no-fund
-
-      - name: Type-check changed frontend surface
-        run: npm exec tsc -- --noEmit --incremental false
-
-      - name: Lint frontend surface
-        run: npm run lint
-
-      - name: Run owning frontend module tests
-        if: needs.classify-changes.outputs.frontend_test_targets != '[]'
         env:
-          FRONTEND_TEST_TARGETS: ${{ needs.classify-changes.outputs.frontend_test_targets }}
+          FRONTEND_TEST_TARGETS: ${{ steps.classify.outputs.frontend_test_targets }}
         run: |
-          python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' > module_test_targets.txt
-          mapfile -t module_test_targets < module_test_targets.txt
-          npm run test:e2e -- "${module_test_targets[@]}"
+          command -v node >/dev/null || { echo 'node is not preinstalled on aistock runner' >&2; exit 1; }
+          command -v npm >/dev/null || { echo 'npm is not preinstalled on aistock runner' >&2; exit 1; }
+          test -d node_modules || { echo 'frontend/node_modules is not prebuilt; dependency installation is prohibited in CI' >&2; exit 1; }
+          ./node_modules/.bin/tsc --noEmit --incremental false
+          npm run lint
+          if [[ "${FRONTEND_TEST_TARGETS}" != "[]" ]]; then
+            mapfile -t module_test_targets < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' | tr -d '\r')
+            npm run test:e2e -- "${module_test_targets[@]}"
+          fi
 
-  tdx-go-tests:
-    name: TDX Go tests
-    needs: [classify-changes, static-gate]
-    if: needs.classify-changes.outputs.go_required == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
+      - name: Run selected TDX Go tests
+        id: go_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.go_required == 'true'
+        continue-on-error: true
         working-directory: tdx-api-main
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: tdx-api-main/go.mod
-          cache-dependency-path: tdx-api-main/go.sum
-
-      - name: Run Go tests
+        env:
+          GOPROXY: off
         run: go test ./...
 
-  workflow-validation-tests:
-    name: Workflow validation fast lane
-    needs: [classify-changes, static-gate]
-    if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Install workflow validation deps
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyyaml pytest ruff nox requests
-
-      - name: Run focused workflow validation tests
-        env:
-          WORKFLOW_TEST_TARGETS: ${{ needs.classify-changes.outputs.workflow_test_targets }}
-        run: |
-          python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' > workflow_test_targets.txt
-          mapfile -t workflow_test_targets < workflow_test_targets.txt
-          python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider
-
-  prompt-evaluation:
-    name: Validation LLM prompt evaluation
-    needs: [classify-changes, static-gate]
-    if: needs.classify-changes.outputs.prompt_evaluation_required == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Install prompt evaluation deps
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyyaml pytest requests
-
-      - name: Build changed-file list
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
-          BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Run selected prompt evaluation
+        id: prompt_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.prompt_evaluation_required == 'true'
+        continue-on-error: true
         run: |
           mkdir -p tmp/validation/llm_prompt_evaluation
-          python scripts/ci_changed_files.py \
-            --output tmp/validation/llm_prompt_evaluation/changed_files.txt \
-            --base-ref "${BASE_REF}" \
-            --base-sha "${BASE_SHA}" \
-            --head-sha "${HEAD_SHA}"
-
-      - name: Run prompt evaluation policy gate
-        run: |
           changed_args=()
           while IFS= read -r path; do
             if [ -n "${path}" ]; then
               changed_args+=(--changed-file "${path}")
             fi
-          done < tmp/validation/llm_prompt_evaluation/changed_files.txt
+          done < tmp/validation/ci_change_classifier/changed_files.txt
           python scripts/llm_provider_adapter.py --json prompt-evaluation \
             --provider github_models \
             "${changed_args[@]}" \
             --output tmp/validation/llm_prompt_evaluation/prompt-evaluation.json
 
-      - name: Upload prompt evaluation artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: llm-prompt-evaluation
-          path: tmp/validation/llm_prompt_evaluation/
-          if-no-files-found: error
-
-  failure-bug-register:
-    name: Publish PR CI failure evidence
-    needs: [backend-tests, workflow-validation-tests, prompt-evaluation]
-    # Keep this job green/no-op when targeted tests pass or are intentionally
-    # skipped. PR failures retain compact evidence without creating a second
-    # Issue alongside the default-branch failure workflow.
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: No targeted CI failure evidence required
-        if: ${{ needs.backend-tests.result != 'failure' && needs.workflow-validation-tests.result != 'failure' && needs.prompt-evaluation.result != 'failure' }}
-        run: |
-          echo "backend-tests result: ${{ needs.backend-tests.result }}"
-          echo "workflow-validation-tests result: ${{ needs.workflow-validation-tests.result }}"
-          echo "prompt-evaluation result: ${{ needs.prompt-evaluation.result }}"
-          echo "No CI failure evidence required."
-
-      - uses: actions/checkout@v4
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-
-      - name: Build CI failure evidence
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
+      - name: Run focused workflow validation tests
+        id: workflow_validation
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
+        continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW_TEST_TARGETS: ${{ steps.classify.outputs.workflow_test_targets }}
+          AISTOCK_RUNNER_PROCESS_OWNERSHIP: runner_owned_isolated_only
+          AISTOCK_USER_BACKEND_PROCESS_CONTROL: forbidden
         run: |
-          mkdir -p tmp/validation/ci_failure_issue
-          python scripts/ci_failure_issue_summary.py \
-            --repo "${{ github.repository }}" \
-            --run-id "${{ github.run_id }}" \
-            --run-url "${RUN_URL}" \
-            --severity "P1" \
-            --source-name "AIstock CI" \
-            --branch "${{ github.head_ref || github.ref_name }}" \
-            --commit "${{ github.event.pull_request.head.sha || github.sha }}" \
-            --log-attempts 3 \
-            --log-wait-seconds 10 \
-            --output tmp/validation/ci_failure_issue/summary.json \
-            --markdown-output tmp/validation/ci_failure_issue/body.md \
-            --context-output tmp/validation/ci_failure_issue/context-pack.json \
-            --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md
+          test "${AISTOCK_USER_BACKEND_PROCESS_CONTROL}" = "forbidden"
+          mapfile -t workflow_test_targets < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' | tr -d '\r')
+          python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider
 
-      - name: Upload CI failure evidence
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr-ci-failure-issue-context
-          path: tmp/validation/ci_failure_issue/
-          if-no-files-found: error
-          retention-days: 14
+      - name: Enforce CI workflow policy
+        id: workflow_policy
+        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
+        continue-on-error: true
+        run: |
+          mkdir -p tmp/validation/ci_workflow_policy
+          python scripts/ci_workflow_policy_scan.py \
+            --output-json tmp/validation/ci_workflow_policy/receipt.json
 
-      - name: Comment PR with CI failure evidence
-        if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const routingBody = [
-              '### CI failure evidence is available',
-              '',
-              'One or more targeted CI jobs failed on this PR.',
-              '',
-              'Inspect the `pr-ci-failure-issue-context` artifact. Failed default-branch runs are registered only by the `Issue On Test Fail` workflow.',
-            ].join('\n');
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: context.issue.number,
-              body: routingBody,
-            });
-
-  ci-verdict:
-    name: CI verdict
-    needs:
-      - classify-changes
-      - static-gate
-      - docs-lite
-      - backend-tests
-      - frontend-quality
-      - tdx-go-tests
-      - workflow-validation-tests
-      - prompt-evaluation
-      - failure-bug-register
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
       - name: Require every selected CI lane to pass
+        if: always()
         env:
-          CLASSIFY_RESULT: ${{ needs.classify-changes.result }}
-          STATIC_RESULT: ${{ needs.static-gate.result }}
-          DOCS_RESULT: ${{ needs.docs-lite.result }}
-          BACKEND_RESULT: ${{ needs.backend-tests.result }}
-          FRONTEND_RESULT: ${{ needs.frontend-quality.result }}
-          GO_RESULT: ${{ needs.tdx-go-tests.result }}
-          WORKFLOW_RESULT: ${{ needs.workflow-validation-tests.result }}
-          PROMPT_RESULT: ${{ needs.prompt-evaluation.result }}
-          REGISTRAR_RESULT: ${{ needs.failure-bug-register.result }}
+          CLASSIFY_RESULT: ${{ steps.classify.outcome }}
+          BACKEND_RESULT: ${{ steps.backend_validation.outcome }}
+          FRONTEND_DEPENDENCIES_RESULT: ${{ steps.frontend_dependencies.outcome }}
+          FRONTEND_RESULT: ${{ steps.frontend_validation.outcome }}
+          GO_RESULT: ${{ steps.go_validation.outcome }}
+          PROMPT_RESULT: ${{ steps.prompt_validation.outcome }}
+          PR_QUALITY_RESULT: ${{ steps.pr_quality_validation.outcome }}
+          SEMGREP_RESULT: ${{ steps.semgrep_validation.outcome }}
+          WORKFLOW_REQUIRED: ${{ steps.classify.outputs.workflow_validation_required }}
+          WORKFLOW_TEST_TARGETS: ${{ steps.classify.outputs.workflow_test_targets }}
+          WORKFLOW_TEST_RESULT: ${{ steps.workflow_validation.outcome }}
+          WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}
+          DEV_DB_REQUIRED: ${{ steps.classify.outputs.dev_db_required }}
+          DEV_DB_PLANS: ${{ steps.classify.outputs.dev_db_plan_keys }}
         run: |
           failures=()
-          for entry in "classify:${CLASSIFY_RESULT}" "static:${STATIC_RESULT}"; do
-            lane="${entry%%:*}"
-            result="${entry#*:}"
-            if [[ "$result" != "success" ]]; then
-              failures+=("${lane}=${result}")
-            fi
-          done
+          if [[ "${CLASSIFY_RESULT}" != "success" ]]; then
+            failures+=("classify_static=${CLASSIFY_RESULT}")
+          fi
           for entry in \
-            "docs:${DOCS_RESULT}" \
             "backend:${BACKEND_RESULT}" \
+            "frontend_dependencies:${FRONTEND_DEPENDENCIES_RESULT}" \
             "frontend:${FRONTEND_RESULT}" \
             "go:${GO_RESULT}" \
-            "workflow:${WORKFLOW_RESULT}" \
             "prompt:${PROMPT_RESULT}" \
-            "registrar:${REGISTRAR_RESULT}"; do
+            "pr_quality:${PR_QUALITY_RESULT}" \
+            "semgrep:${SEMGREP_RESULT}"; do
             lane="${entry%%:*}"
             result="${entry#*:}"
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
               failures+=("${lane}=${result}")
             fi
           done
+          if [[ "${WORKFLOW_REQUIRED}" = "true" && "${WORKFLOW_TEST_TARGETS}" != "[]" ]]; then
+            if [[ "${WORKFLOW_TEST_RESULT}" != "success" ]]; then
+              failures+=("workflow_validation=${WORKFLOW_TEST_RESULT}")
+            fi
+            if [[ "${WORKFLOW_POLICY_RESULT}" != "success" ]]; then
+              failures+=("workflow_policy=${WORKFLOW_POLICY_RESULT}")
+            fi
+          fi
+          if [[ "${DEV_DB_REQUIRED}" = "true" ]]; then
+            failures+=("dev_db=external_DEV_validation_required:${DEV_DB_PLANS}")
+          fi
           if (( ${#failures[@]} > 0 )); then
+            {
+              echo "### CI verdict failed"
+              echo
+              printf -- '- `%s`\n' "${failures[@]}"
+              echo
+              echo "The failed job logs are the authoritative PR evidence; no separate publisher job or action download is required."
+            } >> "${GITHUB_STEP_SUMMARY}"
             printf 'CI verdict failed: %s\n' "${failures[*]}" >&2
             exit 1
           fi

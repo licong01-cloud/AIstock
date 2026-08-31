@@ -1,0 +1,331 @@
+{
+  "actual": "Runtime repeatedly enters PostgreSQL event ingress, failed event INSERTs are retried rapidly, pool acquisition latency grows, and ad-hoc diagnostics issue invalid column queries.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260812_BUG-1041-simulation-runtime-persists-hot-market-events-and-retries-database-ingre.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_runtime.py",
+    "backend/services/miniqmt_execution_runtime/kernel_ingress.py",
+    "backend/services/miniqmt_execution_runtime/kernel_repository_event_delivery.py",
+    "backend/services/miniqmt_execution_runtime/plugin_contracts.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/kernel_diagnostics.py",
+    "backend/services/miniqmt_execution_runtime/kernel_repository_diagnostics.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_ingress.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/miniqmt_execution_runtime/kernel_delivery.py",
+    "backend/services/miniqmt_execution_runtime/kernel_materializer.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_materialization_repository.py",
+    "backend/services/miniqmt_execution_runtime/kernel_repository_transition_outbox.py",
+    "backend/services/miniqmt_execution_runtime/quote_event_schema.py",
+    "backend/execution_algos/vnpy_style/plugin_base.py",
+    "backend/execution_algos/vnpy_style/sniper_plugin.py",
+    "backend/execution_algos/vnpy_style/best_limit_plugin.py",
+    "backend/execution_algos/vnpy_style/twap_lite_plugin.py",
+    "backend/execution_algos/vnpy_style/plugin_manifests.py",
+    "backend/execution_algos/vnpy_style/plugin_factories.py",
+    "backend/execution_algos/vnpy_compat/receipts.py",
+    "backend/services/miniqmt_execution_runtime/full_five_catalog_authority.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_contracts.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_authority.py",
+    "backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py",
+    "backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+    "backend/services/miniqmt_execution_runtime/hot_market_data.py",
+    "backend/execution_algos/vnpy_style/hot_plugin_base.py",
+    "backend/execution_algos/vnpy_style/hot_sniper_plugin.py",
+    "backend/execution_algos/vnpy_style/hot_best_limit_plugin.py",
+    "backend/execution_algos/vnpy_style/hot_twap_lite_plugin.py",
+    "backend/execution_algos/vnpy_style/hot_plugin_manifests.py",
+    "backend/execution_algos/vnpy_style/hot_plugin_factories.py",
+    "backend/execution_algos/vnpy_compat/hot_facade_contracts.py",
+    "backend/execution_algos/vnpy_compat/hot_facade_adapter.py",
+    "backend/execution_algos/vnpy_compat/facade_characterization.py",
+    "backend/services/miniqmt_execution_runtime/kernel_creation.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+    "backend/services/miniqmt_execution_runtime/kernel_repository_schema.py",
+    "backend/services/miniqmt_execution_runtime/repository.py",
+    "backend/execution_algos/hot_market_contracts.py",
+    "backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py",
+    "backend/tests/miniqmt_execution_runtime/test_hot_market_data_migration_postgres.py",
+    "backend/tests/miniqmt_execution_runtime/test_quote_event_schema.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/migrations/miniqmt_hot_market_data_zero_persistence_20260812.preflight.sql",
+    "backend/migrations/miniqmt_hot_market_data_zero_persistence_20260812.sql",
+    "backend/migrations/miniqmt_hot_market_data_zero_persistence_20260812.rollback.sql",
+    "docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md",
+    "docs/architecture/miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1041",
+  "closed_at": "2026-08-13T07:13:35.447852Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-12T08:28:12.894879Z",
+  "description": "Runtime repeatedly enters PostgreSQL event ingress, failed event INSERTs are retried rapidly, pool acquisition latency grows, and ad-hoc diagnostics issue invalid column queries.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260812-0299b6d85824",
+      "timestamp": "2026-08-12T08:28:12.894863Z"
+    }
+  ],
+  "evidence_uris": [
+    "PostgreSQL logs 2026-08-07 and 2026-08-12: execution_runtime_event repeated INSERT/constraint failures, pool getconn latency, invalid diagnostic columns"
+  ],
+  "expected": "During simulation, hot market data remains memory-only; PostgreSQL receives only bounded economic and lifecycle facts. Unsupported persistence is rejected before DB access, failed durable writes are bounded and isolated, and diagnostics use actual schema metadata.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/miniqmt_execution_runtime/hot_market_data.py",
+      "backend/execution_algos/vnpy_style/hot_plugin_base.py",
+      "backend/execution_algos/vnpy_style/hot_sniper_plugin.py",
+      "backend/execution_algos/vnpy_style/hot_best_limit_plugin.py",
+      "backend/execution_algos/vnpy_style/hot_twap_lite_plugin.py",
+      "backend/execution_algos/vnpy_style/hot_plugin_manifests.py",
+      "backend/execution_algos/vnpy_style/hot_plugin_factories.py",
+      "backend/execution_algos/vnpy_compat/hot_facade_contracts.py",
+      "backend/execution_algos/vnpy_compat/hot_facade_adapter.py",
+      "backend/execution_algos/vnpy_compat/facade_characterization.py",
+      "backend/services/miniqmt_execution_runtime/kernel_creation.py",
+      "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+      "backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py",
+      "backend/tests/miniqmt_execution_runtime/test_hot_market_data_migration_postgres.py",
+      "backend/tests/miniqmt_execution_runtime/test_quote_event_schema.py",
+      "backend/migrations/miniqmt_hot_market_data_zero_persistence_20260812.preflight.sql",
+      "backend/migrations/miniqmt_hot_market_data_zero_persistence_20260812.sql",
+      "backend/migrations/miniqmt_hot_market_data_zero_persistence_20260812.rollback.sql"
+    ],
+    "changed_files": [
+      "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+      "backend/services/miniqmt_execution_runtime/kernel_product_runtime.py",
+      "backend/services/miniqmt_execution_runtime/kernel_ingress.py",
+      "backend/services/miniqmt_execution_runtime/plugin_contracts.py",
+      "backend/services/miniqmt_execution_runtime/runtime.py",
+      "backend/services/miniqmt_execution_runtime/kernel_diagnostics.py",
+      "backend/services/miniqmt_execution_runtime/kernel_repository_diagnostics.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_ingress.py",
+      "backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py",
+      "backend/services/simulation_runtime/lifecycle.py",
+      "backend/services/miniqmt_execution_runtime/kernel_delivery.py",
+      "backend/services/miniqmt_execution_runtime/kernel_materializer.py",
+      "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+      "backend/services/miniqmt_execution_runtime/kernel_product_materialization_repository.py",
+      "backend/services/miniqmt_execution_runtime/kernel_repository_transition_outbox.py",
+      "backend/services/miniqmt_execution_runtime/quote_event_schema.py",
+      "backend/execution_algos/vnpy_style/plugin_base.py",
+      "backend/execution_algos/vnpy_style/sniper_plugin.py",
+      "backend/execution_algos/vnpy_style/best_limit_plugin.py",
+      "backend/execution_algos/vnpy_style/twap_lite_plugin.py",
+      "backend/execution_algos/vnpy_style/plugin_manifests.py",
+      "backend/execution_algos/vnpy_style/plugin_factories.py",
+      "backend/execution_algos/vnpy_compat/receipts.py",
+      "backend/services/miniqmt_execution_runtime/full_five_catalog_authority.py",
+      "backend/services/miniqmt_execution_runtime/kernel_product_contracts.py",
+      "backend/services/miniqmt_execution_runtime/kernel_product_authority.py",
+      "backend/tests/miniqmt_execution_runtime/test_current_three_kernel_plugins.py",
+      "backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py",
+      "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+      "docs/architecture/miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md",
+      "docs/architecture/miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+      "tests/aistock_validation/bugs/20260812_BUG-1041-simulation-runtime-persists-hot-market-events-and-retries-database-ingre.json"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-12T08:28:12.894879Z",
+  "fix_branch": null,
+  "fix_commit": "4d68ede94b50f5f501eebd5e356e4acb5d2030db",
+  "fixed_at": "2026-08-13T05:28:58Z",
+  "github_issue_number": 3330,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3330",
+  "last_seen_at": "2026-08-12T08:28:12.894879Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3353",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "applied_and_verified",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "miniqmt_execution_runtime_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?limit=100",
+    "fresh_process_evidence": [
+      "fresh Python process imported the V4 full-five catalog authority from tracked source; exact plugin_count=5, all plugin_version=4.0.0, catalog_sha256=7c3dbedc542fa05871727c33b74c38f27feb1696bfeea0bbaab20de828de0a69; no installed/latest/previous fallback -> passed",
+      "fresh tracked-source process on final HEAD imported the five V4 hot targets and ran the direct process-local ingress/runtime matrix -> 104 passed; no installed/latest/previous fallback"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1041/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1041",
+      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
+      "contract_digest": "721a419752c6dd33ef70a025fab6961fa49c75869efc1b271f52836cdae8741f",
+      "expected_identity": "4d68ede94b50f5f501eebd5e356e4acb5d2030db",
+      "generated_at": "2026-08-13T07:07:48.924355Z",
+      "mode": "read_only",
+      "observed_identity": "3b2b79fb5b22d15458067868725442b969ff6426",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3d4a68ad838e16705fc1d4e6cfde7851cb7f84ad37b53761ca3c2a2c50aff578",
+      "receipt_sha256": "31474178361766ce59a38443da026df46d52bc0fe6c6adbb45e5f45a49e51c9c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d1ffb2536cb587db76dd99867313e980fa13d9468b168cd5ccc639b263c79564",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "verified",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "Simulation runtime persists hot market events and retries database ingress without bounded isolation",
+  "trigger_condition": {
+    "fingerprint": "0299b6d858244dd70aad09d6",
+    "source_event_id": "FE-20260812-0299b6d85824"
+  },
+  "validation_evidence": [
+    "PR #3353 CI verdict final HEAD f01d5f9922fbeb9c34876bd6cf36c348c60f155d -> passed",
+    "post-restart-verify BUG-1041 backend-main expected 4d68ede94b50f5f501eebd5e356e4acb5d2030db observed descendant 3b2b79fb5b22d15458067868725442b969ff6426 -> passed",
+    "production BUG-1041 migration preflight/apply/independent readback -> passed: guard hash exact, repository 14/14, no new TICK during 15s readback"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "miniqmt_execution_runtime"
+      ],
+      "plans": [
+        "miniqmt_execution_runtime_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "miniqmt_execution_runtime"
+        ],
+        "plans": [
+          "miniqmt_execution_runtime_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "ready_for_fix"
+}

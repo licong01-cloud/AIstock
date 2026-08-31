@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from backend.execution_algos.base_algo import BaseExecutionAlgo
+from backend.execution_algos.twap_algo import TWAPAlgo
 from backend.execution_algos.v24_plan_algo import V24PlanAlgo
 from backend.execution_algos.v25_1_small_cap_algo import V25_1SmallCapAlgo
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo
@@ -424,3 +425,58 @@ def test_incremental_minute_execution_advances_cursor_without_duplicate_fills() 
     assert replayed_state == updated_state
     assert replayed_fills == []
     assert replayed_events == []
+
+
+def test_incremental_twap_caps_each_step_to_authoritative_minute_volume_and_carries_residual() -> None:
+    engine = MinuteExecutionEngine()
+    order = make_order(quantity=1900)
+    state = OrderExecutionState(
+        session_id="psess_twap_volume",
+        run_id="prun_twap_volume",
+        order_id=order.order_id,
+        symbol=order.symbol,
+        trade_date=date(2024, 1, 2),
+        algo_code="TWAP",
+        filled_quantity=0,
+        remaining_quantity=order.quantity,
+        status=order.status.value,
+    )
+    first_bar = make_bars(1, volume=1400)[0]
+
+    partial_order, partial_state, first_fills, _ = engine.execute_order_incremental(
+        order=order,
+        execution_state=state,
+        new_bars=[first_bar],
+        algo_code="TWAP",
+        algo_config={"split_count": 1},
+    )
+
+    assert partial_order.status == OrderStatus.PARTIALLY_FILLED
+    assert [fill.quantity for fill in first_fills] == [1400]
+    assert partial_state.filled_quantity == 1400
+    assert partial_state.remaining_quantity == 500
+
+    second_bar = first_bar.model_copy(
+        update={"bar_time": first_bar.bar_time + timedelta(minutes=1), "volume": 1000}
+    )
+    final_order, final_state, second_fills, _ = engine.execute_order_incremental(
+        order=partial_order,
+        execution_state=partial_state,
+        new_bars=[second_bar],
+        algo_code="TWAP",
+        algo_config={"split_count": 1},
+    )
+
+    assert final_order.status == OrderStatus.FILLED
+    assert [fill.quantity for fill in second_fills] == [500]
+    assert final_state.filled_quantity == 1900
+    assert final_state.remaining_quantity == 0
+
+
+@pytest.mark.parametrize("volume", [None, "bad", -1, 1.5, float("inf"), float("nan"), True])
+def test_twap_fails_loud_for_invalid_minute_volume(volume) -> None:
+    algo = TWAPAlgo(config={"split_count": 1})
+    state = algo.init_order("000001.SZ", "BUY", 100)
+
+    with pytest.raises(ValueError, match="finite non-negative integral minute volume"):
+        algo.compute_step(state, {"close": 10.0, "volume": volume}, {})

@@ -201,6 +201,11 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
   await browserPage.getByRole("button", { name: "发送" }).click();
 
   await expect(browserPage.getByText("QE 实验方面我能生成草案").first()).toBeVisible();
+  await expect(browserPage.getByTestId("ra-runtime-code-card")).toHaveCount(0);
+  const diagnosticsToggle = browserPage.locator(".ra-chat-debug-toggle");
+  await expect(diagnosticsToggle).toHaveAttribute("aria-pressed", "false");
+  await diagnosticsToggle.click();
+  await expect(diagnosticsToggle).toHaveAttribute("aria-pressed", "true");
   await expect(browserPage.getByTestId("ra-runtime-code-card")).toBeVisible();
   await expect(browserPage.getByTestId("ra-runtime-code-card")).toContainText("运行时代码可见性");
   await expect(browserPage.getByTestId("ra-runtime-code-card")).toContainText("运行中 commit：1d917189");
@@ -259,6 +264,10 @@ test("Research Assistant chat renders tool choice markup as readable MCP route c
   await expect(browserPage.getByTestId("ra-chat-main")).toContainText("validation issue");
   await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("route decision");
   await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("aistock-validation/mcp_github_issue_sync_bug");
+  await expect(browserPage.getByTestId("ra-mcp-route-card")).toHaveCount(0);
+  const diagnosticsToggle = browserPage.locator(".ra-chat-debug-toggle");
+  await diagnosticsToggle.click();
+  await expect(diagnosticsToggle).toHaveAttribute("aria-pressed", "true");
   await expect(browserPage.getByTestId("ra-mcp-route-card")).toContainText("需要确认和审批后才可执行");
   await expect(browserPage.getByTestId("ra-mcp-route-card")).not.toContainText("MCP route decision");
   await expect(browserPage.getByTestId("ra-mcp-route-card")).not.toContainText("aistock-validation/mcp_github_issue_sync_bug");
@@ -339,6 +348,10 @@ test("Research Assistant chat renders auto-executed MCP summary result cards", a
   await browserPage.getByRole("button", { name: "发送" }).click();
 
   const main = browserPage.getByTestId("ra-chat-main");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toHaveCount(0);
+  const diagnosticsToggle = browserPage.locator(".ra-chat-debug-toggle");
+  await diagnosticsToggle.click();
+  await expect(diagnosticsToggle).toHaveAttribute("aria-pressed", "true");
   await expect(browserPage.getByTestId("ra-mcp-summary-card")).toBeVisible();
   await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("已完成只读业务查询");
   await expect(browserPage.getByTestId("ra-mcp-summary-card")).not.toContainText("aistock-factor-library/factor_library_list");
@@ -601,6 +614,10 @@ test("Research Assistant chat shows per-turn LLM usage in the right rail only", 
   await browserPage.locator(".ra-chat-input").fill("usage check");
   await browserPage.locator(".ra-chat-send").click();
 
+  await expect(browserPage.getByTestId("ra-turn-usage-panel")).toHaveCount(0);
+  const diagnosticsToggle = browserPage.locator(".ra-chat-debug-toggle");
+  await diagnosticsToggle.click();
+  await expect(diagnosticsToggle).toHaveAttribute("aria-pressed", "true");
   await expect(browserPage.getByTestId("ra-turn-usage-panel")).toContainText("本轮消耗");
   await expect(browserPage.getByTestId("ra-turn-usage-panel")).toContainText("1,690");
   await expect(browserPage.getByTestId("ra-turn-usage-panel")).toContainText("$0.0123");
