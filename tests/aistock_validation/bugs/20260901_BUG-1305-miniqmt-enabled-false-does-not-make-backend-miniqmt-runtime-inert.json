@@ -9,7 +9,7 @@
   ],
   "assigned_agent": "codex",
   "bug_id": "BUG-1305",
-  "closed_at": null,
+  "closed_at": "2026-09-01T08:09:47.493120Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -181,10 +181,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1305/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1305",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "941c074b8cf55bb547e3961fdd4665afcbb584d1ec108208a4d774dca0304e5e",
+      "contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
+      "expected_identity": "f46a51d6acdb06ef007551fa851655847fc3efcf",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-01T08:07:45.196985Z",
+      "mode": "read_only",
+      "observed_identity": "c3fcde3eb7bee295a73a426112865a5ed0137a4a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "5889d3e634ced417cfbdb48e6a83df992072c52b1ed1446d64d743ef5b98f422",
+      "receipt_sha256": "80b545438cfd38cac095928e28281749b31c09442bca6311bb0e6a39af8d6e16",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "718e4173bdae2a557da33930951cbcc92c18becf52a8a1ebf7c10cea1e197ef8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -195,12 +217,21 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "schema_version": "aistock_source_merge_receipt_v1",
-    "receipt_id": "ea2d9245c7e8a355",
     "bug_id": "BUG-1305",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4128",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ea2d9245c7e8a355",
+    "recorded_at": "2026-09-01T07:22:39.930656Z",
+    "runtime_contract_digest": "1fadc277cae1586f6ca6cfe5ad91d6940184c622d6d43ae96ab4c21042497b27",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
     "source_head_oid": "1a626f856d7cbe477d3a7e171dc9cf4802de1098",
     "source_merge_commit": "f46a51d6acdb06ef007551fa851655847fc3efcf",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4128",
     "validation_evidence": [
       "validation-receipt: id=ccdba562eaa757cc commit=1a626f856d7cbe477d3a7e171dc9cf4802de1098 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
       "validation-receipt: id=00df325cf45b5688 commit=1a626f856d7cbe477d3a7e171dc9cf4802de1098 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed blocking=0; ownership 5/5 mapped`",
@@ -208,18 +239,9 @@
       "validation-receipt: id=f6baebabc67868d9 commit=1a626f856d7cbe477d3a7e171dc9cf4802de1098 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`133 passed`",
       "validation-receipt: id=2ef279be6856b2fa commit=1a626f856d7cbe477d3a7e171dc9cf4802de1098 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`766 passed, 3 skipped; cross-module 63 passed, 1 skipped`"
     ],
-    "validation_evidence_digest": "093016e98c77f05398e293527a59bf7083383d6459e62c3a1de20547ff664376",
-    "runtime_contract_digest": "1fadc277cae1586f6ca6cfe5ad91d6940184c622d6d43ae96ab4c21042497b27",
-    "runtime_verification": "pending_user_restart",
-    "runtime_identity_match": "pending",
-    "production_gates": {
-      "production_ddl_gate": "noop",
-      "production_frontend_dependency_gate": "noop",
-      "production_backend_dependency_gate": "noop"
-    },
-    "recorded_at": "2026-09-01T07:22:39.930656Z"
+    "validation_evidence_digest": "093016e98c77f05398e293527a59bf7083383d6459e62c3a1de20547ff664376"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -235,7 +257,8 @@
     "validation-receipt: id=00df325cf45b5688 commit=1a626f856d7cbe477d3a7e171dc9cf4802de1098 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed blocking=0; ownership 5/5 mapped`",
     "validation-receipt: id=c23153928f2da9a7 commit=1a626f856d7cbe477d3a7e171dc9cf4802de1098 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; ownership 14/14 mapped`",
     "validation-receipt: id=f6baebabc67868d9 commit=1a626f856d7cbe477d3a7e171dc9cf4802de1098 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`133 passed`",
-    "validation-receipt: id=2ef279be6856b2fa commit=1a626f856d7cbe477d3a7e171dc9cf4802de1098 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`766 passed, 3 skipped; cross-module 63 passed, 1 skipped`"
+    "validation-receipt: id=2ef279be6856b2fa commit=1a626f856d7cbe477d3a7e171dc9cf4802de1098 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`766 passed, 3 skipped; cross-module 63 passed, 1 skipped`",
+    "python -m nox -s l0 -> passed blocking=0"
   ],
   "verification_budget": {
     "budget": "standard",
