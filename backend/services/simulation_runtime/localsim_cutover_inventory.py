@@ -56,7 +56,12 @@ class LocalSimLegacyInventoryReader:
     def __init__(self, conn: Any) -> None:
         self.conn = conn
 
-    def read(self, retained_account_ids: Sequence[str]) -> tuple[LegacyLocalSimAccountInventoryV1, ...]:
+    def read(
+        self,
+        retained_account_ids: Sequence[str],
+        *,
+        authority_trade_date: date,
+    ) -> tuple[LegacyLocalSimAccountInventoryV1, ...]:
         account_ids = tuple(dict.fromkeys(str(item).strip() for item in retained_account_ids if str(item).strip()))
         if not account_ids:
             raise InvalidStateTransitionError(
@@ -69,8 +74,8 @@ class LocalSimLegacyInventoryReader:
                 """
                 SELECT portfolio.portfolio_id AS legacy_account_id,
                        portfolio.portfolio_name AS account_name,
-                       portfolio.package_id,
-                       portfolio.manifest_sha256,
+                       portfolio.package_id AS portfolio_package_id,
+                       portfolio.manifest_sha256 AS portfolio_manifest_sha256,
                        portfolio.initial_cash,
                        portfolio.status AS portfolio_status,
                        portfolio.auto_run_enabled,
@@ -85,6 +90,9 @@ class LocalSimLegacyInventoryReader:
                        binding.binding_hash,
                        binding.broker_account_id,
                        binding.binding_config_json,
+                       binding.effective_from AS binding_effective_from,
+                       binding.effective_to AS binding_effective_to,
+                       binding.created_at AS binding_created_at,
                        scope.ledger_scope_id,
                        scope.scope_kind,
                        scope.source_identity,
@@ -100,29 +108,54 @@ class LocalSimLegacyInventoryReader:
                   ON scope.ledger_scope_id = portfolio.portfolio_id
                 WHERE portfolio.portfolio_id = ANY(%s::text[])
                   AND portfolio.broker_backend = 'local_sim'
-                ORDER BY portfolio.portfolio_id, binding.binding_id
+                  AND binding.effective_from IS NOT NULL
+                  AND binding.effective_from <= %s
+                ORDER BY portfolio.portfolio_id,
+                         binding.effective_from DESC,
+                         binding.created_at DESC,
+                         binding.binding_id DESC
                 """,
-                (list(account_ids),),
+                (list(account_ids), authority_trade_date),
             )
             rows = [dict(row) for row in cur.fetchall()]
             grouped: dict[str, list[dict[str, Any]]] = {account_id: [] for account_id in account_ids}
             for row in rows:
                 grouped.setdefault(str(row["legacy_account_id"]), []).append(row)
             missing = sorted(account_id for account_id, matches in grouped.items() if not matches)
-            duplicate = sorted(account_id for account_id, matches in grouped.items() if len(matches) != 1)
-            if missing or duplicate:
+            selected: dict[str, dict[str, Any]] = {}
+            ambiguous: list[str] = []
+            for account_id, matches in grouped.items():
+                if not matches:
+                    continue
+                latest_effective_from = max(row["binding_effective_from"] for row in matches)
+                latest = [row for row in matches if row["binding_effective_from"] == latest_effective_from]
+                if len(latest) != 1:
+                    ambiguous.append(account_id)
+                    continue
+                selected[account_id] = latest[0]
+            if missing or ambiguous:
                 raise DataUnavailableError(
-                    "retained LocalSIM inventory is missing or ambiguous",
+                    "retained LocalSIM daily binding authority is missing or ambiguous",
                     context={
                         "reason_code": "LOCALSIM_CUTOVER_INVENTORY_NOT_UNIQUE",
                         "missing_account_ids": missing,
-                        "ambiguous_account_ids": duplicate,
+                        "ambiguous_account_ids": sorted(ambiguous),
+                        "authority_trade_date": authority_trade_date.isoformat(),
                     },
                 )
-            result = tuple(self._build(cur, grouped[account_id][0]) for account_id in account_ids)
+            result = tuple(
+                self._build(cur, selected[account_id], authority_trade_date=authority_trade_date)
+                for account_id in account_ids
+            )
             return result
 
-    def _build(self, cur: Any, row: dict[str, Any]) -> LegacyLocalSimAccountInventoryV1:
+    def _build(
+        self,
+        cur: Any,
+        row: dict[str, Any],
+        *,
+        authority_trade_date: date,
+    ) -> LegacyLocalSimAccountInventoryV1:
         legacy_account_id = str(row["legacy_account_id"])
         status_text = str(row["portfolio_status"])
         status = _STATUS_MAP.get(status_text)
@@ -149,13 +182,17 @@ class LocalSimLegacyInventoryReader:
                     "legacy_account_id": legacy_account_id,
                 },
             )
+        binding_effective_from = row["binding_effective_from"]
+        binding_effective_to = row["binding_effective_to"]
         if (
-            str(row["release_package_id"]) != str(row["package_id"])
-            or str(row["binding_package_id"]) != str(row["package_id"])
-            or str(row["release_manifest_sha256"]) != str(row["manifest_sha256"])
-            or str(row["binding_manifest_sha256"]) != str(row["manifest_sha256"])
+            str(row["release_package_id"]) != str(row["portfolio_package_id"])
+            or str(row["binding_package_id"]) != str(row["portfolio_package_id"])
+            or str(row["release_manifest_sha256"]) != str(row["binding_manifest_sha256"])
             or str(row["binding_release_hash"]) != str(row["release_hash"])
             or str(row["broker_account_id"] or "") != legacy_account_id
+            or binding_effective_from is None
+            or binding_effective_from > authority_trade_date
+            or (binding_effective_to is not None and binding_effective_to < binding_effective_from)
         ):
             raise InvalidStateTransitionError(
                 "retained LocalSIM release or binding authority is inconsistent",
@@ -182,8 +219,8 @@ class LocalSimLegacyInventoryReader:
         return LegacyLocalSimAccountInventoryV1(
             legacy_account_id=legacy_account_id,
             account_name=str(row["account_name"]),
-            package_id=str(row["package_id"]),
-            manifest_sha256=str(row["manifest_sha256"]),
+            package_id=str(row["release_package_id"]),
+            manifest_sha256=str(row["release_manifest_sha256"]),
             admission_receipt_id=receipt_id,
             initial_capital=float(row["initial_cash"]),
             release_id=str(row["release_id"]),

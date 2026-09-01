@@ -1659,6 +1659,26 @@ def test_repository_runtime_catalog_routes_index_contract_to_dataset_release_wor
     assert changed_file in heartbeat_route["source_globs"]
 
 
+def test_repository_runtime_catalog_routes_source_pool_to_dataset_release_worker() -> None:
+    root = Path(__file__).resolve().parents[3]
+    changed_file = "backend/services/dataset_release/source_pool.py"
+
+    classification = workflow._classify_runtime_impact([changed_file], root=root)
+    catalog = workflow._load_runtime_target_catalog(root)
+    worker = catalog["targets"]["worker-scheduler"]
+    heartbeat_route = next(
+        route
+        for route in worker["probe_routes"]
+        if route["route_id"] == "dataset_release_worker_heartbeat"
+    )
+
+    assert classification["runtime_impact"] == "worker_scheduler"
+    assert classification["target_ids"] == ["worker-scheduler"]
+    assert classification["runtime_files"] == [changed_file]
+    assert changed_file in worker["source_globs"]
+    assert changed_file in heartbeat_route["source_globs"]
+
+
 def test_dataset_release_migration_profile_and_plan_are_exact_worker_sources() -> None:
     changed_files = [
         "backend/services/dataset_release/profile.py",

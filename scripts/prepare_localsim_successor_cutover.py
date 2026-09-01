@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -36,6 +36,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--mode", choices=("inventory", "preflight", "apply", "readback"), default="inventory")
     result.add_argument("--target", choices=("dev", "production"), required=True)
     result.add_argument("--retained-account-id", action="append", required=True)
+    result.add_argument("--authority-trade-date", type=date.fromisoformat, required=True)
     result.add_argument("--env-file", type=Path, default=ROOT / ".env")
     result.add_argument("--expected-source-commit")
     result.add_argument("--expected-database-host")
@@ -129,16 +130,27 @@ def _database_preflight(conn: Any, args: argparse.Namespace, settings: dict[str,
 
 
 def _authorization(args: argparse.Namespace, account_ids: tuple[str, ...]) -> None:
-    exact = f"AUTHORIZE_LOCALSIM_LINEAGE_APPLY:{args.target}:{args.expected_database_name}:{','.join(account_ids)}"
+    exact = (
+        "AUTHORIZE_LOCALSIM_LINEAGE_APPLY:"
+        f"{args.target}:{args.expected_database_name}:{args.authority_trade_date.isoformat()}:{','.join(account_ids)}"
+    )
     if args.authorization != exact:
         raise CutoverPreparationError(f"exact lineage authorization is required: {exact}")
     if args.target == "production" and not args.confirm_production:
         raise CutoverPreparationError("production apply requires --confirm-production")
 
 
-def _inventory(settings: dict[str, Any], account_ids: tuple[str, ...]) -> tuple[Any, ...]:
+def _inventory(
+    settings: dict[str, Any],
+    account_ids: tuple[str, ...],
+    *,
+    authority_trade_date: date,
+) -> tuple[Any, ...]:
     with _connection(settings) as conn:
-        return LocalSimLegacyInventoryReader(conn).read(account_ids)
+        return LocalSimLegacyInventoryReader(conn).read(
+            account_ids,
+            authority_trade_date=authority_trade_date,
+        )
 
 
 def execute(args: argparse.Namespace) -> dict[str, Any]:
@@ -147,7 +159,11 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         raise CutoverPreparationError("retained account identities must be non-empty")
     settings = _settings(args.target, args.env_file)
     source_commit = _source_commit(args.expected_source_commit, required=args.mode in {"preflight", "apply", "readback"})
-    inventory = _inventory(settings, account_ids)
+    inventory = _inventory(
+        settings,
+        account_ids,
+        authority_trade_date=args.authority_trade_date,
+    )
     preflight = None
     if args.mode != "inventory":
         with _connection(settings) as conn:
@@ -170,12 +186,28 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     readback: list[dict[str, str]] = []
     if args.mode in {"apply", "readback"}:
         repository = LocalSimSuccessorRepository(conn_factory=lambda: _connection(settings))
-        current = _inventory(settings, account_ids)
+        current = _inventory(
+            settings,
+            account_ids,
+            authority_trade_date=args.authority_trade_date,
+        )
         for candidate in current:
             lineage = repository.get_lineage_by_legacy_account(candidate.legacy_account_id)
-            if lineage is None or lineage.economic_facts_sha256 != candidate.economic_facts_sha256:
+            if (
+                lineage is None
+                or lineage.release_id != candidate.release_id
+                or lineage.binding_id != candidate.binding_id
+                or lineage.ledger_scope_id != candidate.ledger_scope_id
+                or lineage.economic_facts_sha256 != candidate.economic_facts_sha256
+            ):
                 raise CutoverPreparationError(
-                    f"lineage readback missing or economic hash drifted: {candidate.legacy_account_id}"
+                    "lineage readback missing or authority/economic hash drifted: "
+                    f"{candidate.legacy_account_id}"
+                )
+            account = repository.get_account(lineage.account_id)
+            if account.package_id != candidate.package_id or account.manifest_sha256 != candidate.manifest_sha256:
+                raise CutoverPreparationError(
+                    f"lineage account package authority drifted: {candidate.legacy_account_id}"
                 )
             readback.append(
                 {
@@ -191,6 +223,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         "mode": args.mode,
         "target": args.target,
         "source_commit": source_commit,
+        "authority_trade_date": args.authority_trade_date.isoformat(),
         "generated_at": datetime.now(UTC).isoformat(),
         "retained_account_ids": list(account_ids),
         "inventory": [item.model_dump(mode="json") for item in inventory],

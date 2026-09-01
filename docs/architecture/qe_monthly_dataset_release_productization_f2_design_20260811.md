@@ -885,6 +885,7 @@ available-memory reserve；超过 hard max 或降低 reserve 必须拒绝加载�
 | WSL host `MemAvailable`（WSL stage） | 兼容遥测阈值 | warning only；task cgroup hard caps 仍生效 |
 | OS `LowMemoryResourceNotification` | 明确信号 | safe pause；等待不耗尽重试 |
 | DB pool / simultaneous row-producing query | 4 / 1 | 4 / 1 |
+| dataset-release source session `work_mem` / `max_parallel_workers_per_gather` | 8 MiB / 1 | transaction-local 固定上限并 readback；不得继承更宽松的全局数据库值 |
 | DB statement timeout | 300 s | 300 s；超时 typed retry，不扩大 |
 | provider request concurrency | 1 | 1 |
 | Qlib dump workers | 8 | 8，仍受 owned-footprint cap |
