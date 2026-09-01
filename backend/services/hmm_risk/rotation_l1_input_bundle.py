@@ -20,6 +20,7 @@ import tempfile
 import time
 import unicodedata
 import uuid
+from bisect import bisect_right
 from collections import defaultdict, deque
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import date, timedelta
@@ -1073,38 +1074,49 @@ def _industry_projection_identity(value: Any) -> tuple[Any, ...]:
     )
 
 
-class _TrainProjectionCache:
+class _IndustryProjectionIndex:
     def __init__(self, adapter: HMMIndustryPitAdapter, *, calendar: Sequence[date]) -> None:
         self._adapter = adapter
-        self._calendar_position = {day: index for index, day in enumerate(calendar)}
-        self._intervals: dict[str, list[tuple[int, int, tuple[Any, ...], Any]]] = defaultdict(list)
-        self._recording = True
+        if not calendar or tuple(calendar) != tuple(sorted(set(calendar))):
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "industry projection calendar is not sorted and unique")
+        self._start = calendar[0]
+        self._end = calendar[-1]
+        self._intervals: dict[str, tuple[tuple[date, date, Any], ...]] = {}
+        self._starts: dict[str, tuple[date, ...]] = {}
+
+    def _build(self, symbol: str) -> None:
+        boundaries = {self._start, self._end + timedelta(days=1)}
+        for resolver in (self._adapter.classification_resolver, self._adapter.index_membership_resolver):
+            boundaries.update(day for day in resolver.transition_dates(symbol) if self._start < day <= self._end)
+        ordered = sorted(boundaries)
+        intervals: list[tuple[date, date, Any]] = []
+        identities: list[tuple[Any, ...]] = []
+        for start, after_end in zip(ordered, ordered[1:]):
+            projection = self._adapter.resolve(symbol, start)
+            identity = _industry_projection_identity(projection)
+            end = after_end - timedelta(days=1)
+            if intervals and identities[-1] == identity and intervals[-1][1] + timedelta(days=1) == start:
+                previous_start, _previous_end, previous = intervals[-1]
+                intervals[-1] = (previous_start, end, previous)
+            else:
+                intervals.append((start, end, projection))
+                identities.append(identity)
+        self._intervals[symbol] = tuple(intervals)
+        self._starts[symbol] = tuple(start for start, _end, _projection in intervals)
 
     def resolve(self, symbol: str, trade_date: date) -> Any:
-        try:
-            position = self._calendar_position[trade_date]
-        except KeyError as exc:
-            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "industry projection date escapes source calendar") from exc
-        intervals = self._intervals.get(symbol, [])
-        if not self._recording:
-            for start, end, _identity, projection in intervals:
-                if start <= position <= end:
-                    return projection
-            return self._adapter.resolve(symbol, trade_date)
-        if intervals and position <= intervals[-1][1]:
-            raise _fail(REASON_AUTHORITY_AMBIGUOUS, "train projection cache input is not strictly date ordered")
-        projection = self._adapter.resolve(symbol, trade_date)
-        identity = _industry_projection_identity(projection)
-        if intervals and intervals[-1][1] + 1 == position and intervals[-1][2] == identity:
-            start, _end, previous_identity, previous = intervals[-1]
-            intervals[-1] = (start, position, previous_identity, previous)
-        else:
-            intervals.append((position, position, identity, projection))
-            self._intervals[symbol] = intervals
+        if trade_date < self._start or trade_date > self._end:
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "industry projection date escapes source calendar")
+        if symbol not in self._intervals:
+            self._build(symbol)
+        starts = self._starts[symbol]
+        position = bisect_right(starts, trade_date) - 1
+        if position < 0:
+            raise _fail(REASON_AUTHORITY_AMBIGUOUS, "industry projection interval is unavailable")
+        start, end, projection = self._intervals[symbol][position]
+        if not start <= trade_date <= end:
+            raise _fail(REASON_AUTHORITY_AMBIGUOUS, "industry projection interval does not cover date")
         return projection
-
-    def freeze(self) -> None:
-        self._recording = False
 
 
 def _spool_qlib_months(
@@ -1709,16 +1721,15 @@ def build_rotation_l1_inputs_from_assets(
         calendar=calendar,
     )
     benchmark = _load_benchmark_returns(assets["files"]["index_context"], calendar=calendar)
-    projection_cache = _TrainProjectionCache(adapter, calendar=calendar)
+    projection_index = _IndustryProjectionIndex(adapter, calendar=calendar)
     contributor_eligibility, eligibility_receipt = _build_train_only_contributor_eligibility(
         spans=spans,
         calendar=calendar,
-        adapter=projection_cache,
+        adapter=projection_index,
         security=security,
         provider_absence=provider_absence,
         suspension_keys=suspension_keys,
     )
-    projection_cache.freeze()
     work_parent = Path(work_parent).resolve()
     work_parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="hmm-rotation-l1-source-", dir=work_parent) as raw_temporary:
@@ -1742,7 +1753,7 @@ def build_rotation_l1_inputs_from_assets(
             assets=assets,
             calendar=calendar,
             spans=spans,
-            adapter=projection_cache,
+            adapter=projection_index,
             security=security,
             provider_absence=provider_absence,
             suspension_keys=suspension_keys,

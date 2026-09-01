@@ -712,18 +712,28 @@ def test_security_resolution_index_preserves_explicit_intervals_and_caches_ident
     assert index.evidence() == {"manifest": "evidence"}
 
 
-def test_train_projection_cache_reuses_only_recorded_contiguous_trade_dates() -> None:
+def test_industry_projection_index_uses_all_authority_transition_boundaries() -> None:
     dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(4))
+
+    class Resolver:
+        def __init__(self, transition):
+            self.transition = transition
+
+        def transition_dates(self, _symbol):
+            return (self.transition,)
 
     class Adapter:
         def __init__(self) -> None:
             self.calls: list[tuple[str, date]] = []
+            self.classification_resolver = Resolver(dates[1])
+            self.index_membership_resolver = Resolver(dates[2])
 
         def resolve(self, symbol, day):
             self.calls.append((symbol, day))
+            code = "801010.SI" if day < dates[1] else ("801020.SI" if day < dates[2] else "801030.SI")
             return SimpleNamespace(
                 status="resolved",
-                l1_code="801010.SI",
+                l1_code=code,
                 l1_name="L1",
                 l2_code="801011.SI",
                 l2_name="L2",
@@ -738,18 +748,15 @@ def test_train_projection_cache_reuses_only_recorded_contiguous_trade_dates() ->
             )
 
     adapter = Adapter()
-    cache = subject._TrainProjectionCache(adapter, calendar=dates)
-    cache.resolve("000001.SZ", dates[0])
-    cache.resolve("000001.SZ", dates[1])
-    cache.resolve("000001.SZ", dates[3])
-    cache.freeze()
+    index = subject._IndustryProjectionIndex(adapter, calendar=dates)
 
-    cache.resolve("000001.SZ", dates[0])
-    cache.resolve("000001.SZ", dates[1])
-    cache.resolve("000001.SZ", dates[3])
-    assert adapter.calls == [("000001.SZ", dates[0]), ("000001.SZ", dates[1]), ("000001.SZ", dates[3])]
-    cache.resolve("000001.SZ", dates[2])
-    assert adapter.calls[-1] == ("000001.SZ", dates[2])
+    assert [index.resolve("000001.SZ", day).l1_code for day in dates] == [
+        "801010.SI",
+        "801020.SI",
+        "801030.SI",
+        "801030.SI",
+    ]
+    assert adapter.calls == [("000001.SZ", dates[0]), ("000001.SZ", dates[1]), ("000001.SZ", dates[2])]
 
 
 def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
