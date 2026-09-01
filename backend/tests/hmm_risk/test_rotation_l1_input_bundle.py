@@ -776,6 +776,21 @@ def test_industry_projection_index_uses_all_authority_transition_boundaries() ->
     assert adapter.calls == [("000001.SZ", dates[0]), ("000001.SZ", dates[1]), ("000001.SZ", dates[2])]
 
 
+def test_canonical_sector_codes_use_c013_constituents_for_l2_not_l1_alias_lookup() -> None:
+    adapter = SimpleNamespace(
+        constituents={
+            "801010.SI": {"l1_code": "801010.SI", "l2_codes": ["801011.SI", "801012.SI"]},
+            "801020.SI": {"l1_code": "801020.SI", "l2_codes": ["801021.SI"]},
+        },
+        classification_lookup={("L1", "801010.SI"): {"index_code": "801010.SI"}},
+    )
+
+    assert subject._canonical_sector_codes(adapter) == (
+        ("801010.SI", "801020.SI"),
+        ("801011.SI", "801012.SI", "801021.SI"),
+    )
+
+
 def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

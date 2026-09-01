@@ -1690,6 +1690,21 @@ def _security_intervals(security: Any, spans: Mapping[str, Sequence[tuple[date, 
     return sorted(output, key=lambda row: (row["canonical_security_id"], row["valid_from"], row["source_code"]))
 
 
+def _canonical_sector_codes(adapter: HMMIndustryPitAdapter) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    l1_codes = tuple(sorted(adapter.constituents))
+    l2_codes = tuple(
+        sorted(
+            {
+                str(code)
+                for l1_code, value in adapter.constituents.items()
+                if str(value.get("l1_code") or "") == l1_code
+                for code in value.get("l2_codes", [])
+            }
+        )
+    )
+    return l1_codes, l2_codes
+
+
 def _unavailable_rows(
     panel: pd.DataFrame,
     *,
@@ -1820,16 +1835,7 @@ def build_rotation_l1_inputs_from_assets(
         )
         observed_l1 = {(item.trade_date, item.l1_code) for item in l1_aggregates}
         observed_l2 = {(item.trade_date, item.l1_code) for item in l2_aggregates}
-        l1_codes = tuple(sorted(adapter.constituents))
-        l2_codes = tuple(
-            sorted(
-                {
-                    str(value["index_code"])
-                    for (level, _alias), value in adapter.classification_lookup.items()
-                    if level == "L2"
-                }
-            )
-        )
+        l1_codes, l2_codes = _canonical_sector_codes(adapter)
         if len(l1_codes) != 31 or len(l2_codes) != 131:
             raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "C-013 canonical 31/131 sector set differs")
         for day in calendar:
